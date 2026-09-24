@@ -165,15 +165,14 @@ def semgrep_rules():
 
 
 def skills():
-    external = {line.split()[0]: line.split()[1] for line in read("skills.external").splitlines()
-                if line.strip() and not line.startswith("#")}
-    rows = []
+    # External skills are described from skills.external, so the output doesn't depend on whether they are cloned.
+    external = [line.split(None, 2) for line in read("skills.external").splitlines()
+                if line.strip() and not line.startswith("#")]
+    rows = [(name, url, description) for name, url, description in external]
     for name in core_entries("skills"):
-        meta = frontmatter(f"skills/{name}/SKILL.md")
-        rows.append((meta.get("name", name), external.get(name, "core"), meta.get("description", "")))
-    for name, url in external.items():
-        if name not in core_entries("skills"):
-            rows.append((name, url, "(not installed on this machine yet: run install.sh)"))
+        if name not in {e[0] for e in external}:
+            meta = frontmatter(f"skills/{name}/SKILL.md")
+            rows.append((meta.get("name", name), "core", meta.get("description", "")))
     return sorted(rows)
 
 

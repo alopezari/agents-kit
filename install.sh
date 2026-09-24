@@ -69,7 +69,7 @@ done
 
 echo "External skills"
 # Third-party skills are fetched from their source instead of being copied into the kit.
-while read -r name url; do
+while read -r name url _; do
   case "$name" in ''|'#'*) continue ;; esac
   if [ -d "$KIT/skills/$name" ]; then ok "$name"
   elif [ $DOCTOR = 1 ]; then warn "$name is missing (from $url)"
