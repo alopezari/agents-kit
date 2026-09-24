@@ -3,6 +3,7 @@
   "maxEffortLevel": "xhigh",
   "fastMode": false,
   "fastModePerSessionOptIn": true,
+  "cleanupPeriodDays": 90,
   "env": {
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "40"
   }
