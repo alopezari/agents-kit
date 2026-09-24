@@ -69,7 +69,7 @@ flowchart TD
   V -->|no manual tests| CP[create-pr skill: evidence check, push, write-pr-description]
   CP --> PR{gh pr create}
   PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]
-  PR -->|stamped| FP[follow-pr skill: CI + review comments]
+  PR -->|stamped| FP[follow-pr skill: first run waits for CI and bot reviews; later runs on demand]
   FP -->|fix needed| W
   FP -->|ready to merge| MG{You merge}
   MG --> SH[ship skill: your deploy + verification guide, rollback ready, close the loop]
@@ -189,7 +189,7 @@ A repository that needs more (a Docker stack, known failing tests, project rules
 |---|---|---|
 | `clarity` | https://github.com/addyosmani/clarity.git | Draft, rewrite or review prose other people will read, so it is specific and sounds like its author without inventing facts. |
 | `create-pr` | core | Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change, pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly. |
-| `follow-pr` | core | Take an open pull request to ready-to-merge. Watches CI and fixes failures the change caused, verifies every review comment (people and bots) before fixing or answering it, keeps the description true after fixes, and reports when the PR is ready for the user to merge. Use right after create-pr, or when asked to follow up on a PR. |
+| `follow-pr` | core | Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs once right after create-pr (waiting for CI and bot reviews), then whenever the user asks to follow up on the PR. |
 | `self-review` | core | Adversarial multi-lens review of your own diff before it goes to a human, using focused reviewers and a second model family, then verifying every finding before acting on it. Use before opening or updating a pull request, before declaring a non-trivial change done, or when asked to review the current branch. |
 | `ship` | core | See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, prepares the rollback, and closes the loop (issue update, repo notes, local branch). Use when the user is about to deploy a merged PR or says it is deployed. |
 | `spec` | core | Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the self-review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change. |
@@ -227,7 +227,7 @@ quality-log test <type> --issues N [--secs S] [--notes "..."]
 **`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree).
 
 ```
-reports path <verify|review|validation|staging-guide>   where the stop hook or a skill saves that report
+reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
 reports                                          print every report that exists, with its path
 ```
 

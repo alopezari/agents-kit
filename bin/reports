@@ -1,6 +1,6 @@
 #!/bin/bash
 # Review and testing reports for the current repo and branch, stored next to the spec (outside the tree).
-#   reports path <verify|review|validation|staging-guide>   where the stop hook or a skill saves that report
+#   reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
 #   reports                                          print every report that exists, with its path
 set -euo pipefail
 spec="$("$HOME/.agents/skills/spec/path.sh")"
@@ -9,14 +9,14 @@ suffix="$(basename "$spec" .md)"; suffix="${suffix#spec-}"
 
 if [ "${1:-}" = "path" ]; then
   case "${2:-}" in
-    verify|review|validation|staging-guide) echo "$dir/$2-$suffix.md" ;;
-    *) echo "usage: reports path <verify|review|validation|staging-guide>" >&2; exit 2 ;;
+    verify|review|validation|staging-guide|follow-pr) echo "$dir/$2-$suffix.md" ;;
+    *) echo "usage: reports path <verify|review|validation|staging-guide|follow-pr>" >&2; exit 2 ;;
   esac
   exit 0
 fi
 
 found=0
-for kind in spec verify review validation staging-guide; do
+for kind in spec verify review validation staging-guide follow-pr; do
   f="$dir/$kind-$suffix.md"
   [ -f "$f" ] || continue
   found=1

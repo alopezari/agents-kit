@@ -1,21 +1,27 @@
 ---
 name: follow-pr
-description: Take an open pull request to ready-to-merge. Watches CI and fixes failures the change caused, verifies every review comment (people and bots) before fixing or answering it, keeps the description true after fixes, and reports when the PR is ready for the user to merge. Use right after create-pr, or when asked to follow up on a PR.
+description: Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs once right after create-pr (waiting for CI and bot reviews), then whenever the user asks to follow up on the PR.
 ---
 
 # Follow PR
 
 From an open PR to "ready to merge". The merge is always the user's: the shell guard blocks `gh pr merge`, and that stays.
 
+Every run handles only what is new: its report keeps each comment it dealt with, so running it again after three days picks up where it left off.
+
 ```bash
-gh pr view --json number,url,headRefName,baseRefName,isDraft
+gh pr view --json number,url,author,headRefName,baseRefName,isDraft,reviewRequests
+cat "$(~/.agents/bin/reports path follow-pr)" 2>/dev/null   # what earlier runs handled
 ```
+
+- **First run** (right after `create-pr`): wait for CI as in section 1, then read the comments. Bot reviewers usually post when their own check finishes, so reading earlier misses them.
+- **On-demand runs** (the user asks to follow up): read the current state, don't wait. If checks are still running, say which and handle the rest.
 
 Fixes go on the branch wherever it is checked out. If that is the user's main checkout (after the staging hand-off), say what you're about to change before editing there: they may be in the middle of something.
 
 ## 1. CI
 
-Wait for the checks, bounded: poll `gh pr checks <n>` about every minute for at most 30 minutes. macOS has no `timeout`, so use your harness's background or timeout mechanism rather than an unbounded `--watch`. Still pending after that: report which checks are pending and stop waiting.
+`gh pr checks <n>` shows the state. On the first run, and after a push, wait for it bounded: poll about every minute for at most 30 minutes. macOS has no `timeout`, so use your harness's background or timeout mechanism rather than an unbounded `--watch`. Still pending after that: report which checks are pending and move on.
 
 For each failing check:
 
@@ -27,33 +33,45 @@ For each failing check:
 
 ## 2. Review comments
 
-Read every comment, from people and bots:
+Fetch all three kinds, with their ids:
 
 ```bash
-gh pr view <n> --comments
-gh api repos/{owner}/{repo}/pulls/<n>/comments --paginate
+gh api 'repos/{owner}/{repo}/pulls/<n>/comments' --paginate \
+  --jq '.[] | {id, user: .user.login, path, line, body, url: .html_url}'          # inline, on the diff
+gh api 'repos/{owner}/{repo}/issues/<n>/comments' --paginate \
+  --jq '.[] | {id, user: .user.login, body, url: .html_url}'                      # conversation
+gh api 'repos/{owner}/{repo}/pulls/<n>/reviews' --paginate \
+  --jq '.[] | select(.body != "") | {id, user: .user.login, state, body, url: .html_url}'   # review summaries
 ```
 
-Verify each one like a self-review finding: Confirmed, Rejected or Uncertain, each with evidence. Fix the confirmed ones (section 3). Draft a short reply for every comment: what was fixed, or why not, with the evidence. Posting speaks for the user: show the drafts and post only what they approve.
+Skip the ids already in the report, and comments by the PR author (the user's own replies). For each new one:
+
+1. Verify it like a self-review finding: **Confirmed**, **Rejected** or **Uncertain**, each with evidence.
+2. Confirmed: fix it (section 3). Rejected: draft a reply with the evidence. Uncertain: put it in front of the user.
+3. Draft a short reply for every comment: what was fixed and where, or why not. Posting speaks for the user: show the drafts and post only what they approve.
 
 ## 3. Fixing on an open PR
 
-1. Make the smallest fix, with a test that fails without it when there is a harness for it.
-2. Let verify run. When the fix changes behavior, re-run the self-review re-check (its step 4) and validate the affected checks, so the stamps cover the final code.
-3. Push.
-4. If the description no longer matches the code, run the `write-pr-description` skill again and update it: `gh pr edit <n> --body-file <pr-body.md>`.
+A fix is a small change of its own, and gets reviewed and tested in proportion:
 
-Then go back to section 1: the push starts a new CI run.
+1. The smallest fix, with a test that fails without it when there is a harness for it.
+2. Verify runs at the end of the turn (the stop hook).
+3. Self-review, step 4 only: re-run the Correctness lens on the new diff, then `python3 ~/.agents/hooks/review_stamp.py write`.
+4. For behavior changes, validate the checks the fix touches, not the whole plan, then `python3 ~/.agents/hooks/review_stamp.py write --kind validate`.
+5. If the fix changes something already tested on staging, update the staging guide and ask the user to re-run the affected steps; the PR is not ready until they pass.
+6. Push. If the description no longer matches the code, run `write-pr-description` again and `gh pr edit <n> --body-file <pr-body.md>`.
 
-## 4. Ready to merge
+The push starts a new CI run: go back to section 1 and wait for it.
 
-Report that it is ready when CI is green and every comment has a fix or an approved reply. If it was a draft waiting for staging results, it can be marked ready (`gh pr ready <n>`) once they passed. List anything still open. The user merges; when they are about to deploy, the `ship` skill takes over.
+## 4. Record and report
 
-## Report
+Append this run to `$(~/.agents/bin/reports path follow-pr)`, one line per comment with its id, so the next run skips it:
 
 ```
-PR:      <url>
-CI:      <check>: pass | fixed (<cause>, <commit>) | not caused by the change (<evidence>) | still pending after 30 min
-Review:  <comment> — Confirmed/Rejected/Uncertain — <evidence> — <fix or drafted reply>
+## Run <date time>
+CI:      <check>: pass | fixed (<cause>, <commit>) | not caused by the change (<evidence>) | pending
+<id> <url> — <user> — Confirmed/Rejected/Uncertain — <evidence> — <fix commit | reply drafted | reply posted | asked the user>
 Status:  ready to merge | waiting on <what>
 ```
+
+It is ready to merge when CI is green, every comment has a fix or an approved reply, no review request is pending, and any staging steps a fix touched passed again. If it was a draft waiting for staging results, it can be marked ready (`gh pr ready <n>`) once they pass. Say what would need another run: checks still running, reviewers who haven't answered. The user merges; when they are about to deploy, the `ship` skill takes over.

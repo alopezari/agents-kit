@@ -44,7 +44,7 @@ Add `--draft` only in the exception from step 1. Print the PR URL.
 
 ## 5. Hand over to follow-pr
 
-Continue with the `follow-pr` skill in the same session: CI starts now, and bot reviewers comment within minutes.
+Run the `follow-pr` skill in the same session (its first run): it waits for CI and the bot reviews that come with it. After that, the user runs it on demand.
 
 ## Report
 
