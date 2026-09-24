@@ -100,6 +100,15 @@ def guard_mcp_linear(base):
             os.rename(approval + ".bak", approval)
 
 
+def guard_mcp_logs_browser_mcp(base):
+    log = os.path.expanduser("~/.agents/logs/hooks.jsonl")
+    for tool in ("mcp__playwright-headless__browser_navigate", "mcp__claude-in-chrome__navigate", "mcp__linear__get_issue"):
+        got = run_hook("guard_mcp.py", {"tool_name": tool, "tool_input": {}, "cwd": "/tmp", "session_id": "test"})
+        assert got is None, f"{tool} must never be blocked: {got}"
+    logged = [json.loads(l)["detail"] for l in open(log) if '"browser-mcp"' in l and '"session": "test"' in l]
+    assert logged[-2:] == ["mcp__playwright-headless__browser_navigate", "mcp__claude-in-chrome__navigate"], logged[-3:]
+
+
 # --- stamps and the PR gate ---------------------------------------------------------------------
 def pr_gate_review_and_validation(base):
     repo = new_repo(base)
@@ -251,7 +260,7 @@ def post_edit_syntax_feedback(base):
     assert d and d.get("decision") == "block", d
 
 
-for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, pr_gate_review_and_validation,
+for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           pr_gate_follows_worktrees, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only, verify_stamp_and_effort_nudge,

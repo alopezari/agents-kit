@@ -5,6 +5,9 @@ Reads pass. Writes are denied unless the user approved that service in the
 last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves, a
 file the shell guard (guard_bash.py) never lets agents create.
 
+Browser MCP calls (Playwright, Chrome DevTools, Claude in Chrome) are logged and never blocked, so the
+monthly job can tell validation runs that went around the browser A/B (bin/browse) from runs with no UI.
+
 Profiles add their own rules in profiles/<name>/mcp-writes.json:
   {"direct": {"<server>": "<operation regex>"},
    "gateways": [{"tool": "<tool-name regex>", "service_field": "provider",
@@ -29,6 +32,7 @@ PROFILES = os.environ.get("AGENTS_PROFILES_DIR") or os.path.expanduser("~/.agent
 DIRECT_WRITE = {
     "linear": re.compile(r"^(save|create|update|delete|share|unshare|merge|submit|mark|resolve|restore|retire|prepare)_"),
 }
+BROWSER_MCP = re.compile(r"^mcp__(playwright|chrome-devtools|claude-in-chrome)[\w-]*__")
 GATEWAYS = []  # MCP tools that reach several services through one generic "execute" tool
 for path in sorted(glob.glob(os.path.join(PROFILES, "*", "mcp-writes.json"))):
     rules = json.load(open(path))
@@ -62,7 +66,11 @@ def main():
         payload = json.load(sys.stdin)
     except ValueError:
         return 0
-    hit = classify(payload.get("tool_name") or "", payload.get("tool_input") or {})
+    tool_name = payload.get("tool_name") or ""
+    if BROWSER_MCP.match(tool_name):
+        log("guard_mcp", "browser-mcp", payload, tool_name)
+        return 0
+    hit = classify(tool_name, payload.get("tool_input") or {})
     if not hit:
         return 0
     service, operation = hit
