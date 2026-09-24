@@ -4,12 +4,14 @@
   review_stamp.py write [--kind review|validate|verify]   # end of self-review / validate; the stop hook after a green verify
   review_stamp.py check [--kind review|validate|verify]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
+  review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names
 
 The fingerprint covers every file that differs from the merge-base with the
 default branch, by content, so committing stamped changes keeps it valid and
 any later edit invalidates it. Stamps live in the repository's shared git dir, per branch
 (.git/agents/stamps/<branch>/), never in the tree: they survive removing the worktree they were
-written in, so the PR can be opened from the main checkout after a staging hand-off.
+written in, so the PR can be opened from the main checkout after a staging hand-off. They also
+follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
 """
 import hashlib
 import os
@@ -65,11 +67,44 @@ def fingerprint():
     return digest.hexdigest()
 
 
+# Files skills/spec/path.sh and bin/reports name <kind>-<repo>-<branch>.md, next to the spec.
+REPORT_KINDS = ("spec", "verify", "review", "validation", "staging-guide", "follow-pr")
+
+
+def renamed_from(branch):
+    """Earlier names of this branch, newest first: git carries a branch's reflog across renames."""
+    entries = git("reflog", "show", "--format=%gs", f"refs/heads/{branch}")
+    return re.findall(r"^Branch: renamed refs/heads/(.+) to refs/heads/", entries, re.M)
+
+
+def follow_branch_renames():
+    """Move the spec, reports and stamps kept under an earlier name of this branch to its current name."""
+    branch = git("branch", "--show-current")
+    if not branch:
+        return
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
+    repo, new = repo_name(), branch.replace("/", "-")
+    dirs = (os.path.join(common, "agents"), os.path.join(os.environ.get("TMPDIR", "/tmp"), "agents-specs"))
+    for old in (name.replace("/", "-") for name in renamed_from(branch)):
+        moves = [(os.path.join(d, f"{kind}-{repo}-{old}.md"), os.path.join(d, f"{kind}-{repo}-{new}.md"))
+                 for d in dirs for kind in REPORT_KINDS]
+        moves += [(os.path.join(d, f"browser-ab-spec-{repo}-{old}.json"), os.path.join(d, f"browser-ab-spec-{repo}-{new}.json"))
+                  for d in dirs]
+        moves.append((os.path.join(common, "agents", "stamps", old), os.path.join(common, "agents", "stamps", new)))
+        for src, dst in moves:
+            if os.path.exists(src) and not os.path.exists(dst):
+                os.rename(src, dst)
+                print(f"moved {os.path.basename(src)} to {os.path.basename(dst)} (branch renamed)", file=sys.stderr)
+
+
 def stamp_path(kind):
     name = "self-review.stamp" if kind == "review" else f"{kind}.stamp"
     common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
     branch = git("branch", "--show-current").replace("/", "-") or "detached"
-    return os.path.join(common, "agents", "stamps", branch, name)
+    directory = os.path.join(common, "agents", "stamps", branch)
+    if not os.path.isdir(directory):
+        follow_branch_renames()
+    return os.path.join(directory, name)
 
 
 def legacy_stamp_path(kind):
@@ -85,6 +120,9 @@ def main():
     args = sys.argv[1:]
     kind = args[args.index("--kind") + 1] if "--kind" in args else "review"
     command = args[0] if args else "check"
+    if command == "follow-renames":
+        follow_branch_renames()
+        return 0
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
     if command == "write":

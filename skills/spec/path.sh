@@ -14,6 +14,11 @@ legacy="$(git rev-parse --absolute-git-dir)/agents/spec-$(basename "$(git rev-pa
 for candidate in "$in_git" "$in_tmp" "$legacy"; do
   [ -f "$candidate" ] && { echo "$candidate"; exit 0; }
 done
+# A spec written before `git branch -m` sits under the old name; move it (and its reports) across.
+python3 "$HOME/.agents/hooks/review_stamp.py" follow-renames
+for candidate in "$in_git" "$in_tmp"; do
+  [ -f "$candidate" ] && { echo "$candidate"; exit 0; }
+done
 if mkdir -p "$(dirname "$in_git")" 2>/dev/null && [ -w "$(dirname "$in_git")" ]; then
   echo "$in_git"
 else

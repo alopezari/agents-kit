@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bin/phase: each step of the flow, stepping back when the change moves, and the cached fast path."""
+"""bin/phase: each step of the flow, stepping back when the change moves, branch renames, and the cached fast path."""
 import os
 import shutil
 import subprocess
@@ -66,6 +66,47 @@ def walks_the_flow(base):
     assert phase(repo, env) == "ship"
 
 
+def new_repo(base):
+    repo = os.path.join(base, "shop")
+    os.makedirs(repo)
+    sh(repo, "git", "init", "-q", "-b", "trunk")
+    open(os.path.join(repo, "app.py"), "w").write("x = 1\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    return repo
+
+
+def no_spec_is_flagged_not_a_gate(base):
+    repo = new_repo(base)
+    sh(repo, "git", "checkout", "-q", "-b", "feature/hotfix")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    assert phase(repo) == "build (no spec)", "code without a spec is being built, not specced"
+    sh(repo, "python3", STAMP, "write", "--kind", "verify")
+    sh(repo, "python3", STAMP, "write", "--kind", "review")
+    assert phase(repo) == "validate (no spec)"
+
+
+def spec_reports_and_stamps_follow_branch_renames(base):
+    repo = new_repo(base)
+    sh(repo, "git", "checkout", "-q", "-b", "session/wary-falcon")
+    spec = sh(repo, SPEC_PATH)
+    open(spec, "w").write("# SHOP-1: the spec\n")
+    guide = spec.replace("spec-shop-", "staging-guide-shop-")
+    open(guide, "w").write("# Staging guide\n")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    sh(repo, "python3", STAMP, "write", "--kind", "verify")
+
+    sh(repo, "git", "branch", "-m", "shop-1/draft")
+    sh(repo, "git", "branch", "-m", "shop-1/final")
+    moved = sh(repo, SPEC_PATH)
+    assert os.path.basename(moved) == "spec-shop-shop-1-final.md", moved
+    assert open(moved).read() == "# SHOP-1: the spec\n" and not os.path.exists(spec)
+    assert os.path.exists(guide.replace("session-wary-falcon", "shop-1-final")), "reports move with the spec"
+    check = subprocess.run(["python3", STAMP, "check", "--kind", "verify"], cwd=repo)
+    assert check.returncode == 0, "the verify stamp follows the rename"
+    assert phase(repo) == "self-review"
+
+
 def fast_path_serves_cache_and_refreshes(base):
     repo = os.path.join(base, "shop")
     os.makedirs(repo)
@@ -84,7 +125,8 @@ def fast_path_serves_cache_and_refreshes(base):
 
 
 RESULTS = []
-for test in (walks_the_flow, fast_path_serves_cache_and_refreshes):
+for test in (walks_the_flow, no_spec_is_flagged_not_a_gate, spec_reports_and_stamps_follow_branch_renames,
+             fast_path_serves_cache_and_refreshes):
     base = tempfile.mkdtemp(prefix="agents-test-phase-")
     try:
         test(base)

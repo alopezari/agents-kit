@@ -101,17 +101,21 @@ def compute(previous):
         label = {"MERGED": "ship", "CLOSED": "PR closed"}.get(state, "PR open")
         return label, {"pr_state": state, "pr_checked_at": checked_at}
 
-    if not os.path.exists(spec):
+    changed = review_stamp.changed_paths()[1]
+    has_spec = os.path.exists(spec)
+    if not has_spec and not changed:
         return "spec", {}
+    # The spec is a step, not a gate: a branch without one still has its real phase, flagged.
+    flag = "" if has_spec else " (no spec)"
     current = review_stamp.fingerprint()
     if not stamp_matches("verify", current):
-        return "build", {}
+        return "build" + flag, {}
     if not stamp_matches("review", current):
-        return "self-review", {}
-    needs_validate = any(not review_stamp.NOT_BEHAVIOR.search(p) for p in review_stamp.changed_paths()[1])
+        return "self-review" + flag, {}
+    needs_validate = any(not review_stamp.NOT_BEHAVIOR.search(p) for p in changed)
     if needs_validate and not stamp_matches("validate", current):
-        return "validate", {}
-    return staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md")) or "create-pr", {}
+        return "validate" + flag, {}
+    return (staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md")) or "create-pr") + flag, {}
 
 
 def refresh(files):
