@@ -110,10 +110,16 @@ for tool in a11y mermaid; do
 done
 
 # gh ignores git's per-host proxies (http.<url>.proxy); bin/gh applies them, so it must come first in PATH.
-# /usr/local/bin precedes Homebrew in every shell the harnesses start, and it needs root, so it's the user's step.
+# /usr/local/bin precedes Homebrew in every shell the harnesses start. It is root's, so the link needs sudo:
+# asked for only when a person runs this in a terminal; an agent's run can't answer a password prompt.
 if git config --global --get-regexp '^http\..+\.proxy$' >/dev/null 2>&1; then
+  wrapper_cmd="sudo ln -sf $KIT/bin/gh /usr/local/bin/gh"
   if [ "$(readlink -f "$(command -v gh)")" = "$(readlink -f "$KIT/bin/gh")" ]; then ok "gh applies git's per-host proxies (bin/gh)"
-  else warn "gh ignores git's per-host proxy, so gh hangs on that host. Run: sudo ln -sf $KIT/bin/gh /usr/local/bin/gh"; fi
+  elif [ $DOCTOR = 1 ] || [ ! -t 0 ]; then warn "gh ignores git's per-host proxy, so gh hangs on that host. Run: $wrapper_cmd"
+  else
+    echo "  gh ignores git's per-host proxy; linking bin/gh ahead of it needs your password:"
+    $wrapper_cmd && fix "gh applies git's per-host proxies (/usr/local/bin/gh -> bin/gh)" || warn "not linked; run: $wrapper_cmd"
+  fi
 fi
 
 if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
