@@ -130,6 +130,19 @@ def pr_gate_follows_worktrees(base):
 
 
 # --- stop checks --------------------------------------------------------------------------------
+def reports_survive_worktree_removal(base):
+    main = new_repo(base, "main")
+    wt = os.path.join(base, "wt")
+    git(main, "worktree", "add", "-q", "-b", "feat/z", wt, "trunk")
+    reports = os.path.expanduser("~/.agents/bin/reports")
+    guide = subprocess.run([reports, "path", "staging-guide"], cwd=wt, capture_output=True, text=True).stdout.strip()
+    open(guide, "w").write("# Staging guide\n")
+    git(main, "worktree", "remove", wt)
+    git(main, "switch", "-q", "feat/z")
+    shown = subprocess.run([reports], cwd=main, capture_output=True, text=True).stdout
+    assert "# Staging guide" in shown, f"guide written at {guide} is gone after removing the worktree"
+
+
 def stop_catches_leftovers_in_worktree(base):
     main = new_repo(base, "main")
     wt = os.path.join(base, "wt")
@@ -214,7 +227,7 @@ def post_edit_syntax_feedback(base):
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, pr_gate_review_and_validation,
-          pr_gate_follows_worktrees, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
+          pr_gate_follows_worktrees, reports_survive_worktree_removal, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only, verify_stamp_and_effort_nudge,
           post_edit_syntax_feedback]:

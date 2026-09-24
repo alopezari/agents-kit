@@ -18,6 +18,7 @@ profiles/
 !/repos/_shared/
 /skills/*
 !/skills/self-review/
+!/skills/ship/
 !/skills/spec/
 !/skills/validate/
 !/skills/write-pr-description/

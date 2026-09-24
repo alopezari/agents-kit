@@ -55,8 +55,8 @@ settings_file() {
 
 # baseline <settings file> <kit baseline>: add the kit's recommended settings where a key is missing.
 baseline() {
-  local mode=(); [ $DOCTOR = 1 ] && mode=(--check)
-  local out; out=$(python3 "$KIT/adapters/apply_baseline.py" "$1" "$2" "${mode[@]}")
+  local check=""; [ $DOCTOR = 1 ] && check=--check
+  local out; out=$(python3 "$KIT/adapters/apply_baseline.py" "$1" "$2" $check)
   if [ -z "$out" ]; then ok "$(basename "$1") has the kit's baseline settings"; return; fi
   [ $DOCTOR = 1 ] || backup "$1"
   while read -r line; do if [ $DOCTOR = 1 ]; then warn "$(basename "$1") $line"; else fix "$(basename "$1") $line"; fi; done <<<"$out"
@@ -164,7 +164,10 @@ fi
 echo "Scheduled jobs"
 # launchd needs real files with absolute paths, so the kit keeps templates and renders them here.
 nodebin=$(dirname "$(command -v node 2>/dev/null || echo /usr/local/bin/node)")
+# Job labels are per user, not per HOME: a test install must not replace the real jobs.
+[ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && ok "skipped (AGENTS_SKIP_LAUNCHD is set)"
 for tpl in "$KIT"/launchd/*.plist; do
+  [ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && break
   label="com.$(id -un).$(basename "$tpl" .plist)"; dest="$HOME/Library/LaunchAgents/$label.plist"
   rendered=$(sed -e "s#__HOME__#$HOME#g" -e "s#__NODEBIN__#$nodebin#g" -e "s#__LABEL__#$label#g" "$tpl")
   if [ "$rendered" = "$(cat "$dest" 2>/dev/null)" ] && launchctl list "$label" >/dev/null 2>&1; then ok "$label"; continue; fi

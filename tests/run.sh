@@ -32,6 +32,9 @@ section "framework reference"
 ~/.agents/bin/docs --check || fail=1
 node ~/.agents/tools/mermaid/check.mjs ~/.agents/docs/framework.md || fail=1
 
+section "install on a new machine"
+bash test_install.sh || fail=1
+
 section "install doctor"
 warnings=$(~/.agents/install.sh --doctor | grep -c "  warn ")
 if [ "$warnings" = 0 ]; then echo "ok   no warnings"; else ~/.agents/install.sh --doctor | grep "  warn "; fail=1; fi

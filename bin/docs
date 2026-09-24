@@ -271,17 +271,23 @@ def render():
     w("")
 
     w("## The life of a task\n")
-    for skill in ("spec", "self-review", "validate", "write-pr-description"):
+    for skill in ("spec", "self-review", "validate", "write-pr-description", "ship"):
         require(f"skills/{skill}/SKILL.md")
     w("```mermaid\nflowchart TD\n  T[Issue or request] --> SP[spec skill: acceptance criteria]\n  SP --> W[Agent edits code]")
     w("  W -->|every shell command| G{guard_bash / guard_mcp}\n  G -->|irreversible or shared write| B[Blocked with the reason]")
     w("  W -->|every file edit| PE[post_edit: syntax check]\n  PE -->|syntax error| W")
     w("  W -->|end of turn| SC{stop_checks + verify}\n  SC -->|problem found, first time| W\n  SC -->|clean| SR[self-review skill: lenses + second model]")
     w("  SR --> V[validate skill: suite + local checks + staging guide]\n  V --> PR{gh pr create}")
-    w("  PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]\n  PR -->|stamped| D[write-pr-description] --> O[Pull request]\n```\n")
+    w("  PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]\n  PR -->|stamped| D[write-pr-description] --> O[Pull request]")
+    w("  O --> SH[ship: hand the branch over for staging tests, CI, review comments]")
+    w("  SH --> MG{You merge and deploy}\n  MG --> PD[ship: read-only production checks, close the loop]\n```\n")
     w("The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up "
       "in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a "
       "stamp of the exact change in `.git/`; editing anything afterwards invalidates it.\n")
+    w("When the change needs manual tests on staging and the agent worked in a git worktree, `ship` removes the worktree "
+      "right after the PR is open (only once everything is committed and pushed), so you can switch to the branch in "
+      "your main checkout. The spec, reports and staging guide live in the repository's shared `.git/agents/`, so they "
+      "survive the hand-off: run `bin/reports` there.\n")
 
     w("## Hooks\n")
     w("| Harness | Event | Applies to | Script | Timeout (s) |\n|---|---|---|---|---|")
@@ -374,7 +380,7 @@ def render():
     w("## Install and maintain\n")
     w("```\n" + "\n".join(l for l in header_comment("install.sh").splitlines() if "install.sh" in l) + "\n```\n")
     w("- `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, the Pi adapter, triage, "
-      "the install doctor, and this reference (up to date, and every diagram parses as GitHub renders it).")
+      "a real install into an empty HOME, the install doctor, and this reference (up to date, and every diagram parses as GitHub renders it).")
     w("- After changing the kit, commit as usual: the pre-commit hook regenerates this file.\n")
 
     w("## Layout\n")

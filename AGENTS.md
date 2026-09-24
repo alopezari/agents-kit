@@ -82,6 +82,8 @@ Before opening a pull request, or pushing substantial changes to one, run the `s
 
 Whenever creating or updating a pull request (e.g. `gh pr create`, `gh pr edit`), use the `write-pr-description` skill first and use its output for the title and description, in every repository, unless I provide my own title/description.
 
+Right after opening a pull request, run the `ship` skill. When the change needs manual staging tests and you worked in a worktree, it removes the worktree so I can switch to the branch; then it follows CI and review comments, and after I merge and deploy, the production checks.
+
 ## Code comments
 
 First ask whether the code can say it instead: a named constant, a named function, a clearer signature. A name cannot drift from the code; a comment can, and a comment explaining the same thing in two places is a name waiting to be extracted.
