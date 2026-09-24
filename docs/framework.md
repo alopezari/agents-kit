@@ -6,7 +6,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 
 ## At a glance
 
-- **3 harnesses** share one `AGENTS.md`, 6 skills and 4 hook scripts.
+- **3 harnesses** share one `AGENTS.md`, 8 skills and 4 hook scripts.
 - **21 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets, then the repo's verify.
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
@@ -63,17 +63,21 @@ flowchart TD
   SC -->|problem found, first time| W
   SC -->|clean| SR[self-review skill: lenses + second model]
   SR --> V[validate skill: suite + local checks + staging guide]
-  V --> PR{gh pr create}
+  V -->|manual tests needed| HO[Branch handed over: you run the staging guide]
+  HO -->|a step fails| W
+  HO -->|all steps pass| CP
+  V -->|no manual tests| CP[create-pr skill: evidence check, push, write-pr-description]
+  CP --> PR{gh pr create}
   PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]
-  PR -->|stamped| D[write-pr-description] --> O[Pull request]
-  O --> SH[ship: hand the branch over for staging tests, CI, review comments]
-  SH --> MG{You merge and deploy}
-  MG --> PD[ship: read-only production checks, close the loop]
+  PR -->|stamped| FP[follow-pr skill: CI + review comments]
+  FP -->|fix needed| W
+  FP -->|ready to merge| MG{You merge}
+  MG --> SH[ship skill: your deploy + verification guide, rollback ready, close the loop]
 ```
 
 The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards invalidates it.
 
-When the change needs manual tests on staging and the agent worked in a git worktree, `ship` removes the worktree right after the PR is open (only once everything is committed and pushed), so you can switch to the branch in your main checkout. The spec, reports and staging guide live in the repository's shared `.git/agents/`, so they survive the hand-off: run `bin/reports` there.
+When the change needs manual tests on staging, `validate` ends by handing you the branch: if the agent worked in a git worktree, it removes it (only once everything is committed and pushed) so you can switch to the branch in your main checkout. The spec, the reports, the staging guide and the review stamps live in the repository's shared `.git/agents/`, so they survive the hand-off: run `bin/reports` there. The PR is opened after you report the staging results, so its description carries them.
 
 ## Hooks
 
@@ -184,10 +188,12 @@ A repository that needs more (a Docker stack, known failing tests, project rules
 | Skill | Source | What it's for |
 |---|---|---|
 | `clarity` | https://github.com/addyosmani/clarity.git | Draft, rewrite or review prose other people will read, so it is specific and sounds like its author without inventing facts. |
+| `create-pr` | core | Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change, pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly. |
+| `follow-pr` | core | Take an open pull request to ready-to-merge. Watches CI and fixes failures the change caused, verifies every review comment (people and bots) before fixing or answering it, keeps the description true after fixes, and reports when the PR is ready for the user to merge. Use right after create-pr, or when asked to follow up on a PR. |
 | `self-review` | core | Adversarial multi-lens review of your own diff before it goes to a human, using focused reviewers and a second model family, then verifying every finding before acting on it. Use before opening or updating a pull request, before declaring a non-trivial change done, or when asked to review the current branch. |
-| `ship` | core | Follow a pull request from creation to production. Hands the branch over to the user when it needs manual staging tests (removing the agent's worktree), watches CI and fixes real failures, verifies and answers review comments, and after the user merges and deploys, runs the production checks and closes the loop. Use right after `gh pr create`, or when asked to follow a PR through. |
+| `ship` | core | See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, prepares the rollback, and closes the loop (issue update, repo notes, local branch). Use when the user is about to deploy a merged PR or says it is deployed. |
 | `spec` | core | Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the self-review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change. |
-| `validate` | core | Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, and writes a step-by-step guide for whatever can only be tested on staging or production. Use for behavior changes before opening a PR, or when asked to test a change. |
+| `validate` | core | Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, writes a step-by-step guide for whatever can only be tested on staging or production, and hands the branch over for those tests. Use for behavior changes before opening a PR, or when asked to test a change. |
 | `write-pr-description` | core | Write short, blunt, human-sounding pull request titles and descriptions that lead with functional impact and keep technical detail at architectural altitude, based on the actual code changes, repository context, issue requirements, validation evidence, and the repository's configured PR template. Use when opening, updating, or preparing a pull request. |
 
 Harnesses pick a skill by its description; you can also call one by name (`/spec` in Claude Code).

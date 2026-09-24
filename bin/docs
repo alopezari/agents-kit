@@ -271,23 +271,26 @@ def render():
     w("")
 
     w("## The life of a task\n")
-    for skill in ("spec", "self-review", "validate", "write-pr-description", "ship"):
+    for skill in ("spec", "self-review", "validate", "create-pr", "write-pr-description", "follow-pr", "ship"):
         require(f"skills/{skill}/SKILL.md")
     w("```mermaid\nflowchart TD\n  T[Issue or request] --> SP[spec skill: acceptance criteria]\n  SP --> W[Agent edits code]")
     w("  W -->|every shell command| G{guard_bash / guard_mcp}\n  G -->|irreversible or shared write| B[Blocked with the reason]")
     w("  W -->|every file edit| PE[post_edit: syntax check]\n  PE -->|syntax error| W")
     w("  W -->|end of turn| SC{stop_checks + verify}\n  SC -->|problem found, first time| W\n  SC -->|clean| SR[self-review skill: lenses + second model]")
-    w("  SR --> V[validate skill: suite + local checks + staging guide]\n  V --> PR{gh pr create}")
-    w("  PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]\n  PR -->|stamped| D[write-pr-description] --> O[Pull request]")
-    w("  O --> SH[ship: hand the branch over for staging tests, CI, review comments]")
-    w("  SH --> MG{You merge and deploy}\n  MG --> PD[ship: read-only production checks, close the loop]\n```\n")
+    w("  SR --> V[validate skill: suite + local checks + staging guide]")
+    w("  V -->|manual tests needed| HO[Branch handed over: you run the staging guide]\n  HO -->|a step fails| W")
+    w("  HO -->|all steps pass| CP\n  V -->|no manual tests| CP[create-pr skill: evidence check, push, write-pr-description]")
+    w("  CP --> PR{gh pr create}\n  PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]")
+    w("  PR -->|stamped| FP[follow-pr skill: CI + review comments]\n  FP -->|fix needed| W")
+    w("  FP -->|ready to merge| MG{You merge}\n  MG --> SH[ship skill: your deploy + verification guide, rollback ready, close the loop]\n```\n")
     w("The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up "
       "in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a "
       "stamp of the exact change in `.git/`; editing anything afterwards invalidates it.\n")
-    w("When the change needs manual tests on staging and the agent worked in a git worktree, `ship` removes the worktree "
-      "right after the PR is open (only once everything is committed and pushed), so you can switch to the branch in "
-      "your main checkout. The spec, reports and staging guide live in the repository's shared `.git/agents/`, so they "
-      "survive the hand-off: run `bin/reports` there.\n")
+    w("When the change needs manual tests on staging, `validate` ends by handing you the branch: if the agent worked in "
+      "a git worktree, it removes it (only once everything is committed and pushed) so you can switch to the branch in "
+      "your main checkout. The spec, the reports, the staging guide and the review stamps live in the repository's "
+      "shared `.git/agents/`, so they survive the hand-off: run `bin/reports` there. The PR is opened after you report "
+      "the staging results, so its description carries them.\n")
 
     w("## Hooks\n")
     w("| Harness | Event | Applies to | Script | Timeout (s) |\n|---|---|---|---|---|")

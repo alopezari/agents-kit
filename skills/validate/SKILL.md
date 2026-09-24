@@ -1,6 +1,6 @@
 ---
 name: validate
-description: Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, and writes a step-by-step guide for whatever can only be tested on staging or production. Use for behavior changes before opening a PR, or when asked to test a change.
+description: Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, writes a step-by-step guide for whatever can only be tested on staging or production, and hands the branch over for those tests. Use for behavior changes before opening a PR, or when asked to test a change.
 effort: high
 ---
 
@@ -121,3 +121,31 @@ Give the user a step-by-step guide they can follow without you and without guess
 - **Anything that changes shared configuration** (repo variables, feature flags, production settings) is marked as the user's step, never run by you.
 
 Give the guide in chat in the user's language, and save an English copy to `$(~/.agents/bin/reports path staging-guide)`.
+
+## 7. Hand the branch over and record the staging results
+
+When there is a staging guide, the PR waits for its results: the PR description then shows real staging evidence, and a staging failure gets fixed before CI and reviewers spend time on the PR. When the change needs no manual tests, skip this step; `create-pr` comes next.
+
+**If you worked in a linked worktree** (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`), remove it so the user can check the branch out: a branch can be checked out in only one worktree. First prove nothing is lost:
+
+1. `git status --porcelain` prints nothing. Untracked files would be deleted with the worktree; commit them or ask.
+2. The branch is pushed: `git push -u origin <branch>` if it has no upstream yet, then `git rev-parse HEAD` equals `git rev-parse @{upstream}`.
+3. The main checkout is the first `worktree` line of `git worktree list --porcelain`.
+
+Then leave the worktree (its directory is about to disappear) and remove it from the main checkout:
+
+```bash
+cd <main checkout> && git worktree remove <worktree path> && git worktree prune
+```
+
+Never add `--force`, and never switch the main checkout's branch yourself: the user may have work there. The spec, the reports and the review and validate stamps live in the repository's shared `.git/agents/`, so they survive. If a tool created the worktree for its session (Xirp, for example), say so, so the user can archive that session too.
+
+Give the user the hand-off in chat, with real values:
+
+1. `cd <main checkout> && git status --short`. **Expected:** nothing. If it lists files, commit or stash them first.
+2. `git switch <branch> && git pull --ff-only`.
+3. `~/.agents/bin/reports` prints the staging guide at the end. Follow it from step 0, and tell me the result of each step.
+
+From here the user owns the checkout. Propose fixes instead of editing it, unless they ask you to.
+
+**When the user reports back,** append their results to the staging-guide report under `## Results (<date>)`, one line per step: PASS or FAIL and what they saw. A failure is a finding: fix it (verify, the self-review re-check and this skill's stamp again), update the guide, and ask for the affected steps to be re-run. When every step passed, continue with `create-pr`.

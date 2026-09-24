@@ -134,6 +134,9 @@ def reports_survive_worktree_removal(base):
     main = new_repo(base, "main")
     wt = os.path.join(base, "wt")
     git(main, "worktree", "add", "-q", "-b", "feat/z", wt, "trunk")
+    open(os.path.join(wt, "app.py"), "a").write("y = 2\n")
+    git(wt, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "change")
+    subprocess.run(["python3", H + "review_stamp.py", "write"], cwd=wt, capture_output=True)
     reports = os.path.expanduser("~/.agents/bin/reports")
     guide = subprocess.run([reports, "path", "staging-guide"], cwd=wt, capture_output=True, text=True).stdout.strip()
     open(guide, "w").write("# Staging guide\n")
@@ -141,6 +144,8 @@ def reports_survive_worktree_removal(base):
     git(main, "switch", "-q", "feat/z")
     shown = subprocess.run([reports], cwd=main, capture_output=True, text=True).stdout
     assert "# Staging guide" in shown, f"guide written at {guide} is gone after removing the worktree"
+    stamped = subprocess.run(["python3", H + "review_stamp.py", "check"], cwd=main).returncode == 0
+    assert stamped, "the self-review stamp must survive the hand-off so the PR can be opened from the main checkout"
 
 
 def stop_catches_leftovers_in_worktree(base):

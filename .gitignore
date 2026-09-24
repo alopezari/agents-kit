@@ -17,6 +17,8 @@ profiles/
 !/repos/README.md
 !/repos/_shared/
 /skills/*
+!/skills/create-pr/
+!/skills/follow-pr/
 !/skills/self-review/
 !/skills/ship/
 !/skills/spec/

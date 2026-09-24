@@ -7,7 +7,9 @@
 
 The fingerprint covers every file that differs from the merge-base with the
 default branch, by content, so committing stamped changes keeps it valid and
-any later edit invalidates it. Stamps live in .git/, never in the tree.
+any later edit invalidates it. Stamps live in the repository's shared git dir, per branch
+(.git/agents/stamps/<branch>/), never in the tree: they survive removing the worktree they were
+written in, so the PR can be opened from the main checkout after a staging hand-off.
 """
 import hashlib
 import os
@@ -58,6 +60,14 @@ def fingerprint():
 
 def stamp_path(kind):
     name = "self-review.stamp" if kind == "review" else f"{kind}.stamp"
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
+    branch = git("branch", "--show-current").replace("/", "-") or "detached"
+    return os.path.join(common, "agents", "stamps", branch, name)
+
+
+def legacy_stamp_path(kind):
+    """Where stamps lived before they moved to the shared git dir; still read, never written."""
+    name = "self-review.stamp" if kind == "review" else f"{kind}.stamp"
     return os.path.join(git("rev-parse", "--absolute-git-dir"), name)
 
 
@@ -71,15 +81,20 @@ def main():
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
     if command == "write":
+        os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
         with open(stamp_path(kind), "w") as fh:
             fh.write(fingerprint())
         print(f"{kind} stamp written")
         return 0
-    try:
-        with open(stamp_path(kind)) as fh:
-            return 0 if fh.read().strip() == fingerprint() else 1
-    except OSError:
-        return 1
+    current = fingerprint()
+    for path in (stamp_path(kind), legacy_stamp_path(kind)):
+        try:
+            with open(path) as fh:
+                if fh.read().strip() == current:
+                    return 0
+        except OSError:
+            continue
+    return 1
 
 
 if __name__ == "__main__":

@@ -78,11 +78,11 @@ Drawn from an analysis of ~2,700 human code-review comments. Write changes that 
 
 ## Pull requests
 
+The path of a change, one skill per step: `spec` → build → `self-review` → `validate` (ends by handing me the branch when staging needs manual tests) → `create-pr` → `follow-pr` (CI and review comments, until it's ready to merge) → I merge → `ship` (when I deploy).
+
 Before opening a pull request, or pushing substantial changes to one, run the `self-review` skill and resolve what it confirms. A hook blocks `gh pr create` until a self-review is recorded for the exact current change.
 
-Whenever creating or updating a pull request (e.g. `gh pr create`, `gh pr edit`), use the `write-pr-description` skill first and use its output for the title and description, in every repository, unless I provide my own title/description.
-
-Right after opening a pull request, run the `ship` skill. When the change needs manual staging tests and you worked in a worktree, it removes the worktree so I can switch to the branch; then it follows CI and review comments, and after I merge and deploy, the production checks.
+Open pull requests with the `create-pr` skill. Whenever creating or updating a pull request (e.g. `gh pr create`, `gh pr edit`), use the `write-pr-description` skill for the title and description, in every repository, unless I provide my own title/description.
 
 ## Code comments
 
