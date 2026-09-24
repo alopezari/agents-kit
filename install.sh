@@ -87,9 +87,11 @@ echo "Requirements"
 for bin in python3 jq git semgrep gitleaks docker node playwright-cli agent-browser; do
   command -v $bin >/dev/null && ok "$bin" || warn "$bin not found"
 done
-if [ -d "$KIT/tools/a11y/node_modules" ]; then ok "a11y-check dependencies"
-elif [ $DOCTOR = 1 ]; then warn "a11y-check dependencies missing (npm install in tools/a11y)"
-else (cd "$KIT/tools/a11y" && npm install --no-audit --no-fund >/dev/null 2>&1) && fix "a11y-check dependencies installed"; fi
+for tool in a11y mermaid; do
+  if [ -d "$KIT/tools/$tool/node_modules" ]; then ok "$tool dependencies"
+  elif [ $DOCTOR = 1 ]; then warn "$tool dependencies missing (npm install in tools/$tool)"
+  else (cd "$KIT/tools/$tool" && npm install --no-audit --no-fund >/dev/null 2>&1) && fix "$tool dependencies installed"; fi
+done
 
 if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
   echo "Claude Code"

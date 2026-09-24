@@ -1,0 +1,10 @@
+{
+  "name": "agents-mermaid-check",
+  "private": true,
+  "type": "module",
+  "description": "Parses the Mermaid diagrams in docs/framework.md the way GitHub renders them (tests/run.sh)",
+  "dependencies": {
+    "jsdom": "29.1.1",
+    "mermaid": "12.0.0"
+  }
+}

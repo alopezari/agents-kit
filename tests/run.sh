@@ -27,6 +27,7 @@ else echo "FAIL triage"; fail=1; fi
 
 section "framework reference"
 ~/.agents/bin/docs --check || fail=1
+node ~/.agents/tools/mermaid/check.mjs ~/.agents/docs/framework.md || fail=1
 
 section "install doctor"
 warnings=$(~/.agents/install.sh --doctor | grep -c "  warn ")

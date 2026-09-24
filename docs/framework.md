@@ -23,8 +23,8 @@ flowchart LR
     H[hooks/]
     R[repos/ overlays]
   end
-  P[(private profile)] -. install.sh --profile .-> R
-  P -. work-only skills .-> S
+  P[(private profile)] -.->|"install.sh --profile"| R
+  P -.->|"work-only skills"| S
   A --> X0[Claude Code]
   S --> X0
   H --> X0
@@ -36,7 +36,7 @@ flowchart LR
   H --> X2
   R --> H
   M[scheduled jobs] --> F[research/ reports and proposals]
-  F -. you review .-> A
+  F -.->|"you review"| A
 ```
 
 `install.sh` links the instructions and skills into each harness's own location and registers the hooks in its settings, so editing a file in `~/.agents` changes every harness at once. Pi has no hook config; the adapter in `adapters/pi/` translates its extension events into the same hook calls.
@@ -284,7 +284,7 @@ The kit itself holds nothing tied to one company. A profile is a separate (usual
 ./install.sh --profile <dir>  add a profile (a private repo with repo overlays, skills, research, rules)
 ```
 
-- `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, the Pi adapter, triage, the install doctor and this reference.
+- `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, the Pi adapter, triage, the install doctor, and this reference (up to date, and every diagram parses as GitHub renders it).
 - After changing the kit, commit as usual: the pre-commit hook regenerates this file.
 
 ## Layout
@@ -307,5 +307,5 @@ The kit itself holds nothing tied to one company. A profile is a separate (usual
 | `skills.external` | Third-party skills install.sh clones from their source. |
 | `skills/` | Skills linked into every harness; third-party ones are listed in `skills.external`. |
 | `tests/` | The regression suite: `tests/run.sh`. |
-| `tools/` | Node dependencies for the tools in `bin/`. |
+| `tools/` | Node code and dependencies for the tools in `bin/` and the diagram check in `tests/run.sh`. |
 | `usage/` | Session and pull-request extractors that feed the monthly analysis. |
