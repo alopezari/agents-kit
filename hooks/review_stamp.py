@@ -37,6 +37,13 @@ def base_ref(cwd=None):
     return "HEAD"
 
 
+def repo_name(cwd=None):
+    """The main checkout's directory name, the same from any worktree: the key of ~/.agents/repos/<name>."""
+    common = git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=cwd)
+    name = os.path.basename(common)
+    return os.path.basename(os.path.dirname(common)) if name == ".git" else name[:-len(".git")] if name.endswith(".git") else name
+
+
 def merge_base(cwd=None):
     """Where this branch left the default branch; HEAD when on the default branch itself."""
     return git("merge-base", "HEAD", base_ref(cwd), cwd=cwd) or "HEAD"

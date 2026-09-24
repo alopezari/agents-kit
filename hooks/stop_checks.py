@@ -144,7 +144,7 @@ def main():
     problems, any_verify_failed = [], False
     for root in roots:
         found, failed_verify = check_checkout(root, session)
-        problems += [f"[{os.path.basename(root)}] {p}" if len(roots) > 1 else p for p in found]
+        problems += [f"[{review_stamp.repo_name(root)}] {p}" if len(roots) > 1 else p for p in found]
         any_verify_failed = any_verify_failed or failed_verify
     streak = record_verify_streak(session, any_verify_failed)
 
@@ -212,7 +212,7 @@ def check_checkout(root, session):
     deleted = git(["diff", review_stamp.merge_base(root), "--name-only", "--diff-filter=D"], root).splitlines()
     problems += [f"Test file deleted: {p}" for p in deleted if TEST_FILE.search(p)]
 
-    verify = os.path.expanduser(f"~/.agents/repos/{os.path.basename(root)}/verify")
+    verify = os.path.expanduser(f"~/.agents/repos/{review_stamp.repo_name(root)}/verify")
     if not os.access(verify, os.X_OK):
         verify = AUTO_VERIFY
     verify_failed = False

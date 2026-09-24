@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets, then the repo's verify.
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **8 command-line tools**: a11y-check, browse, docs, gh, quality-log, reports, triage, wp-query-profile.
+- **9 command-line tools**: a11y-check, browse, docs, gh, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -154,7 +154,7 @@ Project-local tools win over global ones (`node_modules/.bin`, `vendor/bin`, `.v
 
 ### Hand-written, per repository
 
-A repository that needs more (a Docker stack, known failing tests, project rules) gets an executable `repos/<checkout-name>/verify`, usually built on `repos/_shared/verify_changed.py`:
+A repository that needs more (a Docker stack, known failing tests, project rules) gets an executable `repos/<repo>/verify` (`<repo>` as `bin/repo-name` prints it, the same from any worktree), usually built on `repos/_shared/verify_changed.py`:
 
 | Option | What it does |
 |---|---|
@@ -225,6 +225,8 @@ docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the 
 quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex]
 quality-log test <type> --issues N [--secs S] [--notes "..."]
 ```
+
+**`bin/repo-name`**: Print the repository's name as the kit knows it: the main checkout's directory name, the same from any worktree (Xirp, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.
 
 **`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree).
 

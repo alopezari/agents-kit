@@ -1,6 +1,6 @@
 # Personal per-repo overlays
 
-One directory per repository, named after the repo's checkout directory (e.g. `my-plugin` for `~/Projects/my-plugin`). Nothing here is committed to the repositories.
+One directory per repository, named after the repo's main checkout directory (e.g. `my-plugin` for `~/Projects/my-plugin`): `~/.agents/bin/repo-name` prints it, and it is the same from any worktree of that repo, whatever the worktree's directory is called. Nothing here is committed to the repositories.
 
 - `notes.md`: context agents read before working in that repo (commands, traps, conventions I care about). Referenced from `~/.agents/AGENTS.md`.
 - `verify` (executable, optional): run from the repo root by the Stop hook (`~/.agents/hooks/stop_checks.py`) after a session edits files. Exit non-zero to make the agent keep working. Keep it under 10 minutes. Most use `_shared/verify_changed.py`: semgrep, phpcs and PHPStan on changed lines, plus the unit suite compared against `phpunit-baseline.txt`, so pre-existing failures never block.

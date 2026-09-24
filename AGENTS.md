@@ -2,7 +2,7 @@
 
 Shared by every coding agent (Claude Code reads it as `~/.claude/CLAUDE.md`, Codex as `~/.codex/AGENTS.md`, Pi as `~/.pi/agent/AGENTS.md`; all are symlinks to `~/.agents/AGENTS.md`). A repository's own `AGENTS.md` wins over this file for anything repo-specific.
 
-My personal notes for a repository live outside it, in `~/.agents/repos/<repo-directory-name>/notes.md`. When one exists for the repo you're working in, read it before starting. Never add my personal notes to the repository itself; other people work there.
+My personal notes for a repository live outside it, in `~/.agents/repos/<repo>/notes.md`, where `<repo>` is what `~/.agents/bin/repo-name` prints: the main checkout's directory name, the same from any worktree. When one exists for the repo you're working in, read it before starting. Never add my personal notes to the repository itself; other people work there.
 
 ## How to work: like a staff engineer
 

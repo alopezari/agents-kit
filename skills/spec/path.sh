@@ -5,7 +5,7 @@
 # the spec and reports must survive the hand-off to the main checkout.
 set -euo pipefail
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
-repo="$(basename "$(dirname "$common")")"
+repo="$("$HOME/.agents/bin/repo-name")"
 name="spec-$repo-$(git branch --show-current | tr '/' '-').md"
 in_git="$common/agents/$name"
 in_tmp="${TMPDIR:-/tmp}/agents-specs/$name"

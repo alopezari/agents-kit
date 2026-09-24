@@ -328,7 +328,7 @@ def render():
     w("\nProject-local tools win over global ones (`node_modules/.bin`, `vendor/bin`, `.venv/bin`).\n")
     w("### Hand-written, per repository\n")
     w("A repository that needs more (a Docker stack, known failing tests, project rules) gets an executable "
-      "`repos/<checkout-name>/verify`, usually built on `repos/_shared/verify_changed.py`:\n")
+      "`repos/<repo>/verify` (`<repo>` as `bin/repo-name` prints it, the same from any worktree), usually built on `repos/_shared/verify_changed.py`:\n")
     w("| Option | What it does |\n|---|---|")
     for flag, helptext in verify_changed_options():
         w(f"| `{flag}` | {cell(helptext)} |")

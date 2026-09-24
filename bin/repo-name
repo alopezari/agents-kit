@@ -1,0 +1,6 @@
+#!/bin/bash
+# Print the repository's name as the kit knows it: the main checkout's directory name, the same from any
+# worktree (Xirp, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.
+set -euo pipefail
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+if [ "$(basename "$common")" = ".git" ]; then basename "$(dirname "$common")"; else basename "$common" .git; fi

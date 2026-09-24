@@ -148,6 +148,26 @@ def reports_survive_worktree_removal(base):
     assert stamped, "the self-review stamp must survive the hand-off so the PR can be opened from the main checkout"
 
 
+def overlay_found_from_worktree_with_another_name(base):
+    main = new_repo(base, "zz-agents-overlay-repo")
+    wt = os.path.join(base, "zz-agents-overlay-repo-worktree-session-xyz")
+    git(main, "worktree", "add", "-q", "-b", "session/xyz", wt, "trunk")
+    name = subprocess.run([os.path.expanduser("~/.agents/bin/repo-name")], cwd=wt, capture_output=True, text=True).stdout.strip()
+    assert name == "zz-agents-overlay-repo", name
+    vdir = os.path.expanduser("~/.agents/repos/zz-agents-overlay-repo")
+    os.makedirs(vdir, exist_ok=True)
+    try:
+        open(os.path.join(vdir, "verify"), "w").write("#!/bin/sh\necho ran: overlay verify\n")
+        os.chmod(os.path.join(vdir, "verify"), 0o755)
+        open(os.path.join(wt, "app.py"), "a").write("y = 2\n")
+        stop(RUN + "s11", wt, [os.path.join(wt, "app.py")])
+        report = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "verify"], cwd=wt,
+                                capture_output=True, text=True).stdout.strip()
+        assert "ran: overlay verify" in open(report).read(), "the repo's overlay must run from a worktree named differently"
+    finally:
+        shutil.rmtree(vdir, ignore_errors=True)
+
+
 def stop_catches_leftovers_in_worktree(base):
     main = new_repo(base, "main")
     wt = os.path.join(base, "wt")
@@ -232,7 +252,7 @@ def post_edit_syntax_feedback(base):
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, pr_gate_review_and_validation,
-          pr_gate_follows_worktrees, reports_survive_worktree_removal, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
+          pr_gate_follows_worktrees, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only, verify_stamp_and_effort_nudge,
           post_edit_syntax_feedback]:
