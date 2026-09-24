@@ -1,0 +1,53 @@
+#!/bin/bash
+# Runs the real gh with git's per-host proxy. gh ignores git's `http.<url>.proxy`, so a host reachable only through
+# a proxy (a SOCKS tunnel, for example) makes it hang. This finds the host a call targets, passes git's
+# proxy for it as HTTPS_PROXY, and fails at once when that proxy isn't answering.
+# Linked ahead of the real gh in PATH (install.sh --doctor shows how).
+set -euo pipefail
+
+me=$(readlink -f "${BASH_SOURCE[0]}")
+real=""
+IFS=: read -ra dirs <<<"$PATH"
+for dir in "${dirs[@]}"; do
+  if [ -x "$dir/gh" ] && [ "$(readlink -f "$dir/gh")" != "$me" ]; then real="$dir/gh"; break; fi
+done
+[ -n "$real" ] || { echo "gh: no gh found in PATH besides this wrapper ($me)" >&2; exit 127; }
+
+# host_of <URL | HOST/OWNER/REPO | OWNER/REPO | git remote URL>
+host_of() {
+  case "$1" in
+    *://*) local rest=${1#*://}; rest=${rest#*@}; echo "${rest%%[:/]*}" ;;
+    *@*:*) local rest=${1#*@}; echo "${rest%%:*}" ;;
+    */*/*) echo "${1%%/*}" ;;
+    */*) echo "github.com" ;;
+  esac
+}
+
+host=${GH_HOST:-}
+if [ -z "$host" ]; then
+  args=("$@")
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[i]}" in
+      --hostname=*) host=${args[i]#*=} ;;
+      --hostname) host=${args[i + 1]:-} ;;
+      --repo=*) host=$(host_of "${args[i]#*=}") ;;
+      -R | --repo) host=$(host_of "${args[i + 1]:-}") ;;
+      https://*) host=$(host_of "${args[i]}") ;;
+    esac
+    [ -n "$host" ] && break
+  done
+fi
+[ -n "$host" ] || host=$(host_of "$(git remote get-url origin 2>/dev/null || true)")
+
+if [ -n "$host" ] && [ -z "${HTTPS_PROXY:-}${https_proxy:-}${ALL_PROXY:-}${all_proxy:-}" ]; then
+  proxy=$(git config --get-urlmatch http.proxy "https://$host" 2>/dev/null || true)
+  if [ -n "$proxy" ]; then
+    address=${proxy#*://}; address=${address%%/*}
+    if ! nc -z -w 2 "${address%:*}" "${address##*:}" 2>/dev/null; then
+      echo "gh: $host is reached through the proxy $proxy (git config), which isn't answering. Start the tunnel and retry." >&2
+      exit 1
+    fi
+    export HTTPS_PROXY=$proxy
+  fi
+fi
+exec "$real" "$@"

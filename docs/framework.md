@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets, then the repo's verify.
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **7 command-line tools**: a11y-check, browse, docs, quality-log, reports, triage, wp-query-profile.
+- **8 command-line tools**: a11y-check, browse, docs, gh, quality-log, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -216,6 +216,8 @@ browse finish --checks N --passed P [--tool-issues K] [--notes "..."]
 docs            regenerate docs/framework.md
 docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the pre-commit hook)
 ```
+
+**`bin/gh`**: Runs the real gh with git's per-host proxy. gh ignores git's `http.<url>.proxy`, so a host reachable only through a proxy (a SOCKS tunnel, for example) makes it hang. This finds the host a call targets, passes git's proxy for it as HTTPS_PROXY, and fails at once when that proxy isn't answering. Linked ahead of the real gh in PATH (install.sh --doctor shows how).
 
 **`bin/quality-log`**: Record what a review lens or test type produced, so the monthly job can keep only perspectives that pay off.
 

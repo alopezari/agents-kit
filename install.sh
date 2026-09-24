@@ -109,6 +109,13 @@ for tool in a11y mermaid; do
   else (cd "$KIT/tools/$tool" && npm install --no-audit --no-fund >/dev/null 2>&1) && fix "$tool dependencies installed"; fi
 done
 
+# gh ignores git's per-host proxies (http.<url>.proxy); bin/gh applies them, so it must come first in PATH.
+# /usr/local/bin precedes Homebrew in every shell the harnesses start, and it needs root, so it's the user's step.
+if git config --global --get-regexp '^http\..+\.proxy$' >/dev/null 2>&1; then
+  if [ "$(readlink -f "$(command -v gh)")" = "$(readlink -f "$KIT/bin/gh")" ]; then ok "gh applies git's per-host proxies (bin/gh)"
+  else warn "gh ignores git's per-host proxy, so gh hangs on that host. Run: sudo ln -sf $KIT/bin/gh /usr/local/bin/gh"; fi
+fi
+
 if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
   echo "Claude Code"
   link "$KIT/AGENTS.md" "$HOME/.claude/CLAUDE.md"

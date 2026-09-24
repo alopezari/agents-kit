@@ -11,6 +11,9 @@ python3 test_hooks.py || fail=1
 section "generic verify"
 python3 test_verify_auto.py || fail=1
 
+section "gh proxy wrapper"
+bash test_gh_wrapper.sh || fail=1
+
 section "harness baselines"
 python3 test_baseline.py || fail=1
 
