@@ -248,9 +248,13 @@ def main():
             ran.append(f"semgrep {os.path.basename(rules)} on {len(php)} changed PHP files")
 
     tool_cwd = os.path.join(root, args.cwd)
-    rel = [os.path.relpath(os.path.join(root, p), tool_cwd) for p in php]
+    # PHPCS and PHPStan are configured for --cwd: a file outside it (a CI fixture, another package)
+    # would be judged by rules and autoloading that were never meant for it.
+    scope = os.path.normpath(args.cwd)
+    rel = [os.path.relpath(os.path.join(root, p), tool_cwd) for p in php
+           if scope == "." or p.startswith(scope + os.sep)]
 
-    if args.phpcs:
+    if args.phpcs and rel:
         out = run_json(shlex.split(args.phpcs) + ["--report=json", "-q", *rel], tool_cwd, not_run)
         for fpath, data in (out.get("files") or {}).items():
             repo_path = os.path.relpath(os.path.realpath(fpath if os.path.isabs(fpath) else os.path.join(tool_cwd, fpath)), os.path.realpath(root))
@@ -261,7 +265,7 @@ def main():
         if out:
             ran.append(f"phpcs on {len(rel)} files (changed lines only)")
 
-    if args.phpstan:
+    if args.phpstan and rel:
         out = run_json(shlex.split(args.phpstan) + ["--error-format=json", "--no-progress", *rel], tool_cwd, not_run)
         for fpath, data in (out.get("files") or {}).items():
             repo_path = os.path.relpath(os.path.realpath(fpath), os.path.realpath(root))

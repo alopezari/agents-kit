@@ -102,6 +102,15 @@ def staging_hand_off_shows_despite_stale_checks(base):
     assert phase(repo) == "build", "a guide for an older change is not a hand-off"
 
 
+def red_verify_after_self_review_stays_at_the_furthest_step(base):
+    repo = new_repo(base)
+    sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
+    open(sh(repo, SPEC_PATH), "w").write("# Spec\n")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    sh(repo, "python3", STAMP, "write", "--kind", "review")
+    assert phase(repo) == "validate · redo verify", "self-review is done; a red verify doesn't send it back to build"
+
+
 def spec_reports_and_stamps_follow_branch_renames(base):
     repo = new_repo(base)
     sh(repo, "git", "checkout", "-q", "-b", "session/wary-falcon")
@@ -141,7 +150,8 @@ def fast_path_serves_cache_and_refreshes(base):
 
 
 RESULTS = []
-for test in (walks_the_flow, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks, spec_reports_and_stamps_follow_branch_renames,
+for test in (walks_the_flow, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
+             red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
              fast_path_serves_cache_and_refreshes):
     base = tempfile.mkdtemp(prefix="agents-test-phase-")
     try:

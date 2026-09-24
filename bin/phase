@@ -109,18 +109,17 @@ def compute(previous):
     flag = "" if has_spec else " (no spec)"
     current = review_stamp.fingerprint()
     needs_validate = any(not review_stamp.NOT_BEHAVIOR.search(p) for p in changed)
-    validated = stamp_matches("validate", current)
-    unmet = [step for step, kind in (("verify", "verify"), ("self-review", "review")) if not stamp_matches(kind, current)]
-    if needs_validate and not validated:
-        unmet.append("validate")
-    # A staging hand-off for this exact change means the session is waiting on the user, even when
-    # an earlier check went stale; show that, and list what still blocks the PR.
-    staging = staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md")) if validated else None
-    if staging:
-        return staging + (f" · redo {', '.join(unmet)}" if unmet else "") + flag, {}
-    if unmet:
-        return {"verify": "build"}.get(unmet[0], unmet[0]) + flag, {}
-    return "create-pr" + flag, {}
+    steps = [("build", "verify"), ("self-review", "review")] + ([("validate", "validate")] if needs_validate else [])
+    done = [stamp_matches(kind, current) for _, kind in steps]
+    # The phase is the step after the furthest one done for this exact change; an earlier check that
+    # went stale (a red verify, an edit after the self-review) is listed, not shown as the phase.
+    reached = max((i + 1 for i, ok in enumerate(done) if ok), default=0)
+    redo = [("verify" if kind == "verify" else step) for (step, kind), ok in zip(steps[:reached], done) if not ok]
+    if reached < len(steps):
+        label = steps[reached][0]
+    else:
+        label = staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md")) or "create-pr"
+    return label + (f" · redo {', '.join(redo)}" if redo else "") + flag, {}
 
 
 def refresh(files):
