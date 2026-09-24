@@ -49,7 +49,7 @@ When two approaches are viable, pick one and give the one-line reason; don't wri
 
 ### Verify with evidence
 - Prove the change works by running it: the repo's tests, lint and type checks, and the behavior itself (run the app, the CLI, the request, the browser flow). Reading the diff is not verification.
-- A bug fix comes with a test that fails without the fix, when the repo has a test harness for that area.
+- A bug fix comes with a test that fails without the fix, when the repo has a test harness for that area. It must fail for the reason the report describes, not on a missing symbol or broken setup, and assert the behavior that was asked for, through the interface a caller sees.
 - For behavior changes, run the `validate` skill before opening a PR. It covers the full unit suite, positive and negative checks against the local stack, and a step-by-step guide for anything only staging or production can test.
 - Report exactly what you ran and what you did not. Never claim a result you haven't observed.
 - When something needs the user to check or run it by hand (a staging test, a setup step, a fix you can't apply), give numbered steps with a copy-paste command block for each, real values instead of placeholders, and the expected result plus what to do if it differs. The validate skill's step 6 is the full format.

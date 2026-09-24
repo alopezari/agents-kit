@@ -34,6 +34,7 @@ Then check:
 
 You are reviewing the tests in the diff, and the tests the diff should have.
 - Would each new test fail if the implementation were wrong? Look for fixtures that pass by coincidence, loose matchers, and assertions on mocks of the very unit under test.
+- Does each new test check the behavior the goal or spec asks for, through the interface a caller sees? A test of an adjacent path, or of internals only, proves nothing about the request. For a bug fix: does the test fail without the fix for the reason the report describes, not on a missing symbol or a setup error?
 - Is every behavior change in the diff covered, including the error and edge paths from the Correctness lens?
 - Were any tests deleted, skipped or loosened? Each one needs a stated reason.
 - Isolation: global state restored, no duplicated setup or teardown the base class already does, no order dependence.
