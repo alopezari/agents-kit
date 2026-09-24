@@ -108,14 +108,19 @@ def compute(previous):
     # The spec is a step, not a gate: a branch without one still has its real phase, flagged.
     flag = "" if has_spec else " (no spec)"
     current = review_stamp.fingerprint()
-    if not stamp_matches("verify", current):
-        return "build" + flag, {}
-    if not stamp_matches("review", current):
-        return "self-review" + flag, {}
     needs_validate = any(not review_stamp.NOT_BEHAVIOR.search(p) for p in changed)
-    if needs_validate and not stamp_matches("validate", current):
-        return "validate" + flag, {}
-    return (staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md")) or "create-pr") + flag, {}
+    validated = stamp_matches("validate", current)
+    unmet = [step for step, kind in (("verify", "verify"), ("self-review", "review")) if not stamp_matches(kind, current)]
+    if needs_validate and not validated:
+        unmet.append("validate")
+    # A staging hand-off for this exact change means the session is waiting on the user, even when
+    # an earlier check went stale; show that, and list what still blocks the PR.
+    staging = staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md")) if validated else None
+    if staging:
+        return staging + (f" · redo {', '.join(unmet)}" if unmet else "") + flag, {}
+    if unmet:
+        return {"verify": "build"}.get(unmet[0], unmet[0]) + flag, {}
+    return "create-pr" + flag, {}
 
 
 def refresh(files):

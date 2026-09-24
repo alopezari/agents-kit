@@ -86,6 +86,22 @@ def no_spec_is_flagged_not_a_gate(base):
     assert phase(repo) == "validate (no spec)"
 
 
+def staging_hand_off_shows_despite_stale_checks(base):
+    repo = new_repo(base)
+    sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
+    spec = sh(repo, SPEC_PATH)
+    open(spec, "w").write("# Spec\n")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    sh(repo, "python3", STAMP, "write", "--kind", "review")
+    open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
+    sh(repo, "python3", STAMP, "write", "--kind", "validate")
+    open(spec.replace("spec-shop-", "staging-guide-shop-"), "w").write("# Staging guide\n1. Check the cart\n")
+    assert phase(repo) == "staging (you) · redo verify, self-review", \
+        "the session waits on the user's staging test; the stale checks are listed, not shown as the phase"
+    open(os.path.join(repo, "app.py"), "a").write("w = 4\n")
+    assert phase(repo) == "build", "a guide for an older change is not a hand-off"
+
+
 def spec_reports_and_stamps_follow_branch_renames(base):
     repo = new_repo(base)
     sh(repo, "git", "checkout", "-q", "-b", "session/wary-falcon")
@@ -125,7 +141,7 @@ def fast_path_serves_cache_and_refreshes(base):
 
 
 RESULTS = []
-for test in (walks_the_flow, no_spec_is_flagged_not_a_gate, spec_reports_and_stamps_follow_branch_renames,
+for test in (walks_the_flow, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks, spec_reports_and_stamps_follow_branch_renames,
              fast_path_serves_cache_and_refreshes):
     base = tempfile.mkdtemp(prefix="agents-test-phase-")
     try:
