@@ -1,0 +1,6 @@
+update-option.php:2 update-option-false-noop
+update-option.php:3 update-option-false-noop
+update-option.php:4 update-option-false-noop
+wordpress-rules.php:18 wp-rest-route-without-permission-callback
+wordpress-rules.php:22 wp-unbounded-query
+wordpress-rules.php:26 wp-query-in-loop

@@ -1,0 +1,23 @@
+# Machine-local state and output
+logs/
+backups/
+approvals/
+monitors/state/
+review-mining/runs/
+review-mining/last-success
+usage/*.json
+/research/
+__pycache__/
+*.pyc
+node_modules/
+
+# Profiles are private repos layered in by install.sh through symlinks
+profiles/
+/repos/*
+!/repos/README.md
+!/repos/_shared/
+/skills/*
+!/skills/self-review/
+!/skills/spec/
+!/skills/validate/
+!/skills/write-pr-description/

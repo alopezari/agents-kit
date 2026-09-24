@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Record what a review lens or test type produced, so the monthly job can keep only perspectives that pay off.
+
+  quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex]
+  quality-log test <type> --issues N [--secs S] [--notes "..."]
+
+Appends to ~/.agents/logs/quality.jsonl with the repo, branch and the triage tier.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
+
+
+def git(*args):
+    return subprocess.run(["git", *args], capture_output=True, text=True).stdout.strip()
+
+
+def main():
+    argv = sys.argv[1:]
+    if len(argv) < 2 or argv[0] not in ("lens", "test"):
+        print(__doc__)
+        return 1
+    kind, name, rest = argv[0], argv[1], argv[2:]
+    fields = {}
+    i = 0
+    while i < len(rest):
+        key = rest[i].lstrip("-").replace("-", "_")
+        if i + 1 < len(rest):
+            value = rest[i + 1]
+            fields[key] = int(value) if value.isdigit() else value
+        i += 2
+    try:
+        tier = json.loads(subprocess.run([os.path.expanduser("~/.agents/bin/triage"), "--json"],
+                                         capture_output=True, text=True, timeout=60).stdout)["tier"]
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        tier = None
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    with open(LOG, "a") as fh:
+        fh.write(json.dumps({
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": kind, "name": name, "tier": tier,
+            "repo": os.path.basename(git("rev-parse", "--show-toplevel") or os.getcwd()),
+            "branch": git("branch", "--show-current"), "harness": os.environ.get("AGENTS_HARNESS", "unknown"),
+            **fields,
+        }) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.
+
+  triage                  change vs the merge-base with the default branch (committed + uncommitted + untracked)
+  triage --range A..B     a commit range instead (for calibration on past changes)
+  triage --json           machine-readable output
+
+The self-review and validate skills run the lenses and tests this selects. Every rule is a regex
+over changed paths or added lines, so a selection can always be traced back to its signal.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+
+TEST_OR_DOC = re.compile(r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$"
+                         r"|(^|/)(CHANGELOG|README|LICENSE)", re.I)
+STYLE_FILE = re.compile(r"\.(css|scss|sass|less)$", re.I)
+UI_FILE = re.compile(r"\.(jsx?|tsx?|vue|css|scss|sass|less|html|twig|mustache)$|(^|/)(templates?|views?|blocks?|components?)/", re.I)
+
+# (name, regex over added lines) — each hit is recorded as a reason.
+LENS_SIGNALS = {
+    "security": r"\$_(GET|POST|REQUEST|COOKIE|FILES|SERVER)\b|get_param\(|get_json_params|register_rest_route|wp_ajax_"
+                r"|current_user_can|nonce|\$wpdb->|unserialize\(|file_put_contents|unlink\(|move_uploaded_file"
+                r"|wp_remote_|curl_|\bexec\(|shell_exec|proc_open|eval\(|innerHTML|dangerouslySetInnerHTML|redirect",
+    "performance": r"\$wpdb->|new WP_Query|get_posts\(|wc_get_(orders|products)\(|get_post_meta\(|wp_remote_"
+                   r"|add_action\(\s*['\"](init|wp|wp_loaded|template_redirect|admin_init|plugins_loaded)['\"]"
+                   r"|set_transient|wp_cache_|autoload|as_schedule|wp_schedule_event|posts_per_page|LIMIT",
+    "compatibility": r"apply_filters\(|do_action\(|register_rest_route|WP_CLI::add_command|->add_argument\("
+                     r"|add_option\(|update_option\(|register_setting|CREATE TABLE|ALTER TABLE|dbDelta|add_filter\(|add_action\(",
+    "operability": r"as_schedule|as_enqueue|wp_schedule_event|register_rest_route|WP_CLI::add_command|wp_remote_"
+                   r"|curl_|error_log|->log\(",
+    "data-privacy": r"CREATE TABLE|ALTER TABLE|DROP |dbDelta|DELETE FROM|->delete\(|wp_delete_|TRUNCATE|user_email"
+                    r"|billing_|shipping_|\bemail\b|ip_address|personal|gdpr|tracks?_event|analytics|error_log",
+}
+HIGH_RISK = {
+    "auth or permissions": r"current_user_can|permission_callback|wp_verify_nonce|check_ajax_referer|login|capabilit",
+    "payments or orders": r"stripe|payment|checkout|refund|subscription|invoice|wc_get_order|->get_total\(",
+    "schema or data migration": r"CREATE TABLE|ALTER TABLE|dbDelta|migration|DROP TABLE",
+    "public API or hooks": r"register_rest_route|apply_filters\(|do_action\(|WP_CLI::add_command",
+    "caching": r"set_transient|wp_cache_set|wp_cache_add|cache_key",
+    "scheduled jobs": r"as_schedule|as_enqueue|wp_schedule_event|cron",
+}
+PROPERTY_FN = re.compile(r"function\s+\w*(parse|format|calculate|compute|compare|convert|normali[sz]e|version|date|week"
+                         r"|price|round|slug|sanitize|validate)\w*\s*\(", re.I)
+BUDGET = {"low": "< 5 min", "standard": "<= 20 min", "high": "<= 45 min"}
+
+
+def git(*args, cwd=None):
+    return subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd).stdout
+
+
+def base_ref():
+    remote_head = git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").strip()
+    for ref in ([remote_head] if remote_head else []) + ["origin/trunk", "origin/main", "origin/master",
+                                                         "origin/develop", "trunk", "main", "master", "develop"]:
+        if git("rev-parse", "--verify", "--quiet", ref).strip():
+            return ref
+    return "HEAD"
+
+
+def collect(rng):
+    if rng:
+        diff = git("diff", "--unified=0", "--no-color", rng)
+        untracked = []
+    else:
+        merge_base = git("merge-base", "HEAD", base_ref()).strip() or "HEAD"
+        diff = git("diff", "--unified=0", "--no-color", merge_base)
+        untracked = git("ls-files", "--others", "--exclude-standard").splitlines()
+    files, added, removed, path = {}, [], 0, None
+    for line in diff.splitlines():
+        if line.startswith("+++ "):
+            path = line[6:] if line.startswith("+++ b/") else None
+            if path:
+                files.setdefault(path, 0)
+        elif line.startswith("--- a/") and path is None:
+            files.setdefault(line[6:], 0)
+        elif path and line.startswith("+") and not line.startswith("+++"):
+            files[path] += 1
+            added.append((path, line[1:]))
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    for p in untracked:
+        try:
+            lines = open(p, errors="ignore").read().splitlines()
+        except OSError:
+            continue
+        files[p] = len(lines)
+        added += [(p, l) for l in lines]
+    return files, added, removed
+
+
+def php_min():
+    for candidate in ("composer.json", "src/composer.json"):
+        try:
+            data = json.load(open(candidate))
+        except (OSError, ValueError):
+            continue
+        platform = (data.get("config") or {}).get("platform", {}).get("php")
+        req = (data.get("require") or {}).get("php", "")
+        m = re.search(r"(\d+\.\d+)", platform or req)
+        if m:
+            return m.group(1)
+    return None
+
+
+def triage(rng=None):
+    files, added, removed = collect(rng)
+    changed_lines = sum(files.values()) + removed
+    behavior = [p for p in files if not TEST_OR_DOC.search(p)]
+    style_only = bool(behavior) and all(STYLE_FILE.search(p) for p in behavior)
+    code_added = [(p, l) for p, l in added if not TEST_OR_DOC.search(p)]
+    reasons, lenses, tests = [], {"correctness": ["always"]}, {"unit (verify)": ["always"]}
+
+    def hits(pattern, lines=code_added, limit=3):
+        rx = re.compile(pattern, re.I)
+        found = []
+        for p, l in lines:
+            m = rx.search(l)
+            if m and len(found) < limit:
+                found.append(f"{p}: `{m.group(0)}`")
+        return found
+
+    high = []
+    for label, rx in HIGH_RISK.items():
+        h = hits(rx, limit=1)
+        if h:
+            high.append(f"{label} ({h[0]})")
+    if changed_lines > 400:
+        high.append(f"{changed_lines} changed lines")
+
+    if (not behavior or style_only) and changed_lines < 50 and not high:
+        tier = "low"
+    elif high:
+        tier = "high"
+        reasons += high
+    else:
+        tier = "standard"
+
+    if style_only:
+        lenses["ux-a11y-i18n"] = behavior[:3]
+    if tier != "low":
+        lenses["maintainability"] = ["behavior change"]
+        if any(TEST_OR_DOC.search(p) and "test" in p.lower() for p in files) or (behavior and not style_only):
+            lenses["tests"] = ["behavior change" if behavior else "tests changed"]
+        for lens, rx in LENS_SIGNALS.items():
+            h = hits(rx)
+            if h:
+                lenses[lens] = h
+        ui = [p for p in behavior if UI_FILE.search(p)]
+        if ui:
+            lenses["ux-a11y-i18n"] = ui[:3]
+
+    if behavior and not style_only:
+        tests["e2e positive/negative (validate)"] = ["behavior change"]
+    elif style_only:
+        tests["visual check of affected pages (validate)"] = ["style-only change"]
+    if any(re.search(r"\$wpdb->|WP_Query|get_posts\(|wc_get_(orders|products)\(", l) for _, l in code_added):
+        tests["query budget"] = lenses["performance"][:2]
+    if "ux-a11y-i18n" in lenses:
+        tests["accessibility (axe)"] = lenses["ux-a11y-i18n"]
+    minimum = php_min()
+    if minimum and float(minimum) < 8.0 and any(p.endswith(".php") for p in files):
+        tests[f"php {minimum} syntax (verify)"] = [f"composer requires php {minimum}"]
+    if re.search(r"CREATE TABLE|ALTER TABLE|dbDelta|migration", "\n".join(l for _, l in code_added), re.I):
+        tests["migration round-trip"] = hits(r"CREATE TABLE|ALTER TABLE|dbDelta|migration", limit=2)
+    prop = [f"{p}: {m.group(0)}" for p, l in code_added for m in [PROPERTY_FN.search(l)] if m][:3]
+    if prop:
+        tests["property-based"] = prop
+    if tier == "high" and any(TEST_OR_DOC.search(p) and "test" in p.lower() for p in files) and code_added:
+        tests["mutation (changed lines)"] = ["high risk with tests in the diff"]
+
+    return {"tier": tier, "budget": BUDGET[tier], "changed_lines": changed_lines, "files": len(files),
+            "reasons": reasons, "lenses": lenses, "tests": tests,
+            "cross_model": "per lens" if tier == "high" else ("correctness" if tier == "standard" else "none")}
+
+
+def main():
+    args = sys.argv[1:]
+    rng = args[args.index("--range") + 1] if "--range" in args else None
+    result = triage(rng)
+    if "--json" in args:
+        print(json.dumps(result, indent=1))
+        return 0
+    print(f"Risk: {result['tier']} ({result['changed_lines']} changed lines in {result['files']} files; "
+          f"budget {result['budget']}; cross-model: {result['cross_model']})")
+    for r in result["reasons"]:
+        print(f"  high-risk signal: {r}")
+    print("Review lenses:")
+    for k, v in result["lenses"].items():
+        print(f"  - {k}: {'; '.join(v)}")
+    print("Tests:")
+    for k, v in result["tests"].items():
+        print(f"  - {k}: {'; '.join(v)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

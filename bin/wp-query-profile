@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Count the SQL queries a REST route or PHP snippet runs inside the local WordPress, and flag N+1 patterns.
+
+  wp-query-profile --rest GET /wp/v2/posts [--params '{"per_page": 20}'] [--user 1]
+  wp-query-profile --php 'my_function_under_test( 20 );' [--user 1]
+
+Runs from the repo root through ~/.agents/repos/<repo>/wp-cli (an executable that forwards its
+arguments to WP-CLI inside the repo's local stack). Every query is captured with the `query` filter,
+so SAVEQUERIES isn't needed. Normalized queries repeated >= --repeat times (default 3) are reported
+as possible N+1 patterns. Exit 1 when any are found.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+PHP = r"""<?php
+$__agents_q = [];
+add_filter( 'query', function ( $sql ) use ( &$__agents_q ) { $__agents_q[] = $sql; return $sql; }, PHP_INT_MAX );
+if ( %(user)s ) { wp_set_current_user( %(user)s ); }
+$__agents_status = null;
+$__agents_t = microtime( true );
+%(target)s
+$__agents_secs = round( microtime( true ) - $__agents_t, 3 );
+$__agents_norm = array();
+foreach ( $__agents_q as $__s ) {
+	$__k = preg_replace( array( '/\s+/', "/'(?:[^'\\\\]|\\\\.)*'/", '/\b\d+\b/' ), array( ' ', '?', '?' ), trim( $__s ) );
+	$__agents_norm[ $__k ] = ( $__agents_norm[ $__k ] ?? 0 ) + 1;
+}
+arsort( $__agents_norm );
+echo "__AGENTS_JSON__" . wp_json_encode( array(
+	'status'  => $__agents_status,
+	'queries' => count( $__agents_q ),
+	'secs'    => $__agents_secs,
+	'top'     => array_slice( $__agents_norm, 0, 10, true ),
+) ) . "\n";
+"""
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    target = ap.add_mutually_exclusive_group(required=True)
+    target.add_argument("--rest", nargs=2, metavar=("METHOD", "ROUTE"))
+    target.add_argument("--php", help="PHP statements to profile (no <?php tag)")
+    ap.add_argument("--params", default="{}", help="JSON params for the REST request")
+    ap.add_argument("--user", default="0", help="user ID to run as (0 = logged out)")
+    ap.add_argument("--repeat", type=int, default=3, help="flag normalized queries repeated at least this many times")
+    args = ap.parse_args()
+
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    wp = os.path.expanduser(f"~/.agents/repos/{os.path.basename(root or os.getcwd())}/wp-cli")
+    if not os.access(wp, os.X_OK):
+        print(f"No {wp}: create it (an executable forwarding its arguments to WP-CLI in the local stack).", file=sys.stderr)
+        return 2
+
+    if args.rest:
+        method, route = args.rest
+        params = json.loads(args.params)
+        code = (f"$__r = new WP_REST_Request( {json.dumps(method.upper())}, {json.dumps(route)} );\n"
+                f"foreach ( json_decode( {json.dumps(json.dumps(params))}, true ) as $__k => $__v ) {{ $__r->set_param( $__k, $__v ); }}\n"
+                "$__res = rest_do_request( $__r );\n$__agents_status = $__res->get_status();")
+    else:
+        code = args.php
+    user = str(int(args.user)) if str(args.user).isdigit() else "0"
+    proc = subprocess.run([wp, "eval-file", "-"], input=PHP % {"user": user, "target": code},
+                          capture_output=True, text=True, cwd=root or None, timeout=300)
+    line = next((l for l in proc.stdout.splitlines() if l.startswith("__AGENTS_JSON__")), None)
+    if not line:
+        print(f"Profiling failed:\n{(proc.stdout + proc.stderr)[-1500:]}", file=sys.stderr)
+        return 2
+    result = json.loads(line[len("__AGENTS_JSON__"):])
+    repeated = {q: n for q, n in result["top"].items() if n >= args.repeat}
+    print(f"status={result['status']} queries={result['queries']} secs={result['secs']}")
+    for q, n in result["top"].items():
+        flag = "  <-- repeated (possible N+1)" if q in repeated else ""
+        print(f"{n:5d}  {q[:160]}{flag}")
+    return 1 if repeated else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

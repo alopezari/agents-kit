@@ -1,0 +1,3 @@
+#!/bin/bash
+# Accessibility check (axe-core) of the given URLs. See ~/.agents/tools/a11y/check.mjs.
+exec node "$HOME/.agents/tools/a11y/check.mjs" "$@"

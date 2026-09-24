@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""Generate docs/framework.md, the reference for what the kit does, from the kit's own source.
+
+  docs            regenerate docs/framework.md
+  docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the pre-commit hook)
+
+Everything below is read from the files that implement it: hook wiring from install.sh and the
+Pi adapter, rules from guard_bash.py and the semgrep file, skills from their frontmatter, tools
+from their headers, schedules from the launchd templates. Profile content (symlinked repos and
+skills) is left out, so the output is the same on every machine. A section that points at
+something missing fails the run instead of describing it.
+"""
+import ast
+import os
+import re
+import subprocess
+import sys
+
+KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(KIT, "docs", "framework.md")
+HARNESS_OF_SETTINGS = {"S": "Claude Code", "H": "Codex"}
+WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+# One line per top-level entry of the kit. A new directory fails the run until it is described here.
+LAYOUT = {
+    "AGENTS.md": "The instructions every harness loads (linked as CLAUDE.md / AGENTS.md).",
+    "README.md": "Install and first steps.",
+    "LICENSE": "MIT.",
+    "install.sh": "Wires the kit into each installed harness; `--doctor` reports without changing anything.",
+    "adapters/": "Per-harness glue: the Pi extension, the Claude Code status line, Codex profiles.",
+    "hooks/": "The hook scripts all harnesses share (one JSON contract: stdin in, decision out).",
+    "skills/": "Skills linked into every harness; third-party ones are listed in `skills.external`.",
+    "skills.external": "Third-party skills install.sh clones from their source.",
+    "repos/": "Per-repository overlays (`notes.md`, `verify`) and the shared verify scripts in `_shared/`.",
+    "bin/": "Command-line tools the skills and people call.",
+    "tools/": "Node dependencies for the tools in `bin/`.",
+    "monitors/": "The weekly health check and the mid-month trends scan.",
+    "review-mining/": "The monthly job that learns from human code-review comments.",
+    "usage/": "Session and pull-request extractors that feed the monthly analysis.",
+    "launchd/": "Templates for the scheduled jobs (macOS).",
+    "tests/": "The regression suite: `tests/run.sh`.",
+    "docs/": "This reference and the research behind the instructions.",
+    ".githooks/": "Keeps this reference in sync on every commit.",
+}
+# Local state that is git-ignored and never documented.
+IGNORED = {".git", ".gitignore", "logs", "backups", "approvals", "research", "profiles", "node_modules", "__pycache__"}
+
+
+def read(rel):
+    with open(os.path.join(KIT, rel)) as fh:
+        return fh.read()
+
+
+def require(rel):
+    if not os.path.exists(os.path.join(KIT, rel)):
+        sys.exit(f"docs: {rel} is referenced by the reference but does not exist")
+    return rel
+
+
+def docstring(rel):
+    return ast.get_docstring(ast.parse(read(rel))) or ""
+
+
+def first_paragraph(text):
+    """The opening paragraph, stopping before usage lines (`name args`, `~/...`, `./...`)."""
+    lines = []
+    for line in text.strip().splitlines():
+        stripped = line.strip()
+        if not stripped or re.match(r"(~/|\./|[\w-]+\.(py|sh) |[\w-]+ +[<\[-])", stripped):
+            break
+        lines.append(stripped)
+    return " ".join(lines)
+
+
+def summary_and_detail(text):
+    """First line plus the paragraph after it: hook docstrings open with where they run, then what they do."""
+    paragraphs = text.strip().split("\n\n")
+    detail = first_paragraph(paragraphs[1]) if len(paragraphs) > 1 else ""
+    return (first_paragraph(paragraphs[0]) + " " + detail).strip()
+
+
+def header_comment(rel):
+    """The leading comment block of a shell script, or the docstring of a Python one."""
+    text = read(rel)
+    if text.startswith("#!/usr/bin/env python3"):
+        return docstring(rel)
+    lines = []
+    for line in text.splitlines()[1:]:
+        if not line.startswith("#"):
+            break
+        lines.append(line[1:].strip())
+    return "\n".join(lines)
+
+
+def core_entries(slot):
+    """Real directories in a kit slot; symlinks come from a profile and stay out of the reference."""
+    base = os.path.join(KIT, slot)
+    return sorted(e for e in os.listdir(base)
+                  if os.path.isdir(os.path.join(base, e)) and not os.path.islink(os.path.join(base, e)))
+
+
+def frontmatter(rel):
+    match = re.match(r"---\n(.*?)\n---", read(rel), re.S)
+    fields = {}
+    for line in (match.group(1) if match else "").splitlines():
+        key, _, value = line.partition(":")
+        fields[key.strip()] = value.strip().strip('"')
+    return fields
+
+
+def cell(text):
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+# --- sources ---------------------------------------------------------------------------------
+def harness_hooks():
+    """[(harness, event, matcher, script, timeout)] from install.sh and the Pi adapter."""
+    rows = []
+    for var, event, matcher, script, timeout in re.findall(
+            r'^\s*hook "\$(\w)"\s+(\w+)\s+"([^"]*)"\s+(\S+)\s+(\d+)', read("install.sh"), re.M):
+        rows.append((HARNESS_OF_SETTINGS[var], event, matcher or "(every stop)", require(f"hooks/{script}")[6:], timeout))
+    adapter = read("adapters/pi/agents-kit.ts")
+    for chunk in adapter.split("pi.on(")[1:]:
+        event = re.match(r'"(\w+)"', chunk).group(1)
+        tools = re.findall(r'toolName !== "(\w+)"', chunk)
+        for script in re.findall(r'runHook\("([\w.]+)"', chunk):
+            timeout = re.search(r"timeout: ([\d_]+)", adapter).group(1).replace("_", "")
+            rows.append(("Pi", event, "|".join(tools) or "(every settle)", require(f"hooks/{script}")[6:],
+                         str(int(timeout) // 1000)))
+    return rows
+
+
+def guard_rules():
+    tree = ast.parse(read("hooks/guard_bash.py"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "RULES":
+            return [elt.elts[1].value for elt in node.value.elts]
+    sys.exit("docs: RULES not found in hooks/guard_bash.py")
+
+
+def function_docs(rel, prefix=""):
+    tree = ast.parse(read(rel))
+    return [(n.name, first_paragraph(ast.get_docstring(n) or "")) for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name.startswith(prefix)]
+
+
+def verify_changed_options():
+    rows = []
+    for call in re.findall(r'ap\.add_argument\((.*?)\)\n', read("repos/_shared/verify_changed.py"), re.S):
+        flag = re.match(r'"([^"]+)"', call).group(1)
+        helptext = re.search(r'help="([^"]+)"', call)
+        rows.append((flag, " ".join(helptext.group(1).split()) if helptext else ""))
+    return rows
+
+
+def semgrep_rules():
+    rules = []
+    for block in re.split(r"\n  - id: ", read("repos/_shared/wordpress.semgrep.yml"))[1:]:
+        rule_id = block.split("\n")[0].strip()
+        severity = re.search(r"severity: (\w+)", block).group(1)
+        message = re.search(r"message: >-?\n((?:      .*\n?)+)", block)
+        text = " ".join(message.group(1).split()) if message else ""
+        rules.append((rule_id, severity, re.split(r"(?<=[.!?])\s", text)[0]))
+    return rules
+
+
+def skills():
+    external = {line.split()[0]: line.split()[1] for line in read("skills.external").splitlines()
+                if line.strip() and not line.startswith("#")}
+    rows = []
+    for name in core_entries("skills"):
+        meta = frontmatter(f"skills/{name}/SKILL.md")
+        rows.append((meta.get("name", name), external.get(name, "core"), meta.get("description", "")))
+    for name, url in external.items():
+        if name not in core_entries("skills"):
+            rows.append((name, url, "(not installed on this machine yet: run install.sh)"))
+    return sorted(rows)
+
+
+def tools():
+    rows = []
+    for name in sorted(os.listdir(os.path.join(KIT, "bin"))):
+        head = header_comment(f"bin/{name}")
+        usage = [l.strip() for l in head.splitlines() if l.strip().startswith(name + " ") or l.strip() == name]
+        summary = first_paragraph("\n".join(l for l in head.splitlines() if l.strip() not in usage))
+        rows.append((name, summary, usage))
+    return rows
+
+
+def schedules():
+    rows = []
+    for plist in sorted(os.listdir(os.path.join(KIT, "launchd"))):
+        text = read(f"launchd/{plist}")
+        when = dict((k, int(v)) for k, v in re.findall(r"<key>(Weekday|Day|Hour|Minute)</key>\s*<integer>(\d+)</integer>", text))
+        program = re.findall(r"<string>__HOME__/\.agents/([^<]+)</string>", text)
+        script = require(program[0].split()[0]) if program else ""
+        at = f"{when['Hour']:02d}:{when['Minute']:02d}"
+        if "Weekday" in when:
+            cadence = f"Every {WEEKDAYS[when['Weekday'] % 7]} at {at}"
+        elif "Day" in when:
+            cadence = f"Day {when['Day']} of every month at {at}"
+        else:
+            cadence = f"Every day at {at}"
+        rows.append((plist[:-len(".plist")], cadence, script, first_paragraph(header_comment(script))))
+    return rows
+
+
+def agents_md_outline():
+    return [(len(m.group(1)), m.group(2)) for m in re.finditer(r"^(#{2,3}) (.+)$", read("AGENTS.md"), re.M)]
+
+
+# --- rendering -------------------------------------------------------------------------------
+def render():
+    hooks = harness_hooks()
+    skill_rows = skills()
+    tool_rows = tools()
+    jobs = schedules()
+    harnesses = sorted({h for h, *_ in hooks})
+    out = []
+    w = out.append
+
+    w("# What the agents kit does\n")
+    w("_Generated by `bin/docs` from the kit's source; do not edit by hand. The pre-commit hook and `tests/run.sh` keep it current._\n")
+    w("The kit gives every coding agent you use the same way of working: one set of instructions, the same skills, "
+      "and the same safety and quality checks, whichever harness runs the session. It is built for "
+      f"{', '.join(harnesses[:-1])} and {harnesses[-1]} on macOS, and it works on any repository: repository-specific "
+      "knowledge lives in overlays and private profiles, never in the repositories themselves.\n")
+    w("## At a glance\n")
+    w(f"- **{len(harnesses)} harnesses** share one `AGENTS.md`, {len(skill_rows)} skills and {len({s for *_, s, _ in hooks})} hook scripts.")
+    w(f"- **{len(guard_rules()) + 2} guard rules** block irreversible or outward-facing shell commands before they run.")
+    w("- **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets, then the repo's verify.")
+    w(f"- **{len(function_docs('repos/_shared/verify_auto.py', 'check_'))} stacks** are verified automatically when a repo has no hand-written verify.")
+    w(f"- **{len(jobs)} scheduled jobs** watch the kit's health, look for improvements and learn from code review.")
+    w(f"- **{len(tool_rows)} command-line tools**: {', '.join(name for name, *_ in tool_rows)}.\n")
+
+    w("## How it fits together\n")
+    w("```mermaid\nflowchart LR\n  subgraph kit[\"~/.agents\"]\n    A[AGENTS.md]\n    S[skills/]\n    H[hooks/]\n    R[repos/ overlays]\n  end")
+    w("  P[(private profile)] -. install.sh --profile .-> R")
+    w("  P -. work-only skills .-> S")
+    for i, harness in enumerate(harnesses):
+        w(f"  A --> X{i}[{harness}]\n  S --> X{i}\n  H --> X{i}")
+    w("  R --> H\n  M[scheduled jobs] --> F[research/ reports and proposals]\n  F -. you review .-> A\n```\n")
+    w("`install.sh` links the instructions and skills into each harness's own location and registers the hooks in "
+      "its settings, so editing a file in `~/.agents` changes every harness at once. Pi has no hook config; "
+      "the adapter in `adapters/pi/` translates its extension events into the same hook calls.\n")
+
+    w("## The life of a task\n")
+    for skill in ("spec", "self-review", "validate", "write-pr-description"):
+        require(f"skills/{skill}/SKILL.md")
+    w("```mermaid\nflowchart TD\n  T[Issue or request] --> SP[spec skill: acceptance criteria]\n  SP --> W[Agent edits code]")
+    w("  W -->|every shell command| G{guard_bash / guard_mcp}\n  G -->|irreversible or shared write| B[Blocked with the reason]")
+    w("  W -->|every file edit| PE[post_edit: syntax check]\n  PE -->|syntax error| W")
+    w("  W -->|end of turn| SC{stop_checks + verify}\n  SC -->|problem found, first time| W\n  SC -->|clean| SR[self-review skill: lenses + second model]")
+    w("  SR --> V[validate skill: suite + local checks + staging guide]\n  V --> PR{gh pr create}")
+    w("  PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]\n  PR -->|stamped| D[write-pr-description] --> O[Pull request]\n```\n")
+    w("The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up "
+      "in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a "
+      "stamp of the exact change in `.git/`; editing anything afterwards invalidates it.\n")
+
+    w("## Hooks\n")
+    w("| Harness | Event | Applies to | Script | Timeout (s) |\n|---|---|---|---|---|")
+    for row in sorted(hooks):
+        w("| " + " | ".join(cell(str(c)) for c in row) + " |")
+    w("")
+    for script in sorted({s for *_, s, _ in hooks}):
+        w(f"**`{script}`**: {summary_and_detail(docstring('hooks/' + script))}\n")
+    w("Every decision is appended to `~/.agents/logs/hooks.jsonl`, which the weekly health check reads.\n")
+
+    w("### What the shell guard blocks\n")
+    for reason in guard_rules():
+        w(f"- {reason}")
+    w("- Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.")
+    w("- `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.\n")
+    w("It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems (issue trackers, "
+      "chat) need a short-lived approval that only you can create; profiles declare which operations count as writes "
+      "in `mcp-writes.json`.\n")
+
+    w("## Verify: checking the change at the end of every turn\n")
+    w("\"The change\" is everything the branch adds since it left the default branch, committed or not, plus untracked files: "
+      "what the pull request will contain. Only findings on changed lines count, so old problems in a touched file never block.\n")
+    w("Each run saves its output as evidence (`bin/reports`), and every line says what happened: `ran:` for checks that "
+      "executed, `skipped:` with the reason for checks that could not (never counted as a pass), `warning:` and `error:`.\n")
+    w("### Automatic, for any repository\n")
+    w("Used when a repository has no hand-written verify. Only tests related to the changed files run, never full suites.\n")
+    w("| Files | What runs |\n|---|---|")
+    registry = re.search(r"^CHECKS = \((.*?)^\)", read("repos/_shared/verify_auto.py"), re.S | re.M).group(1)
+    exts = dict((fn, e) for e, fn in re.findall(r"\((\w+|\([^)]*\)),\s*(check_\w+)\)", registry))
+    constants = dict(re.findall(r'^(\w+_EXT) = (\(.*?\))$', read("repos/_shared/verify_auto.py"), re.M))
+    for name, doc in function_docs("repos/_shared/verify_auto.py", "check_"):
+        ext = exts.get(name, "")
+        files = ", ".join(f"`{x}`" for x in ast.literal_eval(constants.get(ext, ext)))
+        w(f"| {files} | {cell(doc)} |")
+    w("\nProject-local tools win over global ones (`node_modules/.bin`, `vendor/bin`, `.venv/bin`).\n")
+    w("### Hand-written, per repository\n")
+    w("A repository that needs more (a Docker stack, known failing tests, project rules) gets an executable "
+      "`repos/<checkout-name>/verify`, usually built on `repos/_shared/verify_changed.py`:\n")
+    w("| Option | What it does |\n|---|---|")
+    for flag, helptext in verify_changed_options():
+        w(f"| `{flag}` | {cell(helptext)} |")
+    w("\n#### Semgrep rules shipped with the kit\n")
+    w("| Rule | Severity | Catches |\n|---|---|---|")
+    for rule_id, severity, message in semgrep_rules():
+        w(f"| `{rule_id}` | {severity} | {cell(message)} |")
+    w("")
+
+    w("## Skills\n")
+    w("| Skill | Source | What it's for |\n|---|---|---|")
+    for name, source, description in skill_rows:
+        w(f"| `{name}` | {cell(source)} | {cell(description)} |")
+    w("\nHarnesses pick a skill by its description; you can also call one by name (`/spec` in Claude Code).\n")
+
+    w("## Command-line tools\n")
+    for name, summary, usage in tool_rows:
+        w(f"**`bin/{name}`**: {summary}\n")
+        if usage:
+            w("```\n" + "\n".join(usage) + "\n```\n")
+
+    w("## Periodic operations\n")
+    w("`install.sh` renders the templates in `launchd/` into `~/Library/LaunchAgents/` and loads them. "
+      "No job changes the kit: they write reports and proposals under `research/` for you to review.\n")
+    w("| Job | When | Runs | What it does |\n|---|---|---|---|")
+    for label, cadence, script, summary in jobs:
+        w(f"| `{label}` | {cadence} | `{script}` | {cell(summary)} |")
+    w("\n```mermaid\nflowchart LR")
+    for i, (label, cadence, script, _) in enumerate(jobs):
+        w(f"  J{i}[\"{label}<br/>{cadence}\"] --> O{i}[research/]")
+    w("  " + " & ".join(f"O{i}" for i in range(len(jobs))) + " --> U{You review the proposals} -->|accept| K[AGENTS.md, skills, hooks]")
+    w("```\n")
+
+    w("## Profiles: private, per-employer knowledge\n")
+    w("The kit itself holds nothing tied to one company. A profile is a separate (usually private) repository that "
+      "`install.sh --profile <dir>` layers in through symlinks, so hooks, skills and instructions use the same paths "
+      "with or without it:\n")
+    w("| In the profile | Linked or read as |\n|---|---|")
+    w("| `repos/<repo>/` | `~/.agents/repos/<repo>` (notes, verify overlays, baselines) |")
+    w("| `skills/<name>/` | `~/.agents/skills/<name>` |")
+    w("| `research/*` | `~/.agents/research/*` |")
+    w("| `mcp-writes.json` | read by `hooks/guard_mcp.py` |")
+    w("| `review-mining/repos.txt` | repositories the monthly review mining reads |")
+    w("| `PROFILE.md` | work context for the trends scan |\n")
+
+    w("## What the agents are told\n")
+    w("`AGENTS.md` sections, in order:\n")
+    for level, title in agents_md_outline():
+        w(("  " if level == 3 else "") + f"- {title}")
+    w("")
+
+    w("## Install and maintain\n")
+    w("```\n" + "\n".join(l for l in header_comment("install.sh").splitlines() if "install.sh" in l) + "\n```\n")
+    w("- `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, the Pi adapter, triage, "
+      "the install doctor and this reference.")
+    w("- After changing the kit, commit as usual: the pre-commit hook regenerates this file.\n")
+
+    w("## Layout\n")
+    entries = sorted(e + ("/" if os.path.isdir(os.path.join(KIT, e)) else "") for e in os.listdir(KIT) if e not in IGNORED)
+    unknown = [e for e in entries if e not in LAYOUT]
+    if unknown:
+        sys.exit(f"docs: describe {', '.join(unknown)} in LAYOUT in bin/docs")
+    w("| Path | Purpose |\n|---|---|")
+    for entry in entries:
+        w(f"| `{entry}` | {LAYOUT[entry]} |")
+    return "\n".join(out).rstrip() + "\n"
+
+
+def main():
+    text = render()
+    current = open(OUT).read() if os.path.exists(OUT) else ""
+    if "--check" in sys.argv:
+        if text != current:
+            print("docs/framework.md is out of date: run ~/.agents/bin/docs")
+            return 1
+        print("docs/framework.md is current")
+        return 0
+    if text != current:
+        with open(OUT, "w") as fh:
+            fh.write(text)
+        print("docs/framework.md updated")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

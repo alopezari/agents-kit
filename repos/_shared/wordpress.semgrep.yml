@@ -1,0 +1,106 @@
+rules:
+  - id: update-option-false-noop
+    languages: [php]
+    severity: ERROR
+    message: >-
+      update_option() with a boolean false is a silent no-op when the option doesn't exist yet:
+      get_option() already returns false, so WordPress sees "no change" and writes nothing.
+      Store 0/1 or 'no'/'yes', or add_option() first.
+    patterns:
+      - pattern-either:
+        - pattern: update_option($NAME, false, ...)
+        - pattern: update_option($NAME, (bool) $X, ...)
+        - pattern: update_option($NAME, (boolean) $X, ...)
+        - pattern: update_option($NAME, ! $X, ...)
+        - pattern: update_option($NAME, $X === $Y, ...)
+        - pattern: update_option($NAME, $X !== $Y, ...)
+        - pattern: update_option($NAME, filter_var($X, FILTER_VALIDATE_BOOLEAN, ...), ...)
+        - patterns:
+            - pattern-either:
+                - pattern: update_option($NAME, $FN(...), ...)
+                - pattern: update_option($NAME, $OBJ->$FN(...), ...)
+                - pattern: update_option($NAME, $CLS::$FN(...), ...)
+            - metavariable-regex:
+                metavariable: $FN
+                regex: (?i).*bool.*
+      - pattern-not: update_option($NAME, (int) $X, ...)
+      - pattern-not: update_option($NAME, (integer) $X, ...)
+      - pattern-not: update_option($NAME, intval(...), ...)
+      - pattern-not: update_option($NAME, (string) $X, ...)
+
+  - id: options-api-stubbed-in-test
+    languages: [php]
+    severity: WARNING
+    message: >-
+      This test fakes update_option(). A fake that always writes hides WordPress's real behaviour:
+      update_option() returns false and writes nothing when the new value equals get_option(),
+      including false on a missing option. Make the fake mimic that, or test settings through the real options API.
+    pattern-either:
+      - pattern: function update_option(...) { ... }
+      - pattern: \Spies\stub_function('update_option')
+      - pattern: \Spies\mock_function('update_option')
+      - pattern: Spies\stub_function('update_option')
+      - pattern: Spies\mock_function('update_option')
+      - pattern: Functions\when('update_option')
+      - pattern: Functions\expect('update_option')
+      - pattern: \Brain\Monkey\Functions\when('update_option')
+      - pattern: \Brain\Monkey\Functions\expect('update_option')
+      - pattern: WP_Mock::userFunction('update_option', ...)
+      - pattern: \WP_Mock::userFunction('update_option', ...)
+
+  # --- Security (only what WordPress-Extra phpcs sniffs don't already cover) --
+  # Legitimate exceptions: add `// nosemgrep: <rule-id> -- <why it's safe>` on the line.
+  - id: wp-rest-route-without-permission-callback
+    languages: [php]
+    severity: ERROR
+    message: >-
+      REST route registered without a permission_callback. Add one that checks a capability,
+      or '__return_true' with a nosemgrep reason if the route is deliberately public.
+    patterns:
+      - pattern-either:
+          - pattern: register_rest_route($NS, $ROUTE, [...], ...)
+          - pattern: register_rest_route($NS, $ROUTE, array(...), ...)
+      - pattern-not: register_rest_route($NS, $ROUTE, [..., 'permission_callback' => $CB, ...], ...)
+      - pattern-not: register_rest_route($NS, $ROUTE, array(..., 'permission_callback' => $CB, ...), ...)
+      - pattern-not: register_rest_route($NS, $ROUTE, [[..., 'permission_callback' => $CB, ...], ...], ...)
+      - pattern-not: register_rest_route($NS, $ROUTE, array(array(..., 'permission_callback' => $CB, ...), ...), ...)
+
+  # --- Scale --------------------------------------------------------------
+  - id: wp-unbounded-query
+    languages: [php]
+    severity: ERROR
+    message: >-
+      Unbounded query: fetches every matching row. Paginate or set a limit, or explain with
+      `// nosemgrep: wp-unbounded-query -- <why the set is small and stays small>`.
+    pattern-either:
+      - pattern: "[..., 'posts_per_page' => -1, ...]"
+      - pattern: "array(..., 'posts_per_page' => -1, ...)"
+      - pattern: "[..., 'numberposts' => -1, ...]"
+      - pattern: "array(..., 'numberposts' => -1, ...)"
+      - pattern: "[..., 'nopaging' => true, ...]"
+      - pattern: "array(..., 'nopaging' => true, ...)"
+      - pattern: "[..., 'limit' => -1, ...]"
+      - pattern: "array(..., 'limit' => -1, ...)"
+
+  - id: wp-query-in-loop
+    languages: [php]
+    severity: ERROR
+    message: >-
+      Database query inside a loop (N+1). Fetch or prime the data for all items before iterating,
+      or explain with `// nosemgrep: wp-query-in-loop -- <why the loop is tiny>`.
+    patterns:
+      - pattern-either:
+          - pattern-inside: foreach ($ITEMS as $I) { ... }
+          - pattern-inside: foreach ($ITEMS as $K => $I) { ... }
+          - pattern-inside: for ($A; $B; $C) { ... }
+          - pattern-inside: while (...) { ... }
+      - pattern-either:
+          - pattern: $wpdb->query(...)
+          - pattern: $wpdb->get_results(...)
+          - pattern: $wpdb->get_row(...)
+          - pattern: $wpdb->get_var(...)
+          - pattern: $wpdb->get_col(...)
+          - pattern: new WP_Query(...)
+          - pattern: get_posts(...)
+          - pattern: wc_get_orders(...)
+          - pattern: wc_get_products(...)

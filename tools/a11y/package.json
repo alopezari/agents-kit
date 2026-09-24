@@ -1,0 +1,10 @@
+{
+  "name": "agents-a11y-check",
+  "private": true,
+  "type": "module",
+  "description": "axe-core accessibility check used by ~/.agents/bin/a11y-check",
+  "dependencies": {
+    "axe-core": "4.10.3",
+    "playwright-core": "1.56.1"
+  }
+}
