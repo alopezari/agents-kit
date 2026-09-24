@@ -43,7 +43,8 @@ def main():
         fh.write(json.dumps({
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": kind, "name": name, "tier": tier,
             "repo": os.path.basename(git("rev-parse", "--show-toplevel") or os.getcwd()),
-            "branch": git("branch", "--show-current"), "harness": os.environ.get("AGENTS_HARNESS", "unknown"),
+            # Codex before Claude Code: a Codex run started from Claude Code inherits CLAUDECODE.
+            "branch": git("branch", "--show-current"), "harness": (os.environ.get("AGENTS_HARNESS") or ("codex" if os.environ.get("CODEX_THREAD_ID") else "claude-code" if os.environ.get("CLAUDECODE") else "unknown")),
             **fields,
         }) + "\n")
     return 0

@@ -25,7 +25,8 @@ def git(*args):
 
 
 def run_key():
-    return f"{os.path.basename(git('rev-parse', '--show-toplevel') or os.getcwd())}@{git('branch', '--show-current') or 'detached'}"
+    repo = subprocess.run([os.path.expanduser("~/.agents/bin/repo-name")], capture_output=True, text=True).stdout.strip()
+    return f"{repo or os.path.basename(os.getcwd())}@{git('branch', '--show-current') or 'detached'}"
 
 
 def state_file():
@@ -40,7 +41,8 @@ def log(event, **fields):
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
     with open(LOG, "a") as fh:
         fh.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": event, "run": run_key(),
-                             "harness": os.environ.get("AGENTS_HARNESS", "unknown"), **fields}) + "\n")
+                             # Codex before Claude Code: a Codex run started from Claude Code inherits CLAUDECODE.
+                             "harness": (os.environ.get("AGENTS_HARNESS") or ("codex" if os.environ.get("CODEX_THREAD_ID") else "claude-code" if os.environ.get("CLAUDECODE") else "unknown")), **fields}) + "\n")
 
 
 def assigned():
