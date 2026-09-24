@@ -41,6 +41,8 @@ Write the report in English, as Markdown, and print it as your final answer and 
 - "# Opportunities $MONTH", then a 3-line summary.
 - "## Ranked opportunities": a table (rank, change, source link, what it means for the kit, effort S/M/L, value H/M/L).
   Rank by value over effort. Include kit parts that a native feature could now replace (removing code is a win).
+  Before listing an item, search the kit's current files for it: if the kit already does it, leave it out of the table.
+- "## Already in the kit": one line per candidate you left out for that reason, with the file:line that shows it.
 - "## Breaking or risky changes": anything that could make a hook, adapter or skill silently stop working, with the file it affects.
 - "## New models": if a new model shipped for any harness, recommend re-running the prompt audit
   (/claude-api prompt-audit on AGENTS.md and skills/) and say what to test.
