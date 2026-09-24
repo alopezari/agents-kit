@@ -41,6 +41,14 @@ flowchart LR
 
 `install.sh` links the instructions and skills into each harness's own location and registers the hooks in its settings, so editing a file in `~/.agents` changes every harness at once. Pi has no hook config; the adapter in `adapters/pi/` translates its extension events into the same hook calls.
 
+It also adds the kit's baseline settings where a key is missing, never overwriting one you set:
+
+| Harness | File | Baseline |
+|---|---|---|
+| Claude Code | `~/.claude/settings.json` | `effortLevel="medium"`, `maxEffortLevel="xhigh"`, `fastMode=false`, `fastModePerSessionOptIn=true`, `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="40"` |
+| Codex | `~/.codex/config.toml` | `model_reasoning_effort="high"`, `service_tier="default"`, `features.hooks=true`, `features.fast_mode=false`, `agents.max_concurrent_threads_per_session=3` |
+| Pi | `~/.pi/agent/settings.json` | `defaultThinkingLevel="high"` |
+
 ## The life of a task
 
 ```mermaid

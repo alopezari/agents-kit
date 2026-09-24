@@ -11,6 +11,7 @@ skills) is left out, so the output is the same on every machine. A section that 
 something missing fails the run instead of describing it.
 """
 import ast
+import json
 import os
 import re
 import subprocess
@@ -106,6 +107,14 @@ def frontmatter(rel):
         key, _, value = line.partition(":")
         fields[key.strip()] = value.strip().strip('"')
     return fields
+
+
+def flatten(settings, prefix=""):
+    for key, value in settings.items():
+        if isinstance(value, dict):
+            yield from flatten(value, f"{prefix}{key}.")
+        else:
+            yield prefix + key, value
 
 
 def cell(text):
@@ -242,6 +251,24 @@ def render():
     w("`install.sh` links the instructions and skills into each harness's own location and registers the hooks in "
       "its settings, so editing a file in `~/.agents` changes every harness at once. Pi has no hook config; "
       "the adapter in `adapters/pi/` translates its extension events into the same hook calls.\n")
+    w("It also adds the kit's baseline settings where a key is missing, never overwriting one you set:\n")
+    w("| Harness | File | Baseline |\n|---|---|---|")
+    for harness, target, source in (("Claude Code", "~/.claude/settings.json", "adapters/claude/settings.baseline.json"),
+                                    ("Codex", "~/.codex/config.toml", "adapters/codex/config.baseline.toml"),
+                                    ("Pi", "~/.pi/agent/settings.json", "adapters/pi/settings.baseline.json")):
+        text = read(require(source))
+        if source.endswith(".json"):
+            settings = [f"`{k}={json.dumps(v)}`" for k, v in flatten(json.loads(text))]
+        else:
+            table, settings = "", []
+            for line in text.splitlines():
+                if line.startswith("["):
+                    table = line.strip("[]") + "."
+                elif "=" in line:
+                    key, value = (p.strip() for p in line.split("=", 1))
+                    settings.append(f"`{table}{key}={value}`")
+        w(f"| {harness} | `{target}` | {cell(', '.join(settings))} |")
+    w("")
 
     w("## The life of a task\n")
     for skill in ("spec", "self-review", "validate", "write-pr-description"):

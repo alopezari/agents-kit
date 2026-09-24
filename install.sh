@@ -46,6 +46,22 @@ hook() {
   fix "$(basename "$file") $event → $script"
 }
 
+# settings_file <path> <initial json>: create a harness settings file on a machine that has none yet.
+settings_file() {
+  [ -f "$1" ] && return
+  if [ $DOCTOR = 1 ]; then warn "$1 does not exist yet"; return; fi
+  mkdir -p "$(dirname "$1")"; echo "$2" > "$1"; fix "$1 created"
+}
+
+# baseline <settings file> <kit baseline>: add the kit's recommended settings where a key is missing.
+baseline() {
+  local mode=(); [ $DOCTOR = 1 ] && mode=(--check)
+  local out; out=$(python3 "$KIT/adapters/apply_baseline.py" "$1" "$2" "${mode[@]}")
+  if [ -z "$out" ]; then ok "$(basename "$1") has the kit's baseline settings"; return; fi
+  [ $DOCTOR = 1 ] || backup "$1"
+  while read -r line; do if [ $DOCTOR = 1 ]; then warn "$(basename "$1") $line"; else fix "$(basename "$1") $line"; fi; done <<<"$out"
+}
+
 skills() {  # link every kit skill into a harness skills dir
   local dir=$1
   for s in "$KIT"/skills/*/; do s=${s%/}; link "$s" "$dir/$(basename "$s")"; done
@@ -97,14 +113,15 @@ if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
   echo "Claude Code"
   link "$KIT/AGENTS.md" "$HOME/.claude/CLAUDE.md"
   skills "$HOME/.claude/skills"
-  S="$HOME/.claude/settings.json"; [ -f "$S" ] || echo '{}' > "$S"
+  S="$HOME/.claude/settings.json"; settings_file "$S" '{}'
+  baseline "$S" "$KIT/adapters/claude/settings.baseline.json"
   hook "$S" PreToolUse  "Bash" guard_bash.py 10
   hook "$S" PreToolUse  "mcp__.*" guard_mcp.py 10
   hook "$S" PostToolUse "Edit|Write|MultiEdit|NotebookEdit" post_edit.py 30
   hook "$S" Stop        "" stop_checks.py 660
   # Xirp rewrites statusLine when it reinstalls its integration; ours runs Xirp's line too.
   line="$KIT/adapters/claude/statusline.sh"
-  if [ "$(jq -r '.statusLine.command // ""' "$S")" = "$line" ]; then ok "status line"
+  if [ "$(jq -r '.statusLine.command // ""' "$S" 2>/dev/null)" = "$line" ]; then ok "status line"
   elif [ $DOCTOR = 1 ]; then warn "status line is not $line (Xirp may have reset it)"
   else backup "$S"; tmp=$(mktemp); jq --arg c "$line" '.statusLine = {type: "command", command: $c}' "$S" > "$tmp" && mv "$tmp" "$S"; fix "status line"; fi
 fi
@@ -113,14 +130,15 @@ if command -v codex >/dev/null || [ -d "$HOME/.codex" ]; then
   echo "Codex"
   link "$KIT/AGENTS.md" "$HOME/.codex/AGENTS.md"
   skills "$HOME/.codex/skills"
-  H="$HOME/.codex/hooks.json"; [ -f "$H" ] || echo '{"hooks":{}}' > "$H"
+  H="$HOME/.codex/hooks.json"; settings_file "$H" '{"hooks":{}}'
+  baseline "$HOME/.codex/config.toml" "$KIT/adapters/codex/config.baseline.toml"
   hook "$H" PreToolUse  "Bash|shell|exec_command|local_shell" guard_bash.py 10
   hook "$H" PreToolUse  "mcp__.*" guard_mcp.py 10
   hook "$H" PostToolUse "apply_patch|Edit|Write" post_edit.py 30
   hook "$H" Stop        "" stop_checks.py 660
   # Codex silently skips hooks the user hasn't trusted; trust lives in config.toml [hooks.state].
   jq -r '.hooks | to_entries[] | .key as $e | .value | to_entries[] | .key as $i | .value.hooks | to_entries[]
-    | "\($e)\t\($i)\t\(.key)\t\(.value.command)"' "$H" | while IFS=$'\t' read -r ev i j cmd; do
+    | "\($e)\t\($i)\t\(.key)\t\(.value.command)"' "$H" 2>/dev/null | while IFS=$'\t' read -r ev i j cmd; do
     snake=$(sed -E 's/([a-z])([A-Z])/\1_\2/g' <<<"$ev" | tr '[:upper:]' '[:lower:]')
     grep -qF "hooks.json:$snake:$i:$j\"]" "$HOME/.codex/config.toml" 2>/dev/null \
       || warn "codex hook not trusted yet (skipped silently): $ev → ${cmd##*/}. Open Codex and approve it."
@@ -140,6 +158,7 @@ if command -v pi >/dev/null || [ -d "$HOME/.pi" ]; then
   link "$KIT/AGENTS.md" "$HOME/.pi/agent/AGENTS.md"
   ok "skills: Pi loads ~/.agents/skills natively"
   link "$KIT/adapters/pi/agents-kit.ts" "$HOME/.pi/agent/extensions/agents-kit.ts"
+  baseline "$HOME/.pi/agent/settings.json" "$KIT/adapters/pi/settings.baseline.json"
 fi
 
 echo "Scheduled jobs"

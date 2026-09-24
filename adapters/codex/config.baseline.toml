@@ -1,0 +1,9 @@
+model_reasoning_effort = "high"
+service_tier = "default"
+
+[features]
+hooks = true
+fast_mode = false
+
+[agents]
+max_concurrent_threads_per_session = 3

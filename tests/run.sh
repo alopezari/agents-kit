@@ -11,6 +11,9 @@ python3 test_hooks.py || fail=1
 section "generic verify"
 python3 test_verify_auto.py || fail=1
 
+section "harness baselines"
+python3 test_baseline.py || fail=1
+
 section "semgrep rules"
 got=$(cd fixtures && semgrep --config ~/.agents/repos/_shared/wordpress.semgrep.yml --metrics=off --disable-version-check \
   --json wordpress-rules.php update-option.php 2>/dev/null | jq -r '.results[] | "\(.path):\(.start.line) \(.check_id|split(".")|last)"' | sort)

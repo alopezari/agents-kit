@@ -22,7 +22,13 @@ The kit must live at `~/.agents`. The installer:
 - clones the third-party skills in `skills.external`;
 - installs the scheduled jobs.
 
-Files it replaces are backed up under `backups/`.
+It also adds the kit's baseline harness settings (no fast mode, effort defaults) wherever a key is missing, without overwriting one you set. Files it replaces are backed up under `backups/`.
+
+What it doesn't do, on a new machine:
+
+1. Install or log in to the harnesses (`claude`, `codex`, `pi`) and `gh`. Install them before running `install.sh`, which only wires the harnesses it finds.
+2. Trust the Codex hooks. Open Codex once and approve them; `install.sh --doctor` warns until you do.
+3. Install harness plugins or MCP servers. Add the ones you use yourself, or keep their setup in a profile.
 
 Requirements: `python3`, `git`, `jq`. Recommended: `semgrep` and `gitleaks` for the checks, `docker` for repos with containerized tests, `node` for the Pi adapter and the browser and accessibility tools. `install.sh --doctor` lists what is missing.
 
