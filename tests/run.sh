@@ -23,6 +23,9 @@ got=$(cd fixtures && semgrep --config ~/.agents/repos/_shared/wordpress.semgrep.
 if [ "$got" = "$(sort fixtures/semgrep-expected.txt)" ]; then echo "ok   rules match fixtures"
 else echo "FAIL rules differ from fixtures:"; diff <(sort fixtures/semgrep-expected.txt) <(echo "$got"); fail=1; fi
 
+section "skill frontmatter"
+node test_skill_frontmatter.mjs || fail=1
+
 section "pi adapter"
 node test_pi_adapter.mts 2>/dev/null || fail=1
 
