@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets, then the repo's verify.
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **9 command-line tools**: a11y-check, browse, docs, gh, quality-log, repo-name, reports, triage, wp-query-profile.
+- **10 command-line tools**: a11y-check, browse, docs, gh, phase, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -218,6 +218,13 @@ docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the 
 ```
 
 **`bin/gh`**: Runs the real gh with git's per-host proxy. gh ignores git's `http.<url>.proxy`, so a host reachable only through a proxy (a SOCKS tunnel, for example) makes it hang. This finds the host a call targets, passes git's proxy for it as HTTPS_PROXY, and fails at once when that proxy isn't answering. Linked ahead of the real gh in PATH (install.sh --doctor shows how).
+
+**`bin/phase`**: Where the current branch is in the kit's flow, for the status line: spec → build → self-review → validate → staging → create-pr → PR open → ship.
+
+```
+phase             print the cached phase at once; refresh it in the background when older than 15 s
+phase --refresh   work it out now from the spec, stamps, reports and PR state, cache it and print it
+```
 
 **`bin/quality-log`**: Record what a review lens or test type produced, so the monthly job can keep only perspectives that pay off.
 

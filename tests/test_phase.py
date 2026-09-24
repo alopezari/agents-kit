@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""bin/phase: each step of the flow, stepping back when the change moves, and the cached fast path."""
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+PHASE = os.path.expanduser("~/.agents/bin/phase")
+STAMP = os.path.expanduser("~/.agents/hooks/review_stamp.py")
+SPEC_PATH = os.path.expanduser("~/.agents/skills/spec/path.sh")
+
+
+def sh(cwd, *cmd, env=None):
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env).stdout.strip()
+
+
+def phase(repo, env=None, refresh=True):
+    return sh(repo, PHASE, *(["--refresh"] if refresh else []), env=env)
+
+
+def walks_the_flow(base):
+    repo = os.path.join(base, "shop")
+    os.makedirs(repo)
+    sh(repo, "git", "init", "-q", "-b", "trunk")
+    open(os.path.join(repo, "app.py"), "w").write("x = 1\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    assert phase(repo) == "", "no phase on the default branch"
+
+    sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
+    assert phase(repo) == "spec"
+    spec = sh(repo, SPEC_PATH)
+    open(spec, "w").write("# Spec\n")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    assert phase(repo) == "build"
+    sh(repo, "python3", STAMP, "write", "--kind", "verify")
+    assert phase(repo) == "self-review"
+    sh(repo, "python3", STAMP, "write", "--kind", "review")
+    assert phase(repo) == "validate", "app.py is a behavior change, so it needs validation"
+    sh(repo, "python3", STAMP, "write", "--kind", "validate")
+    assert phase(repo) == "create-pr"
+
+    guide = os.path.join(os.path.dirname(spec), "staging-guide-" + os.path.basename(spec)[len("spec-"):])
+    open(guide, "w").write("# Staging guide\n1. Check the cart\n")
+    assert phase(repo) == "staging (you)"
+    open(guide, "a").write("\n## Results (2026-09-24)\n1. FAIL: total wrong\n")
+    assert phase(repo) == "staging: fix"
+    open(guide, "a").write("\n## Results (2026-09-25)\n1. PASS\n")
+    assert phase(repo) == "create-pr", "only the latest round of results counts"
+
+    open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
+    assert phase(repo) == "build", "an edit after the stamps sends the change back to build"
+
+    fake = os.path.join(base, "bin")
+    os.makedirs(fake)
+    open(os.path.join(fake, "gh"), "w").write('#!/bin/sh\necho "$PR_STATE"\n')
+    os.chmod(os.path.join(fake, "gh"), 0o755)
+    open(guide.replace("staging-guide-", "follow-pr-"), "w").write("# follow-pr\n")
+    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "PR_STATE": "OPEN"}
+    assert phase(repo, env) == "PR open"
+    env["PR_STATE"] = "MERGED"
+    assert phase(repo, env) == "PR open", "the PR state is cached for a few minutes, not asked on every refresh"
+    os.remove(os.path.join(repo, ".git", "agents", "phase", "feature-cart.json"))
+    assert phase(repo, env) == "ship"
+
+
+def fast_path_serves_cache_and_refreshes(base):
+    repo = os.path.join(base, "shop")
+    os.makedirs(repo)
+    sh(repo, "git", "init", "-q", "-b", "trunk")
+    sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
+    sh(repo, "git", "checkout", "-q", "-b", "feature/x")
+    assert phase(repo, refresh=False) == "", "first call has no cache yet"
+    cache = os.path.join(repo, ".git", "agents", "phase", "feature-x.json")
+    for _ in range(50):
+        if os.path.exists(cache) and not os.path.exists(cache.replace(".json", ".lock")):
+            break
+        time.sleep(0.1)
+    assert open(cache).read(), "the first call must start a background refresh"
+    assert phase(repo, refresh=False) == "spec"
+    assert not os.path.exists(cache.replace(".json", ".lock")), "the refresh releases its lock"
+
+
+RESULTS = []
+for test in (walks_the_flow, fast_path_serves_cache_and_refreshes):
+    base = tempfile.mkdtemp(prefix="agents-test-phase-")
+    try:
+        test(base)
+        RESULTS.append((test.__name__, None))
+    except Exception as error:  # noqa: BLE001 - report every failure, keep running the rest
+        RESULTS.append((test.__name__, f"{type(error).__name__}: {error}"))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+for name, error in RESULTS:
+    print(f"{'FAIL' if error else 'ok  '} {name}")
+    if error:
+        print(f"     {error}")
+sys.exit(1 if any(error for _, error in RESULTS) else 0)

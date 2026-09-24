@@ -23,6 +23,9 @@ got=$(cd fixtures && semgrep --config ~/.agents/repos/_shared/wordpress.semgrep.
 if [ "$got" = "$(sort fixtures/semgrep-expected.txt)" ]; then echo "ok   rules match fixtures"
 else echo "FAIL rules differ from fixtures:"; diff <(sort fixtures/semgrep-expected.txt) <(echo "$got"); fail=1; fi
 
+section "flow phase"
+python3 test_phase.py || fail=1
+
 section "browser A/B harness"
 python3 test_browse.py || fail=1
 

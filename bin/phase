@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Where the current branch is in the kit's flow, for the status line:
+spec → build → self-review → validate → staging → create-pr → PR open → ship.
+
+  phase             print the cached phase at once; refresh it in the background when older than 15 s
+  phase --refresh   work it out now from the spec, stamps, reports and PR state, cache it and print it
+
+Prints nothing outside a git repo, on the default branch or when detached.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
+import review_stamp  # noqa: E402
+
+LOCAL_TTL = 15
+PR_TTL = 300
+REFRESH_LOCK_TTL = 60
+# The status line refreshes often, and the user's own git commands must never hit an index.lock held by it.
+os.environ["GIT_OPTIONAL_LOCKS"] = "0"
+
+
+def git(*args):
+    return subprocess.run(["git", *args], capture_output=True, text=True).stdout.strip()
+
+
+def cache_files():
+    """(cache, lock) for this branch, or None where no phase applies. One git call: this runs on every refresh."""
+    out = git("rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD").splitlines()
+    if len(out) != 2 or out[1] == "HEAD":
+        return None
+    directory = os.path.join(out[0], "agents", "phase")
+    name = out[1].replace("/", "-")
+    return os.path.join(directory, name + ".json"), os.path.join(directory, name + ".lock")
+
+
+def read_cache(path):
+    try:
+        return json.load(open(path))
+    except (OSError, ValueError):
+        return {}
+
+
+def on_default_branch():
+    return review_stamp.base_ref().split("/")[-1] == git("branch", "--show-current")
+
+
+def stamp_matches(kind, current):
+    for path in (review_stamp.stamp_path(kind), review_stamp.legacy_stamp_path(kind)):
+        try:
+            if open(path).read().strip() == current:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def pr_state(previous):
+    """OPEN, MERGED or CLOSED from gh, at most every PR_TTL seconds; the last known state when gh fails."""
+    if time.time() - previous.get("pr_checked_at", 0) < PR_TTL and previous.get("pr_state"):
+        return previous["pr_state"], previous["pr_checked_at"]
+    try:
+        out = subprocess.run(["gh", "pr", "view", "--json", "state", "-q", ".state"], capture_output=True, text=True,
+                             timeout=10).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        out = ""
+    return (out or previous.get("pr_state") or "UNKNOWN"), time.time()
+
+
+def staging_phase(guide):
+    """None when there is no guide or every step passed; otherwise the staging phase."""
+    try:
+        text = open(guide).read()
+    except OSError:
+        return None
+    rounds = text.split("## Results")
+    if len(rounds) == 1:
+        return "staging (you)"
+    return "staging: fix" if re.search(r"\bFAIL\b", rounds[-1]) else None
+
+
+def compute(previous):
+    """The phase label, plus the PR fields to keep in the cache."""
+    toplevel = git("rev-parse", "--show-toplevel")
+    if not toplevel:
+        return "", {}
+    os.chdir(toplevel)
+    if on_default_branch():
+        return "", {}
+    spec = subprocess.run([os.path.expanduser("~/.agents/skills/spec/path.sh")], capture_output=True,
+                          text=True).stdout.strip()
+    reports = os.path.dirname(spec)
+    suffix = os.path.basename(spec)[len("spec-"):-len(".md")]
+
+    if os.path.exists(os.path.join(reports, f"follow-pr-{suffix}.md")):
+        state, checked_at = pr_state(previous)
+        label = {"MERGED": "ship", "CLOSED": "PR closed"}.get(state, "PR open")
+        return label, {"pr_state": state, "pr_checked_at": checked_at}
+
+    if not os.path.exists(spec):
+        return "spec", {}
+    current = review_stamp.fingerprint()
+    if not stamp_matches("verify", current):
+        return "build", {}
+    if not stamp_matches("review", current):
+        return "self-review", {}
+    needs_validate = any(not review_stamp.NOT_BEHAVIOR.search(p) for p in review_stamp.changed_paths()[1])
+    if needs_validate and not stamp_matches("validate", current):
+        return "validate", {}
+    return staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md")) or "create-pr", {}
+
+
+def refresh(files):
+    cache, lock = files
+    label, extra = compute(read_cache(cache))
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    tmp = cache + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump({"label": label, "computed_at": time.time(), **extra}, fh)
+    os.replace(tmp, cache)
+    return label
+
+
+def refresh_in_background(lock):
+    try:
+        if time.time() - os.path.getmtime(lock) < REFRESH_LOCK_TTL:
+            return
+        os.remove(lock)
+    except OSError:
+        pass
+    try:
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL))
+    except OSError:
+        return
+    subprocess.Popen([sys.executable, os.path.abspath(__file__), "--refresh"],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def main():
+    files = cache_files()
+    if not files:
+        return 0
+    if "--refresh" in sys.argv:
+        try:
+            print(refresh(files))
+        finally:
+            try:
+                os.remove(files[1])
+            except OSError:
+                pass
+        return 0
+    cached = read_cache(files[0])
+    if time.time() - cached.get("computed_at", 0) >= LOCAL_TTL:
+        refresh_in_background(files[1])
+    print(cached.get("label", ""))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

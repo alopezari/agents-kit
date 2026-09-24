@@ -1,5 +1,6 @@
 #!/bin/bash
-# Claude Code status line: model, effort, context and plan usage, followed by Xirp's line
+# Claude Code status line: model, effort, context and plan usage, the branch's phase in the kit's flow (bin/phase),
+# followed by Xirp's line
 # (Xirp's wrapper also relays the context size to its daemon, so it must keep running).
 input=$(cat)
 ours=$(jq -r '
@@ -12,6 +13,9 @@ ours=$(jq -r '
     "7d \(pct(.rate_limits.seven_day.used_percentage))",
     (if .fast_mode then "FAST MODE ON" else empty end)
   ] | join(" · ")' <<<"$input" 2>/dev/null)
+dir=$(jq -r '.workspace.current_dir // .cwd // empty' <<<"$input" 2>/dev/null)
+phase=$(cd "${dir:-.}" 2>/dev/null && "$HOME/.agents/bin/phase" 2>/dev/null)
+[ -n "$phase" ] && ours="${ours:+$ours · }flow: $phase"
 xirp=""
 [ -x "$HOME/.claude/xirp-statusline-wrapper.sh" ] && xirp=$(printf '%s' "$input" | "$HOME/.claude/xirp-statusline-wrapper.sh" 2>/dev/null)
 echo "${ours}${ours:+${xirp:+ · }}${xirp}"
