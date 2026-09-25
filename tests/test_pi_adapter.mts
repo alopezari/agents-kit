@@ -12,6 +12,9 @@ const pi = { on: (ev: string, fn: Function) => (handlers[ev] = fn) };
 mod.default(pi);
 
 const repo = mkdtempSync(join(tmpdir(), "pi-sim-"));
+// The hooks inherit this: the stop hook records checkouts, and this one isn't real.
+const state = mkdtempSync(join(tmpdir(), "pi-sim-state-"));
+process.env.AGENTS_STATE_DIR = state;
 execSync("git init -q && echo x=1 > a.py && git add -A && git -c user.email=t@t -c user.name=t commit -qm i", { cwd: repo });
 const ctx = { cwd: repo, sessionManager: { getSessionId: () => "pi-sim" }, ui: { notify: () => {} } };
 
@@ -36,5 +39,5 @@ check("only one automatic continuation", (await settle()) === undefined);
 await handlers.input({ source: "interactive" }, ctx);
 const aborted = await handlers.agent_before_settle({ outcome: "aborted", entries: [], continue: false, context: { canContinue: false } }, ctx);
 check("no continuation after an abort", aborted === undefined);
-execSync(`rm -rf ${repo}`);
+execSync(`rm -rf ${repo} ${state}`);
 process.exit(failures ? 1 : 0);
