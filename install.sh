@@ -132,9 +132,11 @@ if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
   hook "$S" PreToolUse  "mcp__.*" guard_mcp.py 10
   hook "$S" PostToolUse "Edit|Write|MultiEdit|NotebookEdit" post_edit.py 30
   hook "$S" Stop        "" stop_checks.py 660
-  # Xirp rewrites statusLine when it reinstalls its integration; ours runs Xirp's line too.
+  # Xirp points statusLine at its wrapper when it reinstalls its integration; the wrapper runs ours first
+  # (its "xirp-original-command" line). Either order shows both lines; anything else loses ours.
   line="$KIT/adapters/claude/statusline.sh"
-  if [ "$(jq -r '.statusLine.command // ""' "$S" 2>/dev/null)" = "$line" ]; then ok "status line"
+  current=$(jq -r '.statusLine.command // ""' "$S" 2>/dev/null)
+  if [ "$current" = "$line" ] || grep -qxF "# xirp-original-command: $line" "$current" 2>/dev/null; then ok "status line"
   elif [ $DOCTOR = 1 ]; then warn "status line is not $line (Xirp may have reset it)"
   else backup "$S"; tmp=$(mktemp); jq --arg c "$line" '.statusLine = {type: "command", command: $c}' "$S" > "$tmp" && mv "$tmp" "$S"; fix "status line"; fi
 fi
