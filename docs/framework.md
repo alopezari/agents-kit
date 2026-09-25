@@ -287,6 +287,7 @@ The kit itself holds nothing tied to one company. A profile is a separate (usual
 | `research/*` | `~/.agents/research/*` |
 | `mcp-writes.json` | read by `hooks/guard_mcp.py` |
 | `review-mining/repos.txt` | repositories the monthly review mining reads |
+| `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |
 | `PROFILE.md` | work context for the trends scan |
 
 ## What the agents are told

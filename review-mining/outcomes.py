@@ -3,7 +3,7 @@
 
 Usage: outcomes.py SINCE_ISO SESSIONS.json OUTPUT.json
 
-Per merged PR, from GitHub (github.com and ghe.example.com):
+Per merged PR, from GitHub (github.com plus any host a profile lists in review-mining/hosts.txt):
   review_threads      inline review threads started by a person other than me
   changes_requested   reviews by a person that requested changes
   red_pushes          commits pushed after the PR opened whose checks ended red
@@ -21,6 +21,7 @@ Since the kit, also:
 The baseline window (BASELINE_MONTHS before KIT_START) never changes once its follow-up windows have
 passed, so it is cached in baseline.json and fetched again only while any of its PRs is pending.
 """
+import glob
 import json
 import os
 import re
@@ -31,7 +32,6 @@ from datetime import datetime, timedelta, timezone
 KIT_START = "2026-09-24"
 BASELINE_MONTHS = 6
 FOLLOW_UP_DAYS = 14
-HOSTS = ("github.com", "ghe.example.com")
 # Larger batches make GitHub's GraphQL time out (a follow-up search with files is the heaviest part).
 DETAIL_BATCH = 10
 FOLLOW_UP_BATCH = 5
@@ -49,6 +49,14 @@ PR_FIELDS = """title url createdAt mergedAt headRefName author { login }
   reviews(first: 100) { nodes { state submittedAt author { login } } }
   commits(last: 100) { nodes { commit { committedDate statusCheckRollup { state } } } }
   files(first: 100) { nodes { path } }"""
+
+
+def github_hosts():
+    """github.com, plus the hosts profiles add (a company's GitHub Enterprise), one per line."""
+    hosts = ["github.com"]
+    for path in sorted(glob.glob(os.path.expanduser("~/.agents/profiles/*/review-mining/hosts.txt"))):
+        hosts += [line.strip() for line in open(path) if line.strip() and not line.startswith("#")]
+    return list(dict.fromkeys(hosts))
 
 
 def gh(host, *args):
@@ -149,7 +157,7 @@ def add_follow_ups(host, prs, now, errors):
 
 def fetch_window(start, end, now, errors):
     prs = []
-    for host in HOSTS:
+    for host in github_hosts():
         try:
             me = json.loads(gh(host, "api", "user"))["login"]
             found = my_merged_prs(host, start, end)

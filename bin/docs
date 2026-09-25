@@ -372,6 +372,7 @@ def render():
     w("| `research/*` | `~/.agents/research/*` |")
     w("| `mcp-writes.json` | read by `hooks/guard_mcp.py` |")
     w("| `review-mining/repos.txt` | repositories the monthly review mining reads |")
+    w("| `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |")
     w("| `PROFILE.md` | work context for the trends scan |\n")
 
     w("## What the agents are told\n")
