@@ -5,6 +5,7 @@ approvals/
 monitors/state/
 review-mining/runs/
 review-mining/last-success
+review-mining/baseline.json
 usage/*.json
 /research/
 __pycache__/

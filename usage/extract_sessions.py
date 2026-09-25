@@ -42,6 +42,7 @@ def claude_sessions():
         prompts, models, efforts, times, tools, advisor = [], {}, set(), [], 0, 0
         tokens = {"in": 0, "out": 0, "cache_read": 0}
         cwd = None
+        branches = set()
         for line in open(f, errors="ignore"):
             try:
                 e = json.loads(line)
@@ -52,6 +53,8 @@ def claude_sessions():
             if e.get("timestamp"):
                 times.append(e["timestamp"])
             cwd = cwd or e.get("cwd")
+            if e.get("gitBranch"):
+                branches.add(e["gitBranch"])
             msg = e.get("message") or {}
             if e.get("type") == "user" and msg.get("role") == "user":
                 t = text_of(msg.get("content"))
@@ -72,7 +75,8 @@ def claude_sessions():
                 advisor += sum(1 for c in blocks if "advisor" in str(c.get("type", "")) or c.get("name") == "advisor")
         if prompts and times and not (cwd or "").startswith(EXCLUDE_CWD):
             yield dict(harness="claude-code", id=sid, cwd=cwd, start=min(times), end=max(times), prompts=prompts,
-                       models=models, effort=sorted(efforts), tokens=tokens, tool_calls=tools, advisor_calls=advisor)
+                       models=models, effort=sorted(efforts), tokens=tokens, tool_calls=tools, advisor_calls=advisor,
+                       branches=sorted(branches))
 
 
 def codex_sessions():
@@ -143,14 +147,14 @@ def _codex_rollout(f):
         if prompts and times:
             yield dict(harness="codex", id=os.path.basename(f)[:-6], cwd=cwd, start=min(times), end=max(times),
                        prompts=prompts, models=models, effort=sorted(efforts), tokens=tokens, tool_calls=tools,
-                       originator=meta.get("originator"))
+                       originator=meta.get("originator"), branches=[b for b in [(meta.get("git") or {}).get("branch")] if b])
 
 
 def summarize(s):
     corrections = [p[:200] for p in s["prompts"][1:] if CORRECTION.search(p.strip())]
     return {
         "harness": s["harness"], "id": s["id"], "project": (s["cwd"] or "").replace(HOME, "~"),
-        "start": s["start"][:16], "minutes": round((ts(s["end"]) - ts(s["start"])).total_seconds() / 60),
+        "start": s["start"][:16], "start_iso": s["start"], "branches": s.get("branches", []), "minutes": round((ts(s["end"]) - ts(s["start"])).total_seconds() / 60),
         "models": s["models"], "effort": s["effort"], "tokens": s["tokens"], "tool_calls": s["tool_calls"],
         "user_turns": len(s["prompts"]), "advisor_calls": s.get("advisor_calls", 0), "first_prompt": s["prompts"][0][:1500],
         "later_prompts": [p[:300] for p in s["prompts"][1:8]], "correction_signals": corrections[:6],

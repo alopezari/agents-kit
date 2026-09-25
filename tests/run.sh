@@ -32,6 +32,9 @@ python3 test_browse.py || fail=1
 section "verify on changed lines"
 python3 test_verify_changed.py || fail=1
 
+section "outcomes and escapes"
+python3 test_outcomes.py || fail=1
+
 section "skill frontmatter"
 node test_skill_frontmatter.mjs || fail=1
 

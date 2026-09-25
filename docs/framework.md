@@ -226,11 +226,12 @@ phase             print the cached phase at once; refresh it in the background w
 phase --refresh   work it out now from the spec, stamps, reports and PR state, cache it and print it
 ```
 
-**`bin/quality-log`**: Record what a review lens or test type produced, so the monthly job can keep only perspectives that pay off.
+**`bin/quality-log`**: Record what a review lens or test type produced, and what got past them, so the monthly job can keep only perspectives that pay off.
 
 ```
 quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex]
 quality-log test <type> --issues N [--secs S] [--notes "..."]
+quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 ```
 
 **`bin/repo-name`**: Print the repository's name as the kit knows it: the main checkout's directory name, the same from any worktree (Xirp, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.

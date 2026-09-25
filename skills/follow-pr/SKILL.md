@@ -74,4 +74,13 @@ CI:      <check>: pass | fixed (<cause>, <commit>) | not caused by the change (<
 Status:  ready to merge | waiting on <what>
 ```
 
+Log every CI failure the change caused and every review comment from someone other than the user, once, when you first handle it. Each is something self-review and validate let through, and the monthly job measures them:
+
+```bash
+~/.agents/bin/quality-log escape <ci|review|bot> --verdict <confirmed|rejected|uncertain> \
+  --category <code from ~/.agents/review-mining/taxonomy.md> --lens <self-review lens that should have caught it> --pr <n>
+```
+
+`review` is a person, `bot` an automated reviewer. For CI, the verdict is `confirmed`; the lens is the one whose area the failure falls in (Tests for a failing test, Correctness for a wrong result). CI failures not caused by the change are not escapes.
+
 It is ready to merge when CI is green, every comment has a fix or an approved reply, no review request is pending, and any staging steps a fix touched passed again. If it was a draft waiting for staging results, it can be marked ready (`gh pr ready <n>`) once they pass. Say what would need another run: checks still running, reviewers who haven't answered. The user merges; when they are about to deploy, the `ship` skill takes over.

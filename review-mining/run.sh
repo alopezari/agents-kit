@@ -45,6 +45,9 @@ COMMENT_NOTE=""
 
 python3 "$HOME/.agents/usage/extract_sessions.py" 200 "$RUN/sessions.json" > "$RUN/sessions.log" 2>&1 || true
 python3 "$HOME/.agents/usage/extract_xirp.py" "$SINCE" "$RUN/xirp-prs.json" > "$RUN/xirp.log" 2>&1 || true
+# Every session, not the 200 above: joining sessions to merged PRs needs the ones before the kit too.
+python3 "$HOME/.agents/usage/extract_sessions.py" 100000 "$RUN/sessions-all.json" > /dev/null 2>&1 || true
+python3 "$BASE/outcomes.py" "$SINCE" "$RUN/sessions-all.json" "$RUN/outcomes.json" > "$RUN/outcomes.log" 2>&1 || true
 
 cat > "$RUN/prompt.md" <<EOF
 You are updating the evidence behind a set of coding-agent instructions.
@@ -62,6 +65,8 @@ Inputs (read them from disk):
 
 - $HOME/.agents/research/health/*.md: weekly health reports from this month.
 - $RUN/xirp-prs.json: Xirp sessions since $SINCE with the PRs each one opened and their state (open/merged/closed); cli_session_id joins to the id in sessions.json.
+- $RUN/outcomes.json: my merged PRs since the kit started and in a baseline window before it (see $BASE/outcomes.py
+  for every field), with per-period summaries; $RUN/outcomes.log has its errors, if any.
 $COMMENT_NOTE
 
 Steps:
@@ -80,6 +85,23 @@ Steps:
    Add an "Outcomes" section from xirp-prs.json joined to sessions.json: PRs opened, merged and closed per model and effort,
    sessions with work but no PR, and sessions in the main checkout vs their own worktree. This is the closest measure of
    finished work; set it against tokens per session. Small samples are evidence, not proof.
+   Add an "Escapes" section from outcomes.json, set against its baseline:
+   - At the PR stage: the escapes follow-pr logged (CI failures the change caused, review comments by people and bots)
+     per merged PR, by category and verdict. For each confirmed escape, name the lens that should have caught it and
+     whether it ran on that branch. A lens that ran and still let its category through gets a proposed fix to its
+     questions in lenses.md; a lens that never catches anything is a candidate to drop (weigh it with quality.jsonl).
+     Rejected comments per bot measure that bot's noise.
+   - After merge: judge every follow_ups candidate from its title and shared files. Count it only when it plausibly
+     fixes or reverts the original PR (not a lint sweep, a rename across the codebase, or a word that only looks like
+     "fix"), and list the ones you count with their URLs. Separately, for the PRs follow-pr handled: a PR with no
+     escapes that later got a real follow-up means review missed something; say what, if the titles show it.
+   - Before and after: compare the per-PR numbers (review threads, changes requested, red pushes, commits after the
+     first review, real follow-ups) between baseline and since_kit, with the PR counts. Few PRs since the kit make
+     any difference noise; say so instead of drawing a conclusion. The baseline counts every PR; the kit numbers can't
+     beat it by excluding hard ones.
+   Add a "Cost per merged PR" section from the sessions joined to PRs: tokens (input+output; cache reads separately),
+   wall-clock minutes (idle included), hours from the first session to the PR and from the PR to the merge, per
+   period and per model and effort where sessions.json has them. Compare cost per merged PR, never per session.
    Add a "Framework friction" section: where the kit itself slowed work down or was bypassed. Count, with example sessions:
    blocks the agent worked around or the user overrode (a deny followed by the same intent in another form), verify or
    self-review steps reported as NOT RUN and why, time per tier against the triage budgets (low <5 min, standard <=20,

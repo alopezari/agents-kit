@@ -60,7 +60,7 @@ Every hook is a small program with one contract: a JSON payload on stdin, a JSON
 
 ## Not in git
 
-`logs/`, `backups/`, `research/`, `approvals/`, `monitors/state/`, `review-mining/runs/` and `usage/*.json` hold local, possibly private data. Profiles are linked in and never committed here.
+`logs/`, `backups/`, `research/`, `approvals/`, `monitors/state/`, `review-mining/runs/`, `review-mining/baseline.json` and `usage/*.json` hold local, possibly private data. Profiles are linked in and never committed here.
 
 ## License
 
