@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""deps.txt is the complete list of programs the kit runs: a program the code calls must be declared there."""
+"""deps.txt is the complete list of programs the kit runs: a program the code calls must be declared there,
+and the kit's Python must parse as the oldest Python it declares."""
+import ast
 import os
 import re
 import subprocess
@@ -19,13 +21,26 @@ NOT_DEPENDENCIES = {
 
 
 def declared():
-    names = set()
+    """{program: minimum version or None}"""
+    programs = {}
     for line in open(os.path.join(KIT, "deps.txt")):
         if line.strip() and not line.lstrip().startswith("#"):
-            tier, program, *_ = line.split()
+            tier, spec, *_ = line.split()
             assert tier in ("required", "recommended", "optional"), f"deps.txt: unknown tier {tier!r}"
-            names.add(program)
-    return names
+            program, _, minimum = spec.partition(">=")
+            programs[program] = minimum or None
+    return programs
+
+
+def python_files():
+    files = subprocess.run(["git", "ls-files"], cwd=KIT, capture_output=True, text=True, check=True).stdout.split()
+    for rel in files:
+        try:
+            source = open(os.path.join(KIT, rel)).read()
+        except (UnicodeDecodeError, IsADirectoryError):
+            continue
+        if rel.endswith(".py") or "python" in source.split("\n", 1)[0]:
+            yield rel, source
 
 
 def called():
@@ -53,13 +68,26 @@ def called():
 
 
 def main():
-    missing = {p: f for p, f in called().items() if p not in declared() | NOT_DEPENDENCIES}
-    if missing:
-        for program, rel in sorted(missing.items()):
-            print(f"FAIL {rel} runs {program}, which deps.txt doesn't declare")
-        return 1
-    print("ok   every program the code runs is declared in deps.txt")
-    return 0
+    fail = 0
+    missing = {p: f for p, f in called().items() if p not in set(declared()) | NOT_DEPENDENCIES}
+    for program, rel in sorted(missing.items()):
+        print(f"FAIL {rel} runs {program}, which deps.txt doesn't declare")
+        fail = 1
+    if not missing:
+        print("ok   every program the code runs is declared in deps.txt")
+    oldest = tuple(int(part) for part in declared()["python3"].split("."))
+    too_new = []
+    for rel, source in python_files():
+        try:
+            ast.parse(source, feature_version=oldest)
+        except SyntaxError as err:
+            too_new.append(f"{rel}:{err.lineno}: {err.msg}")
+    for problem in too_new:
+        print(f"FAIL {problem} (deps.txt promises python3>={declared()['python3']})")
+        fail = 1
+    if not too_new:
+        print(f"ok   the kit's Python parses as Python {declared()['python3']}")
+    return fail
 
 
 if __name__ == "__main__":

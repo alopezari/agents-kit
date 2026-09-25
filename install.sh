@@ -105,15 +105,28 @@ echo "Requirements"
 # programs are installed through Homebrew; optional ones serve a single feature, so they are only reported.
 installed() { if [ "$1" = chrome ]; then [ -d "/Applications/Google Chrome.app" ]; else command -v "$1" >/dev/null; fi; }
 install_hint() { case "$1" in brew:*) echo "brew install ${1#brew:}" ;; npm:*) echo "npm install -g ${1#npm:}" ;; *) echo "$1" ;; esac; }
-while read -r tier program how purpose; do
-  if installed "$program"; then ok "$program"; continue; fi
+older_than() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" != "$2" ]; }
+while read -r tier spec how purpose; do
+  program=${spec%%>=*}; minimum=${spec#"$program"}; minimum=${minimum#>=}
+  if installed "$program"; then
+    version=$("$program" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1) || true  # chrome is an app
+    if [ -z "$minimum" ] || [ -z "$version" ] || ! older_than "$version" "$minimum"; then ok "$program${version:+ $version}"; continue; fi
+    msg="$program $version is older than $minimum, needed for $purpose: $(install_hint "$how")"
+    if [ "$tier" = optional ]; then info "$msg"; else warn "$msg"; fi
+    continue
+  fi
   if [ "$tier" = optional ]; then info "$program not installed, needed for $purpose: $(install_hint "$how")"; continue; fi
   if [ $DOCTOR = 0 ] && [ "${how%%:*}" = brew ] && command -v brew >/dev/null \
     && brew install --quiet "${how#brew:}" </dev/null >/dev/null 2>&1 && installed "$program"; then
     fix "$program installed ($(install_hint "$how"))"; continue
   fi
   warn "$program is missing ($tier), needed for $purpose: $(install_hint "$how")"
-done < <(cat "$KIT/deps.txt" "$KIT"/profiles/*/deps.txt 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)')
+done < <(cat "$KIT/deps.txt" "$KIT"/profiles/*/deps.txt 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)' | awk '
+  # One line per program, in first-seen order, with the strictest tier any list gives it.
+  { rank = $1 == "required" ? 3 : $1 == "recommended" ? 2 : 1; p = $2; sub(/>=.*/, "", p) }
+  !(p in best) { order[++n] = p }
+  rank > best[p] { best[p] = rank; line[p] = $0 }
+  END { for (i = 1; i <= n; i++) print line[order[i]] }')
 for dir in tools/a11y tools/mermaid site; do
   if [ -d "$KIT/$dir/node_modules" ]; then ok "$dir dependencies"
   elif [ $DOCTOR = 1 ]; then warn "$dir dependencies missing (npm install in $dir)"

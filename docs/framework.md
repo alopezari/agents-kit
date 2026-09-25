@@ -291,7 +291,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `review-mining/repos.txt` | repositories the monthly review mining reads |
 | `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |
 | `PROFILE.md` | work context for the trends scan |
-| `deps.txt` | more programs to install and check, in the core's format |
+| `deps.txt` | more programs to install and check, in the core's format; a program in both takes the stricter tier |
 | `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |
 
 ## What the agents are told
@@ -323,14 +323,14 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 
 ### Requirements
 
-`deps.txt` lists every program the kit runs; `tests/test_deps.py` fails when the code calls one it doesn't declare. `install.sh` installs missing required and recommended ones through Homebrew; optional ones serve one feature, so it only says how to install them. Python code uses the standard library only; Node packages are pinned in each `package.json`.
+`deps.txt` lists every program the kit runs; `tests/test_deps.py` fails when the code calls one it doesn't declare. `install.sh` installs missing required and recommended ones through Homebrew; optional ones serve one feature, so it only says how to install them. A program older than its minimum version is reported, not upgraded. Python code uses the standard library only; Node packages are pinned in each `package.json`.
 
 | Tier | Program | Install | Needed for |
 |---|---|---|---|
-| required | `python3` | brew install python | every hook and command-line tool |
-| required | `git` | brew install git | everything that looks at a change |
+| required | `python3 ≥ 3.9` | brew install python | every hook and command-line tool |
+| required | `git ≥ 2.31` | brew install git | everything that looks at a change |
 | required | `jq` | brew install jq | install.sh, the status line, the scheduled jobs |
-| required | `node` | brew install node | tools/ and site/ (npm), the scheduled jobs |
+| required | `node ≥ 22.13` | brew install node | tools/ and site/ (npm), the scheduled jobs |
 | required | `gh` | brew install gh | create-pr, follow-pr, the flow phase in the status line, review mining |
 | recommended | `semgrep` | brew install semgrep | verify's semgrep rules; tests/run.sh |
 | recommended | `gitleaks` | brew install gitleaks | the secrets check at the end of each turn |

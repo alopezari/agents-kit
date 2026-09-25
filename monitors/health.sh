@@ -17,7 +17,7 @@ suite=$("$K/tests/run.sh" 2>&1); suite_rc=$?
 [ $suite_rc = 0 ] || problems+=("Regression suite failed: $(grep -E '^FAIL|  warn ' <<<"$suite" | head -5 | tr '\n' ';')")
 
 # 2. Harness and tool versions: a new version can change the hook contract or add a native feature.
-programs=$(cat "$K/deps.txt" "$K"/profiles/*/deps.txt 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)' | awk '$2 != "chrome" {print $2}')
+programs=$(cat "$K/deps.txt" "$K"/profiles/*/deps.txt 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)' | awk '{ p = $2; sub(/>=.*/, "", p) } p != "chrome" { print p }')
 current=$(for c in claude codex pi $programs; do
   printf '%s %s\n' "$c" "$($c --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?[^ ]*' | head -1)"; done | sort -u)
 if [ -f "$STATE/versions.txt" ]; then
@@ -49,7 +49,7 @@ done
 
 # 5. Leftovers that should never persist.
 [ -e "$K/approvals/linear" ] && [ "$(days_since "$K/approvals/linear")" -ge 1 ] && notes+=("A Linear approval file is older than a day; it is expired but can be removed.")
-stale_overrides=$(find "$HOME/Projects" -maxdepth 4 -name 'docker-compose.override.yml' -exec grep -l 'agents: temporary override' {} + 2>/dev/null)
+stale_overrides=$(python3 "$K/hooks/stop_checks.py" leftover-overrides)
 [ -n "$stale_overrides" ] && problems+=("Marked temporary docker overrides left behind: $(tr '\n' ' ' <<<"$stale_overrides")")
 old_tmp=$(find "${TMPDIR:-/tmp}/agent-hooks" -type f -mtime +14 2>/dev/null | wc -l | tr -d ' ')
 [ "$old_tmp" -gt 0 ] && find "${TMPDIR:-/tmp}/agent-hooks" -type f -mtime +14 -delete 2>/dev/null && notes+=("Removed $old_tmp hook session files older than 14 days.")

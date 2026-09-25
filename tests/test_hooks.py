@@ -14,12 +14,13 @@ import traceback
 
 H = os.path.expanduser("~/.agents/hooks/")
 RESULTS = []
+STATE = tempfile.mkdtemp(prefix="agents-state-")  # keeps the real checkouts registry out of the tests
 RUN = f"t{os.getpid()}{int(time.time())}-"  # unique session ids: hook state is kept per session
 
 
 def run_hook(script, payload, cwd=None, env=None):
     out = subprocess.run(["python3", H + script], input=json.dumps(payload), capture_output=True, text=True,
-                         cwd=cwd, env={**os.environ, "AGENTS_TEST": "1", **(env or {})}).stdout
+                         cwd=cwd, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, **(env or {})}).stdout
     return json.loads(out) if out.strip() else None
 
 
@@ -231,6 +232,26 @@ def stop_flags_marked_override_only(base):
     assert "override" not in stop(RUN + "s5", repo, [os.path.join(repo, "app.py")]).get("reason", "")
 
 
+def stop_finds_override_in_primary_checkout_and_health_finds_it_later(base):
+    # validate writes the override where the stack runs, the primary checkout, while the agent edits a worktree.
+    main = os.path.realpath(new_repo(base, "main"))  # git reports /private/var for macOS's /var
+    wt = os.path.join(base, "wt")
+    git(main, "worktree", "add", "-q", "-b", "feat/o", wt, "trunk")
+    open(os.path.join(main, "compose.override.yml"), "w").write("# agents: temporary override\nservices: {}\n")
+    open(os.path.join(wt, "app.py"), "a").write("y = 2\n")
+    state = os.path.join(base, "state")
+    env = {"AGENTS_STATE_DIR": state}
+    run_hook("post_edit.py", {"session_id": RUN + "o1", "cwd": wt, "tool_input": {"file_path": os.path.join(wt, "app.py")}})
+    reason = (run_hook("stop_checks.py", {"session_id": RUN + "o1", "cwd": wt}, env=env) or {}).get("reason", "")
+    assert "compose.override.yml" in reason and main in reason, reason
+    gone = os.path.join(base, "gone")
+    open(os.path.join(state, "checkouts.txt"), "a").write(gone + "\n")
+    out = subprocess.run([sys.executable, H + "stop_checks.py", "leftover-overrides"],
+                         capture_output=True, text=True, env={**os.environ, **env})
+    assert out.stdout.split() == [os.path.join(main, "compose.override.yml")], out
+    assert open(os.path.join(state, "checkouts.txt")).read().split() == [main], "deleted checkouts are pruned"
+
+
 def verify_stamp_and_effort_nudge(base):
     repo = new_repo(base, "zz-agents-test-repo")
     vdir = os.path.expanduser("~/.agents/repos/zz-agents-test-repo")
@@ -263,7 +284,8 @@ def post_edit_syntax_feedback(base):
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           pr_gate_follows_worktrees, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
-          stop_flags_secrets_redacted, stop_flags_marked_override_only, verify_stamp_and_effort_nudge,
+          stop_flags_secrets_redacted, stop_flags_marked_override_only,
+          stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
           post_edit_syntax_feedback]:
     test(t)
 
@@ -272,6 +294,8 @@ log = os.path.expanduser("~/.agents/logs/hooks.jsonl")
 if os.path.exists(log):
     keep = [l for l in open(log) if "agents-test-" not in l and '"session": "test"' not in l]
     open(log, "w").writelines(keep)
+
+shutil.rmtree(STATE, ignore_errors=True)
 
 failed = [(n, e) for n, e in RESULTS if e]
 for name, err in RESULTS:

@@ -1,13 +1,13 @@
 # Every program the kit runs that macOS doesn't ship. install.sh installs the required and recommended
 # ones that are missing (through Homebrew), --doctor reports them, bin/docs lists them, and
 # tests/test_deps.py fails when the code calls a program that isn't here. Profiles add their own in
-# profiles/<name>/deps.txt, in the same format.
+# profiles/<name>/deps.txt, in the same format. `program>=version` sets the oldest version that works.
 #
 # tier         program         how to install            what needs it
-required       python3         brew:python               every hook and command-line tool
-required       git             brew:git                  everything that looks at a change
+required       python3>=3.9    brew:python               every hook and command-line tool
+required       git>=2.31       brew:git                  everything that looks at a change
 required       jq              brew:jq                   install.sh, the status line, the scheduled jobs
-required       node            brew:node                 tools/ and site/ (npm), the scheduled jobs
+required       node>=22.13     brew:node                 tools/ and site/ (npm), the scheduled jobs
 required       gh              brew:gh                   create-pr, follow-pr, the flow phase in the status line, review mining
 recommended    semgrep         brew:semgrep              verify's semgrep rules; tests/run.sh
 recommended    gitleaks        brew:gitleaks             the secrets check at the end of each turn

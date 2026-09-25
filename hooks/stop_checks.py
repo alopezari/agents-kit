@@ -7,6 +7,9 @@ the agent to continue, once, for a skipped or focused test, a deleted test file,
 leftover, a conflict marker, a possible secret, a new option read near a cache, or a
 temporary compose override left behind. Then runs the repo's verify: the overlay
 in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py.
+
+`stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
+the hook has seen, for the weekly health check.
 """
 import json
 import os
@@ -20,6 +23,9 @@ from hooklog import log  # noqa: E402
 import review_stamp  # noqa: E402
 
 MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
+CHECKOUTS = os.path.join(os.environ.get("AGENTS_STATE_DIR") or os.path.expanduser("~/.agents/monitors/state"), "checkouts.txt")
+OVERRIDE_NAMES = ("docker-compose.override.yml", "docker-compose.override.yaml", "compose.override.yml", "compose.override.yaml")
+OVERRIDE_MARKER = "agents: temporary override"
 VERIFY_TIMEOUT = 600
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
 
@@ -188,6 +194,51 @@ def save_verify_report(root, verify, result):
         pass
 
 
+def primary_checkout(root):
+    """The main working tree of root's repository, where the validate skill runs the stack."""
+    common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], root).strip()
+    return os.path.dirname(common) if os.path.basename(common) == ".git" else root
+
+
+def marked_overrides(dirs):
+    found = []
+    for directory in sorted(dirs):
+        for name in OVERRIDE_NAMES:
+            path = os.path.join(directory, name)
+            try:
+                if OVERRIDE_MARKER in open(path).read():
+                    found.append(path)
+            except OSError:
+                pass
+    return found
+
+
+def known_checkouts():
+    try:
+        return [line for line in open(CHECKOUTS).read().splitlines() if line]
+    except FileNotFoundError:
+        return []
+
+
+def remember_checkout(path):
+    """Record every checkout the agents work in, so the health check looks exactly there, wherever it lives."""
+    if path not in known_checkouts():
+        os.makedirs(os.path.dirname(CHECKOUTS), exist_ok=True)
+        with open(CHECKOUTS, "a") as f:
+            f.write(path + "\n")
+
+
+def leftover_overrides():
+    existing = [path for path in known_checkouts() if os.path.isdir(path)]
+    os.makedirs(os.path.dirname(CHECKOUTS), exist_ok=True)
+    with open(CHECKOUTS + ".tmp", "w") as f:
+        f.write("".join(path + "\n" for path in existing))
+    os.replace(CHECKOUTS + ".tmp", CHECKOUTS)
+    for override in marked_overrides(existing):
+        print(override)
+    return 0
+
+
 def check_checkout(root, session):
     """Return (problems, verify_failed) for one checkout."""
     problems = []
@@ -201,14 +252,11 @@ def check_checkout(root, session):
             problems.append(f"Debug leftover in {path}: `{line.strip()}`")
         if CONFLICT_MARKER.search(line):
             problems.append(f"Merge conflict marker in {path}")
-    for name in ("docker-compose.override.yml", "docker-compose.override.yaml", "compose.override.yml", "compose.override.yaml"):
-        override = os.path.join(root, name)
-        try:
-            if "agents: temporary override" in open(override).read():
-                problems.append(f"Temporary {name} from the validate skill is still there: delete it and run "
-                                "`docker compose up -d` so the stack serves the primary checkout again.")
-        except OSError:
-            pass
+    primary = primary_checkout(root)
+    remember_checkout(primary)
+    for override in marked_overrides({root, primary}):
+        problems.append(f"Temporary {override} from the validate skill is still there: delete it and run "
+                        "`docker compose up -d` so the stack serves the primary checkout again.")
     deleted = git(["diff", review_stamp.merge_base(root), "--name-only", "--diff-filter=D"], root).splitlines()
     problems += [f"Test file deleted: {p}" for p in deleted if TEST_FILE.search(p)]
 
@@ -235,4 +283,4 @@ def check_checkout(root, session):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(leftover_overrides() if sys.argv[1:] == ["leftover-overrides"] else main())

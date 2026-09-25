@@ -386,7 +386,7 @@ def render():
     w("| `review-mining/repos.txt` | repositories the monthly review mining reads |")
     w("| `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |")
     w("| `PROFILE.md` | work context for the trends scan |")
-    w("| `deps.txt` | more programs to install and check, in the core's format |")
+    w("| `deps.txt` | more programs to install and check, in the core's format; a program in both takes the stricter tier |")
     w("| `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |\n")
 
     w("## What the agents are told\n")
@@ -400,7 +400,7 @@ def render():
     w("### Requirements\n")
     w("`deps.txt` lists every program the kit runs; `tests/test_deps.py` fails when the code calls one it doesn't "
       "declare. `install.sh` installs missing required and recommended ones through Homebrew; optional ones serve one "
-      "feature, so it only says how to install them. Python code uses the standard library only; Node packages are "
+      "feature, so it only says how to install them. A program older than its minimum version is reported, not upgraded. Python code uses the standard library only; Node packages are "
       "pinned in each `package.json`.\n")
     w("| Tier | Program | Install | Needed for |\n|---|---|---|---|")
     for line in read("deps.txt").splitlines():
@@ -408,6 +408,7 @@ def render():
             tier, program, how, purpose = line.split(None, 3)
             kind, _, name = how.partition(":")
             how = {"brew": f"brew install {name}", "npm": f"npm install -g {name}"}.get(kind, how)
+            program = program.replace(">=", " ≥ ")
             w(f"| {tier} | `{program}` | {cell(how)} | {cell(purpose)} |")
     w("")
     w("- `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, the Pi adapter, triage, "
