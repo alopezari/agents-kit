@@ -32,7 +32,7 @@ LAYOUT = {
     "hooks/": "The hook scripts all harnesses share (one JSON contract: stdin in, decision out).",
     "skills/": "Skills linked into every harness; third-party ones are listed in `skills.external`.",
     "skills.external": "Third-party skills install.sh clones from their source.",
-    "repos/": "Per-repository overlays (`notes.md`, `verify`) and the shared verify scripts in `_shared/`.",
+    "repos/": "Per-repository overlays (`notes.md`, `verify`, `wp-cli`) and the shared verify scripts in `_shared/`.",
     "bin/": "Command-line tools the skills and people call.",
     "site/": "The public landing page and these docs as a website, built from README.md and this file (`site/build.mjs`).",
     "tools/": "Node code and dependencies for the tools in `bin/` and the diagram check in `tests/run.sh`.",
@@ -68,7 +68,8 @@ def first_paragraph(text):
     lines = []
     for line in text.strip().splitlines():
         stripped = line.strip()
-        if not stripped or re.match(r"(~/|\./|[\w-]+\.(py|sh) |[\w-]+ +[<\[-])", stripped):
+        # The opening line is always prose, even when it starts like a command (`php -l; ...`).
+        if not stripped or (lines and re.match(r"(~/|\./|[\w-]+\.(py|sh) |[\w-]+ +[<\[-])", stripped)):
             break
         lines.append(stripped)
     return " ".join(lines)
@@ -235,9 +236,10 @@ def render():
       f"{', '.join(harnesses[:-1])} and {harnesses[-1]} on macOS, and it works on any repository: repository-specific "
       "knowledge lives in overlays and private profiles, never in the repositories themselves.\n")
     w("## At a glance\n")
-    w(f"- **{len(harnesses)} harnesses** share one `AGENTS.md`, {len(skill_rows)} skills and {len({s for *_, s, _ in hooks})} hook scripts.")
+    w(f"- **{len(harnesses)} harnesses** share one `AGENTS.md`, {len(skill_rows)} skills and {len({s for *_, s, _ in hooks})} hook scripts "
+      "(Pi has no MCP, so it runs all but `guard_mcp.py`).")
     w(f"- **{len(guard_rules()) + 2} guard rules** block irreversible or outward-facing shell commands before they run.")
-    w("- **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets, then the repo's verify.")
+    w("- **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), then the repo's verify.")
     w(f"- **{len(function_docs('repos/_shared/verify_auto.py', 'check_'))} stacks** are verified automatically when a repo has no hand-written verify.")
     w(f"- **{len(jobs)} scheduled jobs** watch the kit's health, look for improvements and learn from code review.")
     w(f"- **{len(tool_rows)} command-line tools**: {', '.join(name for name, *_ in tool_rows)}.\n")
@@ -275,7 +277,8 @@ def render():
     for skill in ("spec", "self-review", "validate", "create-pr", "write-pr-description", "follow-pr", "ship"):
         require(f"skills/{skill}/SKILL.md")
     w("```mermaid\nflowchart TD\n  T[Issue or request] --> SP[spec skill: acceptance criteria]\n  SP --> W[Agent edits code]")
-    w("  W -->|every shell command| G{guard_bash / guard_mcp}\n  G -->|irreversible or shared write| B[Blocked with the reason]")
+    w("  W -->|every shell command| G{guard_bash}\n  G -->|irreversible| B[Blocked with the reason]")
+    w("  W -->|every MCP call| GM{guard_mcp}\n  GM -->|shared write without approval| B")
     w("  W -->|every file edit| PE[post_edit: syntax check]\n  PE -->|syntax error| W")
     w("  W -->|end of turn| SC{stop_checks + verify}\n  SC -->|problem found, first time| W\n  SC -->|clean| SR[self-review skill: lenses + second model]")
     w("  SR --> V[validate skill: suite + local checks + staging guide]")
@@ -300,16 +303,17 @@ def render():
     w("")
     for script in sorted({s for *_, s, _ in hooks}):
         w(f"**`{script}`**: {summary_and_detail(docstring('hooks/' + script))}\n")
-    w("Every decision is appended to `~/.agents/logs/hooks.jsonl`, which the weekly health check reads.\n")
+    w("Every block, and every approved or browser MCP call, is appended to `~/.agents/logs/hooks.jsonl`, "
+      "which the weekly health check reads. Allowed shell commands are not logged.\n")
 
     w("### What the shell guard blocks\n")
     for reason in guard_rules():
         w(f"- {reason}")
     w("- Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.")
     w("- `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.\n")
-    w("It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems (issue trackers, "
-      "chat) need a short-lived approval that only you can create; profiles declare which operations count as writes "
-      "in `mcp-writes.json`.\n")
+    w("It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need a "
+      "short-lived approval that only you can create. The core knows Linear's write operations; profiles declare "
+      "other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded.\n")
 
     w("## Verify: checking the change at the end of every turn\n")
     w("\"The change\" is everything the branch adds since it left the default branch, committed or not, plus untracked files: "
@@ -326,7 +330,9 @@ def render():
         ext = exts.get(name, "")
         files = ", ".join(f"`{x}`" for x in ast.literal_eval(constants.get(ext, ext)))
         w(f"| {files} | {cell(doc)} |")
-    w("\nProject-local tools win over global ones (`node_modules/.bin`, `vendor/bin`, `.venv/bin`).\n")
+    w("\nESLint, Ruff and pytest come from the project (`node_modules/.bin`, `.venv/bin`) when installed there, "
+      "else from `PATH`. PHP tools and JavaScript test runners only run when the project installs them "
+      "(`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped.\n")
     w("### Hand-written, per repository\n")
     w("A repository that needs more (a Docker stack, known failing tests, project rules) gets an executable "
       "`repos/<repo>/verify` (`<repo>` as `bin/repo-name` prints it, the same from any worktree), usually built on `repos/_shared/verify_changed.py`:\n")
@@ -352,8 +358,11 @@ def render():
             w("```\n" + "\n".join(usage) + "\n```\n")
 
     w("## Periodic operations\n")
-    w("`install.sh` renders the templates in `launchd/` into `~/Library/LaunchAgents/` and loads them. "
-      "No job changes the kit: they write reports and proposals under `research/` for you to review.\n")
+    w("`install.sh` renders the templates in `launchd/` into `~/Library/LaunchAgents/` and loads them, "
+      "each labelled `com.<user>.<job>`. No job applies changes to the kit's tracked files: they write reports and "
+      "proposals under `research/` for you to review, and keep their own state in git-ignored directories. "
+      "Review mining classifies review comments from the repositories profiles list in `review-mining/repos.txt`; "
+      "without one, it skips that step and reports only your pull requests' outcomes and the kit's own logs.\n")
     w("| Job | When | Runs | What it does |\n|---|---|---|---|")
     for label, cadence, script, summary in jobs:
         w(f"| `{label}` | {cadence} | `{script}` | {cell(summary)} |")

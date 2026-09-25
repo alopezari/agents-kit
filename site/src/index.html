@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>agents-kit · one setup for every coding agent</title>
-<meta name="description" content="The same instructions, skills and guardrails for Claude Code, Codex and Pi. Nothing irreversible runs without you, every turn that edits code is verified, and no pull request opens until the exact change has been reviewed.">
+<meta name="description" content="The same instructions, skills and guardrails for Claude Code, Codex and Pi. Irreversible and outward-facing commands stop and wait for you, every turn that edits code is verified, and no pull request opens until the exact change has been reviewed.">
 <meta property="og:title" content="agents-kit · one setup for every coding agent">
 <meta property="og:description" content="Same instructions, skills and guardrails for Claude Code, Codex and Pi, with checks that the work was actually done.">
 <meta name="theme-color" content="#0E100F">
@@ -33,7 +33,7 @@
   <div class="stack">
     <p class="eyebrow">// claude code · codex · pi</p>
     <h1>Your agents,<br>one rulebook,<br>every check run.</h1>
-    <p class="lede">The same instructions, skills and guardrails for every harness. Nothing irreversible runs without you, every turn that edits code is verified, and no pull request opens until the exact change has been reviewed.</p>
+    <p class="lede">The same instructions, skills and guardrails for every harness. Irreversible and outward-facing commands stop and wait for you, every turn that edits code is verified, and no pull request opens until the exact change has been reviewed.</p>
     <div class="actions">
       <a class="button" href="#install">$ install.sh</a>
       <a href="docs/">Read the docs</a>
@@ -67,7 +67,7 @@
     <div class="stack">
       <span class="num">02 /</span>
       <h3>Checks, not promises</h3>
-      <p>"Run the tests" is an instruction an agent can forget. Here a hook runs them at the end of every turn, and a stamp of the exact change has to exist before a pull request can be opened.</p>
+      <p>"Run the tests" is an instruction an agent can forget. Here a hook runs the tests related to the change at the end of every turn that edits code, and a stamp of the exact change has to exist before a pull request can be opened.</p>
     </div>
     <div class="stack">
       <span class="num">03 /</span>
@@ -153,7 +153,7 @@
       <div class="body">
         <div><span class="prompt">$ </span>~/.agents/install.sh --profile ~/profiles/work</div>
         <div><span class="prompt">$ </span>~/.agents/install.sh --profile ~/profiles/client-a</div>
-        <div class="comment">linked: repos/ overlays · skills/ · mcp-writes.json · review-mining/</div>
+        <div class="comment">adds: repos/ overlays · skills/ · mcp-writes.json · review-mining/</div>
       </div>
     </div>
   </div>
@@ -171,7 +171,7 @@
       <p class="eyebrow">// learning loop</p>
       <h2>It gets better, and asks you first</h2>
       <p>A weekly health check reads the hook log. Each month a job classifies new review comments, measures what slipped past review, and compares cost per merged pull request with the months before the kit. A mid-month scan looks for new harness and model features worth adopting.</p>
-      <p>None of them changes the kit. They write proposals as diffs, and you decide.</p>
+      <p>None of them applies a change. They write proposals, with diffs, and you decide what goes in.</p>
     </div>
   </div>
 </section>
@@ -181,8 +181,8 @@
     <div class="stack">
       <p class="eyebrow">// install</p>
       <h2>Five minutes, safe to re-run</h2>
-      <p>The installer wires every harness it finds, keeps the hooks you already have, and backs up anything it replaces. The doctor reports what's missing and changes nothing.</p>
-      <p style="font-family: var(--mono); font-size: 14px; color: var(--dim)">macOS · python3, git, jq · semgrep and gitleaks recommended</p>
+      <p>The installer wires every harness it finds, keeps the hooks you already have, and backs up anything it replaces. The doctor reports what's missing and changes nothing; the test suite passes once it's clean.</p>
+      <p style="font-family: var(--mono); font-size: 14px; color: var(--dim)">macOS · python3, git, jq, node · semgrep and gitleaks recommended</p>
     </div>
     <div class="terminal">
       <div class="bar"><span>~</span></div>

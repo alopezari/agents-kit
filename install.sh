@@ -103,10 +103,10 @@ echo "Requirements"
 for bin in python3 jq git semgrep gitleaks docker node playwright-cli agent-browser; do
   command -v $bin >/dev/null && ok "$bin" || warn "$bin not found"
 done
-for tool in a11y mermaid; do
-  if [ -d "$KIT/tools/$tool/node_modules" ]; then ok "$tool dependencies"
-  elif [ $DOCTOR = 1 ]; then warn "$tool dependencies missing (npm install in tools/$tool)"
-  else (cd "$KIT/tools/$tool" && npm install --no-audit --no-fund >/dev/null 2>&1) && fix "$tool dependencies installed"; fi
+for dir in tools/a11y tools/mermaid site; do
+  if [ -d "$KIT/$dir/node_modules" ]; then ok "$dir dependencies"
+  elif [ $DOCTOR = 1 ]; then warn "$dir dependencies missing (npm install in $dir)"
+  else (cd "$KIT/$dir" && npm install --no-audit --no-fund >/dev/null 2>&1) && fix "$dir dependencies installed"; fi
 done
 
 # gh ignores git's per-host proxies (http.<url>.proxy); bin/gh applies them, so it must come first in PATH.

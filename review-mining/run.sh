@@ -74,7 +74,7 @@ Steps:
 2. Aggregate: category counts overall, and separately for comments on agent-authored PRs. Compare with the previous analysis and name what changed.
 3. Decide what the evidence supports: new recurring defects, rules that no longer show up, wording that reviewers keep contradicting. A rule needs a pattern across several PRs, not one comment. For every recurring defect, push it down this ladder as far as it goes, and propose the lowest rung that works:
    a. make it impossible (an API or helper the team could adopt; propose, never apply);
-   b. a deterministic check: a semgrep rule in $HOME/.agents/repos/_shared/wordpress.semgrep.yml or a repo's verify script under $HOME/.agents/repos/ (write the rule, test it against a synthetic example, and include it in the proposal);
+   b. a deterministic check: a semgrep rule in $HOME/.agents/repos/_shared/wordpress.semgrep.yml or a repo's verify script under $HOME/.agents/repos/ (draft the rule in $RUN, test it against a synthetic example, and include it in the proposal as a diff; never edit the kit's files);
    c. a regression or property test the team could add;
    d. required evidence in the self-review lenses ($HOME/.agents/skills/self-review/lenses.md);
    e. a sentence in AGENTS.md, only when nothing above fits. Keep AGENTS.md short.

@@ -6,9 +6,9 @@ The kit gives every coding agent you use the same way of working: one set of ins
 
 ## At a glance
 
-- **3 harnesses** share one `AGENTS.md`, 8 skills and 4 hook scripts.
+- **3 harnesses** share one `AGENTS.md`, 8 skills and 4 hook scripts (Pi has no MCP, so it runs all but `guard_mcp.py`).
 - **21 guard rules** block irreversible or outward-facing shell commands before they run.
-- **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets, then the repo's verify.
+- **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), then the repo's verify.
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
 - **10 command-line tools**: a11y-check, browse, docs, gh, phase, quality-log, repo-name, reports, triage, wp-query-profile.
@@ -55,8 +55,10 @@ It also adds the kit's baseline settings where a key is missing, never overwriti
 flowchart TD
   T[Issue or request] --> SP[spec skill: acceptance criteria]
   SP --> W[Agent edits code]
-  W -->|every shell command| G{guard_bash / guard_mcp}
-  G -->|irreversible or shared write| B[Blocked with the reason]
+  W -->|every shell command| G{guard_bash}
+  G -->|irreversible| B[Blocked with the reason]
+  W -->|every MCP call| GM{guard_mcp}
+  GM -->|shared write without approval| B
   W -->|every file edit| PE[post_edit: syntax check]
   PE -->|syntax error| W
   W -->|end of turn| SC{stop_checks + verify}
@@ -103,7 +105,7 @@ When the change needs manual tests on staging, `validate` ends by handing you th
 
 **`stop_checks.py`**: Stop hook shared by Claude Code, Codex and Pi (via adapters/pi). Only runs when the session edited files since the last stop. Looks at the lines the branch adds since the merge-base with the default branch (committed or not) and asks the agent to continue, once, for a skipped or focused test, a deleted test file, a debug leftover, a conflict marker, a possible secret, a new option read near a cache, or a temporary compose override left behind. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py.
 
-Every decision is appended to `~/.agents/logs/hooks.jsonl`, which the weekly health check reads.
+Every block, and every approved or browser MCP call, is appended to `~/.agents/logs/hooks.jsonl`, which the weekly health check reads. Allowed shell commands are not logged.
 
 ### What the shell guard blocks
 
@@ -129,7 +131,7 @@ Every decision is appended to `~/.agents/logs/hooks.jsonl`, which the weekly hea
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 
-It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems (issue trackers, chat) need a short-lived approval that only you can create; profiles declare which operations count as writes in `mcp-writes.json`.
+It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need a short-lived approval that only you can create. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded.
 
 ## Verify: checking the change at the end of every turn
 
@@ -144,13 +146,13 @@ Used when a repository has no hand-written verify. Only tests related to the cha
 | Files | What runs |
 |---|---|
 | `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` | ESLint on changed lines; Vitest or Jest on the tests related to the changed files. |
-| `.php` |  |
+| `.php` | php -l; PHPCS and PHPStan on changed lines when the project configures them; PHPUnit on related test classes. |
 | `.py` | Ruff on changed lines; pytest on the related test_<module>.py or <module>_test.py files. |
-| `.go` |  |
+| `.go` | gofmt -l on changed files; go vet and go test on the changed packages. |
 | `.rs` | cargo check on the crate. |
 | `.sh`, `.bash` | ShellCheck on changed lines. |
 
-Project-local tools win over global ones (`node_modules/.bin`, `vendor/bin`, `.venv/bin`).
+ESLint, Ruff and pytest come from the project (`node_modules/.bin`, `.venv/bin`) when installed there, else from `PATH`. PHP tools and JavaScript test runners only run when the project installs them (`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped.
 
 ### Hand-written, per repository
 
@@ -260,7 +262,7 @@ wp-query-profile --php 'my_function_under_test( 20 );' [--user 1]
 
 ## Periodic operations
 
-`install.sh` renders the templates in `launchd/` into `~/Library/LaunchAgents/` and loads them. No job changes the kit: they write reports and proposals under `research/` for you to review.
+`install.sh` renders the templates in `launchd/` into `~/Library/LaunchAgents/` and loads them, each labelled `com.<user>.<job>`. No job applies changes to the kit's tracked files: they write reports and proposals under `research/` for you to review, and keep their own state in git-ignored directories. Review mining classifies review comments from the repositories profiles list in `review-mining/repos.txt`; without one, it skips that step and reports only your pull requests' outcomes and the kit's own logs.
 
 | Job | When | Runs | What it does |
 |---|---|---|---|
@@ -335,7 +337,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `install.sh` | Wires the kit into each installed harness; `--doctor` reports without changing anything. |
 | `launchd/` | Templates for the scheduled jobs (macOS). |
 | `monitors/` | The weekly health check and the mid-month trends scan. |
-| `repos/` | Per-repository overlays (`notes.md`, `verify`) and the shared verify scripts in `_shared/`. |
+| `repos/` | Per-repository overlays (`notes.md`, `verify`, `wp-cli`) and the shared verify scripts in `_shared/`. |
 | `review-mining/` | The monthly job that learns from human code-review comments. |
 | `site/` | The public landing page and these docs as a website, built from README.md and this file (`site/build.mjs`). |
 | `skills.external` | Third-party skills install.sh clones from their source. |
