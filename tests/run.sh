@@ -50,6 +50,11 @@ section "framework reference"
 ~/.agents/bin/docs --check || fail=1
 node ~/.agents/tools/mermaid/check.mjs ~/.agents/docs/framework.md || fail=1
 
+section "site build"
+if [ ! -d ~/.agents/site/node_modules ]; then echo "FAIL site dependencies missing: npm --prefix ~/.agents/site ci"; fail=1
+elif node ~/.agents/site/build.mjs >/dev/null; then echo "ok   landing and docs build from the current sources"
+else fail=1; fi
+
 section "install on a new machine"
 bash test_install.sh || fail=1
 

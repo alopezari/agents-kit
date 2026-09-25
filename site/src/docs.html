@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docs · agents-kit</title>
+<meta name="description" content="How agents-kit works: install, the life of a task, hooks, the shell guard, verify, skills, tools, scheduled jobs and profiles.">
+<meta name="theme-color" content="#0E100F">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="site-header">
+  <a class="wordmark" href="../">agents-kit<span>_</span> <small>/ docs</small></a>
+  <nav class="site-nav" aria-label="Main">
+    <a href="../">Overview</a>
+    <a href="{{repo_url}}">GitHub</a>
+    <a class="cta" href="#install">install</a>
+  </nav>
+</header>
+<div class="docs">
+  <nav class="docs-nav" aria-label="Documentation">
+    <p>// on this page</p>
+    <ol>{{nav}}</ol>
+    <details>
+      <summary>On this page</summary>
+      <ol>{{nav}}</ol>
+    </details>
+  </nav>
+  <main class="prose" id="content">
+{{content}}
+    <div class="pager"><a href="../">← overview</a><a href="{{repo_url}}">source on GitHub →</a></div>
+  </main>
+</div>
+<footer class="site-footer">
+  <span>agents-kit · <a href="{{repo_url}}/blob/main/LICENSE">MIT license</a></span>
+  <span>Generated from the kit's source on {{built}}</span>
+</footer>
+<script type="module">
+  import mermaid from "{{mermaid_url}}";
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "base",
+    securityLevel: "strict",
+    themeVariables: {
+      background: "#161917", primaryColor: "#0E100F", primaryTextColor: "#E8E6DF",
+      primaryBorderColor: "#C6EC5A", lineColor: "#8A8F88", secondaryColor: "#161917",
+      tertiaryColor: "#161917", clusterBkg: "#0E100F", clusterBorder: "#2A2E2B",
+      edgeLabelBackground: "#161917", fontFamily: "JetBrains Mono, monospace", fontSize: "14px"
+    }
+  });
+</script>
+</body>
+</html>

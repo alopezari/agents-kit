@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agents-kit · one setup for every coding agent</title>
+<meta name="description" content="The same instructions, skills and guardrails for Claude Code, Codex and Pi. Nothing irreversible runs without you, every turn that edits code is verified, and no pull request opens until the exact change has been reviewed.">
+<meta property="og:title" content="agents-kit · one setup for every coding agent">
+<meta property="og:description" content="Same instructions, skills and guardrails for Claude Code, Codex and Pi, with checks that the work was actually done.">
+<meta name="theme-color" content="#0E100F">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <a class="wordmark" href="./">agents-kit<span>_</span></a>
+  <nav class="site-nav" aria-label="Main">
+    <a class="hide-narrow" href="#how">How it works</a>
+    <a class="hide-narrow" href="#guardrails">Guardrails</a>
+    <a class="hide-narrow" href="#profiles">Profiles</a>
+    <a href="docs/">Docs</a>
+    <a href="{{repo_url}}">GitHub</a>
+    <a class="cta" href="#install">install</a>
+  </nav>
+</header>
+
+<main id="main">
+<section class="hero dots">
+  <div class="stack">
+    <p class="eyebrow">// claude code · codex · pi</p>
+    <h1>Your agents,<br>one rulebook,<br>every check run.</h1>
+    <p class="lede">The same instructions, skills and guardrails for every harness. Nothing irreversible runs without you, every turn that edits code is verified, and no pull request opens until the exact change has been reviewed.</p>
+    <div class="actions">
+      <a class="button" href="#install">$ install.sh</a>
+      <a href="docs/">Read the docs</a>
+    </div>
+  </div>
+  <figure class="terminal" aria-label="An agent session: a force push and a pull request are blocked, then verify passes">
+    <div class="bar"><span>~/shop</span><span>·</span><span>feature/cart</span></div>
+    <div class="body">
+      <div><div><span class="prompt">$ </span>git push --force origin feature/cart</div><div class="blocked">blocked · rewrites remote history</div></div>
+      <div><div><span class="prompt">$ </span>gh pr create --fill</div><div class="blocked">blocked · no self-review stamp for this change</div></div>
+      <div><div class="comment">stop hook · verify</div><div>ran: phpcs, phpstan on 5 changed files</div><div>ran: phpunit, 4 related classes, 0 failing</div><div class="pass">PASS · stamp written</div></div>
+    </div>
+    <div class="foot">model · effort · ctx 12% · flow: self-review</div>
+  </figure>
+</section>
+
+<dl class="stats">
+  <div><dt>{{harnesses}}</dt><dd>harnesses share one AGENTS.md, the same skills and the same hooks</dd></div>
+  <div><dt>{{guard_rules}}</dt><dd>guard rules stop irreversible or outward-facing commands before they run</dd></div>
+  <div><dt>{{stacks}}</dt><dd>stacks verified automatically at the end of every turn that edits code</dd></div>
+  <div><dt>{{review_comments}}</dt><dd>human code-review comments behind the rules agents follow</dd></div>
+</dl>
+
+<section class="section first">
+  <div class="benefits">
+    <div class="stack">
+      <span class="num">01 /</span>
+      <h3>Switch agents, keep your standards</h3>
+      <p>Edit one Markdown file and Claude Code, Codex and Pi all read the change. Repository knowledge lives in overlays outside the repo, so nothing leaks into your teammates' checkouts.</p>
+    </div>
+    <div class="stack">
+      <span class="num">02 /</span>
+      <h3>Checks, not promises</h3>
+      <p>"Run the tests" is an instruction an agent can forget. Here a hook runs them at the end of every turn, and a stamp of the exact change has to exist before a pull request can be opened.</p>
+    </div>
+    <div class="stack">
+      <span class="num">03 /</span>
+      <h3>You stay in charge</h3>
+      <p>Merges, deploys, force pushes and writes to shared systems are yours. The agent prepares them, hands you the steps, and waits.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="how">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">// the life of a change</p>
+      <h2>From issue to production, one skill per step</h2>
+    </div>
+    <p>Orange steps are yours. Everything under the line runs on its own, whichever harness is doing the work.</p>
+  </div>
+  <figure class="figure">
+    {{flow_svg}}
+    {{flow_svg_narrow}}
+  </figure>
+</section>
+
+<section class="section">
+  <div class="split">
+    <div class="stack">
+      <p class="eyebrow">// how it fits together</p>
+      <h2>Edit once, every harness follows</h2>
+      <p>The installer links one set of instructions and skills into each harness and registers the same hooks in each one's settings. Pi has no hook config, so a small adapter translates its events into the same calls.</p>
+      <p>Every hook speaks one contract, JSON in and a decision out, so adding another harness means writing one adapter, not rewriting the checks.</p>
+    </div>
+    <figure class="figure">{{architecture_svg}}</figure>
+  </div>
+</section>
+
+<section class="section" id="guardrails">
+  <div class="split top">
+    <div class="stack">
+      <p class="eyebrow">// guardrails</p>
+      <h2>A seatbelt, not a cage</h2>
+      <p>Agents work freely until a command can't be taken back. Then the guard stops it and says why, and the agent asks you. It catches mistakes; it doesn't claim to stop a determined attacker.</p>
+      <p>When a check can't be satisfied honestly, the agent is asked to continue once, then reports it to you under Blocked on me. It never loops, and it never loosens a test to get past one.</p>
+    </div>
+    <div class="grid-cells cols-2">
+      <div><code>git push --force</code><span class="why">rewrites remote history</span></div>
+      <div><code>git reset --hard</code><span class="why">discards uncommitted work</span></div>
+      <div><code>gh pr merge</code><span class="why">merging is a human decision</span></div>
+      <div><code>make deploy</code><span class="why">deploys are yours</span></div>
+      <div><code>DROP TABLE</code><span class="why">destroys database data</span></div>
+      <div><code>curl … | sh</code><span class="why">runs a download unseen</span></div>
+      <div><code>npm publish</code><span class="why">publishes a package</span></div>
+      <div><code style="color: var(--lime)">+ {{more_rules}} more rules</code><span class="why"><a href="docs/#what-the-shell-guard-blocks">full list in the docs</a></span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">// evidence</p>
+      <h2>Written from what reviewers actually flag</h2>
+      <p>The instructions come from an analysis of about {{review_comments}} human review comments. The defects they catch most are checked before any human sees the change.</p>
+    </div>
+  </div>
+  <div class="grid-cells cols-4">
+    <div><h3>One path fixed, others forgotten</h3><p>A new guard must hold on every path to the same outcome: other callers, CLI and cron, preview and real run.</p></div>
+    <div><h3>Text that lies</h3><p>Comments, help text and PR descriptions must be true of the code as it stands now.</p></div>
+    <div><h3>Tests that can't fail</h3><p>A bug fix comes with a test that fails without it, for the reason the report describes.</p></div>
+    <div><h3>"Failed" treated as "empty"</h3><p>A query error is not "nothing found". No empty catches, no silent fallbacks.</p></div>
+  </div>
+</section>
+
+<section class="section" id="profiles">
+  <div class="split top">
+    <div class="stack">
+      <p class="eyebrow">// profiles</p>
+      <h2>Modular by design: one core, many profiles</h2>
+      <p>The core holds nothing tied to one employer, client or project. Everything specific lives in profiles: separate, usually private repositories you layer on top with one command.</p>
+      <p>Keep one for your day job, one per client, one for open source or side projects. Each adds its own repository notes and checks, skills, rules for shared systems and the repositories the monthly job learns from, and the core stays generic and shareable.</p>
+    </div>
+    <div class="terminal">
+      <div class="bar"><span>~</span></div>
+      <div class="body">
+        <div><span class="prompt">$ </span>~/.agents/install.sh --profile ~/profiles/work</div>
+        <div><span class="prompt">$ </span>~/.agents/install.sh --profile ~/profiles/client-a</div>
+        <div class="comment">linked: repos/ overlays · skills/ · mcp-writes.json · review-mining/</div>
+      </div>
+    </div>
+  </div>
+  <div class="profiles">
+    <div><code>repos/&lt;repo&gt;/</code><p>Notes agents read in that repository, and a verify script when the automatic checks aren't enough.</p></div>
+    <div><code>skills/&lt;name&gt;/</code><p>Skills for one kind of work, available to every harness alongside the core ones.</p></div>
+    <div><code>mcp-writes.json</code><p>Which tools write to your team's shared systems, so they need your approval first.</p></div>
+  </div>
+</section>
+
+<section class="section" id="learning">
+  <div class="split">
+    <figure class="figure">{{loop_svg}}</figure>
+    <div class="stack">
+      <p class="eyebrow">// learning loop</p>
+      <h2>It gets better, and asks you first</h2>
+      <p>A weekly health check reads the hook log. Each month a job classifies new review comments, measures what slipped past review, and compares cost per merged pull request with the months before the kit. A mid-month scan looks for new harness and model features worth adopting.</p>
+      <p>None of them changes the kit. They write proposals as diffs, and you decide.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section dots" id="install">
+  <div class="split top">
+    <div class="stack">
+      <p class="eyebrow">// install</p>
+      <h2>Five minutes, safe to re-run</h2>
+      <p>The installer wires every harness it finds, keeps the hooks you already have, and backs up anything it replaces. The doctor reports what's missing and changes nothing.</p>
+      <p style="font-family: var(--mono); font-size: 14px; color: var(--dim)">macOS · python3, git, jq · semgrep and gitleaks recommended</p>
+    </div>
+    <div class="terminal">
+      <div class="bar"><span>~</span></div>
+      <div class="body" style="gap: 4px">
+        <div><span class="prompt">$ </span>git clone {{repo_url}}.git ~/.agents</div>
+        <div><span class="prompt">$ </span>~/.agents/install.sh</div>
+        <div><span class="prompt">$ </span>~/.agents/install.sh --doctor</div>
+        <div><span class="prompt">$ </span>~/.agents/tests/run.sh</div>
+        <div class="pass">ALL PASSED</div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="site-footer">
+  <span>agents-kit · <a href="{{repo_url}}/blob/main/LICENSE">MIT license</a></span>
+  <span>claude code · codex · pi</span>
+</footer>
+</body>
+</html>

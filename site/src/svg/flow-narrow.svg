@@ -1,0 +1,14 @@
+<svg class="only-narrow" viewBox="0 0 320 470" role="img" aria-label="The flow as a vertical line: spec, build, self-review, validate, staging by you, create-pr, follow-pr, merge by you, ship">
+<g font-family="JetBrains Mono, monospace" font-size="14" fill="#E8E6DF">
+<line x1="30" y1="20" x2="30" y2="444" stroke="#C6EC5A" stroke-width="2"></line>
+<rect x="22" y="12" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="25">spec</text>
+<rect x="22" y="64" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="77">build</text>
+<rect x="22" y="116" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="129">self-review</text><text x="220" y="129" font-size="12" fill="#8A8F88">stamp</text>
+<rect x="22" y="168" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="181">validate</text><text x="220" y="181" font-size="12" fill="#8A8F88">stamp</text>
+<rect x="22" y="220" width="16" height="16" fill="#FF9B73" stroke="#FF9B73" stroke-width="2"></rect><text x="54" y="233" fill="#FF9B73">staging · you</text>
+<rect x="22" y="272" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="285">create-pr</text><text x="220" y="285" font-size="12" fill="#FF9B73">gated</text>
+<rect x="22" y="324" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="337">follow-pr</text>
+<rect x="22" y="376" width="16" height="16" fill="#FF9B73" stroke="#FF9B73" stroke-width="2"></rect><text x="54" y="389" fill="#FF9B73">merge · you</text>
+<rect x="22" y="428" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="441">ship</text>
+</g>
+</svg>

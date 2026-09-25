@@ -276,9 +276,9 @@ flowchart LR
   O0 & O1 & O2 --> U{You review the proposals} -->|accept| K[AGENTS.md, skills, hooks]
 ```
 
-## Profiles: private, per-employer knowledge
+## Profiles: extend the kit for each kind of work
 
-The kit itself holds nothing tied to one company. A profile is a separate (usually private) repository that `install.sh --profile <dir>` layers in through symlinks, so hooks, skills and instructions use the same paths with or without it:
+The kit is modular: the core holds nothing tied to one employer, client or project, and everything specific lives in profiles. A profile is a separate (usually private) repository that `install.sh --profile <dir>` layers in through symlinks, so hooks, skills and instructions use the same paths with or without it. Keep one for your job, one per client, one for open source or side projects; install several and they stack:
 
 | In the profile | Linked or read as |
 |---|---|
@@ -337,6 +337,7 @@ The kit itself holds nothing tied to one company. A profile is a separate (usual
 | `monitors/` | The weekly health check and the mid-month trends scan. |
 | `repos/` | Per-repository overlays (`notes.md`, `verify`) and the shared verify scripts in `_shared/`. |
 | `review-mining/` | The monthly job that learns from human code-review comments. |
+| `site/` | The public landing page and these docs as a website, built from README.md and this file (`site/build.mjs`). |
 | `skills.external` | Third-party skills install.sh clones from their source. |
 | `skills/` | Skills linked into every harness; third-party ones are listed in `skills.external`. |
 | `tests/` | The regression suite: `tests/run.sh`. |

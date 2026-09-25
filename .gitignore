@@ -11,6 +11,7 @@ usage/*.json
 __pycache__/
 *.pyc
 node_modules/
+site/dist/
 
 # Profiles are private repos layered in by install.sh through symlinks
 profiles/

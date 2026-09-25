@@ -1,0 +1,13 @@
+<svg viewBox="0 0 560 460" role="img" aria-label="Learning loop: agents work and leave logs; weekly, monthly and mid-month jobs read them and write proposals; you review them and accepted changes update the kit">
+<g font-family="JetBrains Mono, monospace" font-size="12" fill="#E8E6DF">
+<circle cx="280" cy="230" r="170" fill="none" stroke="#2A2E2B" stroke-dasharray="3 6"></circle>
+<rect x="196" y="36" width="168" height="48" fill="#0E100F" stroke="#2A2E2B"></rect><text x="280" y="58" text-anchor="middle" font-weight="700">agents work</text><text x="280" y="74" text-anchor="middle" font-size="11" fill="#8A8F88">logs · reports · stamps</text>
+<rect x="390" y="150" width="160" height="84" fill="#0E100F" stroke="#2A2E2B"></rect><text x="402" y="172" font-weight="700">scheduled jobs</text><text x="402" y="192" font-size="11" fill="#8A8F88">mon · health</text><text x="402" y="208" font-size="11" fill="#8A8F88">1st · review mining</text><text x="402" y="224" font-size="11" fill="#8A8F88">15th · trends</text>
+<rect x="196" y="378" width="168" height="48" fill="#0E100F" stroke="#2A2E2B"></rect><text x="280" y="400" text-anchor="middle" font-weight="700">proposals</text><text x="280" y="416" text-anchor="middle" font-size="11" fill="#8A8F88">research/ · as diffs</text>
+<rect x="10" y="190" width="160" height="84" fill="#0E100F" stroke="#FF9B73" stroke-width="1.5"></rect><text x="22" y="214" fill="#FF9B73" font-weight="700">you review</text><text x="22" y="236" fill="#FF9B73" font-size="11">accept → AGENTS.md,</text><text x="22" y="252" fill="#FF9B73" font-size="11">skills, hooks</text>
+<path d="M364 60 C 420 70, 462 110, 468 150" stroke="#C6EC5A" fill="none" stroke-width="1.5"></path>
+<path d="M468 234 C 460 320, 420 380, 364 400" stroke="#C6EC5A" fill="none" stroke-width="1.5"></path>
+<path d="M196 402 C 130 390, 96 330, 90 274" stroke="#C6EC5A" fill="none" stroke-width="1.5"></path>
+<path d="M90 190 C 96 120, 140 70, 196 60" stroke="#C6EC5A" fill="none" stroke-width="1.5"></path>
+</g>
+</svg>

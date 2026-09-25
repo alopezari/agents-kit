@@ -1,0 +1,12 @@
+{
+  "name": "agents-kit-site",
+  "private": true,
+  "type": "module",
+  "description": "The kit's landing page and docs, built from README.md and docs/framework.md (site/build.mjs)",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "marked": "18.0.14"
+  }
+}

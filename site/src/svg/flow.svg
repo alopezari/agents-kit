@@ -1,0 +1,24 @@
+<svg class="only-wide" viewBox="0 0 1216 400" role="img" aria-label="The flow: spec, build, self-review, validate, staging by you, create-pr, follow-pr, merge by you, ship. Guards run on every command, checks at every turn, and stamps gate the pull request.">
+<g font-family="JetBrains Mono, monospace" font-size="13" fill="#E8E6DF">
+<line x1="40" y1="90" x2="1176" y2="90" stroke="#C6EC5A" stroke-width="2"></line>
+<g><rect x="50" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="60" y="50" text-anchor="middle" font-weight="700">spec</text><text x="60" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">acceptance</text><text x="60" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">criteria</text></g>
+<g><rect x="186" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="196" y="50" text-anchor="middle" font-weight="700">build</text><text x="196" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">agent edits</text></g>
+<g><rect x="322" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="332" y="50" text-anchor="middle" font-weight="700">self-review</text><text x="332" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">lenses +</text><text x="332" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">second model</text></g>
+<g><rect x="458" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="468" y="50" text-anchor="middle" font-weight="700">validate</text><text x="468" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">suite + local</text><text x="468" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">checks</text></g>
+<g><rect x="594" y="80" width="20" height="20" fill="#FF9B73" stroke="#FF9B73" stroke-width="2"></rect><text x="604" y="50" text-anchor="middle" font-weight="700" fill="#FF9B73">staging</text><text x="604" y="134" text-anchor="middle" font-size="11" fill="#FF9B73">you run</text><text x="604" y="149" text-anchor="middle" font-size="11" fill="#FF9B73">the guide</text></g>
+<g><rect x="730" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="740" y="50" text-anchor="middle" font-weight="700">create-pr</text><text x="740" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">evidence</text><text x="740" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">checked</text></g>
+<g><rect x="866" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="876" y="50" text-anchor="middle" font-weight="700">follow-pr</text><text x="876" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">CI + review</text><text x="876" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">comments</text></g>
+<g><rect x="1002" y="80" width="20" height="20" fill="#FF9B73" stroke="#FF9B73" stroke-width="2"></rect><text x="1012" y="50" text-anchor="middle" font-weight="700" fill="#FF9B73">merge</text><text x="1012" y="134" text-anchor="middle" font-size="11" fill="#FF9B73">yours</text></g>
+<g><rect x="1138" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="1148" y="50" text-anchor="middle" font-weight="700">ship</text><text x="1148" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">deploy guide,</text><text x="1148" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">rollback ready</text></g>
+<path d="M196 72 C 196 20, 332 20, 332 72" stroke="#8A8F88" fill="none" stroke-dasharray="3 4"></path>
+<text x="264" y="16" text-anchor="middle" font-size="11" fill="#8A8F88">finding confirmed → fix</text>
+<line x1="40" y1="200" x2="1176" y2="200" stroke="#2A2E2B" stroke-dasharray="6 6"></line>
+<text x="40" y="190" font-size="11" fill="#8A8F88">AUTOMATIC</text>
+<rect x="40" y="226" width="1136" height="40" fill="#0E100F" stroke="#2A2E2B"></rect>
+<text x="56" y="251" fill="#C6EC5A">guard_bash · guard_mcp</text><text x="1160" y="251" text-anchor="end" fill="#8A8F88">every command · shared-system writes need your approval</text>
+<rect x="196" y="282" width="980" height="40" fill="#0E100F" stroke="#2A2E2B"></rect>
+<text x="212" y="307" fill="#C6EC5A">stop checks + verify</text><text x="1160" y="307" text-anchor="end" fill="#8A8F88">every turn that edited files · changed lines only · evidence saved</text>
+<rect x="332" y="338" width="408" height="40" fill="#0E100F" stroke="#FF9B73"></rect>
+<text x="348" y="363" fill="#FF9B73">stamps of the exact change</text><text x="724" y="363" text-anchor="end" fill="#FF9B73">gate gh pr create</text>
+</g>
+</svg>

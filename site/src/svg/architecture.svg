@@ -1,0 +1,21 @@
+<svg viewBox="0 0 560 420" role="img" aria-label="One kit feeds Claude Code, Codex and Pi; profiles layer in on top">
+<g font-family="JetBrains Mono, monospace" font-size="13" fill="#E8E6DF">
+<rect x="160" y="140" width="210" height="140" fill="#0E100F" stroke="#C6EC5A" stroke-width="1.5"></rect>
+<text x="178" y="168" fill="#C6EC5A" font-weight="700">~/.agents</text>
+<line x1="160" y1="182" x2="370" y2="182" stroke="#2A2E2B"></line>
+<text x="178" y="208">AGENTS.md</text><text x="178" y="232">skills/</text><text x="178" y="256">hooks/  repos/</text>
+<rect x="424" y="52" width="120" height="44" fill="#0E100F" stroke="#2A2E2B"></rect><text x="438" y="79">Claude Code</text>
+<rect x="424" y="188" width="120" height="44" fill="#0E100F" stroke="#2A2E2B"></rect><text x="462" y="215">Codex</text>
+<rect x="424" y="324" width="120" height="44" fill="#0E100F" stroke="#2A2E2B"></rect><text x="474" y="351">Pi</text>
+<path d="M370 184 C 400 184, 396 74, 424 74" stroke="#C6EC5A" fill="none" stroke-width="1.5"></path>
+<path d="M370 210 L 424 210" stroke="#C6EC5A" fill="none" stroke-width="1.5"></path>
+<path d="M370 236 C 400 236, 396 346, 424 346" stroke="#C6EC5A" fill="none" stroke-width="1.5"></path>
+<text x="378" y="330" font-size="11" fill="#8A8F88">adapter</text>
+<rect x="16" y="40" width="112" height="36" fill="none" stroke="#8A8F88" stroke-dasharray="4 4"></rect><text x="30" y="63" fill="#B5B3AB">work</text>
+<rect x="16" y="86" width="112" height="36" fill="none" stroke="#8A8F88" stroke-dasharray="4 4"></rect><text x="30" y="109" fill="#B5B3AB">client</text>
+<rect x="16" y="132" width="112" height="36" fill="none" stroke="#8A8F88" stroke-dasharray="4 4"></rect><text x="30" y="155" fill="#B5B3AB">side project</text>
+<text x="16" y="28" font-size="11" fill="#8A8F88">profiles</text>
+<path d="M128 104 C 150 104, 150 190, 160 200" stroke="#8A8F88" fill="none" stroke-dasharray="4 4"></path>
+<text x="16" y="200" font-size="11" fill="#8A8F88">--profile</text>
+</g>
+</svg>
