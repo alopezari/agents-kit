@@ -1,7 +1,6 @@
 #!/bin/bash
 # Claude Code status line: model, effort, context and plan usage, the branch's phase in the kit's flow (bin/phase),
-# followed by Xirp's line
-# (Xirp's wrapper also relays the context size to its daemon, so it must keep running).
+# then a segment from each profile that provides an executable profiles/<name>/statusline (same JSON on stdin).
 input=$(cat)
 # Plan limits are per account, but Claude Code sends them only after a session's first response: keep the last
 # ones seen, and show them marked "~" in a new session until its own arrive.
@@ -30,9 +29,9 @@ ours=$(jq -r --argjson limits "${limits:-null}" --arg stale "$limits_stale" --ar
 dir=$(jq -r '.workspace.current_dir // .cwd // empty' <<<"$input" 2>/dev/null)
 phase=$(cd "${dir:-.}" 2>/dev/null && "$HOME/.agents/bin/phase" 2>/dev/null)
 [ -n "$phase" ] && ours="${ours:+$ours · }flow: $phase"
-# Xirp either calls this script from its wrapper (settings.json points at the wrapper, which sets
-# CHIRP_STATUSLINE_NESTED and appends its own line) or is called from here; never both, or its line shows twice.
-xirp=""
-[ -z "${CHIRP_STATUSLINE_NESTED:-}" ] && [ -x "$HOME/.claude/xirp-statusline-wrapper.sh" ] \
-  && xirp=$(printf '%s' "$input" | "$HOME/.claude/xirp-statusline-wrapper.sh" 2>/dev/null)
-echo "${ours}${ours:+${xirp:+ · }}${xirp}"
+for extra in "$HOME"/.agents/profiles/*/statusline; do
+  [ -x "$extra" ] || continue
+  segment=$(printf '%s' "$input" | "$extra" 2>/dev/null)
+  [ -n "$segment" ] && ours="${ours:+$ours · }$segment"
+done
+echo "$ours"

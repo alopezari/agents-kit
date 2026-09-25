@@ -44,7 +44,6 @@ COMMENT_NOTE=""
 [ "$COUNT" -lt 50 ] && COMMENT_NOTE="Only $COUNT comments this month: skip steps 1-3 and say so in the proposal."
 
 python3 "$HOME/.agents/usage/extract_sessions.py" 200 "$RUN/sessions.json" > "$RUN/sessions.log" 2>&1 || true
-python3 "$HOME/.agents/usage/extract_xirp.py" "$SINCE" "$RUN/xirp-prs.json" > "$RUN/xirp.log" 2>&1 || true
 # Every session, not the 200 above: joining sessions to merged PRs needs the ones before the kit too.
 python3 "$HOME/.agents/usage/extract_sessions.py" 100000 "$RUN/sessions-all.json" > /dev/null 2>&1 || true
 python3 "$BASE/outcomes.py" "$SINCE" "$RUN/sessions-all.json" "$RUN/outcomes.json" > "$RUN/outcomes.log" 2>&1 || true
@@ -64,7 +63,6 @@ Inputs (read them from disk):
 - $RUN/sessions.json: my last 200 agent sessions (harness, model, effort, tokens, advisor_calls, prompts, correction_signals).
 
 - $HOME/.agents/research/health/*.md: weekly health reports from this month.
-- $RUN/xirp-prs.json: Xirp sessions since $SINCE with the PRs each one opened and their state (open/merged/closed); cli_session_id joins to the id in sessions.json.
 - $RUN/outcomes.json: my merged PRs since the kit started and in a baseline window before it (see $BASE/outcomes.py
   for every field), with per-period summaries; $RUN/outcomes.log has its errors, if any.
 $COMMENT_NOTE
@@ -82,9 +80,9 @@ Steps:
    From browser-ab.jsonl, add a short "Browser A/B" section per tool: runs, commands per run, output bytes per run (context cost), failed calls, wall time, checks passed/completed, tool issues and notes. Also count, from hooks.jsonl (decision "browser-mcp"), sessions that drove a browser through an MCP instead of bin/browse, and which of them look like validation: those runs are missing from the test. The test ends on 2026-11-05 or at 10 finished runs per tool, whichever comes first. Recommend one tool only when both tools have at least 10 finished runs; otherwise report the result as inconclusive, give the counts, and propose a new end date (and, if MCP bypasses explain the gap, how to stop them).
    From hooks.jsonl, add a short "Hooks" section: which rules fired, how often, which look like false positives (the agent or the user worked around them) and which caught real problems; propose removing or narrowing noisy rules.
    From sessions.json, add a short "Models and effort" section: sessions per model/effort, how often the advisor (Fable) was consulted and whether sessions that used it had fewer correction signals, how sessions that used effort "auto" compare, and which tasks look over- or under-provisioned. Compare cost per completed task, never per token. Treat it as evidence, not proof.
-   Add an "Outcomes" section from xirp-prs.json joined to sessions.json: PRs opened, merged and closed per model and effort,
-   sessions with work but no PR, and sessions in the main checkout vs their own worktree. This is the closest measure of
-   finished work; set it against tokens per session. Small samples are evidence, not proof.
+   Add an "Outcomes" section from outcomes.json: merged PRs since the kit per model and effort (from the sessions
+   joined to each PR), with tokens and hours to merge per PR. This is the closest measure of finished work; set it
+   against tokens per session in sessions.json. Small samples are evidence, not proof.
    Add an "Escapes" section from outcomes.json, set against its baseline:
    - At the PR stage: the escapes follow-pr logged (CI failures the change caused, review comments by people and bots)
      per merged PR, by category and verdict. For each confirmed escape, name the lens that should have caught it and

@@ -198,6 +198,8 @@ def attach_sessions(prs, sessions):
             "tokens": sum(s["tokens"].get("in", 0) + s["tokens"].get("out", 0) for s in on_branch),
             "cache_read_tokens": sum(s["tokens"].get("cache_read", 0) for s in on_branch),
             "minutes": sum(s["minutes"] for s in on_branch),
+            "models": sorted({m for s in on_branch for m in s.get("models", {})}),
+            "effort": sorted({e for s in on_branch for e in s.get("effort", [])}),
             "hours_to_pr": round((opened - first).total_seconds() / 3600, 1),
             "hours_to_merge": round((merged - opened).total_seconds() / 3600, 1),
         }

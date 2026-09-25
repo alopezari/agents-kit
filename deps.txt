@@ -1,0 +1,18 @@
+# Every program the kit runs that macOS doesn't ship. install.sh installs the required and recommended
+# ones that are missing (through Homebrew), --doctor reports them, bin/docs lists them, and
+# tests/test_deps.py fails when the code calls a program that isn't here. Profiles add their own in
+# profiles/<name>/deps.txt, in the same format.
+#
+# tier         program         how to install            what needs it
+required       python3         brew:python               every hook and command-line tool
+required       git             brew:git                  everything that looks at a change
+required       jq              brew:jq                   install.sh, the status line, the scheduled jobs
+required       node            brew:node                 tools/ and site/ (npm), the scheduled jobs
+required       gh              brew:gh                   create-pr, follow-pr, the flow phase in the status line, review mining
+recommended    semgrep         brew:semgrep              verify's semgrep rules; tests/run.sh
+recommended    gitleaks        brew:gitleaks             the secrets check at the end of each turn
+optional       claude          https://claude.com/claude-code   the scheduled jobs (they run `claude -p`)
+optional       playwright-cli  npm:@playwright/cli       browser checks in the validate skill (bin/browse)
+optional       agent-browser   npm:agent-browser         browser checks in the validate skill (bin/browse)
+optional       chrome          https://www.google.com/chrome    bin/a11y-check (or: npx playwright install chromium)
+optional       docker          https://www.docker.com    repository verifies that run in containers

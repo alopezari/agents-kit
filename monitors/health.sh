@@ -17,15 +17,15 @@ suite=$("$K/tests/run.sh" 2>&1); suite_rc=$?
 [ $suite_rc = 0 ] || problems+=("Regression suite failed: $(grep -E '^FAIL|  warn ' <<<"$suite" | head -5 | tr '\n' ';')")
 
 # 2. Harness and tool versions: a new version can change the hook contract or add a native feature.
-current=$(for c in claude codex pi semgrep gitleaks playwright-cli agent-browser php docker; do
-  printf '%s %s\n' "$c" "$($c --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?[^ ]*' | head -1)"; done)
+programs=$(cat "$K/deps.txt" "$K"/profiles/*/deps.txt 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)' | awk '$2 != "chrome" {print $2}')
+current=$(for c in claude codex pi $programs; do
+  printf '%s %s\n' "$c" "$($c --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?[^ ]*' | head -1)"; done | sort -u)
 if [ -f "$STATE/versions.txt" ]; then
   changed=$(diff <(sort "$STATE/versions.txt") <(sort <<<"$current") | grep '^>' | cut -c3-)
   [ -n "$changed" ] && notes+=("Versions changed since last week: $(tr '\n' ';' <<<"$changed")the suite above ran against them.")
 fi
 echo "$current" > "$STATE/versions.txt"
-missing=$(awk '$2 == "" {print $1}' <<<"$current" | tr '\n' ' ')
-[ -n "$missing" ] && problems+=("Tools not found on PATH: $missing")
+# Missing required or recommended programs already fail the suite's doctor section above.
 
 # 3. PHPUnit baselines: a stale baseline hides new failures or blocks on fixed ones.
 for b in "$K"/repos/*/phpunit-baseline.txt; do

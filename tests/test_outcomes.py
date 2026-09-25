@@ -83,14 +83,15 @@ def sessions_join_by_repo_and_branch(base):
     prs = [{"repo": "o/shop", "branch": "feature/cart", "opened": "2026-10-01T12:00:00Z", "merged": "2026-10-02T12:00:00Z"}]
     sessions = [
         {"project": "~/p/shop-worktree-session-x", "branches": ["session/x", "feature/cart"], "start_iso": "2026-10-01T10:00:00Z",
-         "minutes": 30, "tokens": {"in": 100, "out": 50, "cache_read": 9000}},
+         "minutes": 30, "tokens": {"in": 100, "out": 50, "cache_read": 9000}, "models": {"opus": 3}, "effort": ["high"]},
         {"project": "~/p/shop", "branches": ["feature/cart"], "start_iso": "2026-10-01T11:00:00Z",
-         "minutes": 10, "tokens": {"in": 10, "out": 5, "cache_read": 0}},
+         "minutes": 10, "tokens": {"in": 10, "out": 5, "cache_read": 0}, "models": {"sonnet": 1, "opus": 1}, "effort": ["medium"]},
         {"project": "~/p/blog", "branches": ["feature/cart"], "start_iso": "2026-09-01T00:00:00Z",
-         "minutes": 99, "tokens": {"in": 999, "out": 999, "cache_read": 0}},
+         "minutes": 99, "tokens": {"in": 999, "out": 999, "cache_read": 0}, "models": {"haiku": 1}, "effort": ["low"]},
     ]
     outcomes.attach_sessions(prs, sessions)
     assert prs[0]["sessions"] == {"count": 2, "tokens": 165, "cache_read_tokens": 9000, "minutes": 40,
+                                  "models": ["opus", "sonnet"], "effort": ["high", "medium"],
                                   "hours_to_pr": 2.0, "hours_to_merge": 24.0}, prs[0]["sessions"]
 
 

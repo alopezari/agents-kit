@@ -291,6 +291,8 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `review-mining/repos.txt` | repositories the monthly review mining reads |
 | `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |
 | `PROFILE.md` | work context for the trends scan |
+| `deps.txt` | more programs to install and check, in the core's format |
+| `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |
 
 ## What the agents are told
 
@@ -319,6 +321,25 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 ./install.sh --profile <dir>  add a profile (a private repo with repo overlays, skills, research, rules)
 ```
 
+### Requirements
+
+`deps.txt` lists every program the kit runs; `tests/test_deps.py` fails when the code calls one it doesn't declare. `install.sh` installs missing required and recommended ones through Homebrew; optional ones serve one feature, so it only says how to install them. Python code uses the standard library only; Node packages are pinned in each `package.json`.
+
+| Tier | Program | Install | Needed for |
+|---|---|---|---|
+| required | `python3` | brew install python | every hook and command-line tool |
+| required | `git` | brew install git | everything that looks at a change |
+| required | `jq` | brew install jq | install.sh, the status line, the scheduled jobs |
+| required | `node` | brew install node | tools/ and site/ (npm), the scheduled jobs |
+| required | `gh` | brew install gh | create-pr, follow-pr, the flow phase in the status line, review mining |
+| recommended | `semgrep` | brew install semgrep | verify's semgrep rules; tests/run.sh |
+| recommended | `gitleaks` | brew install gitleaks | the secrets check at the end of each turn |
+| optional | `claude` | https://claude.com/claude-code | the scheduled jobs (they run `claude -p`) |
+| optional | `playwright-cli` | npm install -g @playwright/cli | browser checks in the validate skill (bin/browse) |
+| optional | `agent-browser` | npm install -g agent-browser | browser checks in the validate skill (bin/browse) |
+| optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
+| optional | `docker` | https://www.docker.com | repository verifies that run in containers |
+
 - `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, the Pi adapter, triage, a real install into an empty HOME, the install doctor, and this reference (up to date, and every diagram parses as GitHub renders it).
 - After changing the kit, commit as usual: the pre-commit hook regenerates this file.
 
@@ -332,6 +353,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `README.md` | Install and first steps. |
 | `adapters/` | Per-harness glue: the Pi extension, the Claude Code status line, Codex profiles. |
 | `bin/` | Command-line tools the skills and people call. |
+| `deps.txt` | Every program the kit runs, by tier; `install.sh` installs and checks them. |
 | `docs/` | This reference and the research behind the instructions. |
 | `hooks/` | The hook scripts all harnesses share (one JSON contract: stdin in, decision out). |
 | `install.sh` | Wires the kit into each installed harness; `--doctor` reports without changing anything. |
@@ -344,4 +366,4 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `skills/` | Skills linked into every harness; third-party ones are listed in `skills.external`. |
 | `tests/` | The regression suite: `tests/run.sh`. |
 | `tools/` | Node code and dependencies for the tools in `bin/` and the diagram check in `tests/run.sh`. |
-| `usage/` | Session and pull-request extractors that feed the monthly analysis. |
+| `usage/` | The agent-session extractor that feeds the monthly analysis. |

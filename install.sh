@@ -19,6 +19,7 @@ BACKUP="$KIT/backups/$(date +%Y%m%d-%H%M%S)"
 ok()   { printf '  ok    %s\n' "$*"; }
 fix()  { printf '  fix   %s\n' "$*"; }
 warn() { printf '  warn  %s\n' "$*"; }
+info() { printf '  info  %s\n' "$*"; }
 
 backup() { [ -e "$1" ] && [ ! -L "$1" ] && { mkdir -p "$BACKUP"; cp -R "$1" "$BACKUP/"; } || true; }
 
@@ -100,13 +101,24 @@ elif [ $DOCTOR = 1 ]; then warn "git hooks not enabled (git -C $KIT config core.
 else git -C "$KIT" config core.hooksPath .githooks && fix "git hooks (.githooks)"; fi
 
 echo "Requirements"
-for bin in python3 jq git semgrep gitleaks docker node playwright-cli agent-browser; do
-  command -v $bin >/dev/null && ok "$bin" || warn "$bin not found"
-done
+# deps.txt lists every program the kit runs, and profiles add theirs. Missing required and recommended
+# programs are installed through Homebrew; optional ones serve a single feature, so they are only reported.
+installed() { if [ "$1" = chrome ]; then [ -d "/Applications/Google Chrome.app" ]; else command -v "$1" >/dev/null; fi; }
+install_hint() { case "$1" in brew:*) echo "brew install ${1#brew:}" ;; npm:*) echo "npm install -g ${1#npm:}" ;; *) echo "$1" ;; esac; }
+while read -r tier program how purpose; do
+  if installed "$program"; then ok "$program"; continue; fi
+  if [ "$tier" = optional ]; then info "$program not installed, needed for $purpose: $(install_hint "$how")"; continue; fi
+  if [ $DOCTOR = 0 ] && [ "${how%%:*}" = brew ] && command -v brew >/dev/null \
+    && brew install --quiet "${how#brew:}" </dev/null >/dev/null 2>&1 && installed "$program"; then
+    fix "$program installed ($(install_hint "$how"))"; continue
+  fi
+  warn "$program is missing ($tier), needed for $purpose: $(install_hint "$how")"
+done < <(cat "$KIT/deps.txt" "$KIT"/profiles/*/deps.txt 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)')
 for dir in tools/a11y tools/mermaid site; do
   if [ -d "$KIT/$dir/node_modules" ]; then ok "$dir dependencies"
   elif [ $DOCTOR = 1 ]; then warn "$dir dependencies missing (npm install in $dir)"
-  else (cd "$KIT/$dir" && npm install --no-audit --no-fund >/dev/null 2>&1) && fix "$dir dependencies installed"; fi
+  elif (cd "$KIT/$dir" && npm install --no-audit --no-fund >/dev/null 2>&1); then fix "$dir dependencies installed"
+  else warn "npm install failed in $dir"; fi
 done
 
 # gh ignores git's per-host proxies (http.<url>.proxy); bin/gh applies them, so it must come first in PATH.
@@ -132,12 +144,12 @@ if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
   hook "$S" PreToolUse  "mcp__.*" guard_mcp.py 10
   hook "$S" PostToolUse "Edit|Write|MultiEdit|NotebookEdit" post_edit.py 30
   hook "$S" Stop        "" stop_checks.py 660
-  # Xirp points statusLine at its wrapper when it reinstalls its integration; the wrapper runs ours first
-  # (its "xirp-original-command" line). Either order shows both lines; anything else loses ours.
+  # Tools that add their own status line may point statusLine at a wrapper script that runs ours;
+  # that keeps our line, so it counts as installed. Anything else loses it.
   line="$KIT/adapters/claude/statusline.sh"
   current=$(jq -r '.statusLine.command // ""' "$S" 2>/dev/null)
-  if [ "$current" = "$line" ] || grep -qxF "# xirp-original-command: $line" "$current" 2>/dev/null; then ok "status line"
-  elif [ $DOCTOR = 1 ]; then warn "status line is not $line (Xirp may have reset it)"
+  if [ "$current" = "$line" ] || grep -qF "$line" "$current" 2>/dev/null; then ok "status line"
+  elif [ $DOCTOR = 1 ]; then warn "status line neither is nor wraps $line"
   else backup "$S"; tmp=$(mktemp); jq --arg c "$line" '.statusLine = {type: "command", command: $c}' "$S" > "$tmp" && mv "$tmp" "$S"; fix "status line"; fi
 fi
 

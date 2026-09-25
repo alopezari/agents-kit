@@ -27,6 +27,7 @@ LAYOUT = {
     "AGENTS.md": "The instructions every harness loads (linked as CLAUDE.md / AGENTS.md).",
     "README.md": "Install and first steps.",
     "LICENSE": "MIT.",
+    "deps.txt": "Every program the kit runs, by tier; `install.sh` installs and checks them.",
     "install.sh": "Wires the kit into each installed harness; `--doctor` reports without changing anything.",
     "adapters/": "Per-harness glue: the Pi extension, the Claude Code status line, Codex profiles.",
     "hooks/": "The hook scripts all harnesses share (one JSON contract: stdin in, decision out).",
@@ -38,7 +39,7 @@ LAYOUT = {
     "tools/": "Node code and dependencies for the tools in `bin/` and the diagram check in `tests/run.sh`.",
     "monitors/": "The weekly health check and the mid-month trends scan.",
     "review-mining/": "The monthly job that learns from human code-review comments.",
-    "usage/": "Session and pull-request extractors that feed the monthly analysis.",
+    "usage/": "The agent-session extractor that feeds the monthly analysis.",
     "launchd/": "Templates for the scheduled jobs (macOS).",
     "tests/": "The regression suite: `tests/run.sh`.",
     "docs/": "This reference and the research behind the instructions.",
@@ -384,7 +385,9 @@ def render():
     w("| `mcp-writes.json` | read by `hooks/guard_mcp.py` |")
     w("| `review-mining/repos.txt` | repositories the monthly review mining reads |")
     w("| `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |")
-    w("| `PROFILE.md` | work context for the trends scan |\n")
+    w("| `PROFILE.md` | work context for the trends scan |")
+    w("| `deps.txt` | more programs to install and check, in the core's format |")
+    w("| `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |\n")
 
     w("## What the agents are told\n")
     w("`AGENTS.md` sections, in order:\n")
@@ -394,6 +397,19 @@ def render():
 
     w("## Install and maintain\n")
     w("```\n" + "\n".join(l for l in header_comment("install.sh").splitlines() if "install.sh" in l) + "\n```\n")
+    w("### Requirements\n")
+    w("`deps.txt` lists every program the kit runs; `tests/test_deps.py` fails when the code calls one it doesn't "
+      "declare. `install.sh` installs missing required and recommended ones through Homebrew; optional ones serve one "
+      "feature, so it only says how to install them. Python code uses the standard library only; Node packages are "
+      "pinned in each `package.json`.\n")
+    w("| Tier | Program | Install | Needed for |\n|---|---|---|---|")
+    for line in read("deps.txt").splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            tier, program, how, purpose = line.split(None, 3)
+            kind, _, name = how.partition(":")
+            how = {"brew": f"brew install {name}", "npm": f"npm install -g {name}"}.get(kind, how)
+            w(f"| {tier} | `{program}` | {cell(how)} | {cell(purpose)} |")
+    w("")
     w("- `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, the Pi adapter, triage, "
       "a real install into an empty HOME, the install doctor, and this reference (up to date, and every diagram parses as GitHub renders it).")
     w("- After changing the kit, commit as usual: the pre-commit hook regenerates this file.\n")
