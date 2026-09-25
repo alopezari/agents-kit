@@ -1,5 +1,5 @@
-# Every program the kit runs that macOS doesn't ship. install.sh installs the required and recommended
-# ones that are missing (through Homebrew), --doctor reports them, bin/docs lists them, and
+# Every program the kit runs that macOS doesn't ship. install.sh offers to install the required and
+# recommended ones that are missing (through Homebrew), --doctor reports them, bin/docs lists them, and
 # tests/test_deps.py fails when the code calls a program that isn't here. Profiles add their own in
 # profiles/<name>/deps.txt, in the same format. `program>=version` sets the oldest version that works.
 #

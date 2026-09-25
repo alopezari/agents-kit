@@ -399,7 +399,8 @@ def render():
     w("```\n" + "\n".join(l for l in header_comment("install.sh").splitlines() if "install.sh" in l) + "\n```\n")
     w("### Requirements\n")
     w("`deps.txt` lists every program the kit runs; `tests/test_deps.py` fails when the code calls one it doesn't "
-      "declare. `install.sh` installs missing required and recommended ones through Homebrew; optional ones serve one "
+      "declare. `install.sh` lists the missing required and recommended ones and installs them through Homebrew if you "
+      "agree (`--yes` skips the question; with no terminal to ask, it only reports them); optional ones serve one "
       "feature, so it only says how to install them. A program older than its minimum version is reported, not upgraded. Python code uses the standard library only; Node packages are "
       "pinned in each `package.json`.\n")
     w("| Tier | Program | Install | Needed for |\n|---|---|---|---|")

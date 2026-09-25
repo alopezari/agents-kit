@@ -17,7 +17,7 @@ git clone https://github.com/alopezari/agents-kit.git ~/.agents
 
 The kit must live at `~/.agents`. The installer:
 
-- installs missing required and recommended programs from `deps.txt` through Homebrew;
+- offers to install missing required and recommended programs from `deps.txt` through Homebrew, asking once (`--yes` skips the question; without a terminal it only reports them);
 - links `AGENTS.md` as each harness's global instructions and the skills into each harness;
 - registers the hooks next to any hooks already there;
 - clones the third-party skills in `skills.external` and installs the Node dependencies of `tools/` and `site/`;
@@ -33,7 +33,7 @@ What it doesn't do, on a new machine:
 2. Trust the Codex hooks. Open Codex once and approve them; `install.sh --doctor` warns until you do.
 3. Install harness plugins or MCP servers. Add the ones you use yourself, or keep their setup in a profile.
 
-Requirements: [`deps.txt`](deps.txt) lists every program the kit runs. `install.sh` installs the missing required ones (`python3`, `git`, `jq`, `node`, `gh`) and recommended ones (`semgrep`, `gitleaks`) through Homebrew, and says how to install the optional ones, each needed by one feature. `install.sh --doctor` reports what is missing, and `tests/run.sh` expects it to report nothing.
+Requirements: [`deps.txt`](deps.txt) lists every program the kit runs. `install.sh` offers to install the missing required ones (`python3`, `git`, `jq`, `node`, `gh`) and recommended ones (`semgrep`, `gitleaks`) through Homebrew, and says how to install the optional ones, each needed by one feature. `install.sh --doctor` reports what is missing, and `tests/run.sh` expects it to report nothing.
 
 ## Make it yours
 

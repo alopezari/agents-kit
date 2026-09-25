@@ -3,13 +3,15 @@
 #   ./install.sh                  install or repair
 #   ./install.sh --doctor         report only, change nothing
 #   ./install.sh --profile <dir>  add a profile (a private repo with repo overlays, skills, research, rules)
+#   ./install.sh --yes            install missing requirements without asking
 set -euo pipefail
 
 KIT="$HOME/.agents"
-DOCTOR=0; NEW_PROFILE=""
+DOCTOR=0; NEW_PROFILE=""; YES=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --doctor) DOCTOR=1 ;;
+    --yes) YES=1 ;;
     --profile) NEW_PROFILE="$(cd "$2" && pwd)"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -102,9 +104,11 @@ else git -C "$KIT" config core.hooksPath .githooks && fix "git hooks (.githooks)
 
 echo "Requirements"
 # deps.txt lists every program the kit runs, and profiles add theirs. Missing required and recommended
-# programs are installed through Homebrew; optional ones serve a single feature, so they are only reported.
+# programs are installed through Homebrew once the person running this agrees (or passed --yes); optional
+# ones serve a single feature, so they are only reported.
 installed() { if [ "$1" = chrome ]; then [ -d "/Applications/Google Chrome.app" ]; else command -v "$1" >/dev/null; fi; }
 install_hint() { case "$1" in brew:*) echo "brew install ${1#brew:}" ;; npm:*) echo "npm install -g ${1#npm:}" ;; *) echo "$1" ;; esac; }
+missing=()
 older_than() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" != "$2" ]; }
 while read -r tier spec how purpose; do
   program=${spec%%>=*}; minimum=${spec#"$program"}; minimum=${minimum#>=}
@@ -116,9 +120,8 @@ while read -r tier spec how purpose; do
     continue
   fi
   if [ "$tier" = optional ]; then info "$program not installed, needed for $purpose: $(install_hint "$how")"; continue; fi
-  if [ $DOCTOR = 0 ] && [ "${how%%:*}" = brew ] && command -v brew >/dev/null \
-    && brew install --quiet "${how#brew:}" </dev/null >/dev/null 2>&1 && installed "$program"; then
-    fix "$program installed ($(install_hint "$how"))"; continue
+  if [ $DOCTOR = 0 ] && [ "${how%%:*}" = brew ] && command -v brew >/dev/null; then
+    missing+=("$program ${how#brew:} $tier $purpose"); continue
   fi
   warn "$program is missing ($tier), needed for $purpose: $(install_hint "$how")"
 done < <(cat "$KIT/deps.txt" "$KIT"/profiles/*/deps.txt 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)' | awk '
@@ -127,6 +130,20 @@ done < <(cat "$KIT/deps.txt" "$KIT"/profiles/*/deps.txt 2>/dev/null | grep -Ev '
   !(p in best) { order[++n] = p }
   rank > best[p] { best[p] = rank; line[p] = $0 }
   END { for (i = 1; i <= n; i++) print line[order[i]] }')
+if [ ${#missing[@]} -gt 0 ]; then
+  answer=n; asked=""
+  if [ $YES = 1 ]; then answer=y
+  elif [ -t 0 ]; then
+    read -r -p "  Install with Homebrew: $(for m in "${missing[@]}"; do printf '%s ' "${m%% *}"; done)[Y/n] " answer
+    answer=${answer:-y}
+  else asked=" (run install.sh in a terminal to be asked, or with --yes)"; fi
+  for entry in "${missing[@]}"; do
+    read -r program formula tier purpose <<<"$entry"
+    if [[ $answer == [Yy]* ]] && brew install --quiet "$formula" </dev/null >/dev/null 2>&1 && installed "$program"; then
+      fix "$program installed (brew install $formula)"
+    else warn "$program is missing ($tier), needed for $purpose: brew install $formula$asked"; fi
+  done
+fi
 for dir in tools/a11y tools/mermaid site; do
   if [ -d "$KIT/$dir/node_modules" ]; then ok "$dir dependencies"
   elif [ $DOCTOR = 1 ]; then warn "$dir dependencies missing (npm install in $dir)"

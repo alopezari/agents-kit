@@ -319,11 +319,12 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 ./install.sh                  install or repair
 ./install.sh --doctor         report only, change nothing
 ./install.sh --profile <dir>  add a profile (a private repo with repo overlays, skills, research, rules)
+./install.sh --yes            install missing requirements without asking
 ```
 
 ### Requirements
 
-`deps.txt` lists every program the kit runs; `tests/test_deps.py` fails when the code calls one it doesn't declare. `install.sh` installs missing required and recommended ones through Homebrew; optional ones serve one feature, so it only says how to install them. A program older than its minimum version is reported, not upgraded. Python code uses the standard library only; Node packages are pinned in each `package.json`.
+`deps.txt` lists every program the kit runs; `tests/test_deps.py` fails when the code calls one it doesn't declare. `install.sh` lists the missing required and recommended ones and installs them through Homebrew if you agree (`--yes` skips the question; with no terminal to ask, it only reports them); optional ones serve one feature, so it only says how to install them. A program older than its minimum version is reported, not upgraded. Python code uses the standard library only; Node packages are pinned in each `package.json`.
 
 | Tier | Program | Install | Needed for |
 |---|---|---|---|

@@ -24,7 +24,12 @@ export PATH="$bin:/usr/bin:/bin:/usr/sbin:/sbin"
 mkdir -p "$home/.agents/profiles/work"
 echo "required docker brew:docker the profile's containerized verify" > "$home/.agents/profiles/work/deps.txt"
 fail=0
-if out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" 2>&1); then
+# Nobody can answer a prompt here: without --yes nothing is installed, and the warning says how to.
+first=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" </dev/null 2>&1)
+if [ ! -e "$bin/gh" ] && echo "$first" | grep -q "warn  gh is missing (required).*or with --yes"; then
+  echo "ok   without a terminal or --yes, install.sh installs nothing and says how to"
+else echo "FAIL install.sh without --yes: $(echo "$first" | grep -E "gh( |$)")"; fail=1; fi
+if out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --yes 2>&1); then
   echo "ok   install.sh completes on an empty HOME"
 else
   echo "FAIL install.sh on an empty HOME:"; echo "$out" | tail -5; fail=1
