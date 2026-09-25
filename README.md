@@ -9,8 +9,12 @@ macOS only for now (the scheduled jobs use launchd).
 ## Install
 
 ```bash
-git clone https://github.com/alopezari/agents-kit.git ~/.agents
-~/.agents/install.sh            # wire every installed harness (safe to re-run)
+git clone https://github.com/alopezari/agents-kit.git ~/.agents && ~/.agents/install.sh
+```
+
+`install.sh` wires every installed harness and is safe to re-run. To check the setup afterwards:
+
+```bash
 ~/.agents/install.sh --doctor   # report what's missing, change nothing
 ~/.agents/tests/run.sh          # regression suite (passes once --doctor is clean)
 ```

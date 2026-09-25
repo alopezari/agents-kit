@@ -187,8 +187,8 @@
     <div class="terminal">
       <div class="bar"><span>~</span></div>
       <div class="body" style="gap: 4px">
-        <div><span class="prompt">$ </span>git clone {{repo_url}}.git ~/.agents</div>
-        <div><span class="prompt">$ </span>~/.agents/install.sh</div>
+        <div><span class="prompt">$ </span>git clone {{repo_url}}.git ~/.agents &amp;&amp; ~/.agents/install.sh</div>
+        <div class="comment">optional: check the setup</div>
         <div><span class="prompt">$ </span>~/.agents/install.sh --doctor</div>
         <div><span class="prompt">$ </span>~/.agents/tests/run.sh</div>
         <div class="pass">ALL PASSED</div>
