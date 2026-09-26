@@ -75,24 +75,57 @@ echo "agents-kit $version"
 echo "Profiles"
 # A profile is layered in by symlinks into the kit's git-ignored slots, so every path the hooks,
 # skills and AGENTS.md use stays the same with or without it.
-[ -n "$NEW_PROFILE" ] && link "$NEW_PROFILE" "$KIT/profiles/$(basename "$NEW_PROFILE")"
+if [ -n "$NEW_PROFILE" ]; then
+  current=$(readlink "$KIT/profiles/$(basename "$NEW_PROFILE")" 2>/dev/null || true)
+  [ -n "$current" ] && [ "$current" != "$NEW_PROFILE" ] \
+    && warn "profile $(basename "$NEW_PROFILE") was $current; $NEW_PROFILE replaces it (profiles are named by their directory)"
+  link "$NEW_PROFILE" "$KIT/profiles/$(basename "$NEW_PROFILE")"
+fi
+# Two profiles with the same name for a skill, overlay or doc: the first, alphabetically, keeps it. Linking both
+# would re-point the link on every run.
+claimed=""
+link_profile_entry() {  # <profile name> <entry> <kit path>
+  local owner
+  owner=$(lookup="$3" awk -F'\t' '$1 == ENVIRON["lookup"] { print $2; exit }' <<<"$claimed")
+  if [ -n "$owner" ]; then warn "${3#"$KIT"/} is in profiles $owner and $1; using $owner's"; return; fi
+  claimed+="$3	$1"$'\n'
+  link "$2" "$3"
+}
 for profile in "$KIT"/profiles/*/; do
   [ -d "$profile" ] || continue
-  profile=${profile%/}
+  profile=${profile%/}; name=$(basename "$profile")
   for entry in "$profile"/repos/*/ "$profile"/skills/*/; do
     [ -d "$entry" ] || continue
     entry=${entry%/}; slot=$(basename "$(dirname "$entry")")
-    link "$entry" "$KIT/$slot/$(basename "$entry")"
+    target="$KIT/$slot/$(basename "$entry")"
+    if [ -e "$target" ] && [ ! -L "$target" ]; then warn "$slot/$(basename "$entry") in profile $name has the name of the kit's own; skipped"; continue; fi
+    link_profile_entry "$name" "$entry" "$target"
   done
-  for doc in "$profile"/research/*; do [ -e "$doc" ] && link "$doc" "$KIT/research/$(basename "$doc")"; done
+  for doc in "$profile"/research/*; do [ -e "$doc" ] && link_profile_entry "$name" "$doc" "$KIT/research/$(basename "$doc")"; done
 done
 [ -d "$KIT/profiles" ] || ok "no profiles (add one with --profile <dir>)"
+# guard_mcp.py merges every profile's direct MCP servers into one table, so a later profile replaces earlier rules.
+python3 - "$KIT" <<'PY' | while read -r line; do warn "$line"; done
+import glob, json, os, sys
+kit = sys.argv[1]
+os.environ["AGENTS_PROFILES_DIR"] = os.devnull
+sys.path.insert(0, os.path.join(kit, "hooks"))
+import guard_mcp
+owner = {server: "the kit" for server in guard_mcp.DIRECT_WRITE}
+for path in sorted(glob.glob(os.path.join(kit, "profiles", "*", "mcp-writes.json"))):
+    profile = os.path.basename(os.path.dirname(path))
+    for server in json.load(open(path)).get("direct", {}):
+        if server in owner:
+            print(f"MCP server {server} has write rules in {owner[server]} and profile {profile}; {profile}'s replace them")
+        owner[server] = f"profile {profile}"
+PY
 
 echo "External skills"
 # Third-party skills are fetched from their source instead of being copied into the kit.
 while read -r name url _; do
   case "$name" in ''|'#'*) continue ;; esac
-  if [ -d "$KIT/skills/$name" ]; then ok "$name"
+  if [ -L "$KIT/skills/$name" ]; then warn "$name is an external skill and a profile's; using the profile's"
+  elif [ -d "$KIT/skills/$name" ]; then ok "$name"
   elif [ $DOCTOR = 1 ]; then warn "$name is missing (from $url)"
   else git clone -q --depth 1 "$url" "$KIT/skills/$name" && fix "$name cloned from $url"; fi
 done < "$KIT/skills.external"

@@ -382,7 +382,10 @@ def render():
     w("The kit is modular: the core holds nothing tied to one employer, client or project, and everything specific "
       "lives in profiles. A profile is a separate (usually private) repository that `install.sh --profile <dir>` "
       "layers in through symlinks, so hooks, skills and instructions use the same paths with or without it. Keep one "
-      "for your job, one per client, one for open source or side projects; install several and they stack. "
+      "for your job, one per client, one for open source or side projects; install several and they stack. When two "
+      "use the same name for a skill, overlay, doc or MCP server, `install.sh` warns; the first profile alphabetically "
+      "keeps the name, except MCP write rules, where the last one's replace the rest. A profile never replaces the "
+      "kit's own skills or overlays. "
       "`examples/sample-profile/` has one of each, ready to copy:\n")
     w("| In the profile | Linked or read as |\n|---|---|")
     w("| `repos/<repo>/` | `~/.agents/repos/<repo>` (notes, verify overlays, baselines) |")
