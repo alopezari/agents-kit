@@ -93,10 +93,15 @@ HOME="$home" "$kit/review-mining/run.sh" >/dev/null 2>&1; mining_status=$?
 flags=$(cat "$home/claude-args" 2>/dev/null)
 run_dir="$kit/review-mining/runs/$(date +%Y-%m)"
 writable=$(grep '^Edit(' <<<"$flags" | sort | tr '\n' ' ')
-check "review mining runs the model without network, code or writes outside its run and the proposal" \
+tools=$(grep -A1 -x -- --tools <<<"$flags" | tail -1)
+check "review mining runs the model without network, a shell or writes outside its run and the proposal" \
   '[ $mining_status = 0 ] && grep -qx -- --restricted <<<"$flags" && grep -qx dontAsk <<<"$flags" \
-   && ! grep -q bypassPermissions <<<"$flags" && ! grep -qE "^(WebFetch|WebSearch)$|Bash\((curl|gh|python|sh|bash)" <<<"$flags" \
-   && [ "$writable" = "Edit(/$kit/research/proposals/**) Edit(/$run_dir/**) " ]'
+   && [ "$tools" = "Read,Grep,Glob,Write,Edit,Agent" ] && ! grep -q "^Bash" <<<"$flags" \
+   && [ "$writable" = "Edit(/$kit/research/proposals/$(date +%Y-%m).md) Edit(/$run_dir/**) " ]'
+since=$(cat "$kit/review-mining/last-success")
+rm -f "$bin/claude"; printf '#!/bin/sh\nexit 0\n' > "$bin/claude"; chmod +x "$bin/claude"
+check "and a run that writes no proposal fails, even with an earlier one from this month" \
+  '! HOME="$home" "$kit/review-mining/run.sh" >/dev/null 2>&1 && [ "$(cat "$kit/review-mining/last-success")" = "$since" ]'
 plugin="$home/Projects/example-plugin"; mkdir -p "$plugin"
 git -C "$plugin" init -q -b main && git -C "$plugin" commit -q --allow-empty -m init && git -C "$plugin" switch -q -c change
 line=$(printf '{"workspace":{"current_dir":"%s"}}' "$plugin" | HOME="$home" "$kit/adapters/claude/statusline.sh" 2>/dev/null)
