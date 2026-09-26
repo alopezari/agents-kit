@@ -70,11 +70,11 @@ Inputs (read them from disk):
 $COMMENT_NOTE
 
 Steps:
-1. Split comments.jsonl into chunks of about 300 lines and classify every comment with parallel subagents (model: sonnet), each writing its own output file in $RUN with {"id","cat","agent","rule"} per line, as defined in taxonomy.md. Give each subagent a unique scratch filename. Verify every id is classified exactly once.
+1. Classify every comment with parallel subagents (model: sonnet), each reading its own range of about 300 lines of comments.jsonl and writing its own output file in $RUN with {"id","cat","agent","rule"} per line, as defined in taxonomy.md. Give each subagent a unique scratch filename. Verify every id is classified exactly once.
 2. Aggregate: category counts overall, and separately for comments on agent-authored PRs. Compare with the previous analysis and name what changed.
 3. Decide what the evidence supports: new recurring defects, rules that no longer show up, wording that reviewers keep contradicting. A rule needs a pattern across several PRs, not one comment. For every recurring defect, push it down this ladder as far as it goes, and propose the lowest rung that works:
    a. make it impossible (an API or helper the team could adopt; propose, never apply);
-   b. a deterministic check: a semgrep rule in $HOME/.agents/repos/_shared/wordpress.semgrep.yml or a repo's verify script under $HOME/.agents/repos/ (draft the rule in $RUN, test it against a synthetic example, and include it in the proposal as a diff; never edit the kit's files);
+   b. a deterministic check: a semgrep rule in $HOME/.agents/repos/_shared/wordpress.semgrep.yml or a repo's verify script under $HOME/.agents/repos/ (draft the rule and a synthetic example it should catch in $RUN, include both in the proposal as a diff, and say the rule is untested; never edit the kit's files);
    c. a regression or property test the team could add;
    d. required evidence in the self-review lenses ($HOME/.agents/skills/self-review/lenses.md);
    e. a sentence in AGENTS.md, only when nothing above fits. Keep AGENTS.md short.
@@ -114,12 +114,18 @@ Do not edit AGENTS.md or any file outside $RUN and $PROPOSAL. Do not call GitHub
 EOF
 
 cd "$RUN"
-claude -p "$(cat "$RUN/prompt.md")" --safe-mode --no-session-persistence --model opus \
-  --permission-mode bypassPermissions --add-dir "$HOME/.agents" \
-  --disallowedTools "Bash(gh:*)" "Bash(git push:*)" "Bash(curl:*)" "WebFetch" "WebSearch" \
+mkdir -p "$(dirname "$PROPOSAL")"
+# The comments are other people's text, so the model gets no network and no shell: even an allowed command like
+# semgrep can fetch rules or rewrite files. --restricted keeps file tools inside the working directories, and
+# dontAsk refuses anything the rules don't allow. It reads the kit; it writes only this run and the proposal.
+previous=$(cksum "$PROPOSAL" 2>/dev/null || true)
+claude -p "$(cat "$RUN/prompt.md")" --safe-mode --restricted --strict-mcp-config --no-session-persistence --model opus \
+  --add-dir "$HOME/.agents" --tools "Read,Grep,Glob,Write,Edit,Agent" --permission-mode dontAsk \
+  --allowedTools "Edit(/$RUN/**)" "Edit(/$PROPOSAL)" \
   > "$RUN/claude.log" 2>&1
 
-if [ -s "$PROPOSAL" ]; then
+# A proposal left by an earlier run this month is not this run's success.
+if [ -s "$PROPOSAL" ] && [ "$(cksum "$PROPOSAL")" != "$previous" ]; then
   date -u +%Y-%m-%dT%H:%M:%SZ > "$SINCE_FILE"
   osascript -e "display notification \"Proposal ready: ~/.agents/research/proposals/$MONTH.md\" with title \"Agent review mining\"" || true
 else
