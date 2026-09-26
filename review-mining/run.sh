@@ -114,9 +114,13 @@ Do not edit AGENTS.md or any file outside $RUN and $PROPOSAL. Do not call GitHub
 EOF
 
 cd "$RUN"
-claude -p "$(cat "$RUN/prompt.md")" --safe-mode --no-session-persistence --model opus \
-  --permission-mode bypassPermissions --add-dir "$HOME/.agents" \
-  --disallowedTools "Bash(gh:*)" "Bash(git push:*)" "Bash(curl:*)" "WebFetch" "WebSearch" \
+mkdir -p "$(dirname "$PROPOSAL")"
+# The comments are other people's text, so the model gets no network and no way to run code: --restricted drops
+# the shell and web tools unless --tools names them and keeps file tools inside the working directories, and
+# dontAsk refuses anything the rules don't allow. It reads the kit; it writes only this run and the proposal.
+claude -p "$(cat "$RUN/prompt.md")" --safe-mode --restricted --strict-mcp-config --no-session-persistence --model opus \
+  --add-dir "$HOME/.agents" --tools "Read,Grep,Glob,Write,Edit,Agent,Bash" --permission-mode dontAsk \
+  --allowedTools "Edit(/$RUN/**)" "Edit(/$(dirname "$PROPOSAL")/**)" "Bash(semgrep:*)" "Bash(jq:*)" "Bash(wc:*)" \
   > "$RUN/claude.log" 2>&1
 
 if [ -s "$PROPOSAL" ]; then

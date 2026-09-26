@@ -17,7 +17,7 @@ bin="$home/bin"; mkdir -p "$bin"
 for program in python3 git jq node npm claude codex pi; do
   path=$(command -v "$program") && ln -s "$path" "$bin/$program"
 done
-printf '#!/bin/bash\n[ "$1" = install ] || exit 1\nprintf "#!/bin/sh\\n" > "%s/${!#}"; chmod +x "%s/${!#}"\n' "$bin" "$bin" > "$bin/brew"
+printf '#!/bin/bash\n[ "$1" = install ] || exit 1\nrm -f "%s/${!#}"; printf "#!/bin/sh\\n" > "%s/${!#}"; chmod +x "%s/${!#}"\n' "$bin" "$bin" "$bin" > "$bin/brew"
 chmod +x "$bin/brew"
 real_path=$PATH q="'"
 export PATH="$bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -82,6 +82,21 @@ check "sample profile: its private terms are enforced" \
   '[ "$(HOME="$home" python3 -c "import sys; sys.path.insert(0, \"$kit/hooks\"); import private_terms; print(private_terms.found(\"see INTERNAL-42\"))")" = "[${q}INTERNAL-42${q}]" ]'
 check "sample profile: the monthly review mining runs with its list of only comments" \
   'HOME="$home" FETCH_ONLY=1 "$kit/review-mining/run.sh" >/dev/null 2>&1'
+# The monthly job hands other people's review comments to a model: it must run it without network or code
+# execution, writing only its run folder and the proposal. A fake claude records the flags and writes the proposal.
+# $bin/claude links to the real Claude Code: remove the link first, or the fake would be written into it.
+rm -f "$bin/claude" "$bin/osascript"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/claude-args"\nmkdir -p "%s/.agents/research/proposals"\necho proposal > "%s/.agents/research/proposals/$(date +%%Y-%%m).md"\n' \
+  "$home" "$home" "$home" > "$bin/claude"
+printf '#!/bin/sh\nexit 0\n' > "$bin/osascript"; chmod +x "$bin/claude" "$bin/osascript"
+HOME="$home" "$kit/review-mining/run.sh" >/dev/null 2>&1; mining_status=$?
+flags=$(cat "$home/claude-args" 2>/dev/null)
+run_dir="$kit/review-mining/runs/$(date +%Y-%m)"
+writable=$(grep '^Edit(' <<<"$flags" | sort | tr '\n' ' ')
+check "review mining runs the model without network, code or writes outside its run and the proposal" \
+  '[ $mining_status = 0 ] && grep -qx -- --restricted <<<"$flags" && grep -qx dontAsk <<<"$flags" \
+   && ! grep -q bypassPermissions <<<"$flags" && ! grep -qE "^(WebFetch|WebSearch)$|Bash\((curl|gh|python|sh|bash)" <<<"$flags" \
+   && [ "$writable" = "Edit(/$kit/research/proposals/**) Edit(/$run_dir/**) " ]'
 plugin="$home/Projects/example-plugin"; mkdir -p "$plugin"
 git -C "$plugin" init -q -b main && git -C "$plugin" commit -q --allow-empty -m init && git -C "$plugin" switch -q -c change
 line=$(printf '{"workspace":{"current_dir":"%s"}}' "$plugin" | HOME="$home" "$kit/adapters/claude/statusline.sh" 2>/dev/null)
