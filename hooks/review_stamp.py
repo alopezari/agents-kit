@@ -100,10 +100,14 @@ def follow_branch_renames():
         moves += [(os.path.join(d, f"browser-ab-spec-{repo}-{old}.json"), os.path.join(d, f"browser-ab-spec-{repo}-{new}.json"))
                   for d in dirs]
         moves.append((os.path.join(common, "agents", "stamps", old), os.path.join(common, "agents", "stamps", new)))
+        moves.append((os.path.join(common, "agents", "phase", f"{old}.json"), os.path.join(common, "agents", "phase", f"{new}.json")))
         for src, dst in moves:
             if os.path.exists(src) and not os.path.exists(dst) and not (old in dashed and branch_exists(old)):
-                os.rename(src, dst)
-                print(f"moved {os.path.basename(src)} to {os.path.basename(dst)}", file=sys.stderr)
+                try:
+                    os.rename(src, dst)
+                    print(f"moved {os.path.basename(src)} to {os.path.basename(dst)}", file=sys.stderr)
+                except OSError as error:  # a sandbox with a read-only .git: the caller falls back to $TMPDIR
+                    print(f"could not move {src} to {dst}: {error}", file=sys.stderr)
 
 
 def branch_exists(name):

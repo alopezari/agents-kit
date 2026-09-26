@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """bin/phase: each step of the flow, stepping back when the change moves, branch renames, and the cached fast path."""
+import json
 import os
 import shutil
 import subprocess
@@ -178,17 +179,31 @@ def files_under_the_old_dash_key_move_unless_that_branch_exists(base):
     repo = new_repo(base)
     agents = os.path.join(repo, ".git", "agents")
     os.makedirs(os.path.join(agents, "stamps", "feature-y"))
+    os.makedirs(os.path.join(agents, "phase"))
+    json.dump({"pr": "MERGED"}, open(os.path.join(agents, "phase", "feature-y.json"), "w"))
     open(os.path.join(agents, "spec-shop-feature-y.md"), "w").write("# old key\n")
     open(os.path.join(agents, "review-shop-feature-y.md"), "w").write("# review\n")
     sh(repo, "git", "checkout", "-q", "-b", "feature/y")
     assert open(sh(repo, SPEC_PATH)).read() == "# old key\n", "a spec saved under the dash key moves to the new key"
     assert os.path.exists(os.path.join(agents, "review-shop-feature~y.md")) and os.path.isdir(os.path.join(agents, "stamps", "feature~y"))
+    assert json.load(open(os.path.join(agents, "phase", "feature~y.json"))) == {"pr": "MERGED"}, "the phase cache moves too"
 
     open(os.path.join(agents, "spec-shop-feature-z.md"), "w").write("# the dash branch's\n")
     sh(repo, "git", "branch", "feature-z", "trunk")
     sh(repo, "git", "checkout", "-q", "-b", "feature/z")
     assert not os.path.exists(sh(repo, SPEC_PATH)), "a real feature-z branch keeps its files"
     assert os.path.exists(os.path.join(agents, "spec-shop-feature-z.md"))
+
+    open(os.path.join(agents, "spec-shop-feature-w.md"), "w").write("# old key\n")
+    os.chmod(agents, 0o555)  # a sandbox's read-only .git: the move fails and the spec goes to $TMPDIR
+    try:
+        sh(repo, "git", "checkout", "-q", "-b", "feature/w")
+        env = {**os.environ, "TMPDIR": os.path.join(base, "tmp")}
+        os.makedirs(env["TMPDIR"])
+        found = sh(repo, SPEC_PATH, env=env)
+        assert found.startswith(env["TMPDIR"]), found
+    finally:
+        os.chmod(agents, 0o755)
 
 
 def fast_path_serves_cache_and_refreshes(base):
