@@ -1,6 +1,6 @@
 # Changelog
 
-Each pull request adds a line under Unreleased. A release moves those lines under a new version, sets `VERSION` to it and tags the commit `v<version>`. Versions follow [semantic versioning](https://semver.org): a minor version while the kit is below 1.0, a major one for anything that breaks an installed profile.
+Each pull request adds a line under Unreleased. A release moves those lines under a new version, sets `VERSION` to it and tags the commit `v<version>`. Versions follow [semantic versioning](https://semver.org): a minor version while the kit is below 1.0, a major one for anything that breaks an installed profile. 0.1.0 and 0.2.0 group the work before versioning started, by day, and have no tags.
 
 ## [Unreleased]
 
