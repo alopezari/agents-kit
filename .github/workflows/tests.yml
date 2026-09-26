@@ -3,7 +3,7 @@ name: tests
 on:
   pull_request:
   push:
-    branches: [main, ci-macos] # ci-macos: temporary, while the workflow is being tried out
+    branches: [main]
 
 permissions:
   contents: read
