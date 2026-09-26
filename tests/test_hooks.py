@@ -124,7 +124,8 @@ def pr_gate_review_and_validation(base):
     assert guard("cat > notes.md <<'EOF'\ntext\nEOF\ngh pr create --fill", repo) == "deny", "a real one after a heredoc"
     runs = ['GH_HOST="x" gh pr create --fill', 'echo "$(gh pr create --fill)"', "cat <<EOF\n$(gh pr create --fill)\nEOF",
             "# <<EOF\ngh pr create --fill\nEOF", "echo $((1<<2)); gh pr create --fill", 'printf \\" | gh pr create --fill',
-            "echo `gh pr create --fill`"]
+            "echo `gh pr create --fill`", "echo \"$(printf %s ')' ; gh pr create --fill)\"",
+            "cat <<\\EOF\nbody\nEOF\ngh pr create --fill", "echo $'it\\'s' ; gh pr create --fill", 'GH_REPO="alopezari/"agents-kit gh pr create --fill']
     for command in runs:
         assert guard(command, repo) == "deny", f"the shell runs gh here: {command!r}"
     inert = ["cat <<EOF\n EOF\ngh pr create --fill\nEOF", "cat <<'END-MARK'\ngh pr create --fill\nEND-MARK",

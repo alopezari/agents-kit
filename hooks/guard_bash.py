@@ -98,62 +98,27 @@ def pr_checkout(command, cwd):
 
 
 def shell_code(command):
-    """The command with text that can't run blanked out (same length): single-quoted strings, comments, and the
-    literal parts of double-quoted strings and heredoc bodies. `$(...)` and backticks stay, since the shell runs them.
-    When unsure, it leaves text in: a false match only blocks, a false blank would let a command through."""
+    """The command with text that can't run blanked out (same length): quoted strings, comments and heredoc bodies.
+    Blanking uses x, not spaces, so a VAR="a b"c prefix still reads as one word. A command with $(...), backticks
+    or <<\\ or $'...' is returned whole: parsing those is where a real gh would hide, and a false match only blocks."""
+    if "$(" in command or "`" in command or "<<\\" in command or "$'" in command:
+        return command
     out, n, i, heredocs = list(command), len(command), 0, []
 
     def blank(start, end):
         for k in range(start, end):
             if out[k] != "\n":
-                out[k] = " "
-
-    def blank_literal(start, end):
-        """Blank start..end except command substitutions, which run even inside double quotes and heredocs."""
-        k = start
-        while k < end:
-            if command.startswith("$(", k) or command[k] == "`":
-                close = substitution_end(k, end)
-                k = close
-                continue
-            if command[k] == "\\" and k + 1 < end:
-                blank(k, k + 2)
-                k += 2
-                continue
-            blank(k, k + 1)
-            k += 1
-
-    def substitution_end(k, limit):
-        if command[k] == "`":
-            close = command.find("`", k + 1, limit)
-            return limit if close < 0 else close + 1
-        depth, k = 0, k + 1
-        while k < limit:
-            depth += command[k] == "("
-            depth -= command[k] == ")"
-            k += 1
-            if depth == 0:
-                return k
-        return limit
+                out[k] = "x"
 
     while i < n:
         c = command[i]
         if c == "\\":
             i += 2
-        elif c == "'":
-            close = command.find("'", i + 1)
-            close = n if close < 0 else close
-            blank(i + 1, close)
-            i = close + 1
-        elif c == '"':
+        elif c in "'\"":
             k = i + 1
-            while k < n and command[k] != '"':
-                if command[k] == "\\":
-                    k += 1
-                elif command.startswith("$(", k) or command[k] == "`":
-                    k = substitution_end(k, n) - 1
-                k += 1
-            blank_literal(i + 1, min(k, n))
+            while k < n and command[k] != c:
+                k += 2 if c == '"' and command[k] == "\\" else 1
+            blank(i + 1, min(k, n))
             i = k + 1
         elif c == "#" and (i == 0 or command[i - 1] in " \t\n;&|("):
             end = command.find("\n", i)
@@ -164,23 +129,20 @@ def shell_code(command):
             close = command.find("))", i + 2)
             i = n if close < 0 else close + 2
         elif command.startswith("<<", i) and not command.startswith("<<<", i) and (i == 0 or not command[i - 1].isdigit()):
-            m = re.match(r"<<(-?)[ \t]*(['\"]?)([^\s'\"<>;&|()]+)\2", command[i:])
+            m = re.match(r"<<(-?)[ \t]*(['\"]?)([^\s'\"<>;&|()\\]+)\2", command[i:])
             if m:
-                heredocs.append((m.group(3), bool(m.group(1)), bool(m.group(2))))
+                heredocs.append((m.group(3), bool(m.group(1))))
             i += m.end() if m else 2
         elif c == "\n" and heredocs:
             k = i + 1
             while heredocs and k < n:
                 end = command.find("\n", k)
                 end = n if end < 0 else end
-                word, tabs, quoted = heredocs[0]
-                line = command[k:end].lstrip("\t") if tabs else command[k:end]
-                if line == word:
+                word, tabs = heredocs[0]
+                if (command[k:end].lstrip("\t") if tabs else command[k:end]) == word:
                     heredocs.pop(0)
-                elif quoted:
-                    blank(k, end)
                 else:
-                    blank_literal(k, end)
+                    blank(k, end)
                 k = end + 1
             i = k
         else:
