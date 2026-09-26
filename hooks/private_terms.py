@@ -35,7 +35,7 @@ def found(text):
 
 def staged_additions():
     diff = subprocess.run(["git", "diff", "--cached", "--unified=0", "--no-color", "--text"],
-                          capture_output=True, text=True, check=True).stdout
+                          capture_output=True, text=True, errors="replace", check=True).stdout
     names = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=AR"],
                            capture_output=True, text=True, check=True).stdout
     return names + "\n".join(l[1:] for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++"))

@@ -58,13 +58,23 @@ def kit_prs_are_checked(base):
     assert guard("GH_HOST=ghe.example gh pr edit 3 -R alopezari/agents-kit -t ACME-4", other, env) == "", "GH_HOST"
     open(os.path.join(other, "-"), "w").write("fine\n")
     assert "can't be read" in guard("gh pr edit 3 -R alopezari/agents-kit -F -", other, env), "a file named -"
+    open(os.path.join(base, "clean.md"), "w").write("fine\n")
+    assert "can't be read" in guard(f"cd {base} && printf ACME-4 > clean.md && gh pr edit 3 -R alopezari/agents-kit"
+                                    " -F clean.md", other, env), "a body file rewritten in the same command"
+    assert "ACME-4" in guard('gh pr edit 3 -R "$REPO" -t ACME-4', other, env), "a repository the shell expands"
+    assert "ACME-4" in guard("cd tests && cd .. && gh pr edit 3 -t ACME-4", KIT, env), "chained cd"
+    assert "ACME-4" in guard("GH_REPO=someone/other gh pr view 3; gh pr edit 3 -t ACME-4", KIT, env), "one-off GH_REPO"
+    sys.path.insert(0, os.path.join(KIT, "hooks"))
+    import guard_bash
+    assert guard_bash.pr_checkout(f"cd /tmp && gh pr edit 3 -t a && cd {KIT} && gh pr create --fill", other) == KIT, \
+        "the review gate still finds the checkout gh pr create runs in"
     assert guard('gh pr edit 3 --title "Fix the flow"', KIT, env) == "", "clean title"
     assert guard('gh pr edit 3 --title "Fix ACME-12 flow"', other, env) == "", "other repositories may name them"
 
 
 def kit_commits_are_checked(base):
     env, other = setup(base)
-    open(os.path.join(other, "a.bin"), "wb").write(b"\0binary ACME-5\n")
+    open(os.path.join(other, "a.bin"), "wb").write(b"\0\xff binary ACME-5\n")
     run(["git", "add", "a.bin"], other, env)
     staged = run([sys.executable, os.path.join(KIT, "hooks", "private_terms.py"), "staged"], other, env)
     assert staged.returncode == 1 and "ACME-5" in staged.stderr, ("binary files too", staged)

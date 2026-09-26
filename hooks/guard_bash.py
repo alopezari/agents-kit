@@ -77,8 +77,8 @@ def dangerous_rm(command, cwd):
 
 
 def pr_checkout(command, cwd):
-    """The checkout `gh pr create|edit` acts on: a `cd <dir>` before it, else the worktree holding --head."""
-    before = re.split(r"\bgh\s+pr\s+(?:create|edit)\b", command)[0]
+    """The checkout `gh pr create` acts on: a `cd <dir>` before it, else the worktree holding --head."""
+    before = re.split(r"\bgh\s+pr\s+create\b", command)[0]
     cds = re.findall(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before)
     if cds:
         target = os.path.expanduser(cds[-1].strip("\"'"))
@@ -157,9 +157,12 @@ def private_terms_in_kit_pr(command, cwd):
     for match in re.finditer(r"(?:^|[;&|(\n])\s*((?:\w+=\S*\s+)*)gh\s+pr\s+(?:create|edit)\b", command):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
-        cds = re.findall(r"(?:^|[;&|\n]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before)
-        runs_in = os.path.join(cwd, os.path.expanduser(cds[-1].strip("\"'"))) if cds else cwd
-        exported = dict(re.findall(r"\b(GH_REPO|GH_HOST)=(\S+)", before + match.group(1)))
+        runs_in = cwd
+        for target in re.findall(r"(?:^|[;&|\n]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before):
+            runs_in = os.path.normpath(os.path.join(runs_in, os.path.expanduser(target.strip("\"'"))))
+        exported = dict(re.findall(r"(?:^|[;&|\n]\s*)(?:export\s+)?(GH_REPO|GH_HOST)=([^\s;&|]+)(?=\s*(?:[;&|\n]|$))",
+                                   before))
+        exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=(\S+)", match.group(1)))
         try:
             args = pr_command_args(command, match.end(1))
         except ValueError:
@@ -179,7 +182,9 @@ def private_terms_in_kit_pr(command, cwd):
                 files.append(value)
             elif re.match(r"https?://\S+/pull/\d+", arg):
                 repo = arg
-        if not (values or files) or not targets_kit(repo, host, pr_checkout(command[match.start(1):], runs_in)):
+        if not (values or files):
+            continue
+        if not ("$" in (repo or "") or targets_kit(repo, host, pr_checkout(command[match.start(1):], runs_in))):
             continue
         # Checked before the shell runs, so fail closed on text only the shell will produce.
         if any(re.search(r"[$`]", v) for v in values):
@@ -187,7 +192,7 @@ def private_terms_in_kit_pr(command, cwd):
                     "for a profile's private terms. Pass the text literally or in a --body-file.")
         for path in files:
             try:
-                if path == "-":  # gh reads standard input, even when a file named - exists
+                if path == "-" or os.path.basename(path) in before:  # stdin, or a file this command writes first
                     raise OSError
                 values.append(open(os.path.join(runs_in, os.path.expanduser(path))).read())
             except OSError:
