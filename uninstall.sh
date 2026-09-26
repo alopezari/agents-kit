@@ -20,12 +20,17 @@ BACKUP="$HOME/.agents-uninstall-backups/$(date +%Y%m%d-%H%M%S)"
 APPLY=0; planned=0
 todo() { if [ $APPLY = 1 ]; then printf '  done  %s\n' "$*"; else printf '  -     %s\n' "$*"; planned=$((planned + 1)); fi; }
 warn() { [ $APPLY = 1 ] || printf '  warn  %s\n' "$*"; }
-backup() { [ $APPLY = 1 ] && [ -f "$1" ] && { mkdir -p "$BACKUP"; local dir; dir=$(basename "$(dirname "$1")"); cp "$1" "$BACKUP/${dir#.}-$(basename "$1")"; } || true; }
+# backup <file>: its content before this run's first edit, or stop before editing it.
+backup() {
+  local dir; dir=$(basename "$(dirname "$1")"); local copy="$BACKUP/${dir#.}-$(basename "$1")"
+  [ -e "$copy" ] && return 0
+  mkdir -p "$BACKUP" && cp -p "$1" "$copy" || { echo "Couldn't back up $1; stopped before editing it." >&2; exit 1; }
+}
 
 # unlink_kit <path>: remove a symlink into the kit; anything else there is the user's.
 unlink_kit() {
   local target; target=$(readlink "$1" 2>/dev/null) || return 0
-  case "$target" in "$KIT"/*) ;; *) return 0 ;; esac
+  case "$target" in */../*) return 0 ;; "$KIT"/*) ;; *) return 0 ;; esac
   [ $APPLY = 1 ] && rm "$1"
   todo "$1 (link to ${target#"$KIT"/})"
 }
@@ -36,7 +41,8 @@ unlink_skills() { for s in "$1"/*; do unlink_kit "$s"; done; }
 KIT_HOOK='python3 $HOME/.agents/hooks/'
 unhook() {
   local file=$1 count
-  count=$(jq --arg k "$KIT_HOOK" '[.hooks[]?[]?.hooks[]?.command // "" | select(startswith($k))] | length' "$file" 2>/dev/null) || return 0
+  count=$(jq --arg k "$KIT_HOOK" '[.hooks[]?[]?.hooks[]?.command // "" | select(startswith($k))] | length' "$file" 2>/dev/null) \
+    || { warn "couldn't read $file; remove any kit hooks in it by hand"; return 0; }
   [ "$count" -gt 0 ] || return 0
   if [ $APPLY = 1 ]; then
     backup "$file"
@@ -58,7 +64,7 @@ unwire() {
   if [ "$current" = "$line" ]; then
     if [ $APPLY = 1 ]; then backup "$S"; tmp=$(mktemp); jq 'del(.statusLine)' "$S" > "$tmp" && mv "$tmp" "$S"; fi
     todo "$S: status line"
-  elif [ -n "$current" ] && grep -qF "$line" "$current" 2>/dev/null; then
+  elif [[ $current == *"$line"* ]] || { [ -n "$current" ] && grep -qF "$line" "$current" 2>/dev/null; }; then
     warn "your status line ($current) runs the kit's; edit it by hand"
   fi
 
@@ -78,17 +84,24 @@ unwire() {
   else
     for tpl in "$KIT"/launchd/*.plist; do
       label="com.$(id -un).$(basename "$tpl" .plist)"; dest="$HOME/Library/LaunchAgents/$label.plist"
-      [ -f "$dest" ] || continue
-      if [ $APPLY = 1 ]; then launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true; rm "$dest"; fi
+      grep -qF "$KIT/" "$dest" 2>/dev/null || continue  # a job the user replaced is theirs
+      if [ $APPLY = 1 ]; then
+        launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true  # fails when it isn't loaded
+        if launchctl list "$label" >/dev/null 2>&1; then
+          printf '  warn  %s is still loaded; kept %s so a rerun can retry\n' "$label" "$dest"; continue
+        fi
+        rm "$dest"
+      fi
       todo "$label (unloaded, $dest removed)"
     done
   fi
 
-  if [ "$(readlink -f "$(command -v gh 2>/dev/null)" 2>/dev/null)" = "$(readlink -f "$KIT/bin/gh")" ]; then
-    echo "gh wrapper"; wrapper=$(command -v gh)
-    # Root's directory: only a person at a terminal can give sudo its password.
+  wrapper=/usr/local/bin/gh  # where install.sh links it
+  if [ -L "$wrapper" ] && [ "$(readlink -f "$wrapper")" = "$(readlink -f "$KIT/bin/gh")" ]; then
+    echo "gh wrapper"
+    # Root's directory: sudo asks a person at a terminal; elsewhere it works only without a password.
     if [ $APPLY = 0 ]; then todo "$wrapper (link to bin/gh; needs sudo)"
-    elif [ -t 0 ] && sudo rm "$wrapper"; then todo "$wrapper"
+    elif { [ -t 0 ] && sudo rm "$wrapper"; } || { [ ! -t 0 ] && sudo -n rm "$wrapper" 2>/dev/null; }; then todo "$wrapper"
     else printf '  warn  %s still links to the kit; run: sudo rm %s\n' "$wrapper" "$wrapper"; fi
   fi
 }
