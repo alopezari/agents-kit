@@ -388,6 +388,7 @@ def render():
     w("| `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |")
     w("| `PROFILE.md` | work context for the trends scan |")
     w("| `deps.txt` | more programs to install and check, in the core's format; a program in both takes the stricter tier |")
+    w("| `private-terms.txt` | case-insensitive regexes, one per line, that must never reach the public kit: its commits and pull requests are refused when they match |")
     w("| `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |\n")
 
     w("## What the agents are told\n")

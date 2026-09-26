@@ -14,6 +14,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import log  # noqa: E402
+import private_terms  # noqa: E402
+
+KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 
 GIT = r"\bgit\s+(?:(?:-C|-c)\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
 PROTECTED_BRANCHES = r"(main|master|trunk|develop|production|release(/[\w.-]+)?)"
@@ -74,8 +77,8 @@ def dangerous_rm(command, cwd):
 
 
 def pr_checkout(command, cwd):
-    """The checkout `gh pr create` acts on: a `cd <dir>` before it, else the worktree holding --head."""
-    before = re.split(r"\bgh\s+pr\s+create\b", command)[0]
+    """The checkout `gh pr create|edit` acts on: a `cd <dir>` before it, else the worktree holding --head."""
+    before = re.split(r"\bgh\s+pr\s+(?:create|edit)\b", command)[0]
     cds = re.findall(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before)
     if cds:
         target = os.path.expanduser(cds[-1].strip("\"'"))
@@ -114,6 +117,55 @@ def unreviewed_pr(command, cwd):
     return None
 
 
+def targets_kit(repo, cwd):
+    """Whether a gh command acts on the kit's own repository: its --repo, else the checkout it runs in."""
+    if repo:
+        origin = subprocess.run(["git", "-C", KIT, "remote", "get-url", "origin"], capture_output=True, text=True).stdout
+        slug = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?\s*$", origin)
+        return bool(slug) and repo.rstrip("/").lower().endswith(slug.group(1).lower())
+    common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd,
+                            capture_output=True, text=True).stdout.strip()
+    return bool(common) and os.path.realpath(common) == os.path.join(KIT, ".git")
+
+
+def private_terms_in_kit_pr(command, cwd):
+    """The kit is public: a pull request to it must not carry a profile's private terms."""
+    match = re.search(r"(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*(gh\s+pr\s+(?:create|edit)\b)", command)
+    if not match:
+        return None
+    lexer = shlex.shlex(command[match.start(1):], posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    args = []
+    try:
+        for token in lexer:
+            if token in (";", "&&", "||", "|", "&", "\n"):
+                break
+            args.append(token)
+    except ValueError:
+        return None
+    cwd = pr_checkout(command, cwd)
+    values, repo = [], None
+    for i, arg in enumerate(args):
+        flag, _, inline = arg.partition("=")
+        value = inline or (args[i + 1] if i + 1 < len(args) else "")
+        if flag in ("-R", "--repo"):
+            repo = value
+        elif flag in ("-t", "--title", "-b", "--body"):
+            values.append(value)
+        elif flag in ("-F", "--body-file"):
+            try:
+                values.append(open(os.path.join(cwd, os.path.expanduser(value))).read())
+            except OSError:
+                pass
+    if not values or not targets_kit(repo, cwd):
+        return None
+    terms = private_terms.found("\n".join(values))
+    if terms:
+        return (f"This pull request's title or description names {', '.join(terms)}, which a profile marks as private, "
+                "and the kit is public. Rewrite it without them.")
+    return None
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -126,7 +178,7 @@ def main():
         return 0
     cwd = os.path.realpath(payload.get("cwd") or os.getcwd())
 
-    reason = dangerous_rm(command, cwd) or unreviewed_pr(command, cwd)
+    reason = dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd)
     if not reason:
         for pattern, why in RULES:
             if re.search(pattern, command):

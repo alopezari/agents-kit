@@ -1,7 +1,10 @@
 #!/bin/bash
-# Regenerate the framework reference so every commit carries docs that match the code.
+# Keep profiles' private terms out, then regenerate the framework reference so every commit carries
+# docs that match the code.
 # It is built from the working tree, so commit the files it describes together with it.
 set -euo pipefail
 root=$(git rev-parse --show-toplevel)
+# The kit is public: no profile's private terms in what this commit adds.
+python3 "$(dirname "$0")/../hooks/private_terms.py" staged
 "$root/bin/docs" >/dev/null
 git add "$root/docs/framework.md"
