@@ -16,7 +16,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 # Outside the kit, so deleting ~/.agents afterwards doesn't take the backups with it.
-BACKUP="$HOME/.agents-uninstall-backups/$(date +%Y%m%d-%H%M%S)"
+BACKUP="$HOME/.agents-uninstall-backups/$(date +%Y%m%d-%H%M%S)-$$"
 APPLY=0; planned=0
 todo() { if [ $APPLY = 1 ]; then printf '  done  %s\n' "$*"; else printf '  -     %s\n' "$*"; planned=$((planned + 1)); fi; }
 warn() { [ $APPLY = 1 ] || printf '  warn  %s\n' "$*"; }
@@ -47,8 +47,11 @@ unhook() {
   if [ $APPLY = 1 ]; then
     backup "$file"
     local tmp; tmp=$(mktemp)
-    jq --arg k "$KIT_HOOK" '.hooks |= (map_values(map(.hooks |= map(select((.command // "") | startswith($k) | not)))
-      | map(select(.hooks | length > 0))) | with_entries(select(.value | length > 0)))' "$file" > "$tmp" && mv "$tmp" "$file"
+    # Groups and events are dropped only when removing the kit's hooks leaves them empty.
+    jq --arg k "$KIT_HOOK" 'def kit: (.command // "") | startswith($k);
+      .hooks |= with_entries(if any(.value[]?.hooks[]?; kit) then
+        .value |= map(if any(.hooks[]?; kit) then (.hooks |= map(select(kit | not))) | select(.hooks | length > 0) else . end)
+        | select(.value | length > 0) else . end)' "$file" > "$tmp" && mv "$tmp" "$file"
   fi
   todo "$file: $count kit hooks"
 }

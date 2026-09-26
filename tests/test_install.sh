@@ -68,7 +68,8 @@ if [ "$(command -v launchctl)" != "$bin/launchctl" ]; then echo "FAIL the fake l
 kit="$home/.agents"
 wired=$(HOME="$home" "$kit/install.sh" --yes 2>&1)
 S="$home/.claude/settings.json"
-jq '.hooks.Stop += [{matcher: "", hooks: [{type: "command", command: "my-own-hook"}]}]' "$S" > "$S.tmp" && mv "$S.tmp" "$S"
+jq '.hooks.Stop += [{matcher: "", hooks: [{type: "command", command: "my-own-hook"}]}] | .hooks.Notification = [{matcher: "x", hooks: []}]' \
+  "$S" > "$S.tmp" && mv "$S.tmp" "$S"
 mkdir -p "$home/.claude/skills/mine" "$home/elsewhere"
 ln -s "$home/elsewhere" "$home/.claude/skills/linked-elsewhere"
 ln -s "$kit/../elsewhere" "$home/.claude/skills/through-the-kit"
@@ -98,7 +99,7 @@ check "uninstall.sh --yes removes every link into the kit" '[ "$(kit_links)" = 0
 check "and the kit's hooks and status line from Claude Code and Codex" \
   '! grep -qF "/.agents/" "$S" "$home/.codex/hooks.json"'
 check "keeping the user's own hook, skill and settings" \
-  'jq -e ".hooks.Stop[0].hooks[0].command == \"my-own-hook\" and .effortLevel == \"medium\"" "$S" >/dev/null && [ -d "$home/.claude/skills/mine" ] && [ -L "$home/.claude/skills/linked-elsewhere" ] \
+  'jq -e ".hooks.Stop[0].hooks[0].command == \"my-own-hook\" and .hooks.Notification[0].matcher == \"x\" and .effortLevel == \"medium\"" "$S" >/dev/null && [ -d "$home/.claude/skills/mine" ] && [ -L "$home/.claude/skills/linked-elsewhere" ] \
   && [ -L "$home/.claude/skills/through-the-kit" ]'
 check "unloading and removing the kit's scheduled jobs, keeping one still loaded and the user's own" \
   '[ "$jobs" -gt 2 ] && [ "$(ls "$home/Library/LaunchAgents" | sort | tr "\n" " ")" = "$(printf "%s\n" "$mine" "$stuck" | sort | tr "\n" " ")" ] \
