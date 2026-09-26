@@ -73,13 +73,18 @@ skills() {  # link every kit skill into a harness skills dir
 echo "Profiles"
 # A profile is layered in by symlinks into the kit's git-ignored slots, so every path the hooks,
 # skills and AGENTS.md use stays the same with or without it.
-[ -n "$NEW_PROFILE" ] && link "$NEW_PROFILE" "$KIT/profiles/$(basename "$NEW_PROFILE")"
+if [ -n "$NEW_PROFILE" ]; then
+  current=$(readlink "$KIT/profiles/$(basename "$NEW_PROFILE")" 2>/dev/null || true)
+  [ -n "$current" ] && [ "$current" != "$NEW_PROFILE" ] \
+    && warn "profile $(basename "$NEW_PROFILE") was $current; $NEW_PROFILE replaces it (profiles are named by their directory)"
+  link "$NEW_PROFILE" "$KIT/profiles/$(basename "$NEW_PROFILE")"
+fi
 # Two profiles with the same name for a skill, overlay or doc: the first, alphabetically, keeps it. Linking both
 # would re-point the link on every run.
 claimed=""
 link_profile_entry() {  # <profile name> <entry> <kit path>
   local owner
-  owner=$(awk -F'\t' -v path="$3" '$1 == path { print $2; exit }' <<<"$claimed")
+  owner=$(lookup="$3" awk -F'\t' '$1 == ENVIRON["lookup"] { print $2; exit }' <<<"$claimed")
   if [ -n "$owner" ]; then warn "${3#"$KIT"/} is in profiles $owner and $1; using $owner's"; return; fi
   claimed+="$3	$1"$'\n'
   link "$2" "$3"

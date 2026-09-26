@@ -98,6 +98,10 @@ check "and a direct MCP server in two places is warned about" \
   'grep -q "warn  MCP server tracker has write rules in profile sample-profile and profile zz-other" <<<"$out" \
    && grep -q "warn  MCP server linear has write rules in the kit and profile zz-other" <<<"$out"'
 rm "$kit/profiles/zz-other"
+mkdir -p "$home/elsewhere/sample-profile"
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor --profile "$home/elsewhere/sample-profile" 2>&1)
+check "a new profile with an installed one's directory name is warned about" \
+  'grep -q "warn  profile sample-profile was /.*/examples/sample-profile; /.*/elsewhere/sample-profile replaces it" <<<"$out"'
 check "sample profile: its private terms are enforced" \
   '[ "$(HOME="$home" python3 -c "import sys; sys.path.insert(0, \"$kit/hooks\"); import private_terms; print(private_terms.found(\"see INTERNAL-42\"))")" = "[${q}INTERNAL-42${q}]" ]'
 check "sample profile: the monthly review mining runs with its list of only comments" \
