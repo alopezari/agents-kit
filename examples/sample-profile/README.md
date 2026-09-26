@@ -3,7 +3,7 @@
 A profile layers everything specific to one kind of work (a job, a client, your open source) on top of the kit, from its own repository. This one is a working example with one of each extension point, for a made-up WordPress plugin called `example-plugin`. Copy it into a new repository, replace the contents, and install it:
 
 ```bash
-cp -R ~/.agents/examples/sample-profile ~/profiles/work && git -C ~/profiles/work init
+mkdir -p ~/profiles && cp -R ~/.agents/examples/sample-profile ~/profiles/work && git -C ~/profiles/work init
 ~/.agents/install.sh --profile ~/profiles/work
 ```
 
@@ -23,4 +23,4 @@ Keep the repository private when it holds anything about your employer or client
 | `PROFILE.md` | Context for the monthly trends scan | read by `monitors/trends.sh` |
 | `statusline` | An executable that adds a segment to the Claude Code status line | run by the kit's status line with the same JSON on stdin |
 
-Everything is optional: leave out what you don't need. Several profiles can be installed at once; their lists add up.
+Everything is optional: leave out what you don't need. Several profiles can be installed at once and their lists add up, but a skill, repo overlay or direct MCP server with the same name in two profiles is taken from only one of them, so keep those names unique.

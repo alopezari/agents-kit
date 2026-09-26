@@ -15,7 +15,9 @@ mkdir -p "$RUN"
 : > "$RUN/comments.jsonl"
 
 # Repositories to mine come from the profiles (profiles/<name>/review-mining/repos.txt, one owner/repo per line).
-cat "$HOME"/.agents/profiles/*/review-mining/repos.txt 2>/dev/null | grep -v '^\s*#' | grep -v '^\s*$' | sort -u | while read -r repo; do
+# No profile, or lists with only comments, is an empty list, not a failure.
+repos=$(cat "$HOME"/.agents/profiles/*/review-mining/repos.txt 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)' | sort -u || true)
+[ -n "$repos" ] && while read -r repo; do
   for page in $(seq 1 $MAX_PAGES); do
     batch=$(gh api "repos/$repo/pulls/comments?sort=created&direction=desc&since=$SINCE&per_page=100&page=$page") || break
     [ "$(jq length <<<"$batch")" = 0 ] && break
@@ -26,7 +28,7 @@ cat "$HOME"/.agents/profiles/*/review-mining/repos.txt 2>/dev/null | grep -v '^\
          path, reviewer: .user.login, body: (.body | .[0:1200]), hunk: (.diff_hunk | .[-400:])}' <<<"$batch" >> "$RUN/comments.jsonl"
     [ "$(jq length <<<"$batch")" -lt 100 ] && break
   done
-done
+done <<<"$repos"
 
 # Flag PRs whose description says an agent wrote them.
 jq -r '"\(.repo) \(.pr)"' "$RUN/comments.jsonl" | sort -u | while read -r repo pr; do

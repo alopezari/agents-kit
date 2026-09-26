@@ -80,6 +80,8 @@ decisions+=" $(mcp mcp__hub__execute '{"service":"wiki","action":"edit-page"}') 
 check "sample profile: the guard blocks tracker and wiki writes, not reads" '[ "$decisions" = "deny allow deny allow" ]'
 check "sample profile: its private terms are enforced" \
   '[ "$(HOME="$home" python3 -c "import sys; sys.path.insert(0, \"$kit/hooks\"); import private_terms; print(private_terms.found(\"see INTERNAL-42\"))")" = "[${q}INTERNAL-42${q}]" ]'
+check "sample profile: the monthly review mining runs with its list of only comments" \
+  'HOME="$home" FETCH_ONLY=1 "$kit/review-mining/run.sh" >/dev/null 2>&1'
 plugin="$home/Projects/example-plugin"; mkdir -p "$plugin"
 git -C "$plugin" init -q -b main && git -C "$plugin" commit -q --allow-empty -m init && git -C "$plugin" switch -q -c change
 line=$(printf '{"workspace":{"current_dir":"%s"}}' "$plugin" | HOME="$home" "$kit/adapters/claude/statusline.sh" 2>/dev/null)
