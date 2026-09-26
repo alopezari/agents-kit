@@ -5,11 +5,12 @@
   review_stamp.py check [--kind review|validate|verify]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names
+  review_stamp.py branch-key                       # the current branch as it appears in those file names
 
 The fingerprint covers every file that differs from the merge-base with the
 default branch, by content, so committing stamped changes keeps it valid and
 any later edit invalidates it. Stamps live in the repository's shared git dir, per branch
-(.git/agents/stamps/<branch>/), never in the tree: they survive removing the worktree they were
+(.git/agents/stamps/<branch key>/), never in the tree: they survive removing the worktree they were
 written in, so the PR can be opened from the main checkout after a staging hand-off. They also
 follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
 """
@@ -67,7 +68,7 @@ def fingerprint():
     return digest.hexdigest()
 
 
-# Files skills/spec/path.sh and bin/reports name <kind>-<repo>-<branch>.md, next to the spec.
+# Files skills/spec/path.sh and bin/reports name <kind>-<repo>-<branch key>.md, next to the spec.
 REPORT_KINDS = ("spec", "verify", "review", "validation", "staging-guide", "follow-pr")
 
 
@@ -77,30 +78,46 @@ def renamed_from(branch):
     return re.findall(r"^Branch: renamed refs/heads/(.+) to refs/heads/", entries, re.M)
 
 
+def branch_key(branch):
+    """The branch in file names. `~` can't appear in a branch name, so `a/b` and `a-b` never share files."""
+    return branch.replace("/", "~")
+
+
 def follow_branch_renames():
-    """Move the spec, reports and stamps kept under an earlier name of this branch to its current name."""
+    """Move the spec, reports and stamps kept under an earlier name or key of this branch to its current key."""
     branch = git("branch", "--show-current")
     if not branch:
         return
     common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
-    repo, new = repo_name(), branch.replace("/", "-")
+    repo, new = repo_name(), branch_key(branch)
     dirs = (os.path.join(common, "agents"), os.path.join(os.environ.get("TMPDIR", "/tmp"), "agents-specs"))
-    for old in (name.replace("/", "-") for name in renamed_from(branch)):
+    earlier = renamed_from(branch)
+    # Keys used to turn / into -: such a key is this branch's, unless a branch with that name really exists.
+    dashed = [name.replace("/", "-") for name in [branch, *earlier] if "/" in name]
+    for old in [branch_key(name) for name in earlier] + dashed:
         moves = [(os.path.join(d, f"{kind}-{repo}-{old}.md"), os.path.join(d, f"{kind}-{repo}-{new}.md"))
                  for d in dirs for kind in REPORT_KINDS]
         moves += [(os.path.join(d, f"browser-ab-spec-{repo}-{old}.json"), os.path.join(d, f"browser-ab-spec-{repo}-{new}.json"))
                   for d in dirs]
         moves.append((os.path.join(common, "agents", "stamps", old), os.path.join(common, "agents", "stamps", new)))
+        moves.append((os.path.join(common, "agents", "phase", f"{old}.json"), os.path.join(common, "agents", "phase", f"{new}.json")))
         for src, dst in moves:
-            if os.path.exists(src) and not os.path.exists(dst):
-                os.rename(src, dst)
-                print(f"moved {os.path.basename(src)} to {os.path.basename(dst)} (branch renamed)", file=sys.stderr)
+            if os.path.exists(src) and not os.path.exists(dst) and not (old in dashed and branch_exists(old)):
+                try:
+                    os.rename(src, dst)
+                    print(f"moved {os.path.basename(src)} to {os.path.basename(dst)}", file=sys.stderr)
+                except OSError as error:  # a sandbox with a read-only .git: the caller falls back to $TMPDIR
+                    print(f"could not move {src} to {dst}: {error}", file=sys.stderr)
+
+
+def branch_exists(name):
+    return subprocess.run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{name}"]).returncode == 0
 
 
 def stamp_path(kind):
     name = "self-review.stamp" if kind == "review" else f"{kind}.stamp"
     common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
-    branch = git("branch", "--show-current").replace("/", "-") or "detached"
+    branch = branch_key(git("branch", "--show-current")) or "detached"
     directory = os.path.join(common, "agents", "stamps", branch)
     if not os.path.isdir(directory):
         follow_branch_renames()
@@ -120,6 +137,9 @@ def main():
     args = sys.argv[1:]
     kind = args[args.index("--kind") + 1] if "--kind" in args else "review"
     command = args[0] if args else "check"
+    if command == "branch-key":
+        print(branch_key(git("branch", "--show-current")))
+        return 0
     if command == "follow-renames":
         follow_branch_renames()
         return 0

@@ -20,7 +20,7 @@ def run(cmd, cwd, env):
 
 def setup(base):
     home = os.path.join(base, "home")
-    for rel in ("bin/browse", "bin/repo-name", "skills/spec/path.sh"):
+    for rel in ("bin/browse", "bin/repo-name", "skills/spec/path.sh", "hooks/review_stamp.py"):
         os.makedirs(os.path.join(home, ".agents", os.path.dirname(rel)), exist_ok=True)
         os.symlink(os.path.join(KIT, rel), os.path.join(home, ".agents", rel))
     tools = os.path.join(base, "tools")
