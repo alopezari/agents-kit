@@ -31,8 +31,8 @@ phase=$(cd "${dir:-.}" 2>/dev/null && "$HOME/.agents/bin/phase" 2>/dev/null)
 if [ -n "$phase" ]; then
   # Name the branch: a checkout left on another task's branch shows that task's flow.
   branch=$(git -C "${dir:-.}" branch --show-current 2>/dev/null)
-  label=$(grep -oE '[A-Za-z]+-[0-9]+' <<<"$branch" | head -1)
-  if [ -z "$label" ]; then label=${branch##*/}; [ ${#label} -gt 20 ] && label="${label:0:19}…"; fi
+  label=${branch##*/}
+  [ ${#label} -gt 20 ] && label="${label:0:19}…"
   ours="${ours:+$ours · }flow $label: $phase"
 fi
 for extra in "$HOME"/.agents/profiles/*/statusline; do
