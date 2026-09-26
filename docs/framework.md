@@ -349,6 +349,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | Path | Purpose |
 |---|---|
 | `.githooks/` | Keeps this reference in sync on every commit. |
+| `.github/` | CI: installs the kit on a macOS runner and runs `tests/run.sh` on every pull request. |
 | `AGENTS.md` | The instructions every harness loads (linked as CLAUDE.md / AGENTS.md). |
 | `LICENSE` | MIT. |
 | `README.md` | Install and first steps. |
