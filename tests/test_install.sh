@@ -78,6 +78,26 @@ mcp() {  # mcp <tool> <input json>: the MCP guard's decision; it prints nothing 
 decisions="$(mcp mcp__tracker__create_issue '{}') $(mcp mcp__tracker__get_issue '{}')"
 decisions+=" $(mcp mcp__hub__execute '{"service":"wiki","action":"edit-page"}') $(mcp mcp__hub__execute '{"service":"wiki","action":"read-page"}')"
 check "sample profile: the guard blocks tracker and wiki writes, not reads" '[ "$decisions" = "deny allow deny allow" ]'
+# A second profile reusing the sample's names, and one of the kit's own: the first profile keeps each name, the
+# kit's own is never replaced, and nothing flips between runs.
+other="$home/zz-other"
+mkdir -p "$other/skills/release-notes" "$other/skills/spec" "$other/repos/example-plugin" "$other/research"
+echo "# other" > "$other/research/example-study.md"
+echo '{"direct": {"tracker": "^x", "linear": "^y"}}' > "$other/mcp-writes.json"
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes --profile "$other" 2>&1); status=$?
+again=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes 2>&1)
+check "two profiles with the same names: warned, the first keeps them, the kit's own stays" \
+  '[ $status = 0 ] && grep -q "warn  skills/release-notes is in profiles sample-profile and zz-other; using sample-profile.s" <<<"$out" \
+   && grep -q "warn  repos/example-plugin is in profiles sample-profile and zz-other" <<<"$out" \
+   && grep -q "warn  research/example-study.md is in profiles sample-profile and zz-other" <<<"$out" \
+   && grep -q "warn  skills/spec in profile zz-other has the name of the kit.s own; skipped" <<<"$out" \
+   && [ "$(readlink "$kit/skills/release-notes")" = "$kit/profiles/sample-profile/skills/release-notes" ] \
+   && [ "$(readlink "$kit/research/example-study.md")" = "$kit/profiles/sample-profile/research/example-study.md" ] \
+   && [ -d "$kit/skills/spec" ] && [ ! -L "$kit/skills/spec" ] && ! grep -q "  fix " <<<"$again"'
+check "and a direct MCP server in two places is warned about" \
+  'grep -q "warn  MCP server tracker has write rules in profile sample-profile and profile zz-other" <<<"$out" \
+   && grep -q "warn  MCP server linear has write rules in the kit and profile zz-other" <<<"$out"'
+rm "$kit/profiles/zz-other"
 check "sample profile: its private terms are enforced" \
   '[ "$(HOME="$home" python3 -c "import sys; sys.path.insert(0, \"$kit/hooks\"); import private_terms; print(private_terms.found(\"see INTERNAL-42\"))")" = "[${q}INTERNAL-42${q}]" ]'
 check "sample profile: the monthly review mining runs with its list of only comments" \
