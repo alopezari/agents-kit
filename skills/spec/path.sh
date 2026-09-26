@@ -6,12 +6,15 @@
 set -euo pipefail
 common="$(git rev-parse --path-format=absolute --git-common-dir)"
 repo="$("$HOME/.agents/bin/repo-name")"
-name="spec-$repo-$(git branch --show-current | tr '/' '-').md"
+name="spec-$repo-$(python3 "$HOME/.agents/hooks/review_stamp.py" branch-key).md"
 in_git="$common/agents/$name"
 in_tmp="${TMPDIR:-/tmp}/agents-specs/$name"
-# Where specs lived before they moved to the shared git dir.
-legacy="$(git rev-parse --absolute-git-dir)/agents/spec-$(basename "$(git rev-parse --show-toplevel)")-$(git branch --show-current | tr '/' '-').md"
-for candidate in "$in_git" "$in_tmp" "$legacy"; do
+# Where a linked worktree kept specs before they moved to the shared git dir. In the main checkout that is the
+# shared dir itself, under the old dash key, which follow-renames moves instead.
+candidates=("$in_git" "$in_tmp")
+git_dir="$(git rev-parse --absolute-git-dir)"
+[ "$git_dir" != "$common" ] && candidates+=("$git_dir/agents/spec-$(basename "$(git rev-parse --show-toplevel)")-$(git branch --show-current | tr '/' '-').md")
+for candidate in "${candidates[@]}"; do
   [ -f "$candidate" ] && { echo "$candidate"; exit 0; }
 done
 # A spec written before `git branch -m` sits under the old name; move it (and its reports) across.

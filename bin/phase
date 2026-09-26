@@ -34,7 +34,7 @@ def cache_files():
     if len(out) != 2 or out[1] == "HEAD":
         return None
     directory = os.path.join(out[0], "agents", "phase")
-    name = out[1].replace("/", "-")
+    name = review_stamp.branch_key(out[1])
     return os.path.join(directory, name + ".json"), os.path.join(directory, name + ".lock")
 
 

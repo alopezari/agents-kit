@@ -89,7 +89,7 @@ def walks_the_flow(base):
     assert phase(repo, env) == "PR open"
     env["PR_STATE"] = "MERGED"
     assert phase(repo, env) == "PR open", "the PR state is cached for a few minutes, not asked on every refresh"
-    os.remove(os.path.join(repo, ".git", "agents", "phase", "feature-cart.json"))
+    os.remove(os.path.join(repo, ".git", "agents", "phase", "feature~cart.json"))
     assert phase(repo, env) == "ship"
 
 
@@ -151,12 +151,44 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     sh(repo, "git", "branch", "-m", "shop-1/draft")
     sh(repo, "git", "branch", "-m", "shop-1/final")
     moved = sh(repo, SPEC_PATH)
-    assert os.path.basename(moved) == "spec-shop-shop-1-final.md", moved
+    assert os.path.basename(moved) == "spec-shop-shop-1~final.md", moved
     assert open(moved).read() == "# SHOP-1: the spec\n" and not os.path.exists(spec)
-    assert os.path.exists(guide.replace("session-wary-falcon", "shop-1-final")), "reports move with the spec"
+    assert os.path.exists(guide.replace("session~wary-falcon", "shop-1~final")), "reports move with the spec"
     check = subprocess.run(["python3", STAMP, "check", "--kind", "verify"], cwd=repo)
     assert check.returncode == 0, "the verify stamp follows the rename"
     assert phase(repo) == "self-review"
+
+
+def slash_and_dash_branches_keep_their_own_files(base):
+    # Both used to be keyed "feature-x": the second branch saw the first one's spec and stamps.
+    repo = new_repo(base)
+    sh(repo, "git", "checkout", "-q", "-b", "feature/x")
+    open(sh(repo, SPEC_PATH), "w").write("# slash\n")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    sh(repo, "python3", STAMP, "write", "--kind", "review")
+    sh(repo, "git", "stash", "-q")
+    sh(repo, "git", "checkout", "-q", "-b", "feature-x", "trunk")
+    sh(repo, "git", "stash", "pop", "-q")
+    assert not os.path.exists(sh(repo, SPEC_PATH)), "the dash branch has no spec of its own yet"
+    check = subprocess.run(["python3", STAMP, "check"], cwd=repo, capture_output=True)
+    assert check.returncode == 1, "the slash branch's review stamp doesn't cover the dash branch"
+
+
+def files_under_the_old_dash_key_move_unless_that_branch_exists(base):
+    repo = new_repo(base)
+    agents = os.path.join(repo, ".git", "agents")
+    os.makedirs(os.path.join(agents, "stamps", "feature-y"))
+    open(os.path.join(agents, "spec-shop-feature-y.md"), "w").write("# old key\n")
+    open(os.path.join(agents, "review-shop-feature-y.md"), "w").write("# review\n")
+    sh(repo, "git", "checkout", "-q", "-b", "feature/y")
+    assert open(sh(repo, SPEC_PATH)).read() == "# old key\n", "a spec saved under the dash key moves to the new key"
+    assert os.path.exists(os.path.join(agents, "review-shop-feature~y.md")) and os.path.isdir(os.path.join(agents, "stamps", "feature~y"))
+
+    open(os.path.join(agents, "spec-shop-feature-z.md"), "w").write("# the dash branch's\n")
+    sh(repo, "git", "branch", "feature-z", "trunk")
+    sh(repo, "git", "checkout", "-q", "-b", "feature/z")
+    assert not os.path.exists(sh(repo, SPEC_PATH)), "a real feature-z branch keeps its files"
+    assert os.path.exists(os.path.join(agents, "spec-shop-feature-z.md"))
 
 
 def fast_path_serves_cache_and_refreshes(base):
@@ -166,7 +198,7 @@ def fast_path_serves_cache_and_refreshes(base):
     sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
     sh(repo, "git", "checkout", "-q", "-b", "feature/x")
     assert phase(repo, refresh=False) == "", "first call has no cache yet"
-    cache = os.path.join(repo, ".git", "agents", "phase", "feature-x.json")
+    cache = os.path.join(repo, ".git", "agents", "phase", "feature~x.json")
     for _ in range(50):
         if os.path.exists(cache) and not os.path.exists(cache.replace(".json", ".lock")):
             break
@@ -179,6 +211,7 @@ def fast_path_serves_cache_and_refreshes(base):
 RESULTS = []
 for test in (status_line_names_the_branch, walks_the_flow, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
              red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
+             slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,
              fast_path_serves_cache_and_refreshes):
     base = tempfile.mkdtemp(prefix="agents-test-phase-")
     try:
