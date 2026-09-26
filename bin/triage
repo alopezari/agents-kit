@@ -42,6 +42,9 @@ HIGH_RISK = {
     "caching": r"set_transient|wp_cache_set|wp_cache_add|cache_key",
     "scheduled jobs": r"as_schedule|as_enqueue|wp_schedule_event|cron",
 }
+# A git checkout, not a shop's: lines with version-control words don't count as a payments signal.
+GIT_CHECKOUT = re.compile(r"\bgit\b|actions/checkout|worktree|\bbranch|\b(pr|primary|known|remember)_checkouts?\b"
+                          r"|\b(main|this|a|the|every|another|each)\s+checkouts?\b(?!\s+(page|form|block|field|flow|process|button|url|step))", re.I)
 PROPERTY_FN = re.compile(r"function\s+\w*(parse|format|calculate|compute|compare|convert|normali[sz]e|version|date|week"
                          r"|price|round|slug|sanitize|validate)\w*\s*\(", re.I)
 BUDGET = {"low": "< 5 min", "standard": "<= 20 min", "high": "<= 45 min"}
@@ -117,7 +120,7 @@ def triage(rng=None):
         rx = re.compile(pattern, re.I)
         found = []
         for p, l in lines:
-            m = rx.search(l)
+            m = next((m for m in rx.finditer(l) if not (m.group(0).lower() == "checkout" and GIT_CHECKOUT.search(l))), None)
             if m and len(found) < limit:
                 found.append(f"{p}: `{m.group(0)}`")
         return found

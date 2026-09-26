@@ -49,6 +49,7 @@ section "triage"
 if ~/.agents/bin/triage --json --range HEAD~1..HEAD 2>/dev/null | jq -e '.tier and .lenses.correctness' >/dev/null; then
   echo "ok   triage produces a tier and lenses"
 else echo "FAIL triage"; fail=1; fi
+python3 test_triage.py || fail=1
 
 section "framework reference"
 ~/.agents/bin/docs --check || fail=1
