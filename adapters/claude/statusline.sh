@@ -28,7 +28,13 @@ ours=$(jq -r --argjson limits "${limits:-null}" --arg stale "$limits_stale" --ar
   ] | join(" · ")' <<<"$input" 2>/dev/null)
 dir=$(jq -r '.workspace.current_dir // .cwd // empty' <<<"$input" 2>/dev/null)
 phase=$(cd "${dir:-.}" 2>/dev/null && "$HOME/.agents/bin/phase" 2>/dev/null)
-[ -n "$phase" ] && ours="${ours:+$ours · }flow: $phase"
+if [ -n "$phase" ]; then
+  # Name the branch: a checkout left on another task's branch shows that task's flow.
+  branch=$(git -C "${dir:-.}" branch --show-current 2>/dev/null)
+  label=${branch##*/}
+  [ ${#label} -gt 20 ] && label="${label:0:19}…"
+  ours="${ours:+$ours · }flow $label: $phase"
+fi
 for extra in "$HOME"/.agents/profiles/*/statusline; do
   [ -x "$extra" ] || continue
   segment=$(printf '%s' "$input" | "$extra" 2>/dev/null)
