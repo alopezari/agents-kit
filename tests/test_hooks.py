@@ -119,6 +119,9 @@ def pr_gate_review_and_validation(base):
     assert guard(f"cd {repo} && GH_HOST=x gh pr create --fill", repo) == "deny"
     assert guard("""python3 -c 'print("gh pr create")'""", repo) == "allow", "phrase inside a string is not a PR"
     assert guard('grep -n "gh pr create" hooks/guard_bash.py', repo) == "allow"
+    assert guard('grep -n "guard_bash\\|gh pr create" bin/docs', repo) == "allow", "a | inside a pattern starts no command"
+    assert guard("cat > notes.md <<'EOF'\nRun gh pr create\n| gh pr create --fill\nEOF", repo) == "allow", "heredoc text"
+    assert guard("cat > notes.md <<'EOF'\ntext\nEOF\ngh pr create --fill", repo) == "deny", "a real one after a heredoc"
     subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "review"], cwd=repo, capture_output=True)
     assert guard("gh pr create --fill", repo) == "deny", "behavior change needs validation too"
     subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo, capture_output=True)

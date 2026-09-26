@@ -97,10 +97,48 @@ def pr_checkout(command, cwd):
     return cwd
 
 
+def shell_code(command):
+    """The command with quoted text and heredoc bodies blanked out, same length, so a match in it is shell code:
+    `grep "x|gh pr create"` or a heredoc line naming a command runs nothing."""
+    out, quote, heredocs, i = list(command), None, [], 0
+    while i < len(command):
+        c = command[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < len(command):
+                out[i] = out[i + 1] = " "
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            else:
+                out[i] = " " if c != "\n" else c
+        elif c in "'\"":
+            quote = c
+        elif command.startswith("<<", i) and not command.startswith("<<<", i):
+            m = re.match(r"<<(-?)\s*(['\"]?)(\w+)\2", command[i:])
+            if m:
+                heredocs.append(m.group(3))
+                i += m.end()
+                continue
+        elif c == "\n" and heredocs:
+            end = i + 1
+            while heredocs and end < len(command):
+                line_end = command.find("\n", end)
+                line_end = len(command) if line_end < 0 else line_end
+                if command[end:line_end].strip() == heredocs[0]:
+                    heredocs.pop(0)
+                else:
+                    out[end:line_end] = " " * (line_end - end)
+                end = line_end + 1
+            i = end
+            continue
+        i += 1
+    return "".join(out)
+
+
 def unreviewed_pr(command, cwd):
     """Opening a PR requires a self-review stamp for the exact current change."""
-    # Only in command position: the phrase inside a quoted string, grep pattern or heredoc is not a PR.
-    if not re.search(r"(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*gh\s+pr\s+create\b", command):
+    if not re.search(r"(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*gh\s+pr\s+create\b", shell_code(command)):
         return None
     cwd = pr_checkout(command, cwd)
     stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
@@ -154,7 +192,7 @@ def pr_command_args(command, start):
 
 def private_terms_in_kit_pr(command, cwd):
     """The kit is public: a pull request to it must not carry a profile's private terms."""
-    for match in re.finditer(r"(?:^|[;&|(\n])\s*((?:\w+=\S*\s+)*)gh\s+pr\s+(?:create|edit)\b", command):
+    for match in re.finditer(r"(?:^|[;&|(\n])\s*((?:\w+=\S*\s+)*)gh\s+pr\s+(?:create|edit)\b", shell_code(command)):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
         runs_in = cwd
@@ -162,7 +200,7 @@ def private_terms_in_kit_pr(command, cwd):
             runs_in = os.path.normpath(os.path.join(runs_in, os.path.expanduser(target.strip("\"'"))))
         exported = dict(re.findall(r"(?:^|[;&|\n]\s*)(?:export\s+)?(GH_REPO|GH_HOST)=([^\s;&|]+)(?=\s*(?:[;&|\n]|$))",
                                    before))
-        exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=(\S+)", match.group(1)))
+        exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=(\S+)", command[match.start(1):match.end(1)]))
         try:
             args = pr_command_args(command, match.end(1))
         except ValueError:
