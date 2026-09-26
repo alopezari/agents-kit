@@ -98,47 +98,99 @@ def pr_checkout(command, cwd):
 
 
 def shell_code(command):
-    """The command with quoted text and heredoc bodies blanked out, same length, so a match in it is shell code:
-    `grep "x|gh pr create"` or a heredoc line naming a command runs nothing."""
-    out, quote, heredocs, i = list(command), None, [], 0
-    while i < len(command):
+    """The command with text that can't run blanked out (same length): single-quoted strings, comments, and the
+    literal parts of double-quoted strings and heredoc bodies. `$(...)` and backticks stay, since the shell runs them.
+    When unsure, it leaves text in: a false match only blocks, a false blank would let a command through."""
+    out, n, i, heredocs = list(command), len(command), 0, []
+
+    def blank(start, end):
+        for k in range(start, end):
+            if out[k] != "\n":
+                out[k] = " "
+
+    def blank_literal(start, end):
+        """Blank start..end except command substitutions, which run even inside double quotes and heredocs."""
+        k = start
+        while k < end:
+            if command.startswith("$(", k) or command[k] == "`":
+                close = substitution_end(k, end)
+                k = close
+                continue
+            if command[k] == "\\" and k + 1 < end:
+                blank(k, k + 2)
+                k += 2
+                continue
+            blank(k, k + 1)
+            k += 1
+
+    def substitution_end(k, limit):
+        if command[k] == "`":
+            close = command.find("`", k + 1, limit)
+            return limit if close < 0 else close + 1
+        depth, k = 0, k + 1
+        while k < limit:
+            depth += command[k] == "("
+            depth -= command[k] == ")"
+            k += 1
+            if depth == 0:
+                return k
+        return limit
+
+    while i < n:
         c = command[i]
-        if quote:
-            if c == "\\" and quote == '"' and i + 1 < len(command):
-                out[i] = out[i + 1] = " "
-                i += 2
-                continue
-            if c == quote:
-                quote = None
-            else:
-                out[i] = " " if c != "\n" else c
-        elif c in "'\"":
-            quote = c
-        elif command.startswith("<<", i) and not command.startswith("<<<", i):
-            m = re.match(r"<<(-?)\s*(['\"]?)(\w+)\2", command[i:])
-            if m:
-                heredocs.append(m.group(3))
-                i += m.end()
-                continue
-        elif c == "\n" and heredocs:
-            end = i + 1
-            while heredocs and end < len(command):
-                line_end = command.find("\n", end)
-                line_end = len(command) if line_end < 0 else line_end
-                if command[end:line_end].strip() == heredocs[0]:
-                    heredocs.pop(0)
-                else:
-                    out[end:line_end] = " " * (line_end - end)
-                end = line_end + 1
+        if c == "\\":
+            i += 2
+        elif c == "'":
+            close = command.find("'", i + 1)
+            close = n if close < 0 else close
+            blank(i + 1, close)
+            i = close + 1
+        elif c == '"':
+            k = i + 1
+            while k < n and command[k] != '"':
+                if command[k] == "\\":
+                    k += 1
+                elif command.startswith("$(", k) or command[k] == "`":
+                    k = substitution_end(k, n) - 1
+                k += 1
+            blank_literal(i + 1, min(k, n))
+            i = k + 1
+        elif c == "#" and (i == 0 or command[i - 1] in " \t\n;&|("):
+            end = command.find("\n", i)
+            end = n if end < 0 else end
+            blank(i, end)
             i = end
-            continue
-        i += 1
+        elif command.startswith("((", i):  # arithmetic, where << is a shift
+            close = command.find("))", i + 2)
+            i = n if close < 0 else close + 2
+        elif command.startswith("<<", i) and not command.startswith("<<<", i) and (i == 0 or not command[i - 1].isdigit()):
+            m = re.match(r"<<(-?)[ \t]*(['\"]?)([^\s'\"<>;&|()]+)\2", command[i:])
+            if m:
+                heredocs.append((m.group(3), bool(m.group(1)), bool(m.group(2))))
+            i += m.end() if m else 2
+        elif c == "\n" and heredocs:
+            k = i + 1
+            while heredocs and k < n:
+                end = command.find("\n", k)
+                end = n if end < 0 else end
+                word, tabs, quoted = heredocs[0]
+                line = command[k:end].lstrip("\t") if tabs else command[k:end]
+                if line == word:
+                    heredocs.pop(0)
+                elif quoted:
+                    blank(k, end)
+                else:
+                    blank_literal(k, end)
+                k = end + 1
+            i = k
+        else:
+            i += 1
     return "".join(out)
 
 
 def unreviewed_pr(command, cwd):
     """Opening a PR requires a self-review stamp for the exact current change."""
-    if not re.search(r"(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*gh\s+pr\s+create\b", shell_code(command)):
+    if not re.search(r"(?:^|[;&|(\n`])\s*(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*gh\s+pr\s+create\b", shell_code(command)):
         return None
     cwd = pr_checkout(command, cwd)
     stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
@@ -192,7 +244,7 @@ def pr_command_args(command, start):
 
 def private_terms_in_kit_pr(command, cwd):
     """The kit is public: a pull request to it must not carry a profile's private terms."""
-    for match in re.finditer(r"(?:^|[;&|(\n])\s*((?:\w+=\S*\s+)*)gh\s+pr\s+(?:create|edit)\b", shell_code(command)):
+    for match in re.finditer(r"(?:^|[;&|(\n`])\s*((?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*)gh\s+pr\s+(?:create|edit)\b", shell_code(command)):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
         runs_in = cwd

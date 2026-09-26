@@ -122,6 +122,15 @@ def pr_gate_review_and_validation(base):
     assert guard('grep -n "guard_bash\\|gh pr create" bin/docs', repo) == "allow", "a | inside a pattern starts no command"
     assert guard("cat > notes.md <<'EOF'\nRun gh pr create\n| gh pr create --fill\nEOF", repo) == "allow", "heredoc text"
     assert guard("cat > notes.md <<'EOF'\ntext\nEOF\ngh pr create --fill", repo) == "deny", "a real one after a heredoc"
+    runs = ['GH_HOST="x" gh pr create --fill', 'echo "$(gh pr create --fill)"', "cat <<EOF\n$(gh pr create --fill)\nEOF",
+            "# <<EOF\ngh pr create --fill\nEOF", "echo $((1<<2)); gh pr create --fill", 'printf \\" | gh pr create --fill',
+            "echo `gh pr create --fill`"]
+    for command in runs:
+        assert guard(command, repo) == "deny", f"the shell runs gh here: {command!r}"
+    inert = ["cat <<EOF\n EOF\ngh pr create --fill\nEOF", "cat <<'END-MARK'\ngh pr create --fill\nEND-MARK",
+             "echo 'a | gh pr create'", "cat <<-EOF\n\tgh pr create\n\tEOF"]
+    for command in inert:
+        assert guard(command, repo) == "allow", f"nothing runs gh here: {command!r}"
     subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "review"], cwd=repo, capture_output=True)
     assert guard("gh pr create --fill", repo) == "deny", "behavior change needs validation too"
     subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo, capture_output=True)
