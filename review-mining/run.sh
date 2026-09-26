@@ -118,14 +118,14 @@ mkdir -p "$(dirname "$PROPOSAL")"
 # The comments are other people's text, so the model gets no network and no shell: even an allowed command like
 # semgrep can fetch rules or rewrite files. --restricted keeps file tools inside the working directories, and
 # dontAsk refuses anything the rules don't allow. It reads the kit; it writes only this run and the proposal.
-previous=$(cksum < "$PROPOSAL" 2>/dev/null || true)
+previous=$(cksum "$PROPOSAL" 2>/dev/null || true)
 claude -p "$(cat "$RUN/prompt.md")" --safe-mode --restricted --strict-mcp-config --no-session-persistence --model opus \
   --add-dir "$HOME/.agents" --tools "Read,Grep,Glob,Write,Edit,Agent" --permission-mode dontAsk \
   --allowedTools "Edit(/$RUN/**)" "Edit(/$PROPOSAL)" \
   > "$RUN/claude.log" 2>&1
 
 # A proposal left by an earlier run this month is not this run's success.
-if [ -s "$PROPOSAL" ] && [ "$(cksum < "$PROPOSAL")" != "$previous" ]; then
+if [ -s "$PROPOSAL" ] && [ "$(cksum "$PROPOSAL")" != "$previous" ]; then
   date -u +%Y-%m-%dT%H:%M:%SZ > "$SINCE_FILE"
   osascript -e "display notification \"Proposal ready: ~/.agents/research/proposals/$MONTH.md\" with title \"Agent review mining\"" || true
 else
