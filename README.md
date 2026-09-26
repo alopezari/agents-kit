@@ -31,6 +31,8 @@ The kit must live at `~/.agents`. The installer:
 
 It also adds the kit's baseline harness settings (no fast mode, effort defaults) wherever a key is missing, without overwriting one you set. Files it replaces are backed up under `backups/`.
 
+To remove it, `~/.agents/uninstall.sh` lists every link, hook, status line and scheduled job that still points at the kit, asks, and removes them (`--yes` skips the question). Your own hooks and settings stay, and so do the baseline settings and the programs installed through Homebrew. It backs up the settings files it edits to `~/.agents-uninstall-backups/`, and leaves `~/.agents` itself for you to delete.
+
 What it doesn't do, on a new machine:
 
 1. Install or log in to the harnesses (`claude`, `codex`, `pi`) and `gh`. Install them before running `install.sh`, which only wires the harnesses it finds.

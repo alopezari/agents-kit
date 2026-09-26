@@ -58,4 +58,61 @@ doctor=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 
 if echo "$doctor" | grep -q "  warn  oldtool 1.9.3 is older than 1.10"; then
   echo "ok   --doctor reports a program older than its minimum"
 else echo "FAIL --doctor did not flag oldtool 1.9.3 < 1.10"; fail=1; fi
+
+# uninstall.sh on the same HOME, with a fake launchctl so the real jobs (labels are per user) stay untouched.
+# `list` reports a job loaded only when its label is in $home/stuck, standing in for a bootout that failed.
+printf '#!/bin/sh\necho "$@" >> "%s/launchctl.log"\n[ "$1" = list ] && { grep -qx "$2" "%s/stuck" 2>/dev/null; exit; }\nexit 0\n' \
+  "$home" "$home" > "$bin/launchctl"
+chmod +x "$bin/launchctl"
+if [ "$(command -v launchctl)" != "$bin/launchctl" ]; then echo "FAIL the fake launchctl isn't first in PATH"; exit 1; fi
+kit="$home/.agents"
+unset AGENTS_SKIP_LAUNCHD  # CI sets it; the fake launchctl above is what keeps the real jobs safe here
+mkdir -p "$home/.claude" "$home/.codex"  # wired by their directories when the harnesses aren't installed (CI)
+wired=$(HOME="$home" "$kit/install.sh" --yes 2>&1)
+S="$home/.claude/settings.json"
+jq '.hooks.Stop += [{matcher: "", hooks: [{type: "command", command: "my-own-hook"}]}] | .hooks.Notification = [{matcher: "x", hooks: []}]' \
+  "$S" > "$S.tmp" && mv "$S.tmp" "$S"
+mkdir -p "$home/.claude/skills/mine" "$home/elsewhere"
+ln -s "$home/elsewhere" "$home/.claude/skills/linked-elsewhere"
+ln -s "$kit/../elsewhere" "$home/.claude/skills/through-the-kit"
+kit_links() { find "$home" -path "$kit" -prune -o -type l -lname "$kit/*" ! -lname "*/../*" -print | wc -l | tr -d ' '; }
+jobs=$(ls "$home/Library/LaunchAgents" 2>/dev/null | wc -l | tr -d ' ')
+before=$(kit_links)
+if [ "$before" -gt 0 ] && [ "$jobs" -gt 0 ]; then echo "ok   a full install to remove: $before links, $jobs scheduled jobs"
+else echo "FAIL the install to remove has $before links and $jobs jobs:"; echo "$wired" | tail -5; fail=1; fi
+out=$(HOME="$home" "$kit/uninstall.sh" </dev/null 2>&1)
+if [ "$(kit_links)" = "$before" ] && echo "$out" | grep -q "Nothing removed: run uninstall.sh in a terminal"; then
+  echo "ok   without a terminal or --yes, uninstall.sh lists what it would remove and changes nothing"
+else echo "FAIL uninstall.sh without --yes:"; echo "$out" | tail -3; fail=1; fi
+# script(1) gives it a terminal, so it asks; answering no must change nothing. Input stays open a while:
+# script kills the command when its input ends, which would pass this test whatever the answer did.
+out=$( (printf 'n\n'; sleep 10) | HOME="$home" script -q /dev/null "$kit/uninstall.sh" 2>&1)
+if [ "$(kit_links)" = "$before" ] && echo "$out" | grep -q "Remove these .* items? \[y/N\]"; then
+  echo "ok   in a terminal, uninstall.sh asks, and answering no changes nothing"
+else echo "FAIL uninstall.sh answered no:"; echo "$out" | tail -3; fail=1; fi
+: > "$home/launchctl.log"
+agents=$(ls "$home/Library/LaunchAgents")
+mine=$(echo "$agents" | sed -n 1p); stuck=$(echo "$agents" | sed -n 2p)
+echo '<plist><string>/usr/bin/true</string></plist>' > "$home/Library/LaunchAgents/$mine"  # the user's own job now
+basename "$stuck" .plist > "$home/stuck"
+out=$(HOME="$home" "$kit/uninstall.sh" --yes 2>&1)
+check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
+check "uninstall.sh --yes removes every link into the kit" '[ "$(kit_links)" = 0 ]'
+check "and the kit's hooks and status line from Claude Code and Codex" \
+  '! grep -qF "/.agents/" "$S" "$home/.codex/hooks.json"'
+check "keeping the user's own hook, skill and settings" \
+  'jq -e ".hooks.Stop[0].hooks[0].command == \"my-own-hook\" and .hooks.Notification[0].matcher == \"x\" and .effortLevel == \"medium\"" "$S" >/dev/null && [ -d "$home/.claude/skills/mine" ] && [ -L "$home/.claude/skills/linked-elsewhere" ] \
+  && [ -L "$home/.claude/skills/through-the-kit" ]'
+check "unloading and removing the kit's scheduled jobs, keeping one still loaded and the user's own" \
+  '[ "$jobs" -gt 2 ] && [ "$(ls "$home/Library/LaunchAgents" | sort | tr "\n" " ")" = "$(printf "%s\n" "$mine" "$stuck" | sort | tr "\n" " ")" ] \
+   && [ "$(grep -c "^bootout" "$home/launchctl.log")" = $((jobs - 1)) ] && echo "$out" | grep -q "is still loaded"'
+backups=$(ls -d "$home"/.agents-uninstall-backups/*/ | head -1)
+check "with the settings files, as they were before, backed up outside the kit" \
+  'grep -qF "/.agents/hooks/" "${backups}claude-settings.json" && grep -qF "/.agents/hooks/" "${backups}codex-hooks.json"'
+check "and printing no errors" '! echo "$out" | grep -qiE "unbound|error|No such file"'
+: > "$home/stuck"
+check "a second run removes the job that was still loaded, then finds nothing" \
+  'HOME="$home" "$kit/uninstall.sh" --yes >/dev/null 2>&1 && HOME="$home" "$kit/uninstall.sh" --yes 2>&1 | grep -q "Nothing of the kit is wired in"'
+HOME="$home" "$kit/install.sh" --yes >/dev/null 2>&1
+check "install.sh wires it all back in" '[ "$(kit_links)" = "$before" ]'
 exit $fail

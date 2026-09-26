@@ -321,6 +321,8 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 ./install.sh --doctor         report only, change nothing
 ./install.sh --profile <dir>  add a profile (a private repo with repo overlays, skills, research, rules)
 ./install.sh --yes            install missing requirements without asking
+./uninstall.sh                list what it would remove, then ask
+./uninstall.sh --yes          remove without asking
 ```
 
 ### Requirements
@@ -370,4 +372,5 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `skills/` | Skills linked into every harness; third-party ones are listed in `skills.external`. |
 | `tests/` | The regression suite: `tests/run.sh`. |
 | `tools/` | Node code and dependencies for the tools in `bin/` and the diagram check in `tests/run.sh`. |
+| `uninstall.sh` | Removes what install.sh wired in that still points at the kit; your own hooks and settings stay. |
 | `usage/` | The agent-session extractor that feeds the monthly analysis. |
