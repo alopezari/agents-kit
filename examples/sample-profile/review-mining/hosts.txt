@@ -1,0 +1,2 @@
+# GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes job reads, e.g.:
+# github.example.com

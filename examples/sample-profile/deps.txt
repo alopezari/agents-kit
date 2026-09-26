@@ -1,0 +1,2 @@
+# tier program[>=minimum] how purpose; a program the core also lists takes the stricter tier.
+optional composer brew:composer example-plugin's dependencies and test suite

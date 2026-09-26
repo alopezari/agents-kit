@@ -1,0 +1,6 @@
+rules:
+  - id: logger-not-error-log
+    languages: [php]
+    severity: ERROR
+    message: Log through Example_Plugin\Logger; production silences the PHP error log, so error_log() is lost.
+    pattern: error_log(...)

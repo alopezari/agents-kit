@@ -19,9 +19,10 @@ try {
 const piPackage = join(dirname(piCli), "..", "..");
 const YAML = createRequire(join(piPackage, "package.json"))("yaml");
 
-const skillsDir = join(homedir(), ".agents", "skills");
+// The sample profile's skills too: people copy them as the model for their own.
+const skillsDirs = [join(homedir(), ".agents", "skills"), join(homedir(), ".agents", "examples", "sample-profile", "skills")];
 let failed = 0;
-for (const skill of readdirSync(skillsDir).sort()) {
+for (const [skillsDir, skill] of skillsDirs.flatMap((dir) => readdirSync(dir).sort().map((name) => [dir, name]))) {
   const file = join(skillsDir, skill, "SKILL.md");
   if (!existsSync(file)) continue;
   const match = readFileSync(file, "utf8").match(/^---\n([\s\S]*?)\n---/);

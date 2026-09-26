@@ -1,0 +1,15 @@
+{
+  "direct": {
+    "tracker": "^(create|update|delete|close|assign|comment)_"
+  },
+  "gateways": [
+    {
+      "tool": "hub__execute$",
+      "service_field": "service",
+      "operation_fields": ["action"],
+      "writes": {
+        "wiki": ["create-page", "edit-page", "delete-page"]
+      }
+    }
+  ]
+}
