@@ -59,6 +59,12 @@ if [ ! -d ~/.agents/site/node_modules ]; then echo "FAIL site dependencies missi
 elif node ~/.agents/site/build.mjs >/dev/null; then echo "ok   landing and docs build from the current sources"
 else fail=1; fi
 
+section "version"
+version=$(cat ~/.agents/VERSION)
+if [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && grep -q "^## \[$version\] - [0-9]\{4\}-[0-9][0-9]-[0-9][0-9]$" ~/.agents/CHANGELOG.md; then
+  echo "ok   VERSION $version has its CHANGELOG entry"
+else echo "FAIL VERSION ($version) needs a '## [$version] - <date>' heading in CHANGELOG.md"; fail=1; fi
+
 section "install on a new machine"
 bash test_install.sh || fail=1
 

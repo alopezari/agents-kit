@@ -355,8 +355,10 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `.githooks/` | Keeps this reference in sync on every commit. |
 | `.github/` | CI: installs the kit on a macOS runner and runs `tests/run.sh` on every pull request. |
 | `AGENTS.md` | The instructions every harness loads (linked as CLAUDE.md / AGENTS.md). |
+| `CHANGELOG.md` | What changed in each version, and how a release is cut. |
 | `LICENSE` | MIT. |
 | `README.md` | Install and first steps. |
+| `VERSION` | The kit's version; `install.sh --doctor` prints it. |
 | `adapters/` | Per-harness glue: the Pi extension, the Claude Code status line, Codex profiles. |
 | `bin/` | Command-line tools the skills and people call. |
 | `deps.txt` | Every program the kit runs, by tier; `install.sh` installs and checks them. |

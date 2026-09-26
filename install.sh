@@ -70,6 +70,7 @@ skills() {  # link every kit skill into a harness skills dir
   for s in "$KIT"/skills/*/; do s=${s%/}; link "$s" "$dir/$(basename "$s")"; done
 }
 
+echo "agents-kit $(cat "$KIT/VERSION")"
 echo "Profiles"
 # A profile is layered in by symlinks into the kit's git-ignored slots, so every path the hooks,
 # skills and AGENTS.md use stays the same with or without it.
