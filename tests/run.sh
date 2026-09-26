@@ -7,6 +7,7 @@ section() { printf '\n== %s\n' "$1"; }
 
 section "hooks"
 python3 test_hooks.py || fail=1
+python3 test_private_terms.py || fail=1
 
 section "generic verify"
 python3 test_verify_auto.py || fail=1

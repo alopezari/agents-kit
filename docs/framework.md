@@ -292,6 +292,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |
 | `PROFILE.md` | work context for the trends scan |
 | `deps.txt` | more programs to install and check, in the core's format; a program in both takes the stricter tier |
+| `private-terms.txt` | case-insensitive regexes, one per line, that must never reach the public kit: its commits and pull requests are refused when they match |
 | `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |
 
 ## What the agents are told

@@ -37,10 +37,10 @@ def status_line_names_the_branch(base):
         return subprocess.run([statusline], input=payload, capture_output=True, text=True, env=env).stdout
 
     assert "flow" not in line(), "no flow on the default branch"
-    # Guessing a ticket ID with a pattern named "python-3-upgrade" as "python-3" and "A8C-1090" as "C-1090".
-    for branch, label in (("26-09/qit-1090-exclude-local-runs", "qit-1090-exclude-lo…"),
+    # Guessing a ticket ID with a pattern named "python-3-upgrade" as "python-3" and "X9Y-1090" as "Y-1090".
+    for branch, label in (("26-09/shop-1090-exclude-local-runs", "shop-1090-exclude-l…"),
                           ("feature/python-3-upgrade", "python-3-upgrade"),
-                          ("team/A8C-1090", "A8C-1090"),
+                          ("team/X9Y-1090", "X9Y-1090"),
                           ("abcdefghijklmnopqrst", "abcdefghijklmnopqrst"),  # 20 characters: kept whole
                           ("abcdefghijklmnopqrstu", "abcdefghijklmnopqrs…")):
         sh(repo, "git", "checkout", "-q", "-b", branch)

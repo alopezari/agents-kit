@@ -14,6 +14,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import log  # noqa: E402
+import private_terms  # noqa: E402
+
+KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 
 GIT = r"\bgit\s+(?:(?:-C|-c)\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
 PROTECTED_BRANCHES = r"(main|master|trunk|develop|production|release(/[\w.-]+)?)"
@@ -114,6 +117,94 @@ def unreviewed_pr(command, cwd):
     return None
 
 
+def repo_id(repo, default_host=None):
+    """(host, owner/repo) from OWNER/REPO, HOST/OWNER/REPO, a URL (a PR's too) or a git remote URL."""
+    path = re.sub(r"^(?:\w+://)?(?:[^@/]+@)?", "", repo.strip()).replace(":", "/")
+    path = re.sub(r"/pull/\d+.*$", "", path).rstrip("/")
+    parts = re.sub(r"\.git$", "", path).lower().split("/")
+    return (parts[-3] if len(parts) > 2 else default_host), "/".join(parts[-2:])
+
+
+def targets_kit(repo, host, cwd):
+    """Whether a gh command acts on the kit's own repository: its --repo (on GH_HOST, if set), else the checkout it
+    runs in."""
+    if repo:
+        origin = subprocess.run(["git", "-C", KIT, "remote", "get-url", "origin"], capture_output=True, text=True).stdout
+        if not origin.strip():
+            return False
+        (kit_host, kit_slug), (host, slug) = repo_id(origin), repo_id(repo, host)
+        return slug == kit_slug and host in (None, kit_host)
+    common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd,
+                            capture_output=True, text=True).stdout.strip()
+    return bool(common) and os.path.realpath(common) == os.path.join(KIT, ".git")
+
+
+def pr_command_args(command, start):
+    """The arguments of the gh command starting at `start`, up to the next shell operator."""
+    lexer = shlex.shlex(command[start:], posix=True, punctuation_chars=";&|\n")
+    # No comments: bash starts one only after whitespace (`abc#x` is one word); keeping `#` checks more, never less.
+    lexer.whitespace, lexer.whitespace_split, lexer.commenters = " \t\r", True, ""
+    args = []
+    for token in lexer:
+        if token.strip(";&|\n") == "":
+            break
+        args.append(token)
+    return args
+
+
+def private_terms_in_kit_pr(command, cwd):
+    """The kit is public: a pull request to it must not carry a profile's private terms."""
+    for match in re.finditer(r"(?:^|[;&|(\n])\s*((?:\w+=\S*\s+)*)gh\s+pr\s+(?:create|edit)\b", command):
+        before = command[:match.start(1)]
+        # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
+        runs_in = cwd
+        for target in re.findall(r"(?:^|[;&|\n]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before):
+            runs_in = os.path.normpath(os.path.join(runs_in, os.path.expanduser(target.strip("\"'"))))
+        exported = dict(re.findall(r"(?:^|[;&|\n]\s*)(?:export\s+)?(GH_REPO|GH_HOST)=([^\s;&|]+)(?=\s*(?:[;&|\n]|$))",
+                                   before))
+        exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=(\S+)", match.group(1)))
+        try:
+            args = pr_command_args(command, match.end(1))
+        except ValueError:
+            continue  # unbalanced quotes: text inside a heredoc or string, not a command gh would run
+        repo, host = (exported.get(k, os.environ.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
+        values, files = [], []
+        for i, arg in enumerate(args[3:], 3):
+            flag, eq, inline = arg.partition("=")
+            if re.fullmatch(r"-[tbFR]..*", arg):  # -tTitle: gh accepts short flags with the value attached
+                flag, eq, inline = arg[:2], "=", arg[2:]
+            value = inline if eq else (args[i + 1] if i + 1 < len(args) else "")
+            if flag in ("-R", "--repo"):
+                repo = value
+            elif flag in ("-t", "--title", "-b", "--body"):
+                values.append(value)
+            elif flag in ("-F", "--body-file"):
+                files.append(value)
+            elif re.match(r"https?://\S+/pull/\d+", arg):
+                repo = arg
+        if not (values or files):
+            continue
+        if not ("$" in (repo or "") or targets_kit(repo, host, pr_checkout(command[match.start(1):], runs_in))):
+            continue
+        # Checked before the shell runs, so fail closed on text only the shell will produce.
+        if any(re.search(r"[$`]", v) for v in values):
+            return ("This pull request's title or description comes from a shell expansion, which can't be checked "
+                    "for a profile's private terms. Pass the text literally or in a --body-file.")
+        for path in files:
+            try:
+                if path == "-" or os.path.basename(path) in before:  # stdin, or a file this command writes first
+                    raise OSError
+                values.append(open(os.path.join(runs_in, os.path.expanduser(path))).read())
+            except OSError:
+                return (f"This pull request's description file ({path}) can't be read yet, so it can't be checked for "
+                        "a profile's private terms. Write the file first, then run gh in a separate command.")
+        terms = private_terms.found("\n".join(values))
+        if terms:
+            return (f"This pull request's title or description names {', '.join(terms)}, which a profile marks as "
+                    "private, and the kit is public. Rewrite it without them.")
+    return None
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -126,7 +217,7 @@ def main():
         return 0
     cwd = os.path.realpath(payload.get("cwd") or os.getcwd())
 
-    reason = dangerous_rm(command, cwd) or unreviewed_pr(command, cwd)
+    reason = dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd)
     if not reason:
         for pattern, why in RULES:
             if re.search(pattern, command):
