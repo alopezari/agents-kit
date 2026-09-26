@@ -43,8 +43,9 @@ HIGH_RISK = {
     "scheduled jobs": r"as_schedule|as_enqueue|wp_schedule_event|cron",
 }
 # A git checkout, not a shop's: lines with version-control words don't count as a payments signal.
-GIT_CHECKOUT = re.compile(r"\bgit\b|actions/checkout|worktree|\bbranch|\b(pr|primary|known|remember)_checkouts?\b"
-                          r"|\b(main|this|a|the|every|another|each)\s+checkouts?\b(?!\s+(page|form|block|field|flow|process|button|url|step))", re.I)
+GIT_CHECKOUT = re.compile(r"\bgit(\b|_)|actions/checkout|worktree|\bbranch|\b(pr|primary|known|remember)_checkouts?\b"
+                          r"|\b(main|this|a|the|every|another|each)\s+checkouts?\b(?![\s-]+(page|form|block|field|flow|process|button|url|step))",
+                          re.I)
 PROPERTY_FN = re.compile(r"function\s+\w*(parse|format|calculate|compute|compare|convert|normali[sz]e|version|date|week"
                          r"|price|round|slug|sanitize|validate)\w*\s*\(", re.I)
 BUDGET = {"low": "< 5 min", "standard": "<= 20 min", "high": "<= 45 min"}

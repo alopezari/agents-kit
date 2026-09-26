@@ -8,9 +8,9 @@ import tempfile
 
 TRIAGE = os.path.expanduser("~/.agents/bin/triage")
 GIT_SENSE = ["cwd = pr_checkout(command, cwd)", "git checkout -b fix", "- uses: actions/checkout@v4",
-             "# the main checkout serves the stack", "for path in known_checkouts():"]
+             "# the main checkout serves the stack", "for path in known_checkouts():", "git_checkout(command, cwd)"]
 SHOP_SENSE = ["return wc_get_checkout_url();", "'wc-blocks-checkout',", "if ( is_checkout() ) {",
-              "// Redirect to the checkout page", "git checkout-free refund( $order );"]
+              "// Redirect to the checkout page", "git checkout-free refund( $order );", "// Render the checkout-page"]
 
 
 def payments_signal(line):
