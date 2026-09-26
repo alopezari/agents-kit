@@ -4,6 +4,12 @@ Each pull request adds a line under Unreleased. A release moves those lines unde
 
 ## [Unreleased]
 
+- triage no longer reads a git checkout as a payments signal (#7).
+- The shell guard no longer blocks commands that only mention `gh pr create` in quoted text or heredocs (#8).
+- Monthly review mining runs the model with no shell or network, writing only its run folder and this month's proposal (#9).
+- Branches like `feature/x` and `feature-x` no longer share a spec, reports and stamps; files saved under the old name move on first use (#10).
+- `install.sh` warns when profiles, or a profile and the kit, use the same name for a skill, overlay, doc or MCP server (#12).
+
 ## [0.3.0] - 2026-09-26
 
 - The status line's flow segment names the branch (#1).
