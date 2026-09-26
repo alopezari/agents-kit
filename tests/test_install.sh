@@ -58,4 +58,38 @@ doctor=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 
 if echo "$doctor" | grep -q "  warn  oldtool 1.9.3 is older than 1.10"; then
   echo "ok   --doctor reports a program older than its minimum"
 else echo "FAIL --doctor did not flag oldtool 1.9.3 < 1.10"; fail=1; fi
+
+# uninstall.sh on the same HOME, with a fake launchctl so the real jobs (labels are per user) stay untouched.
+printf '#!/bin/sh\necho "$@" >> "%s/launchctl.log"\n[ "$1" = list ] && exit 1\nexit 0\n' "$home" > "$bin/launchctl"
+chmod +x "$bin/launchctl"
+if [ "$(command -v launchctl)" != "$bin/launchctl" ]; then echo "FAIL the fake launchctl isn't first in PATH"; exit 1; fi
+kit="$home/.agents"
+wired=$(HOME="$home" "$kit/install.sh" --yes 2>&1)
+S="$home/.claude/settings.json"
+jq '.hooks.Stop += [{matcher: "", hooks: [{type: "command", command: "my-own-hook"}]}]' "$S" > "$S.tmp" && mv "$S.tmp" "$S"
+mkdir -p "$home/.claude/skills/mine"
+kit_links() { find "$home" -path "$kit" -prune -o -type l -lname "$kit/*" -print | wc -l | tr -d ' '; }
+jobs=$(ls "$home/Library/LaunchAgents" 2>/dev/null | wc -l | tr -d ' ')
+before=$(kit_links)
+if [ "$before" -gt 0 ] && [ "$jobs" -gt 0 ]; then echo "ok   a full install to remove: $before links, $jobs scheduled jobs"
+else echo "FAIL the install to remove has $before links and $jobs jobs:"; echo "$wired" | tail -5; fail=1; fi
+out=$(HOME="$home" "$kit/uninstall.sh" </dev/null 2>&1)
+if [ "$(kit_links)" = "$before" ] && echo "$out" | grep -q "Nothing removed: run uninstall.sh in a terminal"; then
+  echo "ok   without a terminal or --yes, uninstall.sh lists what it would remove and changes nothing"
+else echo "FAIL uninstall.sh without --yes:"; echo "$out" | tail -3; fail=1; fi
+out=$(HOME="$home" "$kit/uninstall.sh" --yes 2>&1)
+check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
+check "uninstall.sh --yes removes every link into the kit" '[ "$(kit_links)" = 0 ]'
+check "and the kit's hooks and status line from Claude Code and Codex" \
+  '! grep -qF "/.agents/" "$S" "$home/.codex/hooks.json"'
+check "keeping the user's own hook, skill and settings" \
+  'jq -e ".hooks.Stop[0].hooks[0].command == \"my-own-hook\" and .effortLevel == \"medium\"" "$S" >/dev/null && [ -d "$home/.claude/skills/mine" ]'
+check "unloading and removing every scheduled job" \
+  '[ "$jobs" -gt 0 ] && [ -z "$(ls "$home/Library/LaunchAgents")" ] && [ "$(grep -c "^bootout" "$home/launchctl.log")" -ge "$jobs" ]'
+check "with the settings files backed up outside the kit" '[ -f "$(ls -d "$home"/.agents-uninstall-backups/*/ | head -1)claude-settings.json" ]'
+check "and printing no errors" '! echo "$out" | grep -qiE "unbound|error|No such file"'
+check "a second run finds nothing to remove" \
+  'HOME="$home" "$kit/uninstall.sh" --yes 2>&1 | grep -q "Nothing of the kit is wired in"'
+HOME="$home" "$kit/install.sh" --yes >/dev/null 2>&1
+check "install.sh wires it all back in" '[ "$(kit_links)" = "$before" ]'
 exit $fail

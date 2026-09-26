@@ -29,6 +29,7 @@ LAYOUT = {
     "LICENSE": "MIT.",
     "deps.txt": "Every program the kit runs, by tier; `install.sh` installs and checks them.",
     "install.sh": "Wires the kit into each installed harness; `--doctor` reports without changing anything.",
+    "uninstall.sh": "Removes what install.sh wired in that still points at the kit; your own hooks and settings stay.",
     "adapters/": "Per-harness glue: the Pi extension, the Claude Code status line, Codex profiles.",
     "hooks/": "The hook scripts all harnesses share (one JSON contract: stdin in, decision out).",
     "skills/": "Skills linked into every harness; third-party ones are listed in `skills.external`.",
@@ -398,7 +399,8 @@ def render():
     w("")
 
     w("## Install and maintain\n")
-    w("```\n" + "\n".join(l for l in header_comment("install.sh").splitlines() if "install.sh" in l) + "\n```\n")
+    w("```\n" + "\n".join(l for f in ("install.sh", "uninstall.sh") for l in header_comment(f).splitlines()
+                            if f in l) + "\n```\n")
     w("### Requirements\n")
     w("`deps.txt` lists every program the kit runs; `tests/test_deps.py` fails when the code calls one it doesn't "
       "declare. `install.sh` lists the missing required and recommended ones and installs them through Homebrew if you "

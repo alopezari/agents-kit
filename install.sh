@@ -229,7 +229,7 @@ for tpl in "$KIT"/launchd/*.plist; do
   rendered=$(sed -e "s#__HOME__#$HOME#g" -e "s#__NODEBIN__#$nodebin#g" -e "s#__LABEL__#$label#g" "$tpl")
   if [ "$rendered" = "$(cat "$dest" 2>/dev/null)" ] && launchctl list "$label" >/dev/null 2>&1; then ok "$label"; continue; fi
   if [ $DOCTOR = 1 ]; then warn "$label is not installed or out of date"; continue; fi
-  mkdir -p "$KIT/monitors/state"; backup "$dest"
+  mkdir -p "$KIT/monitors/state" "$(dirname "$dest")"; backup "$dest"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   echo "$rendered" > "$dest"
   launchctl bootstrap "gui/$(id -u)" "$dest" && fix "$label loaded"
