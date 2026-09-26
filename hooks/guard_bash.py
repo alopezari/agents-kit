@@ -97,10 +97,65 @@ def pr_checkout(command, cwd):
     return cwd
 
 
+def shell_code(command):
+    """The command with text that can't run blanked out (same length): quoted strings and heredoc bodies.
+    Blanking uses x, not spaces, so a VAR="a b"c prefix still reads as one word. A command with $(...), backticks
+    or <<\\ or $'...' is returned whole: parsing those is where a real gh would hide, and a false match only blocks."""
+    if "$(" in command or "`" in command or "<<\\" in command or "$'" in command:
+        return command
+    out, n, i, heredocs = list(command), len(command), 0, []
+
+    def in_brackets(k):  # arr[x<<2] is a shift
+        line = command[command.rfind("\n", 0, k) + 1:k]
+        return line.rfind("[") > line.rfind("]")
+
+    def blank(start, end):
+        for k in range(start, end):
+            if out[k] != "\n":
+                out[k] = "x"
+
+    while i < n:
+        c = command[i]
+        if c == "\\":
+            i += 2
+        elif c in "'\"":
+            k = i + 1
+            while k < n and command[k] != c:
+                k += 2 if c == '"' and command[k] == "\\" else 1
+            blank(i + 1, min(k, n))
+            i = k + 1
+        elif c == "#" and (i == 0 or command[i - 1] in " \t\n;&|("):
+            # Skipped, not blanked: a quote or << in a comment opens nothing, and a misread # hides nothing.
+            end = command.find("\n", i)
+            i = n if end < 0 else end
+        elif command.startswith("((", i):  # arithmetic, where << is a shift
+            close = command.find("))", i + 2)
+            i = n if close < 0 else close + 2
+        elif command.startswith("<<", i) and not command.startswith("<<<", i) and not in_brackets(i):
+            m = re.match(r"<<(-?)[ \t]*(?:(['\"])([^'\"\n]+)\2|([A-Za-z_][\w-]*))", command[i:])
+            if m:
+                heredocs.append((m.group(3) or m.group(4), bool(m.group(1))))
+            i += m.end() if m else 2
+        elif c == "\n" and heredocs:
+            k = i + 1
+            while heredocs and k < n:
+                end = command.find("\n", k)
+                end = n if end < 0 else end
+                word, tabs = heredocs[0]
+                if (command[k:end].lstrip("\t") if tabs else command[k:end]) == word:
+                    heredocs.pop(0)
+                else:
+                    blank(k, end)
+                k = end + 1
+            i = k
+        else:
+            i += 1
+    return "".join(out)
+
+
 def unreviewed_pr(command, cwd):
     """Opening a PR requires a self-review stamp for the exact current change."""
-    # Only in command position: the phrase inside a quoted string, grep pattern or heredoc is not a PR.
-    if not re.search(r"(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*gh\s+pr\s+create\b", command):
+    if not re.search(r"(?:^|[;&|(\n`])\s*(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*gh\s+pr\s+create\b", shell_code(command)):
         return None
     cwd = pr_checkout(command, cwd)
     stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
@@ -154,7 +209,7 @@ def pr_command_args(command, start):
 
 def private_terms_in_kit_pr(command, cwd):
     """The kit is public: a pull request to it must not carry a profile's private terms."""
-    for match in re.finditer(r"(?:^|[;&|(\n])\s*((?:\w+=\S*\s+)*)gh\s+pr\s+(?:create|edit)\b", command):
+    for match in re.finditer(r"(?:^|[;&|(\n`])\s*((?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*)gh\s+pr\s+(?:create|edit)\b", shell_code(command)):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
         runs_in = cwd
@@ -162,7 +217,7 @@ def private_terms_in_kit_pr(command, cwd):
             runs_in = os.path.normpath(os.path.join(runs_in, os.path.expanduser(target.strip("\"'"))))
         exported = dict(re.findall(r"(?:^|[;&|\n]\s*)(?:export\s+)?(GH_REPO|GH_HOST)=([^\s;&|]+)(?=\s*(?:[;&|\n]|$))",
                                    before))
-        exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=(\S+)", match.group(1)))
+        exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=(\S+)", command[match.start(1):match.end(1)]))
         try:
             args = pr_command_args(command, match.end(1))
         except ValueError:
