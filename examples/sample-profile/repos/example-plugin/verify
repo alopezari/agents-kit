@@ -1,0 +1,9 @@
+#!/bin/bash
+# Run from the repository root by the kit's Stop hook after an agent edits files; exit non-zero to send it back.
+# The kit's stack-detecting checks first (linters and the tests related to the change), then semgrep rules that
+# only fail on lines the change adds: the kit's WordPress rules and this project's own.
+set -e
+python3 ~/.agents/repos/_shared/verify_auto.py
+exec python3 ~/.agents/repos/_shared/verify_changed.py \
+  --semgrep ~/.agents/repos/_shared/wordpress.semgrep.yml \
+  --semgrep ~/.agents/repos/example-plugin/rules.semgrep.yml "$@"

@@ -280,7 +280,7 @@ flowchart LR
 
 ## Profiles: extend the kit for each kind of work
 
-The kit is modular: the core holds nothing tied to one employer, client or project, and everything specific lives in profiles. A profile is a separate (usually private) repository that `install.sh --profile <dir>` layers in through symlinks, so hooks, skills and instructions use the same paths with or without it. Keep one for your job, one per client, one for open source or side projects; install several and they stack:
+The kit is modular: the core holds nothing tied to one employer, client or project, and everything specific lives in profiles. A profile is a separate (usually private) repository that `install.sh --profile <dir>` layers in through symlinks, so hooks, skills and instructions use the same paths with or without it. Keep one for your job, one per client, one for open source or side projects; install several and they stack. `examples/sample-profile/` has one of each, ready to copy:
 
 | In the profile | Linked or read as |
 |---|---|
@@ -361,6 +361,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `bin/` | Command-line tools the skills and people call. |
 | `deps.txt` | Every program the kit runs, by tier; `install.sh` installs and checks them. |
 | `docs/` | This reference and the research behind the instructions. |
+| `examples/` | A sample profile with one of each extension point, to copy as the start of your own. |
 | `hooks/` | The hook scripts all harnesses share (one JSON contract: stdin in, decision out). |
 | `install.sh` | Wires the kit into each installed harness; `--doctor` reports without changing anything. |
 | `launchd/` | Templates for the scheduled jobs (macOS). |

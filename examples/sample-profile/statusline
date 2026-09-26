@@ -1,0 +1,7 @@
+#!/bin/bash
+# A segment for the Claude Code status line: names the overlay when the session works in a repository this
+# profile has one for. Gets the same JSON as the status line on stdin; prints nothing to add nothing.
+dir=$(jq -r '.workspace.current_dir // .cwd // empty' 2>/dev/null)
+repo=$(cd "${dir:-.}" 2>/dev/null && "$HOME/.agents/bin/repo-name" 2>/dev/null) || exit 0
+[ -d "$HOME/.agents/repos/$repo" ] && [ -f "$(dirname "$0")/repos/$repo/notes.md" ] && echo "overlay $repo"
+exit 0

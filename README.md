@@ -45,7 +45,7 @@ Requirements: [`deps.txt`](deps.txt) lists every program the kit runs. `install.
 
 - **Instructions:** edit `AGENTS.md`. It is plain Markdown and every harness reads the same file.
 - **A repository:** add `repos/<checkout-directory-name>/notes.md` with the context agents should read there. Add an executable `verify` when the automatic checks aren't enough. Nothing is written into the repository itself. See [repos/README.md](repos/README.md).
-- **A profile:** keep anything tied to one employer or client in a separate private repository and layer it in with `install.sh --profile <dir>`. It can hold repo overlays, work-only skills, research, MCP write rules and the repositories to learn from. The core stays generic and shareable.
+- **A profile:** keep anything tied to one employer or client in a separate private repository and layer it in with `install.sh --profile <dir>`. It can hold repo overlays, work-only skills, research, MCP write rules and the repositories to learn from; [`examples/sample-profile/`](examples/sample-profile/) has one of each to start from. The core stays generic and shareable.
 
 ## Hook contract
 

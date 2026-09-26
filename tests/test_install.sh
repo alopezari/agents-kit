@@ -4,8 +4,8 @@
 set -uo pipefail
 home=$(mktemp -d "${TMPDIR:-/tmp}/agents-install-XXXXXX")
 trap 'rm -rf "$home"' EXIT
-rsync -a --exclude node_modules --exclude logs --exclude backups --exclude research --exclude profiles \
-  --exclude approvals --exclude monitors/state "$HOME/.agents/" "$home/.agents/"
+rsync -a --exclude node_modules --exclude /logs --exclude /backups --exclude /research --exclude /profiles \
+  --exclude /approvals --exclude /monitors/state "$HOME/.agents/" "$home/.agents/"
 # Dependencies are linked, not reinstalled: the test is about install.sh, not npm.
 for dir in "$HOME"/.agents/tools/*/ "$HOME"/.agents/site/; do
   rel=${dir#"$HOME"/.agents/}
@@ -19,6 +19,7 @@ for program in python3 git jq node npm claude codex pi; do
 done
 printf '#!/bin/bash\n[ "$1" = install ] || exit 1\nprintf "#!/bin/sh\\n" > "%s/${!#}"; chmod +x "%s/${!#}"\n' "$bin" "$bin" > "$bin/brew"
 chmod +x "$bin/brew"
+real_path=$PATH q="'"
 export PATH="$bin:/usr/bin:/bin:/usr/sbin:/sbin"
 # A profile needs docker, which the core lists as optional: the stricter tier wins, so it gets installed.
 mkdir -p "$home/.agents/profiles/work"
@@ -59,13 +60,47 @@ if echo "$doctor" | grep -q "  warn  oldtool 1.9.3 is older than 1.10"; then
   echo "ok   --doctor reports a program older than its minimum"
 else echo "FAIL --doctor did not flag oldtool 1.9.3 < 1.10"; fail=1; fi
 
+# The sample profile, installed as a user would: each extension point must do what its README says.
+semgrep_dir=$(dirname "$(PATH="$real_path" command -v semgrep 2>/dev/null || echo /nonexistent/semgrep)")
+kit="$home/.agents"; sample="$kit/examples/sample-profile"
+mkdir -p "$home/.claude"  # Claude Code is wired by its directory when it isn't installed (CI)
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes --profile "$sample" 2>&1)
+check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
+check "sample profile: repo overlay, skill and research linked into the kit and the harness" \
+  '[ -L "$kit/repos/example-plugin" ] && [ -L "$kit/skills/release-notes" ] && [ -L "$kit/research/example-study.md" ] \
+   && [ "$(readlink "$home/.claude/skills/release-notes")" = "$kit/skills/release-notes" ]'
+check "sample profile: its optional program is reported, not installed" 'echo "$out" | grep -q "info  composer not installed"'
+mcp() {  # mcp <tool> <input json>: the MCP guard's decision; it prints nothing to allow
+  local decision; decision=$(printf '{"tool_name":"%s","tool_input":%s,"session_id":"t"}' "$1" "$2" \
+    | HOME="$home" python3 "$kit/hooks/guard_mcp.py" | jq -r '.hookSpecificOutput.permissionDecision')
+  echo "${decision:-allow}"
+}
+decisions="$(mcp mcp__tracker__create_issue '{}') $(mcp mcp__tracker__get_issue '{}')"
+decisions+=" $(mcp mcp__hub__execute '{"service":"wiki","action":"edit-page"}') $(mcp mcp__hub__execute '{"service":"wiki","action":"read-page"}')"
+check "sample profile: the guard blocks tracker and wiki writes, not reads" '[ "$decisions" = "deny allow deny allow" ]'
+check "sample profile: its private terms are enforced" \
+  '[ "$(HOME="$home" python3 -c "import sys; sys.path.insert(0, \"$kit/hooks\"); import private_terms; print(private_terms.found(\"see INTERNAL-42\"))")" = "[${q}INTERNAL-42${q}]" ]'
+check "sample profile: the monthly review mining runs with its list of only comments" \
+  'HOME="$home" FETCH_ONLY=1 "$kit/review-mining/run.sh" >/dev/null 2>&1'
+plugin="$home/Projects/example-plugin"; mkdir -p "$plugin"
+git -C "$plugin" init -q -b main && git -C "$plugin" commit -q --allow-empty -m init && git -C "$plugin" switch -q -c change
+line=$(printf '{"workspace":{"current_dir":"%s"}}' "$plugin" | HOME="$home" "$kit/adapters/claude/statusline.sh" 2>/dev/null)
+check "sample profile: its status line segment names the overlay" 'echo "$line" | grep -q "overlay example-plugin"'
+if [ -x "$semgrep_dir/semgrep" ]; then
+  printf '<?php\nerror_log( "x" );\n' > "$plugin/plugin.php"
+  red=$(cd "$plugin" && HOME="$home" PATH="$semgrep_dir:$PATH" "$kit/repos/example-plugin/verify" 2>&1); red_status=$?
+  printf '<?php\nExample_Plugin\\Logger::info( "x" );\n' > "$plugin/plugin.php"
+  (cd "$plugin" && HOME="$home" PATH="$semgrep_dir:$PATH" "$kit/repos/example-plugin/verify" >/dev/null 2>&1); green_status=$?
+  check "sample profile: its verify fails on the project rule and passes without it" \
+    '[ $red_status = 1 ] && echo "$red" | grep -q "logger-not-error-log" && [ $green_status = 0 ]'
+else echo "skip sample profile verify: semgrep not installed"; fi
+
 # uninstall.sh on the same HOME, with a fake launchctl so the real jobs (labels are per user) stay untouched.
 # `list` reports a job loaded only when its label is in $home/stuck, standing in for a bootout that failed.
 printf '#!/bin/sh\necho "$@" >> "%s/launchctl.log"\n[ "$1" = list ] && { grep -qx "$2" "%s/stuck" 2>/dev/null; exit; }\nexit 0\n' \
   "$home" "$home" > "$bin/launchctl"
 chmod +x "$bin/launchctl"
 if [ "$(command -v launchctl)" != "$bin/launchctl" ]; then echo "FAIL the fake launchctl isn't first in PATH"; exit 1; fi
-kit="$home/.agents"
 unset AGENTS_SKIP_LAUNCHD  # CI sets it; the fake launchctl above is what keeps the real jobs safe here
 mkdir -p "$home/.claude" "$home/.codex"  # wired by their directories when the harnesses aren't installed (CI)
 wired=$(HOME="$home" "$kit/install.sh" --yes 2>&1)
@@ -96,7 +131,6 @@ mine=$(echo "$agents" | sed -n 1p); stuck=$(echo "$agents" | sed -n 2p)
 echo '<plist><string>/usr/bin/true</string></plist>' > "$home/Library/LaunchAgents/$mine"  # the user's own job now
 basename "$stuck" .plist > "$home/stuck"
 out=$(HOME="$home" "$kit/uninstall.sh" --yes 2>&1)
-check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
 check "uninstall.sh --yes removes every link into the kit" '[ "$(kit_links)" = 0 ]'
 check "and the kit's hooks and status line from Claude Code and Codex" \
   '! grep -qF "/.agents/" "$S" "$home/.codex/hooks.json"'

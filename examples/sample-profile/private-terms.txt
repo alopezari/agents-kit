@@ -1,0 +1,3 @@
+# Terms that must never reach the public kit, one case-insensitive regex per line: an employer's ticket prefix,
+# internal product or host names. Kit commits and pull requests that match are refused.
+\bINTERNAL-\d+\b

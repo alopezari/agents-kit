@@ -28,6 +28,7 @@ LAYOUT = {
     "README.md": "Install and first steps.",
     "LICENSE": "MIT.",
     "deps.txt": "Every program the kit runs, by tier; `install.sh` installs and checks them.",
+    "examples/": "A sample profile with one of each extension point, to copy as the start of your own.",
     "install.sh": "Wires the kit into each installed harness; `--doctor` reports without changing anything.",
     "uninstall.sh": "Removes what install.sh wired in that still points at the kit; your own hooks and settings stay.",
     "adapters/": "Per-harness glue: the Pi extension, the Claude Code status line, Codex profiles.",
@@ -379,7 +380,8 @@ def render():
     w("The kit is modular: the core holds nothing tied to one employer, client or project, and everything specific "
       "lives in profiles. A profile is a separate (usually private) repository that `install.sh --profile <dir>` "
       "layers in through symlinks, so hooks, skills and instructions use the same paths with or without it. Keep one "
-      "for your job, one per client, one for open source or side projects; install several and they stack:\n")
+      "for your job, one per client, one for open source or side projects; install several and they stack. "
+      "`examples/sample-profile/` has one of each, ready to copy:\n")
     w("| In the profile | Linked or read as |\n|---|---|")
     w("| `repos/<repo>/` | `~/.agents/repos/<repo>` (notes, verify overlays, baselines) |")
     w("| `skills/<name>/` | `~/.agents/skills/<name>` |")
