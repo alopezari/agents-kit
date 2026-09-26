@@ -335,6 +335,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | required | `gh` | brew install gh | create-pr, follow-pr, the flow phase in the status line, review mining |
 | recommended | `semgrep` | brew install semgrep | verify's semgrep rules; tests/run.sh |
 | recommended | `gitleaks` | brew install gitleaks | the secrets check at the end of each turn |
+| recommended | `php` | brew install php | the generic verify's PHP checks; tests/run.sh |
 | optional | `claude` | https://claude.com/claude-code | the scheduled jobs (they run `claude -p`) |
 | optional | `playwright-cli` | npm install -g @playwright/cli | browser checks in the validate skill (bin/browse) |
 | optional | `agent-browser` | npm install -g agent-browser | browser checks in the validate skill (bin/browse) |

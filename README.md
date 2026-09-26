@@ -37,7 +37,7 @@ What it doesn't do, on a new machine:
 2. Trust the Codex hooks. Open Codex once and approve them; `install.sh --doctor` warns until you do.
 3. Install harness plugins or MCP servers. Add the ones you use yourself, or keep their setup in a profile.
 
-Requirements: [`deps.txt`](deps.txt) lists every program the kit runs. `install.sh` offers to install the missing required ones (`python3`, `git`, `jq`, `node`, `gh`) and recommended ones (`semgrep`, `gitleaks`) through Homebrew, and says how to install the optional ones, each needed by one feature. `install.sh --doctor` reports what is missing, and `tests/run.sh` expects it to report nothing.
+Requirements: [`deps.txt`](deps.txt) lists every program the kit runs. `install.sh` offers to install the missing required ones (`python3`, `git`, `jq`, `node`, `gh`) and recommended ones (`semgrep`, `gitleaks`, `php`) through Homebrew, and says how to install the optional ones, each needed by one feature. `install.sh --doctor` reports what is missing, and `tests/run.sh` expects it to report nothing.
 
 ## Make it yours
 
