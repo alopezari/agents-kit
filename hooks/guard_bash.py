@@ -98,12 +98,16 @@ def pr_checkout(command, cwd):
 
 
 def shell_code(command):
-    """The command with text that can't run blanked out (same length): quoted strings, comments and heredoc bodies.
+    """The command with text that can't run blanked out (same length): quoted strings and heredoc bodies.
     Blanking uses x, not spaces, so a VAR="a b"c prefix still reads as one word. A command with $(...), backticks
     or <<\\ or $'...' is returned whole: parsing those is where a real gh would hide, and a false match only blocks."""
     if "$(" in command or "`" in command or "<<\\" in command or "$'" in command:
         return command
     out, n, i, heredocs = list(command), len(command), 0, []
+
+    def in_brackets(k):  # arr[x<<2] is a shift
+        line = command[command.rfind("\n", 0, k) + 1:k]
+        return line.rfind("[") > line.rfind("]")
 
     def blank(start, end):
         for k in range(start, end):
@@ -121,17 +125,16 @@ def shell_code(command):
             blank(i + 1, min(k, n))
             i = k + 1
         elif c == "#" and (i == 0 or command[i - 1] in " \t\n;&|("):
+            # Skipped, not blanked: a quote or << in a comment opens nothing, and a misread # hides nothing.
             end = command.find("\n", i)
-            end = n if end < 0 else end
-            blank(i, end)
-            i = end
+            i = n if end < 0 else end
         elif command.startswith("((", i):  # arithmetic, where << is a shift
             close = command.find("))", i + 2)
             i = n if close < 0 else close + 2
-        elif command.startswith("<<", i) and not command.startswith("<<<", i) and (i == 0 or not command[i - 1].isdigit()):
-            m = re.match(r"<<(-?)[ \t]*(['\"]?)([^\s'\"<>;&|()\\]+)\2", command[i:])
+        elif command.startswith("<<", i) and not command.startswith("<<<", i) and not in_brackets(i):
+            m = re.match(r"<<(-?)[ \t]*(?:(['\"])([^'\"\n]+)\2|([A-Za-z_][\w-]*))", command[i:])
             if m:
-                heredocs.append((m.group(3), bool(m.group(1))))
+                heredocs.append((m.group(3) or m.group(4), bool(m.group(1))))
             i += m.end() if m else 2
         elif c == "\n" and heredocs:
             k = i + 1
