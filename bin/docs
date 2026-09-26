@@ -44,6 +44,7 @@ LAYOUT = {
     "tests/": "The regression suite: `tests/run.sh`.",
     "docs/": "This reference and the research behind the instructions.",
     ".githooks/": "Keeps this reference in sync on every commit.",
+    ".github/": "CI: installs the kit on a macOS runner and runs `tests/run.sh` on every pull request.",
 }
 # Local state that is git-ignored and never documented.
 IGNORED = {".git", ".gitignore", "logs", "backups", "approvals", "research", "profiles", "node_modules", "__pycache__"}

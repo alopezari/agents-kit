@@ -62,8 +62,14 @@ section "install on a new machine"
 bash test_install.sh || fail=1
 
 section "install doctor"
-warnings=$(~/.agents/install.sh --doctor | grep -c "  warn ")
-if [ "$warnings" = 0 ]; then echo "ok   no warnings"; else ~/.agents/install.sh --doctor | grep "  warn "; fail=1; fi
+doctor=$(~/.agents/install.sh --doctor 2>&1); doctor_status=$?
+warnings=$(grep "  warn " <<<"$doctor")
+if [ $doctor_status = 0 ] && [ -z "$warnings" ]; then echo "ok   no warnings"
+else
+  [ -n "$warnings" ] && echo "$warnings"
+  [ $doctor_status = 0 ] || echo "FAIL install.sh --doctor exited $doctor_status: $(tail -3 <<<"$doctor")"
+  fail=1
+fi
 
 echo
 [ $fail = 0 ] && echo "ALL PASSED" || echo "FAILURES ABOVE"

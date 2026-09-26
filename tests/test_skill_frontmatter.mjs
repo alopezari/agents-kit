@@ -11,6 +11,8 @@ let piCli;
 try {
   piCli = realpathSync(execFileSync("which", ["pi"], { encoding: "utf8" }).trim());
 } catch {
+  // CI installs Pi, so a skip there means the check silently stopped running.
+  if (process.env.CI) { console.log("FAIL pi not installed in CI: skill frontmatter went unchecked"); process.exit(1); }
   console.log("skip pi not installed, so nothing drops skills on strict YAML");
   process.exit(0);
 }
