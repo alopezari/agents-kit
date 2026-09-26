@@ -20,6 +20,29 @@ def phase(repo, env=None, refresh=True):
     return sh(repo, PHASE, *(["--refresh"] if refresh else []), env=env)
 
 
+def status_line_names_the_branch(base):
+    # A session opened in a checkout left on another task's branch must see whose flow it is.
+    statusline = os.path.expanduser("~/.agents/adapters/claude/statusline.sh")
+    repo = os.path.join(base, "shop")
+    os.makedirs(repo)
+    sh(repo, "git", "init", "-q", "-b", "trunk")
+    open(os.path.join(repo, "app.py"), "w").write("x = 1\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    env = {**os.environ, "CHIRP_STATUSLINE_NESTED": "1"}  # no profile segments
+
+    def line():
+        phase(repo)
+        payload = '{"model": {"display_name": "M"}, "cwd": "%s"}' % repo
+        return subprocess.run([statusline], input=payload, capture_output=True, text=True, env=env).stdout
+
+    assert "flow" not in line(), "no flow on the default branch"
+    for branch, label in (("26-09/qit-1090-exclude-local-runs", "qit-1090"),
+                          ("feature/cart-redesign-with-a-long-name", "cart-redesign-with-…")):
+        sh(repo, "git", "checkout", "-q", "-b", branch)
+        assert f"flow {label}: spec" in line(), (branch, line())
+
+
 def walks_the_flow(base):
     repo = os.path.join(base, "shop")
     os.makedirs(repo)
@@ -150,7 +173,7 @@ def fast_path_serves_cache_and_refreshes(base):
 
 
 RESULTS = []
-for test in (walks_the_flow, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
+for test in (status_line_names_the_branch, walks_the_flow, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
              red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
              fast_path_serves_cache_and_refreshes):
     base = tempfile.mkdtemp(prefix="agents-test-phase-")
