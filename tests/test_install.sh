@@ -56,6 +56,8 @@ else echo "FAIL docker in core and profile: $(echo "$out" | grep docker)"; fail=
 printf '#!/bin/sh\necho "oldtool version 1.9.3"\n' > "$bin/oldtool"; chmod +x "$bin/oldtool"
 echo "required oldtool>=1.10 brew:oldtool a test" >> "$home/.agents/profiles/work/deps.txt"
 doctor=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
+if grep -qx "agents-kit $(cat "$home/.agents/VERSION")" <<<"$doctor"; then echo "ok   --doctor names the kit's version"
+else echo "FAIL --doctor does not print agents-kit <VERSION>"; fail=1; fi
 if echo "$doctor" | grep -q "  warn  oldtool 1.9.3 is older than 1.10"; then
   echo "ok   --doctor reports a program older than its minimum"
 else echo "FAIL --doctor did not flag oldtool 1.9.3 < 1.10"; fail=1; fi

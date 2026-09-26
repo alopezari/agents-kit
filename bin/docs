@@ -27,6 +27,8 @@ LAYOUT = {
     "AGENTS.md": "The instructions every harness loads (linked as CLAUDE.md / AGENTS.md).",
     "README.md": "Install and first steps.",
     "LICENSE": "MIT.",
+    "VERSION": "The kit's version; `install.sh --doctor` prints it.",
+    "CHANGELOG.md": "What changed in each version, and how a release is cut.",
     "deps.txt": "Every program the kit runs, by tier; `install.sh` installs and checks them.",
     "examples/": "A sample profile with one of each extension point, to copy as the start of your own.",
     "install.sh": "Wires the kit into each installed harness; `--doctor` reports without changing anything.",
