@@ -3,7 +3,7 @@
 #   .github/changelog-check origin/main
 set -euo pipefail
 base=$1
-unreleased() { awk '/^## \[Unreleased\]/ { on = 1; next } /^## \[/ { on = 0 } on && /^- /'; }
+unreleased() { awk '/^## \[Unreleased\]/ { on = 1; next } /^## / { on = 0 } on && /^- +[^ ]/'; }
 before=$(git show "$base:CHANGELOG.md" | unreleased | sort)
 after=$(unreleased < CHANGELOG.md | sort)
 added=$(comm -13 <(echo "$before") <(echo "$after"))

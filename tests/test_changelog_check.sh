@@ -22,6 +22,10 @@ case_ fail "a new line under a released version fails" \
   '# Changelog\n\n## [Unreleased]\n\n- Old entry (#1).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n- Sneaked in (#2).\n'
 case_ fail "rewording the intro fails" \
   '# Changelog, edited\n\n## [Unreleased]\n\n- Old entry (#1).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n'
+case_ fail "a line under another heading after Unreleased fails" \
+  '# Changelog\n\n## [Unreleased]\n\n- Old entry (#1).\n\n## Notes\n\n- Not an entry (#2).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n'
+case_ fail "an empty bullet fails" \
+  '# Changelog\n\n## [Unreleased]\n\n- Old entry (#1).\n- \n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n'
 case_ pass "rewording an existing entry counts as new" \
   '# Changelog\n\n## [Unreleased]\n\n- Old entry, clarified (#1).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n'
 exit $fail
