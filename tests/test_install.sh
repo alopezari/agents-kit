@@ -58,6 +58,11 @@ if [ "$(echo "$out" | grep -c "  fix   docker installed")" = 1 ] && ! echo "$out
 else echo "FAIL docker in core and profile: $(echo "$out" | grep docker)"; fail=1; fi
 # A program older than its declared minimum is reported, never passed as ok.
 printf '#!/bin/sh\necho "oldtool version 1.9.3"\n' > "$bin/oldtool"; chmod +x "$bin/oldtool"
+# From here on $bin stays as it is: a block that needs a fake puts it in its own folder, on the PATH of its own
+# commands only, so no fake outlives its block (one once ran from the real ~/.agents during a later install).
+bin_state() { for program in "$bin"/*; do echo "$program $(cksum < "$program")"; done; }
+bin_before=$(bin_state)
+fakes() { mkdir -p "$home/fakes/$1"; printf '#!/bin/sh\nexit 0\n' > "$home/fakes/$1/osascript"; chmod +x "$home/fakes/$1/osascript"; }
 echo "required oldtool>=1.10 brew:oldtool a test" >> "$home/.agents/profiles/work/deps.txt"
 doctor=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
 if grep -qx "agents-kit $(cat "$home/.agents/VERSION")" <<<"$doctor"; then echo "ok   --doctor names the kit's version"
@@ -114,10 +119,10 @@ check "sample profile: the monthly review mining runs with its list of only comm
   'HOME="$home" FETCH_ONLY=1 "$kit/review-mining/run.sh" >/dev/null 2>&1'
 # The monthly job hands other people's review comments to a model: it must run it without network or code
 # execution, writing only its run folder and the proposal. A fake claude records the flags and writes the proposal.
+fakes flags
 printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/claude-args"\nmkdir -p "%s/.agents/research/proposals"\necho proposal > "%s/.agents/research/proposals/$(date +%%Y-%%m).md"\n' \
-  "$home" "$home" "$home" > "$bin/claude"
-printf '#!/bin/sh\nexit 0\n' > "$bin/osascript"; chmod +x "$bin/claude" "$bin/osascript"
-HOME="$home" "$kit/review-mining/run.sh" >/dev/null 2>&1; mining_status=$?
+  "$home" "$home" "$home" > "$home/fakes/flags/claude"; chmod +x "$home/fakes/flags/claude"
+HOME="$home" PATH="$home/fakes/flags:$PATH" "$kit/review-mining/run.sh" >/dev/null 2>&1; mining_status=$?
 flags=$(cat "$home/claude-args" 2>/dev/null)
 run_dir="$kit/review-mining/runs/$(date +%Y-%m)"
 writable=$(grep '^Edit(' <<<"$flags" | sort | tr '\n' ' ')
@@ -127,9 +132,9 @@ check "review mining runs the model without network, a shell or writes outside i
    && [ "$tools" = "Read,Grep,Glob,Write,Edit,Agent" ] && ! grep -q "^Bash" <<<"$flags" \
    && [ "$writable" = "Edit(/$kit/research/proposals/$(date +%Y-%m).md) Edit(/$run_dir/**) " ]'
 since=$(cat "$kit/review-mining/last-success")
-rm -f "$bin/claude"; printf '#!/bin/sh\nexit 0\n' > "$bin/claude"; chmod +x "$bin/claude"
+fakes silent; printf '#!/bin/sh\nexit 0\n' > "$home/fakes/silent/claude"; chmod +x "$home/fakes/silent/claude"
 check "and a run that writes no proposal fails, even with an earlier one from this month" \
-  '! HOME="$home" "$kit/review-mining/run.sh" >/dev/null 2>&1 && [ "$(cat "$kit/review-mining/last-success")" = "$since" ]'
+  '! HOME="$home" PATH="$home/fakes/silent:$PATH" "$kit/review-mining/run.sh" >/dev/null 2>&1 && [ "$(cat "$kit/review-mining/last-success")" = "$since" ]'
 # The rules the model drafts are checked by run.sh with real semgrep: one of each result.
 if [ -x "$semgrep_dir/semgrep" ]; then
   fixture="$home/rules-fixture"; mkdir -p "$fixture"
@@ -141,11 +146,10 @@ if [ -x "$semgrep_dir/semgrep" ]; then
   rule unscanned 'eval(...);'; printf '<?php eval($x);\n' > "$fixture/unscanned.bad.php"; printf 'eval($x);\n' > "$fixture/unscanned.good.txt"
   printf 'rules: [\n' > "$fixture/broken.yml"; printf '<?php eval($x);\n' > "$fixture/broken.bad.php"; printf '<?php echo 1;\n' > "$fixture/broken.good.php"
   mkdir -p "$run_dir/rules"; : > "$run_dir/rules/stale.yml"  # left by an earlier run this month
-  rm -f "$bin/claude"
-  printf '#!/bin/sh\ncp -R "%s" "%s/rules"\necho "second proposal" > "%s/.agents/research/proposals/$(date +%%Y-%%m).md"\n' "$fixture" "$run_dir" "$home" > "$bin/claude"
-  chmod +x "$bin/claude"
-  HOME="$home" PATH="$semgrep_dir:$PATH" "$kit/review-mining/run.sh" >/dev/null 2>&1; rules_status=$?
-  rm -f "$bin/claude"; printf '#!/bin/sh\nexit 0\n' > "$bin/claude"; chmod +x "$bin/claude"  # later installs run claude too
+  fakes rules
+  printf '#!/bin/sh\ncp -R "%s" "%s/rules"\necho "second proposal" > "%s/.agents/research/proposals/$(date +%%Y-%%m).md"\n' \
+    "$fixture" "$run_dir" "$home" > "$home/fakes/rules/claude"; chmod +x "$home/fakes/rules/claude"
+  HOME="$home" PATH="$home/fakes/rules:$semgrep_dir:$PATH" "$kit/review-mining/run.sh" >/dev/null 2>&1; rules_status=$?
   proposal=$(cat "$kit/research/proposals/$(date +%Y-%m).md")
   check "review mining checks each drafted rule against its examples and adds the results to the proposal" \
     '[ $rules_status = 0 ] && grep -q "^- demo: PASS" <<<"$proposal" && grep -q "^- noisy: FAIL (flags its good example 1 times)" <<<"$proposal" \
@@ -168,10 +172,12 @@ else echo "skip sample profile verify: semgrep not installed"; fi
 
 # uninstall.sh on the same HOME, with a fake launchctl so the real jobs (labels are per user) stay untouched.
 # `list` reports a job loaded only when its label is in $home/stuck, standing in for a bootout that failed.
+mkdir -p "$home/fakes/launchd"
 printf '#!/bin/sh\necho "$@" >> "%s/launchctl.log"\n[ "$1" = list ] && { grep -qx "$2" "%s/stuck" 2>/dev/null; exit; }\nexit 0\n' \
-  "$home" "$home" > "$bin/launchctl"
-chmod +x "$bin/launchctl"
-if [ "$(command -v launchctl)" != "$bin/launchctl" ]; then echo "FAIL the fake launchctl isn't first in PATH"; exit 1; fi
+  "$home" "$home" > "$home/fakes/launchd/launchctl"
+chmod +x "$home/fakes/launchd/launchctl"
+export PATH="$home/fakes/launchd:$PATH"  # the rest of the test is this block
+if [ "$(command -v launchctl)" != "$home/fakes/launchd/launchctl" ]; then echo "FAIL the fake launchctl isn't first in PATH"; exit 1; fi
 unset AGENTS_SKIP_LAUNCHD  # CI sets it; the fake launchctl above is what keeps the real jobs safe here
 mkdir -p "$home/.claude" "$home/.codex"  # wired by their directories when the harnesses aren't installed (CI)
 wired=$(HOME="$home" "$kit/install.sh" --yes 2>&1)
@@ -220,6 +226,7 @@ check "a second run removes the job that was still loaded, then finds nothing" \
   'HOME="$home" "$kit/uninstall.sh" --yes >/dev/null 2>&1 && HOME="$home" "$kit/uninstall.sh" --yes 2>&1 | grep -q "Nothing of the kit is wired in"'
 HOME="$home" "$kit/install.sh" --yes >/dev/null 2>&1
 check "install.sh wires it all back in" '[ "$(kit_links)" = "$before" ]'
+check "no block changed the shared bin folder" '[ "$(bin_state)" = "$bin_before" ]'
 check "the real programs the test ran are untouched" \
   '[ "$(for path in "${real_programs[@]}"; do stat -Lf "%N %m %z" "$path"; done)" = "$real_before" ]'
 exit $fail
