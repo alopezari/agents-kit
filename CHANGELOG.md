@@ -12,6 +12,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - The install test can no longer write into a real program it runs, and fails if one changes (#14).
 - The shell guard no longer blocks text that only mentions a substitution in single quotes or quoted heredocs, and gates `eval` and `sh -c` (#15).
 - CI checks that each pull request adds a line here, unless it's labeled "no changelog" (#16).
+- Monthly review mining checks each semgrep rule the model drafts against its own examples and adds the results to the proposal (#17).
 
 ## [0.3.0] - 2026-09-26
 
