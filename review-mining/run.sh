@@ -126,7 +126,12 @@ claude -p "$(cat "$RUN/prompt.md")" --safe-mode --restricted --strict-mcp-config
   > "$RUN/claude.log" 2>&1
 
 # The model can't run code, so its semgrep rules are checked here: each must flag its .bad example and nothing
-# in its .good one. Local configs only and metrics off, so semgrep makes no network calls.
+# in its .good one. The rules come from a model that read other people's text, so semgrep runs with the network
+# denied by the macOS sandbox and a time limit.
+offline_semgrep() {
+  sandbox-exec -p '(version 1)(allow default)(deny network*)' perl -e 'alarm shift; exec @ARGV' 30 \
+    semgrep --metrics=off --disable-version-check --timeout 30 --json "$@"
+}
 check_rules() {
   local rule name bad good example count=0
   printf '\n## Semgrep rules checked by run.sh\n\n'
@@ -147,9 +152,13 @@ check_rules() {
 rule_result() {  # <rule> <bad example> <good example>
   local out example bad_hits good_hits
   for example in "$2" "$3"; do
-    out=$(semgrep --config "$1" --metrics=off --disable-version-check --timeout 30 --json "$example" 2>/dev/null || true)
+    out=$(offline_semgrep --config "$1" "$example" 2>/dev/null || true)
     if ! jq -e '.errors | length == 0' <<<"$out" >/dev/null 2>&1; then
-      echo "ERROR ($(jq -r '.errors[0].message // "semgrep failed"' <<<"$out" 2>/dev/null | head -1 | cut -c1-120))"; return
+      echo "ERROR ($(jq -r '.errors[0].message // "semgrep failed or took over 30s"' <<<"$out" 2>/dev/null | head -1 | cut -c1-120))"
+      return
+    fi
+    if ! jq -e --arg f "/$(basename "$example")" 'any(.paths.scanned[]; ("/" + .) | endswith($f))' <<<"$out" >/dev/null; then
+      echo "ERROR (semgrep skipped $(basename "$example"); use an extension its language scans)"; return
     fi
     if [ "$example" = "$2" ]; then bad_hits=$(jq '.results | length' <<<"$out"); else good_hits=$(jq '.results | length' <<<"$out"); fi
   done
