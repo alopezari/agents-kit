@@ -13,10 +13,14 @@ for dir in "$HOME"/.agents/tools/*/ "$HOME"/.agents/site/; do
 done
 # The machine lacks gh, semgrep and gitleaks, and a fake brew "installs" them as stubs: install.sh must
 # install missing required and recommended programs, and only report optional ones.
-bin="$home/bin"; mkdir -p "$bin"
+# Real programs are reached through scripts, not symlinks: a test writing a fake over one must replace the script,
+# never the real binary (a symlink once let a fake claude overwrite the installed Claude Code).
+bin="$home/bin"; mkdir -p "$bin"; real_programs=()
 for program in python3 git jq node npm claude codex pi; do
-  path=$(command -v "$program") && ln -s "$path" "$bin/$program"
+  path=$(command -v "$program") || continue
+  real_programs+=("$path"); printf '#!/bin/sh\nexec "%s" "$@"\n' "$path" > "$bin/$program"; chmod +x "$bin/$program"
 done
+real_before=$(for path in "${real_programs[@]}"; do stat -Lf '%N %m %z' "$path"; done)
 printf '#!/bin/bash\n[ "$1" = install ] || exit 1\nrm -f "%s/${!#}"; printf "#!/bin/sh\\n" > "%s/${!#}"; chmod +x "%s/${!#}"\n' "$bin" "$bin" "$bin" > "$bin/brew"
 chmod +x "$bin/brew"
 real_path=$PATH q="'"
@@ -110,8 +114,6 @@ check "sample profile: the monthly review mining runs with its list of only comm
   'HOME="$home" FETCH_ONLY=1 "$kit/review-mining/run.sh" >/dev/null 2>&1'
 # The monthly job hands other people's review comments to a model: it must run it without network or code
 # execution, writing only its run folder and the proposal. A fake claude records the flags and writes the proposal.
-# $bin/claude links to the real Claude Code: remove the link first, or the fake would be written into it.
-rm -f "$bin/claude" "$bin/osascript"
 printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/claude-args"\nmkdir -p "%s/.agents/research/proposals"\necho proposal > "%s/.agents/research/proposals/$(date +%%Y-%%m).md"\n' \
   "$home" "$home" "$home" > "$bin/claude"
 printf '#!/bin/sh\nexit 0\n' > "$bin/osascript"; chmod +x "$bin/claude" "$bin/osascript"
@@ -195,4 +197,6 @@ check "a second run removes the job that was still loaded, then finds nothing" \
   'HOME="$home" "$kit/uninstall.sh" --yes >/dev/null 2>&1 && HOME="$home" "$kit/uninstall.sh" --yes 2>&1 | grep -q "Nothing of the kit is wired in"'
 HOME="$home" "$kit/install.sh" --yes >/dev/null 2>&1
 check "install.sh wires it all back in" '[ "$(kit_links)" = "$before" ]'
+check "the real programs the test ran are untouched" \
+  '[ "$(for path in "${real_programs[@]}"; do stat -Lf "%N %m %z" "$path"; done)" = "$real_before" ]'
 exit $fail
