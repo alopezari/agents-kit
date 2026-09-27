@@ -161,7 +161,10 @@ def shell_code(command):
             i = k
         else:
             i += 1
-    return "".join(out)
+    masked = "".join(out)
+    if re.search(r"\beval\b|\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\b", masked):
+        return re.sub(r"['\"]", ";", command)  # its quoted text runs as code, so a quote starts a command there
+    return masked
 
 
 def unreviewed_pr(command, cwd):
