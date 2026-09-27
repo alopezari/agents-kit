@@ -130,6 +130,27 @@ since=$(cat "$kit/review-mining/last-success")
 rm -f "$bin/claude"; printf '#!/bin/sh\nexit 0\n' > "$bin/claude"; chmod +x "$bin/claude"
 check "and a run that writes no proposal fails, even with an earlier one from this month" \
   '! HOME="$home" "$kit/review-mining/run.sh" >/dev/null 2>&1 && [ "$(cat "$kit/review-mining/last-success")" = "$since" ]'
+# The rules the model drafts are checked by run.sh with real semgrep: one of each result.
+if [ -x "$semgrep_dir/semgrep" ]; then
+  fixture="$home/rules-fixture"; mkdir -p "$fixture"
+  rule() { printf 'rules:\n  - id: %s\n    languages: [php]\n    severity: WARNING\n    message: x\n    pattern: %s\n' "$1" "$2" > "$fixture/$1.yml"; }
+  rule demo 'eval(...);'; printf '<?php eval($x);\n' > "$fixture/demo.bad.php"; printf '<?php echo $x;\n' > "$fixture/demo.good.php"
+  rule noisy 'echo $X;'; printf '<?php echo 1;\n' > "$fixture/noisy.bad.php"; printf '<?php echo 2;\n' > "$fixture/noisy.good.php"
+  rule missed 'eval(...);'; printf '<?php echo 1;\n' > "$fixture/missed.bad.php"; printf '<?php echo 2;\n' > "$fixture/missed.good.php"
+  rule lonely 'eval(...);'
+  printf 'rules: [\n' > "$fixture/broken.yml"; printf '<?php eval($x);\n' > "$fixture/broken.bad.php"; printf '<?php echo 1;\n' > "$fixture/broken.good.php"
+  mkdir -p "$run_dir/rules"; : > "$run_dir/rules/stale.yml"  # left by an earlier run this month
+  rm -f "$bin/claude"
+  printf '#!/bin/sh\ncp -R "%s" "%s/rules"\necho "second proposal" > "%s/.agents/research/proposals/$(date +%%Y-%%m).md"\n' "$fixture" "$run_dir" "$home" > "$bin/claude"
+  chmod +x "$bin/claude"
+  HOME="$home" PATH="$semgrep_dir:$PATH" "$kit/review-mining/run.sh" >/dev/null 2>&1; rules_status=$?
+  rm -f "$bin/claude"; printf '#!/bin/sh\nexit 0\n' > "$bin/claude"; chmod +x "$bin/claude"  # later installs run claude too
+  proposal=$(cat "$kit/research/proposals/$(date +%Y-%m).md")
+  check "review mining checks each drafted rule against its examples and adds the results to the proposal" \
+    '[ $rules_status = 0 ] && grep -q "^- demo: PASS" <<<"$proposal" && grep -q "^- noisy: FAIL (flags its good example 1 times)" <<<"$proposal" \
+     && grep -q "^- missed: FAIL (misses its bad example)" <<<"$proposal" && grep -q "^- lonely: NO EXAMPLE" <<<"$proposal" \
+     && grep -q "^- broken: ERROR" <<<"$proposal" && ! grep -q stale <<<"$proposal"'
+else echo "skip review mining rule checks: semgrep is not installed"; fi
 plugin="$home/Projects/example-plugin"; mkdir -p "$plugin"
 git -C "$plugin" init -q -b main && git -C "$plugin" commit -q --allow-empty -m init && git -C "$plugin" switch -q -c change
 line=$(printf '{"workspace":{"current_dir":"%s"}}' "$plugin" | HOME="$home" "$kit/adapters/claude/statusline.sh" 2>/dev/null)

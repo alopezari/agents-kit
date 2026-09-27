@@ -74,7 +74,7 @@ Steps:
 2. Aggregate: category counts overall, and separately for comments on agent-authored PRs. Compare with the previous analysis and name what changed.
 3. Decide what the evidence supports: new recurring defects, rules that no longer show up, wording that reviewers keep contradicting. A rule needs a pattern across several PRs, not one comment. For every recurring defect, push it down this ladder as far as it goes, and propose the lowest rung that works:
    a. make it impossible (an API or helper the team could adopt; propose, never apply);
-   b. a deterministic check: a semgrep rule in $HOME/.agents/repos/_shared/wordpress.semgrep.yml or a repo's verify script under $HOME/.agents/repos/ (draft the rule and a synthetic example it should catch in $RUN, include both in the proposal as a diff, and say the rule is untested; never edit the kit's files);
+   b. a deterministic check: a semgrep rule in $HOME/.agents/repos/_shared/wordpress.semgrep.yml or a repo's verify script under $HOME/.agents/repos/ (write each rule to $RUN/rules/<name>.yml, a synthetic example it must flag to $RUN/rules/<name>.bad.<ext> and one it must not flag to $RUN/rules/<name>.good.<ext>, and put the rule in the proposal as a diff. You can't run semgrep: when you finish, run.sh checks each rule against its examples and adds the results to the proposal. Never edit the kit's files);
    c. a regression or property test the team could add;
    d. required evidence in the self-review lenses ($HOME/.agents/skills/self-review/lenses.md);
    e. a sentence in AGENTS.md, only when nothing above fits. Keep AGENTS.md short.
@@ -119,13 +119,48 @@ mkdir -p "$(dirname "$PROPOSAL")"
 # semgrep can fetch rules or rewrite files. --restricted keeps file tools inside the working directories, and
 # dontAsk refuses anything the rules don't allow. It reads the kit; it writes only this run and the proposal.
 previous=$(cksum "$PROPOSAL" 2>/dev/null || true)
+rm -rf "$RUN/rules"  # rules from an earlier run this month would be checked as this run's
 claude -p "$(cat "$RUN/prompt.md")" --safe-mode --restricted --strict-mcp-config --no-session-persistence --model opus \
   --add-dir "$HOME/.agents" --tools "Read,Grep,Glob,Write,Edit,Agent" --permission-mode dontAsk \
   --allowedTools "Edit(/$RUN/**)" "Edit(/$PROPOSAL)" \
   > "$RUN/claude.log" 2>&1
 
+# The model can't run code, so its semgrep rules are checked here: each must flag its .bad example and nothing
+# in its .good one. Local configs only and metrics off, so semgrep makes no network calls.
+check_rules() {
+  local rule name bad good example count=0
+  printf '\n## Semgrep rules checked by run.sh\n\n'
+  if ! command -v semgrep >/dev/null; then echo "semgrep is not installed, so no rule was checked."; return; fi
+  for rule in "$RUN"/rules/*.yml; do
+    [ -f "$rule" ] || continue
+    count=$((count + 1)); [ $count -gt 20 ] && { echo "- More than 20 rules; the rest weren't checked."; break; }
+    name=$(basename "$rule" .yml)
+    bad=""; good=""
+    for example in "$RUN/rules/$name".bad.*; do [ -f "$example" ] && bad=$example; done
+    for example in "$RUN/rules/$name".good.*; do [ -f "$example" ] && good=$example; done
+    if [ -z "$bad" ] || [ -z "$good" ]; then echo "- $name: NO EXAMPLE (needs $name.bad.* and $name.good.*)"; continue; fi
+    echo "- $name: $(rule_result "$rule" "$bad" "$good")"
+  done
+  [ $count -gt 0 ] || echo "No rules were drafted."
+}
+
+rule_result() {  # <rule> <bad example> <good example>
+  local out example bad_hits good_hits
+  for example in "$2" "$3"; do
+    out=$(semgrep --config "$1" --metrics=off --disable-version-check --timeout 30 --json "$example" 2>/dev/null || true)
+    if ! jq -e '.errors | length == 0' <<<"$out" >/dev/null 2>&1; then
+      echo "ERROR ($(jq -r '.errors[0].message // "semgrep failed"' <<<"$out" 2>/dev/null | head -1 | cut -c1-120))"; return
+    fi
+    if [ "$example" = "$2" ]; then bad_hits=$(jq '.results | length' <<<"$out"); else good_hits=$(jq '.results | length' <<<"$out"); fi
+  done
+  if [ "$bad_hits" -gt 0 ] && [ "$good_hits" = 0 ]; then echo "PASS (flags the bad example, not the good one)"
+  elif [ "$bad_hits" = 0 ]; then echo "FAIL (misses its bad example)"
+  else echo "FAIL (flags its good example $good_hits times)"; fi
+}
+
 # A proposal left by an earlier run this month is not this run's success.
 if [ -s "$PROPOSAL" ] && [ "$(cksum "$PROPOSAL")" != "$previous" ]; then
+  check_rules >> "$PROPOSAL"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$SINCE_FILE"
   osascript -e "display notification \"Proposal ready: ~/.agents/research/proposals/$MONTH.md\" with title \"Agent review mining\"" || true
 else
