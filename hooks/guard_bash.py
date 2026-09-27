@@ -99,10 +99,9 @@ def pr_checkout(command, cwd):
 
 def shell_code(command):
     """The command with text that can't run blanked out (same length): quoted strings and heredoc bodies.
-    Blanking uses x, not spaces, so a VAR="a b"c prefix still reads as one word. A command with $(...), backticks
-    or <<\\ or $'...' is returned whole: parsing those is where a real gh would hide, and a false match only blocks."""
-    if "$(" in command or "`" in command or "<<\\" in command or "$'" in command:
-        return command
+    Blanking uses x, not spaces, so a VAR="a b"c prefix still reads as one word. Where bash would run $(...) or
+    backticks, or read <<\\ or $'...', the command is returned whole: parsing those is where a real gh would hide,
+    and a false match only blocks. Inside single quotes, comments and quoted-delimiter heredocs they are only text."""
     out, n, i, heredocs = list(command), len(command), 0, []
 
     def in_brackets(k):  # arr[x<<2] is a shift
@@ -118,9 +117,13 @@ def shell_code(command):
         c = command[i]
         if c == "\\":
             i += 2
+        elif c == "`" or command.startswith("$(", i) or command.startswith("$'", i):
+            return command
         elif c in "'\"":
             k = i + 1
             while k < n and command[k] != c:
+                if c == '"' and (command[k] == "`" or command.startswith("$(", k)):
+                    return command
                 k += 2 if c == '"' and command[k] == "\\" else 1
             blank(i + 1, min(k, n))
             i = k + 1
@@ -132,18 +135,22 @@ def shell_code(command):
             close = command.find("))", i + 2)
             i = n if close < 0 else close + 2
         elif command.startswith("<<", i) and not command.startswith("<<<", i) and not in_brackets(i):
+            if re.match(r"<<-?[ \t]*\\", command[i:]):
+                return command
             m = re.match(r"<<(-?)[ \t]*(?:(['\"])([^'\"\n]+)\2|([A-Za-z_][\w-]*))", command[i:])
             if m:
-                heredocs.append((m.group(3) or m.group(4), bool(m.group(1))))
+                heredocs.append((m.group(3) or m.group(4), bool(m.group(1)), bool(m.group(2))))
             i += m.end() if m else 2
         elif c == "\n" and heredocs:
             k = i + 1
             while heredocs and k < n:
                 end = command.find("\n", k)
                 end = n if end < 0 else end
-                word, tabs = heredocs[0]
+                word, tabs, literal = heredocs[0]
                 if (command[k:end].lstrip("\t") if tabs else command[k:end]) == word:
                     heredocs.pop(0)
+                elif not literal and ("`" in command[k:end] or "$(" in command[k:end]):
+                    return command
                 else:
                     blank(k, end)
                 k = end + 1

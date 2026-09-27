@@ -125,12 +125,16 @@ def pr_gate_review_and_validation(base):
     runs = ['GH_HOST="x" gh pr create --fill', 'echo "$(gh pr create --fill)"', "cat <<EOF\n$(gh pr create --fill)\nEOF",
             "# <<EOF\ngh pr create --fill\nEOF", "echo $((1<<2)); gh pr create --fill", 'printf \\" | gh pr create --fill',
             "echo `gh pr create --fill`", "echo \"$(printf %s ')' ; gh pr create --fill)\"",
-            "cat <<\\EOF\nbody\nEOF\ngh pr create --fill", "echo $'it\\'s' ; gh pr create --fill", 'GH_REPO="alopezari/"agents-kit gh pr create --fill',
-            "printf %s foo\\ #bar; gh pr create --fill", "x=1; arr[x<<2]=value\ngh pr create --fill"]
+            "cat <<\\EOF\nbody\nEOF\ngh pr create --fill", "cat <<\\EOF\nit's\nEOF\ngh pr create --fill", "echo $'it\\'s' ; gh pr create --fill", 'GH_REPO="alopezari/"agents-kit gh pr create --fill',
+            "printf %s foo\\ #bar; gh pr create --fill", "x=1; arr[x<<2]=value\ngh pr create --fill",
+            "(( $(gh pr create --fill) ))", "echo 'a' `gh pr create --fill`", "cat <<- EOF\n\t`gh pr create --fill`\n\tEOF",
+            "cat <<EOF\nx\nEOF\ncat <<'X'\n`y`\nX\ngh pr create --fill", "echo \"a\\\"$(gh pr create --fill)\""]
     for command in runs:
         assert guard(command, repo) == "deny", f"the shell runs gh here: {command!r}"
     inert = ["cat <<EOF\n EOF\ngh pr create --fill\nEOF", "cat <<'END-MARK'\ngh pr create --fill\nEND-MARK",
-             "echo 'a | gh pr create'", "cat <<-EOF\n\tgh pr create\n\tEOF"]
+             "echo 'a | gh pr create'", "cat <<-EOF\n\tgh pr create\n\tEOF",
+             "python3 - <<'PY'\ns = '`x`|gh pr create $(y)'\nPY", "grep -n '`gh pr create`' notes.md",
+             'echo "\\`gh pr create\\`"']
     for command in inert:
         assert guard(command, repo) == "allow", f"nothing runs gh here: {command!r}"
     subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "review"], cwd=repo, capture_output=True)
