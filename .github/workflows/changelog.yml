@@ -1,0 +1,26 @@
+name: changelog
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  unreleased-entry:
+    # A pull request that changes nothing for someone using the kit opts out with this label.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no changelog') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # The base branch's checker, so a pull request can't pass by editing it; the PR's own until the base has one.
+      - env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          git show "origin/$BASE:.github/changelog-check" > "$RUNNER_TEMP/changelog-check" 2>/dev/null \
+            || cp .github/changelog-check "$RUNNER_TEMP/changelog-check"
+          bash "$RUNNER_TEMP/changelog-check" "origin/$BASE"
