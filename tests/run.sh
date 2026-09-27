@@ -67,6 +67,8 @@ if [[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
   echo "ok   VERSION $version has its CHANGELOG entry"
 else echo "FAIL VERSION ($version) needs a '## [$version] - <date>' heading in CHANGELOG.md"; fail=1; fi
 
+bash test_changelog_check.sh || fail=1
+
 section "install on a new machine"
 bash test_install.sh || fail=1
 
