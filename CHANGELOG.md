@@ -1,6 +1,6 @@
 # Changelog
 
-Each pull request adds a line under Unreleased. A release moves those lines under a new version, sets `VERSION` to it and tags the commit `v<version>`. Versions follow [semantic versioning](https://semver.org): a minor version while the kit is below 1.0, a major one for anything that breaks an installed profile. 0.1.0 and 0.2.0 group the work before versioning started, by day, and have no tags.
+Each pull request adds a line under Unreleased; CI checks it, unless the pull request is labeled "no changelog" because nothing changes for someone using the kit. A release moves those lines under a new version, sets `VERSION` to it and tags the commit `v<version>`. Versions follow [semantic versioning](https://semver.org): a minor version while the kit is below 1.0, a major one for anything that breaks an installed profile. 0.1.0 and 0.2.0 group the work before versioning started, by day, and have no tags.
 
 ## [Unreleased]
 
@@ -9,6 +9,9 @@ Each pull request adds a line under Unreleased. A release moves those lines unde
 - Monthly review mining runs the model with no shell or network, writing only its run folder and this month's proposal (#9).
 - Branches like `feature/x` and `feature-x` no longer share a spec, reports and stamps; files saved under the old name move on first use (#10).
 - `install.sh` warns when profiles, or a profile and the kit, use the same name for a skill, overlay, doc or MCP server (#12).
+- The install test can no longer write into a real program it runs, and fails if one changes (#14).
+- The shell guard no longer blocks text that only mentions a substitution in single quotes or quoted heredocs, and gates `eval` and `sh -c` (#15).
+- CI checks that each pull request adds a line here, unless it's labeled "no changelog" (#16).
 - Monthly review mining checks each semgrep rule the model drafts against its own examples and adds the results to the proposal (#17).
 
 ## [0.3.0] - 2026-09-26

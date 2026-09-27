@@ -1,0 +1,15 @@
+#!/bin/bash
+# Pass when this checkout's CHANGELOG.md has a "- " line under Unreleased that <base ref> doesn't have.
+#   .github/changelog-check origin/main
+set -euo pipefail
+base=$1
+unreleased() { awk '/^## \[Unreleased\]/ { on = 1; next } /^## / { on = 0 } on && /^- +[^ ]/'; }
+before=$(git show "$base:CHANGELOG.md" | unreleased | sort)
+after=$(unreleased < CHANGELOG.md | sort)
+added=$(comm -13 <(echo "$before") <(echo "$after"))
+if [ -z "$added" ]; then
+  echo "CHANGELOG.md has no new line under Unreleased. Add one saying what this pull request changes for someone"
+  echo "using the kit, or label the pull request \"no changelog\" if nothing changes for them."
+  exit 1
+fi
+echo "New under Unreleased:"; echo "$added"
