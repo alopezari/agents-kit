@@ -102,6 +102,8 @@ def shell_code(command):
     Blanking uses x, not spaces, so a VAR="a b"c prefix still reads as one word. Where bash would run $(...) or
     backticks, or read <<\\ or $'...', the command is returned whole: parsing those is where a real gh would hide,
     and a false match only blocks. Inside single quotes, comments and quoted-delimiter heredocs they are only text."""
+    if re.search(r"\$(?:\\\n)+[('`]", command):  # bash joins $\<newline>( back into $(
+        return command
     out, n, i, heredocs = list(command), len(command), 0, []
 
     def in_brackets(k):  # arr[x<<2] is a shift
@@ -138,6 +140,8 @@ def shell_code(command):
             if re.match(r"<<-?[ \t]*\\", command[i:]):
                 return command
             m = re.match(r"<<(-?)[ \t]*(?:(['\"])([^'\"\n]+)\2|([A-Za-z_][\w-]*))", command[i:])
+            if m and i + m.end() < n and command[i + m.end()] not in " \t\n;&|<>)":
+                return command  # <<'EOF'x or <<EOF'x': bash's delimiter is EOFx, and quoting any part makes the body literal
             if m:
                 heredocs.append((m.group(3) or m.group(4), bool(m.group(1)), bool(m.group(2))))
             i += m.end() if m else 2
