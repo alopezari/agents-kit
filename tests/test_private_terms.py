@@ -95,6 +95,9 @@ def kit_prs_are_checked(base):
         "sh -c after export GH_REPO"
     assert "ACME-4" in guard("GH_REPO=alopezari/agents-kit sh -c 'gh pr edit 3 -t ACME-4'", other, env), \
         "GH_REPO for sh -c only"
+    assert "ACME-4" in guard("eval 'gh pr edit 3 -t' ' ACME-4'", KIT, env), "eval joins its arguments"
+    assert "ACME-4" in guard("sh -c 'gh pr edit 3 -t 'ACME-4", KIT, env), "sh -c, a script of quoted and bare pieces"
+    assert "ACME-4" in guard("sh -c $'gh pr edit 3 -t ACME-4'", KIT, env), "sh -c $'...'"
     locked = os.path.join(base, "locked")
     os.makedirs(locked, mode=0o000)
     assert "ACME-4" in guard(f"cd {locked}; gh pr edit 3 -t ACME-4", KIT, env), "a folder cd can't enter"

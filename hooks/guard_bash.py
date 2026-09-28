@@ -76,6 +76,9 @@ def dangerous_rm(command, cwd):
     return None
 
 
+RUNS_QUOTED_TEXT = re.compile(r"\beval\b|\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\b")
+
+
 def cd_into(cwd, target):
     """Where `cd <target>` leaves a shell that was in cwd. A cd that fails leaves it where it was."""
     path = os.path.normpath(os.path.join(cwd, os.path.expanduser(target.strip("\"'"))))
@@ -123,13 +126,18 @@ def pr_checkout(command, cwd):
     return cwd
 
 
+def opened(command):
+    """The command with every quote read as ; when eval or sh -c runs quoted text as code."""
+    return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(command) else command
+
+
 def shell_code(command):
     """The command with text that can't run blanked out (same length): quoted strings and heredoc bodies.
     Blanking uses x, not spaces, so a VAR="a b"c prefix still reads as one word. Where bash would run $(...) or
-    backticks, or read <<\\ or $'...', the command is returned whole: parsing those is where a real gh would hide,
+    backticks, or read <<\\ or $'...', the command is returned whole (opened()): parsing those is where a real gh would hide,
     and a false match only blocks. Inside single quotes, comments and quoted-delimiter heredocs they are only text."""
     if re.search(r"\$(?:\\\n)+[('`]", command):  # bash joins $\<newline>( back into $(
-        return command
+        return opened(command)
     out, n, i, heredocs = list(command), len(command), 0, []
 
     def in_brackets(k):  # arr[x<<2] is a shift
@@ -146,12 +154,12 @@ def shell_code(command):
         if c == "\\":
             i += 2
         elif c == "`" or command.startswith("$(", i) or command.startswith("$'", i):
-            return command
+            return opened(command)
         elif c in "'\"":
             k = i + 1
             while k < n and command[k] != c:
                 if c == '"' and (command[k] == "`" or command.startswith("$(", k)):
-                    return command
+                    return opened(command)
                 k += 2 if c == '"' and command[k] == "\\" else 1
             blank(i + 1, min(k, n))
             i = k + 1
@@ -164,10 +172,10 @@ def shell_code(command):
             i = n if close < 0 else close + 2
         elif command.startswith("<<", i) and not command.startswith("<<<", i) and not in_brackets(i):
             if re.match(r"<<-?[ \t]*\\", command[i:]):
-                return command
+                return opened(command)
             m = re.match(r"<<(-?)[ \t]*(?:(['\"])([^'\"\n]+)\2|([A-Za-z_][\w-]*))", command[i:])
             if m and i + m.end() < n and command[i + m.end()] not in " \t\n;&|<>)":
-                return command  # <<'EOF'x or <<EOF'x': bash's delimiter is EOFx, and quoting any part makes the body literal
+                return opened(command)  # <<'EOF'x or <<EOF'x': bash's delimiter is EOFx, and quoting any part makes the body literal
             if m:
                 heredocs.append((m.group(3) or m.group(4), bool(m.group(1)), bool(m.group(2))))
             i += m.end() if m else 2
@@ -180,7 +188,7 @@ def shell_code(command):
                 if (command[k:end].lstrip("\t") if tabs else command[k:end]) == word:
                     heredocs.pop(0)
                 elif not literal and ("`" in command[k:end] or "$(" in command[k:end]):
-                    return command
+                    return opened(command)
                 else:
                     blank(k, end)
                 k = end + 1
@@ -188,9 +196,7 @@ def shell_code(command):
         else:
             i += 1
     masked = "".join(out)
-    if re.search(r"\beval\b|\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\b", masked):
-        return re.sub(r"['\"]", ";", command)  # its quoted text runs as code, so a quote starts a command there
-    return masked
+    return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(masked) else masked
 
 
 def unreviewed_pr(command, cwd):
@@ -271,10 +277,14 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
             if wrapper not in checked:
                 checked.add(wrapper)
                 start, end = wrapper
+                # The script is the whole word ('gh pr edit -t 'ACME-4 is one), and every argument of eval, which joins them.
+                stops = "\n;&|)" if re.search(r"\beval\s+\$?$", command[:start]) else " \t\n;&|)"
+                while end < len(command) and command[end] not in stops:
+                    end = quote_around(end + 1)[1] if command[end] in "'\"" else end + 1
                 prefix = len(re.split(r"[;&|\n]", code[:start])[-1])  # GH_REPO=x sh -c '...'
                 exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=([^\s;&|]+)", command[start - prefix:start]))
                 try:
-                    script = shlex.split(command[start:end])[0]
+                    script = " ".join(shlex.split(command[start:end]))
                 except ValueError:  # an unclosed quote
                     script = command[start + 1:end]
                 reason = private_terms_in_kit_pr(script, runs_in, {**env, **exported})
