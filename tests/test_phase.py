@@ -94,6 +94,40 @@ def walks_the_flow(base):
     assert phase(repo, env) == "ship"
 
 
+def pr_opened_without_follow_pr(base):
+    # A PR opened by hand has no follow-pr report; its staging guide without results showed "staging (you)".
+    repo = new_repo(base)
+    sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
+    spec = sh(repo, SPEC_PATH)
+    open(spec, "w").write("# Spec\n")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    for kind in ("verify", "review", "validate"):
+        sh(repo, "python3", STAMP, "write", "--kind", kind)
+    open(spec.replace("spec-shop-", "staging-guide-shop-"), "w").write("# Staging guide\n1. Check the cart\n")
+    fake = os.path.join(base, "bin")
+    os.makedirs(fake)
+    open(os.path.join(fake, "gh"), "w").write('#!/bin/sh\necho "$PR_STATE"\necho called >> "$GH_CALLS"\n')
+    os.chmod(os.path.join(fake, "gh"), 0o755)
+    calls = os.path.join(base, "gh-calls")
+    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "PR_STATE": "OPEN", "GH_CALLS": calls}
+    assert phase(repo, env) == "staging (you)", "a branch that was never pushed has no PR"
+    assert not os.path.exists(calls), "and gh isn't asked about it"
+
+    remote = os.path.join(base, "remote.git")
+    sh(base, "git", "init", "-q", "--bare", remote)
+    sh(repo, "git", "remote", "add", "origin", remote)
+    sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "cart")
+    sh(repo, "git", "push", "-q", "-u", "origin", "feature/cart")
+    for kind in ("verify", "review", "validate"):
+        sh(repo, "python3", STAMP, "write", "--kind", kind)
+    assert phase(repo, env) == "PR open"
+    env["PR_STATE"] = ""
+    os.remove(os.path.join(repo, ".git", "agents", "phase", "feature~cart.json"))
+    assert phase(repo, env) == "staging (you)", "a pushed branch with no PR is still in the flow"
+    assert phase(repo, env) == "staging (you)"
+    assert len(open(calls).read().split()) == 2, "no PR is cached like any other answer"
+
+
 def new_repo(base):
     repo = os.path.join(base, "shop")
     os.makedirs(repo)
@@ -224,7 +258,7 @@ def fast_path_serves_cache_and_refreshes(base):
 
 
 RESULTS = []
-for test in (status_line_names_the_branch, walks_the_flow, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
+for test in (status_line_names_the_branch, walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
              red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
              slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,
              fast_path_serves_cache_and_refreshes):

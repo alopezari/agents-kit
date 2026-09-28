@@ -96,15 +96,21 @@ def compute(previous):
     reports = os.path.dirname(spec)
     suffix = os.path.basename(spec)[len("spec-"):-len(".md")]
 
-    if os.path.exists(os.path.join(reports, f"follow-pr-{suffix}.md")):
+    # A PR may have been opened without follow-pr (by hand, or before the flow existed), so ask gh too, once the
+    # branch is pushed: a branch that never left this machine has no PR to ask about.
+    followed = os.path.exists(os.path.join(reports, f"follow-pr-{suffix}.md"))
+    pr, extra = None, {}
+    if followed or git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"):
         state, checked_at = pr_state(previous)
-        label = {"MERGED": "ship", "CLOSED": "PR closed"}.get(state, "PR open")
-        return label, {"pr_state": state, "pr_checked_at": checked_at}
+        extra = {"pr_state": state, "pr_checked_at": checked_at}
+        pr = {"MERGED": "ship", "CLOSED": "PR closed"}.get(state, "PR open" if followed or state == "OPEN" else None)
+    if pr:
+        return pr, extra
 
     changed = review_stamp.changed_paths()[1]
     has_spec = os.path.exists(spec)
     if not has_spec and not changed:
-        return "spec", {}
+        return "spec", extra
     # The spec is a step, not a gate: a branch without one still has its real phase, flagged.
     flag = "" if has_spec else " (no spec)"
     current = review_stamp.fingerprint()
@@ -119,7 +125,7 @@ def compute(previous):
         label = steps[reached][0]
     else:
         label = staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md")) or "create-pr"
-    return label + (f" · redo {', '.join(redo)}" if redo else "") + flag, {}
+    return label + (f" · redo {', '.join(redo)}" if redo else "") + flag, extra
 
 
 def refresh(files):
