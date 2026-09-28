@@ -24,7 +24,7 @@ def guard(command, cwd, env):
 def setup(base):
     profiles = os.path.join(base, "profiles")
     os.makedirs(os.path.join(profiles, "work"))
-    open(os.path.join(profiles, "work", "private-terms.txt"), "w").write("# an employer's tickets\nacme-\\d+\n")
+    open(os.path.join(profiles, "work", "private-terms.txt"), "w").write("# an employer's tickets\nacme-\\d+\nsecret project\n")
     env = {**os.environ, "AGENTS_PROFILES_DIR": profiles, "AGENTS_TEST": "1"}
     other = os.path.join(base, "other")
     os.makedirs(other)
@@ -72,6 +72,13 @@ def kit_prs_are_checked(base):
     assert "ACME-4" in guard("bash -lc 'gh pr edit 3 --title \"Fix ACME-4 flow\"'", KIT, env), "sh -c, a title with spaces"
     assert "ACME-4" in guard("sh -c \"gh pr edit 3 -R alopezari/agents-kit -t ACME-4\"", other, env), "sh -c with --repo"
     assert guard("bash -lc 'gh pr edit 3 -R someone/other -t ACME-4'", KIT, env) == "", "sh -c on another repository"
+    assert "ACME-4" in guard("bash -lc 'gh pr edit 3 --title \"hello; ACME-4\"'", KIT, env), "sh -c, an operator in the title"
+    assert "Secret Project" in guard("eval 'gh pr edit 3 -t \"Secret Project\"'", KIT, env), "eval, a term of two words"
+    assert "ACME-4" in guard("bash -lc 'gh pr edit 3 --repo=\"alopezari/agents-kit\" -t ACME-4'", other, env), "--repo=\"...\""
+    assert "ACME-4" in guard(f"bash -lc 'cd {KIT} && gh pr edit 3 -t ACME-4'", other, env), "sh -c that cds into the kit"
+    assert guard("bash -lc 'cd /tmp && gh pr edit 3 -t ACME-4'", KIT, env) == "", "sh -c that cds out of the kit"
+    assert guard('echo "x; cd /tmp" && gh pr edit 3 -t ACME-4', KIT, env) != "", "a cd inside quotes moves nothing"
+    assert "can't be read" in guard("gh pr edit 3 -F 'a\x00b'", KIT, env), "a path open() rejects"
     assert guard('gh pr edit 3 --title "Fix the flow"', KIT, env) == "", "clean title"
     assert guard('gh pr edit 3 --title "Fix ACME-12 flow"', other, env) == "", "other repositories may name them"
 

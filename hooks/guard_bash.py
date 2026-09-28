@@ -223,11 +223,14 @@ def pr_command_args(command, start):
 
 def private_terms_in_kit_pr(command, cwd):
     """The kit is public: a pull request to it must not carry a profile's private terms."""
-    for match in re.finditer(r"(?:^|[;&|(\n`])\s*((?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*)gh\s+pr\s+(?:create|edit)\b", shell_code(command)):
+    code = shell_code(command)
+    for match in re.finditer(r"(?:^|[;&|(\n`])\s*((?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*)gh\s+pr\s+(?:create|edit)\b", code):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
+        # The cds are found in the code (quoted text blanked, or eval's argument opened up) and read from the command.
         runs_in = cwd
-        for target in re.findall(r"(?:^|[;&|\n]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before):
+        for cd in re.finditer(r"(?:^|[;&|\n]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", code[:match.start(1)]):
+            target = command[cd.start(1):cd.end(1)]
             runs_in = os.path.normpath(os.path.join(runs_in, os.path.expanduser(target.strip("\"'"))))
         exported = dict(re.findall(r"(?:^|[;&|\n]\s*)(?:export\s+)?(GH_REPO|GH_HOST)=([^\s;&|]+)(?=\s*(?:[;&|\n]|$))",
                                    before))
@@ -236,10 +239,11 @@ def private_terms_in_kit_pr(command, cwd):
         try:
             args = pr_command_args(command, match.end(1))
         except ValueError:
-            # The command starts inside a quote: eval '...' or sh -c '...'. Split its line on spaces instead; a title
-            # comes apart there, so every word is checked as text.
-            args = [arg.strip("\"'") for arg in re.split(r"[;&|]", command[match.end(1):].split("\n")[0])[0].split()]
-            values += args[3:]
+            # The command starts inside a quote: eval '...' or sh -c '...'. Read its flags from the line split on
+            # spaces, and check the whole line as text, since a quoted title comes apart there.
+            line = command[match.end(1):].split("\n")[0]
+            args = [arg.replace('"', "").replace("'", "") for arg in line.split()]
+            values.append(line)
         repo, host = (exported.get(k, os.environ.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
         for i, arg in enumerate(args[3:], 3):
             flag, eq, inline = arg.partition("=")
@@ -267,7 +271,7 @@ def private_terms_in_kit_pr(command, cwd):
                 if path == "-" or os.path.basename(path) in before:  # stdin, or a file this command writes first
                     raise OSError
                 values.append(open(os.path.join(runs_in, os.path.expanduser(path))).read())
-            except OSError:
+            except (OSError, ValueError):  # ValueError: a path open() rejects, like one with a NUL
                 return (f"This pull request's description file ({path}) can't be read yet, so it can't be checked for "
                         "a profile's private terms. Write the file first, then run gh in a separate command.")
         terms = private_terms.found("\n".join(values))
