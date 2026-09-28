@@ -86,7 +86,8 @@ def cd_into(cwd, target):
 
 
 def quoted_spans(command):
-    """(start, end) of each quoted string in the command, quotes included; an unclosed one runs to the end."""
+    """(start, end) of each quoted string in the command, quotes included; an unclosed one runs to the end.
+    Heredoc bodies aren't skipped: an apostrophe in one can pair with a later quote."""
     spans, i, n = [], 0, len(command)
     while i < n:
         c = command[i]
@@ -98,6 +99,9 @@ def quoted_spans(command):
                 k += 2 if c == '"' and command[k] == "\\" else 1
             spans.append((i, min(k + 1, n)))
             i = k + 1
+        elif c == "#" and (i == 0 or command[i - 1] in " \t\n;&|("):  # a comment's quotes open nothing
+            end = command.find("\n", i)
+            i = n if end < 0 else end
         else:
             i += 1
     return spans
