@@ -232,12 +232,15 @@ def private_terms_in_kit_pr(command, cwd):
         exported = dict(re.findall(r"(?:^|[;&|\n]\s*)(?:export\s+)?(GH_REPO|GH_HOST)=([^\s;&|]+)(?=\s*(?:[;&|\n]|$))",
                                    before))
         exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=(\S+)", command[match.start(1):match.end(1)]))
+        values, files = [], []
         try:
             args = pr_command_args(command, match.end(1))
         except ValueError:
-            continue  # unbalanced quotes: text inside a heredoc or string, not a command gh would run
+            # The command starts inside a quote: eval '...' or sh -c '...'. Split its line on spaces instead; a title
+            # comes apart there, so every word is checked as text.
+            args = [arg.strip("\"'") for arg in re.split(r"[;&|]", command[match.end(1):].split("\n")[0])[0].split()]
+            values += args[3:]
         repo, host = (exported.get(k, os.environ.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
-        values, files = [], []
         for i, arg in enumerate(args[3:], 3):
             flag, eq, inline = arg.partition("=")
             if re.fullmatch(r"-[tbFR]..*", arg):  # -tTitle: gh accepts short flags with the value attached

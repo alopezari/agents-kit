@@ -68,6 +68,10 @@ def kit_prs_are_checked(base):
     import guard_bash
     assert guard_bash.pr_checkout(f"cd /tmp && gh pr edit 3 -t a && cd {KIT} && gh pr create --fill", other) == os.path.realpath(KIT), \
         "the review gate still finds the checkout gh pr create runs in"
+    assert "ACME-4" in guard("eval 'gh pr edit 3 -t ACME-4'", KIT, env), "eval"
+    assert "ACME-4" in guard("bash -lc 'gh pr edit 3 --title \"Fix ACME-4 flow\"'", KIT, env), "sh -c, a title with spaces"
+    assert "ACME-4" in guard("sh -c \"gh pr edit 3 -R alopezari/agents-kit -t ACME-4\"", other, env), "sh -c with --repo"
+    assert guard("bash -lc 'gh pr edit 3 -R someone/other -t ACME-4'", KIT, env) == "", "sh -c on another repository"
     assert guard('gh pr edit 3 --title "Fix the flow"', KIT, env) == "", "clean title"
     assert guard('gh pr edit 3 --title "Fix ACME-12 flow"', other, env) == "", "other repositories may name them"
 

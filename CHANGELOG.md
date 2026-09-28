@@ -4,6 +4,8 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 
 ## [Unreleased]
 
+- The private-terms check also reads pull requests opened through `eval` or `sh -c` (#20).
+
 - triage no longer reads a git checkout as a payments signal (#7).
 - The shell guard no longer blocks commands that only mention `gh pr create` in quoted text or heredocs (#8).
 - Monthly review mining runs the model with no shell or network, writing only its run folder and this month's proposal (#9).
