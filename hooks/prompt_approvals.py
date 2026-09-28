@@ -28,13 +28,17 @@ def main():
     session = re.sub(r"[^\w-]", "", str(payload.get("session_id") or ""))
     if not session:
         return 0
+    shutil.rmtree(os.path.join(guard_mcp.TURN_APPROVALS, session), ignore_errors=True)  # the last turn's
     os.makedirs(guard_mcp.TURN_APPROVALS, exist_ok=True)
-    for name in os.listdir(guard_mcp.TURN_APPROVALS):  # this session's last turn, and sessions long gone
+    for name in os.listdir(guard_mcp.TURN_APPROVALS):  # sessions long gone
         path = os.path.join(guard_mcp.TURN_APPROVALS, name)
-        if name == session or time.time() - os.path.getmtime(path) > STALE_SECONDS:
-            shutil.rmtree(path, ignore_errors=True)
+        try:
+            if time.time() - os.path.getmtime(path) > STALE_SECONDS:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:  # another session's hook removed it first
+            pass
     prompt = str(payload.get("prompt") or "")
-    named = sorted(s for s in guard_mcp.guarded_services() if re.search(rf"\b{re.escape(s)}\b", prompt, re.I))
+    named = sorted(s for s in guard_mcp.guarded_services() if re.search(rf"(?<!\w){re.escape(s)}(?!\w)", prompt, re.I))
     if named:
         os.makedirs(os.path.join(guard_mcp.TURN_APPROVALS, session))
         for service in named:

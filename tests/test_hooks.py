@@ -132,6 +132,15 @@ def asking_for_a_service_approves_its_writes_for_that_turn(base):
     prompt("open an issue in the Tracker")
     assert write(*gateway) == "allow", "services a profile declares too"
     assert write() == "deny", "and only the one named"
+    turn = ("mcp__plugin_gateway__execute", {"provider": "turn", "subtool": "create-issue"})
+    rules = json.load(open(os.path.join(base, "profiles", "work", "mcp-writes.json")))
+    rules["gateways"][0]["writes"].update({"turn": ["create-issue"], "wiki-": ["create-issue"]})
+    json.dump(rules, open(os.path.join(base, "profiles", "work", "mcp-writes.json"), "w"))
+    prompt("open an issue in the Tracker")
+    assert write(*turn) == "deny", "a service named turn isn't approved by the folder of turn approvals"
+    prompt("use wiki- for it")
+    assert write("mcp__plugin_gateway__execute", {"provider": "wiki-", "subtool": "create-issue"}) == "allow", \
+        "a name that ends in a symbol"
 
 
 def guard_mcp_logs_browser_mcp(base):

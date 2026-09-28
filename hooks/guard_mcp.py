@@ -63,8 +63,9 @@ def guarded_services():
 def approved(service, session):
     if os.path.exists(os.path.join(TURN_APPROVALS, re.sub(r"[^\w-]", "", str(session or "")) or "-", service)):
         return True
-    try:
-        return time.time() - os.path.getmtime(os.path.join(APPROVALS, service)) < APPROVAL_MINUTES * 60
+    manual = os.path.join(APPROVALS, service)
+    try:  # a file: a service named "turn" must not read TURN_APPROVALS as the user's approval
+        return os.path.isfile(manual) and time.time() - os.path.getmtime(manual) < APPROVAL_MINUTES * 60
     except OSError:
         return False
 
