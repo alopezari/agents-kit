@@ -13,7 +13,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - The shell guard no longer blocks text that only mentions a substitution in single quotes or quoted heredocs, and gates `eval` and `sh -c` (#15).
 - CI checks that each pull request adds a line here, unless it's labeled "no changelog" (#16).
 - Monthly review mining checks each semgrep rule the model drafts against its own examples and adds the results to the proposal (#17).
-- The private-terms check also reads pull requests opened through `eval` or `sh -c`, and a `cd` to a missing folder no longer crashes the shell guard open (#20).
+- The private-terms check also reads pull requests opened through `eval` or `sh -c`, and a `cd` that fails no longer crashes the shell guard, which let the command run (#20).
 
 ## [0.3.0] - 2026-09-26
 
