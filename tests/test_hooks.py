@@ -117,6 +117,8 @@ def pr_gate_review_and_validation(base):
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     assert guard("gh pr create --fill", repo) == "deny"
     assert guard(f"cd {repo} && GH_HOST=x gh pr create --fill", repo) == "deny"
+    assert guard("cd no-such-dir; gh pr create --fill", repo) == "deny", "a failed cd can't crash the guard open"
+    assert guard("sh -c $'gh pr create --fill'", repo) == "deny", "sh -c $'...'"
     assert guard("""python3 -c 'print("gh pr create")'""", repo) == "allow", "phrase inside a string is not a PR"
     assert guard('grep -n "gh pr create" hooks/guard_bash.py', repo) == "allow"
     assert guard('grep -n "guard_bash\\|gh pr create" bin/docs', repo) == "allow", "a | inside a pattern starts no command"

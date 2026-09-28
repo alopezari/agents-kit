@@ -24,7 +24,7 @@ def guard(command, cwd, env):
 def setup(base):
     profiles = os.path.join(base, "profiles")
     os.makedirs(os.path.join(profiles, "work"))
-    open(os.path.join(profiles, "work", "private-terms.txt"), "w").write("# an employer's tickets\nacme-\\d+\n")
+    open(os.path.join(profiles, "work", "private-terms.txt"), "w").write("# an employer's tickets\nacme-\\d+\nsecret project\n")
     env = {**os.environ, "AGENTS_PROFILES_DIR": profiles, "AGENTS_TEST": "1"}
     other = os.path.join(base, "other")
     os.makedirs(other)
@@ -68,6 +68,42 @@ def kit_prs_are_checked(base):
     import guard_bash
     assert guard_bash.pr_checkout(f"cd /tmp && gh pr edit 3 -t a && cd {KIT} && gh pr create --fill", other) == os.path.realpath(KIT), \
         "the review gate still finds the checkout gh pr create runs in"
+    assert "ACME-4" in guard("eval 'gh pr edit 3 -t ACME-4'", KIT, env), "eval"
+    assert "ACME-4" in guard("bash -lc 'gh pr edit 3 --title \"Fix ACME-4 flow\"'", KIT, env), "sh -c, a title with spaces"
+    assert "ACME-4" in guard("sh -c \"gh pr edit 3 -R alopezari/agents-kit -t ACME-4\"", other, env), "sh -c with --repo"
+    assert guard("bash -lc 'gh pr edit 3 -R someone/other -t ACME-4'", KIT, env) == "", "sh -c on another repository"
+    assert "ACME-4" in guard("bash -lc 'gh pr edit 3 --title \"hello; ACME-4\"'", KIT, env), "sh -c, an operator in the title"
+    assert "Secret Project" in guard("eval 'gh pr edit 3 -t \"Secret Project\"'", KIT, env), "eval, a term of two words"
+    assert "ACME-4" in guard("bash -lc 'gh pr edit 3 --repo=\"alopezari/agents-kit\" -t ACME-4'", other, env), "--repo=\"...\""
+    assert "ACME-4" in guard(f"bash -lc 'cd {KIT} && gh pr edit 3 -t ACME-4'", other, env), "sh -c that cds into the kit"
+    assert guard("bash -lc 'cd /tmp && gh pr edit 3 -t ACME-4'", KIT, env) == "", "sh -c that cds out of the kit"
+    assert guard('echo "x; cd /tmp" && gh pr edit 3 -t ACME-4', KIT, env) != "", "a cd inside quotes moves nothing"
+    assert "can't be read" in guard("gh pr edit 3 -F 'a\x00b'", KIT, env), "a path open() rejects"
+    assert "ACME-4" in guard("sh -c 'cd no-such-dir; gh pr edit 3 -t ACME-4'", KIT, env), "a failed cd leaves gh in the kit"
+    assert "ACME-4" in guard(f"bash -lc 'cd \"{KIT}\" && gh pr edit 3 -t ACME-4'", other, env), "sh -c, a quoted cd"
+    assert "ACME-4" in guard("bash -lc 'gh pr edit 3 --title \"fine\nACME-4\"'", KIT, env), "sh -c, a title of two lines"
+    assert guard_bash.pr_checkout("cd /tmp; cd no-such-dir; gh pr create --fill", KIT) == os.path.realpath("/tmp"), \
+        "a failed cd after another leaves the review gate in the first one's folder"
+    assert "ACME-4" in guard("bash -lc 'gh pr edit 3 --title \"fine\nACME-4\" -R alopezari/agents-kit'", other, env), \
+        "sh -c, flags after a title of two lines"
+    open(os.path.join(base, "body file.md"), "w").write("Fixes ACME-8.\n")
+    open(os.path.join(base, "body"), "w").write("fine\n")
+    assert "ACME-8" in guard(f"cd {base} && sh -c 'gh pr edit 3 -R alopezari/agents-kit -F \"body file.md\"'", other, env), \
+        "sh -c, a body file with a space"
+    assert "ACME-4" in guard("sh -c 'echo \"cd /tmp\"; gh pr edit 3 -t ACME-4'", KIT, env), "sh -c, a cd that is only text"
+    assert "ACME-4" in guard("export GH_REPO=alopezari/agents-kit && sh -c 'gh pr edit 3 -t ACME-4'", other, env), \
+        "sh -c after export GH_REPO"
+    assert "ACME-4" in guard("GH_REPO=alopezari/agents-kit sh -c 'gh pr edit 3 -t ACME-4'", other, env), \
+        "GH_REPO for sh -c only"
+    assert "ACME-4" in guard("eval 'gh pr edit 3 -t' ' ACME-4'", KIT, env), "eval joins its arguments"
+    assert "ACME-4" in guard("sh -c 'gh pr edit 3 -t 'ACME-4", KIT, env), "sh -c, a script of quoted and bare pieces"
+    assert "ACME-4" in guard("sh -c $'gh pr edit 3 -t ACME-4'", KIT, env), "sh -c $'...'"
+    assert "ACME-4" in guard("# don't\nsh -c 'gh pr edit 3 -t ACME-4'", KIT, env), "an apostrophe in a comment"
+    assert "ACME-4" in guard("sh -c 'gh pr edit 3 -t \"it'\\''s ACME-4\"'", KIT, env), "sh -c, an escaped quote in the script"
+    locked = os.path.join(base, "locked")
+    os.makedirs(locked, mode=0o000)
+    assert "ACME-4" in guard(f"cd {locked}; gh pr edit 3 -t ACME-4", KIT, env), "a folder cd can't enter"
+    os.chmod(locked, 0o700)
     assert guard('gh pr edit 3 --title "Fix the flow"', KIT, env) == "", "clean title"
     assert guard('gh pr edit 3 --title "Fix ACME-12 flow"', other, env) == "", "other repositories may name them"
 

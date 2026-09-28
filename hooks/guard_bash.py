@@ -76,13 +76,46 @@ def dangerous_rm(command, cwd):
     return None
 
 
+RUNS_QUOTED_TEXT = re.compile(r"\beval\b|\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\b")
+
+
+def cd_into(cwd, target):
+    """Where `cd <target>` leaves a shell that was in cwd. A cd that fails leaves it where it was."""
+    path = os.path.normpath(os.path.join(cwd, os.path.expanduser(target.strip("\"'"))))
+    return path if os.path.isdir(path) and os.access(path, os.X_OK) else cwd
+
+
+def quoted_spans(command):
+    """(start, end) of each quoted string in the command, quotes included; an unclosed one runs to the end.
+    Heredoc bodies aren't skipped: an apostrophe in one can pair with a later quote."""
+    spans, i, n = [], 0, len(command)
+    while i < n:
+        c = command[i]
+        if c == "\\":
+            i += 2
+        elif c in "'\"":
+            k = i + 1
+            while k < n and command[k] != c:
+                k += 2 if c == '"' and command[k] == "\\" else 1
+            spans.append((i, min(k + 1, n)))
+            i = k + 1
+        elif c == "#" and (i == 0 or command[i - 1] in " \t\n;&|("):  # a comment's quotes open nothing
+            end = command.find("\n", i)
+            i = n if end < 0 else end
+        else:
+            i += 1
+    return spans
+
+
 def pr_checkout(command, cwd):
     """The checkout `gh pr create` acts on: a `cd <dir>` before it, else the worktree holding --head."""
     before = re.split(r"\bgh\s+pr\s+create\b", command)[0]
     cds = re.findall(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before)
+    runs_in = cwd
+    for target in cds:
+        runs_in = cd_into(runs_in, target)
     if cds:
-        target = os.path.expanduser(cds[-1].strip("\"'"))
-        return os.path.realpath(os.path.join(cwd, target))
+        return os.path.realpath(runs_in)
     head = re.search(r"--head(?:=|\s+)(\S+)", command)
     if head:
         branch = head.group(1).split(":")[-1].strip("\"'")
@@ -97,13 +130,18 @@ def pr_checkout(command, cwd):
     return cwd
 
 
+def opened(command):
+    """The command with every quote read as ; when eval or sh -c runs quoted text as code."""
+    return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(command) else command
+
+
 def shell_code(command):
     """The command with text that can't run blanked out (same length): quoted strings and heredoc bodies.
     Blanking uses x, not spaces, so a VAR="a b"c prefix still reads as one word. Where bash would run $(...) or
-    backticks, or read <<\\ or $'...', the command is returned whole: parsing those is where a real gh would hide,
+    backticks, or read <<\\ or $'...', the command is returned whole (opened()): parsing those is where a real gh would hide,
     and a false match only blocks. Inside single quotes, comments and quoted-delimiter heredocs they are only text."""
     if re.search(r"\$(?:\\\n)+[('`]", command):  # bash joins $\<newline>( back into $(
-        return command
+        return opened(command)
     out, n, i, heredocs = list(command), len(command), 0, []
 
     def in_brackets(k):  # arr[x<<2] is a shift
@@ -120,12 +158,12 @@ def shell_code(command):
         if c == "\\":
             i += 2
         elif c == "`" or command.startswith("$(", i) or command.startswith("$'", i):
-            return command
+            return opened(command)
         elif c in "'\"":
             k = i + 1
             while k < n and command[k] != c:
                 if c == '"' and (command[k] == "`" or command.startswith("$(", k)):
-                    return command
+                    return opened(command)
                 k += 2 if c == '"' and command[k] == "\\" else 1
             blank(i + 1, min(k, n))
             i = k + 1
@@ -138,10 +176,10 @@ def shell_code(command):
             i = n if close < 0 else close + 2
         elif command.startswith("<<", i) and not command.startswith("<<<", i) and not in_brackets(i):
             if re.match(r"<<-?[ \t]*\\", command[i:]):
-                return command
+                return opened(command)
             m = re.match(r"<<(-?)[ \t]*(?:(['\"])([^'\"\n]+)\2|([A-Za-z_][\w-]*))", command[i:])
             if m and i + m.end() < n and command[i + m.end()] not in " \t\n;&|<>)":
-                return command  # <<'EOF'x or <<EOF'x': bash's delimiter is EOFx, and quoting any part makes the body literal
+                return opened(command)  # <<'EOF'x or <<EOF'x': bash's delimiter is EOFx, and quoting any part makes the body literal
             if m:
                 heredocs.append((m.group(3) or m.group(4), bool(m.group(1)), bool(m.group(2))))
             i += m.end() if m else 2
@@ -154,7 +192,7 @@ def shell_code(command):
                 if (command[k:end].lstrip("\t") if tabs else command[k:end]) == word:
                     heredocs.pop(0)
                 elif not literal and ("`" in command[k:end] or "$(" in command[k:end]):
-                    return command
+                    return opened(command)
                 else:
                     blank(k, end)
                 k = end + 1
@@ -162,9 +200,7 @@ def shell_code(command):
         else:
             i += 1
     masked = "".join(out)
-    if re.search(r"\beval\b|\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\b", masked):
-        return re.sub(r"['\"]", ";", command)  # its quoted text runs as code, so a quote starts a command there
-    return masked
+    return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(masked) else masked
 
 
 def unreviewed_pr(command, cwd):
@@ -221,22 +257,51 @@ def pr_command_args(command, start):
     return args
 
 
-def private_terms_in_kit_pr(command, cwd):
+def private_terms_in_kit_pr(command, cwd, env=os.environ):
     """The kit is public: a pull request to it must not carry a profile's private terms."""
-    for match in re.finditer(r"(?:^|[;&|(\n`])\s*((?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*)gh\s+pr\s+(?:create|edit)\b", shell_code(command)):
+    code = shell_code(command)
+    spans, checked = quoted_spans(command), set()
+
+    def quote_around(pos):
+        return next(((start, end) for start, end in spans if start < pos < end), None)
+
+    for match in re.finditer(r"(?:^|[;&|(\n`])\s*((?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*)gh\s+pr\s+(?:create|edit)\b", code):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
+        # The cds are found in the code, where a quote may read as ; around eval's argument, and read from the command.
         runs_in = cwd
-        for target in re.findall(r"(?:^|[;&|\n]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before):
-            runs_in = os.path.normpath(os.path.join(runs_in, os.path.expanduser(target.strip("\"'"))))
+        for cd in re.finditer(r"(?:^|[;&|\n]\s*)(cd)\s+(\"[^\"]+\"|'[^']+'|;[^;\n]+;|[^\s;&|]+)", code[:match.start(1)]):
+            if not quote_around(cd.start(1)):
+                runs_in = cd_into(runs_in, command[cd.start(2):cd.end(2)])
         exported = dict(re.findall(r"(?:^|[;&|\n]\s*)(?:export\s+)?(GH_REPO|GH_HOST)=([^\s;&|]+)(?=\s*(?:[;&|\n]|$))",
                                    before))
+        wrapper = quote_around(match.end(1))
+        if wrapper:
+            # eval '...' or sh -c '...': check the quoted script as a command of its own, from where it starts.
+            if wrapper not in checked:
+                checked.add(wrapper)
+                start, end = wrapper
+                # The script is the whole word ('gh pr edit -t 'ACME-4 is one), and every argument of eval, which joins them.
+                stops = "\n;&|)" if re.search(r"\beval\s+\$?$", command[:start]) else " \t\n;&|)"
+                while end < len(command) and command[end] not in stops:
+                    quoted = quote_around(end + 1) if command[end] in "'\"" else None
+                    end = quoted[1] if quoted else end + (2 if command[end] == "\\" else 1)
+                prefix = len(re.split(r"[;&|\n]", code[:start])[-1])  # GH_REPO=x sh -c '...'
+                exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=([^\s;&|]+)", command[start - prefix:start]))
+                try:
+                    script = " ".join(shlex.split(command[start:end]))
+                except ValueError:  # an unclosed quote
+                    script = command[start + 1:end]
+                reason = private_terms_in_kit_pr(script, runs_in, {**env, **exported})
+                if reason:
+                    return reason
+            continue
         exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=(\S+)", command[match.start(1):match.end(1)]))
         try:
             args = pr_command_args(command, match.end(1))
         except ValueError:
             continue  # unbalanced quotes: text inside a heredoc or string, not a command gh would run
-        repo, host = (exported.get(k, os.environ.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
+        repo, host = (exported.get(k, env.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
         values, files = [], []
         for i, arg in enumerate(args[3:], 3):
             flag, eq, inline = arg.partition("=")
@@ -264,7 +329,7 @@ def private_terms_in_kit_pr(command, cwd):
                 if path == "-" or os.path.basename(path) in before:  # stdin, or a file this command writes first
                     raise OSError
                 values.append(open(os.path.join(runs_in, os.path.expanduser(path))).read())
-            except OSError:
+            except (OSError, ValueError):  # ValueError: a path open() rejects, like one with a NUL
                 return (f"This pull request's description file ({path}) can't be read yet, so it can't be checked for "
                         "a profile's private terms. Write the file first, then run gh in a separate command.")
         terms = private_terms.found("\n".join(values))
