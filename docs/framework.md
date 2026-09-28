@@ -6,7 +6,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 
 ## At a glance
 
-- **3 harnesses** share one `AGENTS.md`, 8 skills and 4 hook scripts (Pi has no MCP, so it runs all but `guard_mcp.py`).
+- **3 harnesses** share one `AGENTS.md`, 8 skills and 5 hook scripts (Pi has no MCP, so it runs all but `guard_mcp.py`).
 - **21 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), then the repo's verify.
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
@@ -89,19 +89,23 @@ When the change needs manual tests on staging, `validate` ends by handing you th
 | Claude Code | PreToolUse | Bash | guard_bash.py | 10 |
 | Claude Code | PreToolUse | mcp__.* | guard_mcp.py | 10 |
 | Claude Code | Stop | (every stop) | stop_checks.py | 660 |
+| Claude Code | UserPromptSubmit | (every stop) | prompt_approvals.py | 10 |
 | Codex | PostToolUse | apply_patch\|Edit\|Write | post_edit.py | 30 |
 | Codex | PreToolUse | Bash\|shell\|exec_command\|local_shell | guard_bash.py | 10 |
 | Codex | PreToolUse | mcp__.* | guard_mcp.py | 10 |
 | Codex | Stop | (every stop) | stop_checks.py | 660 |
+| Codex | UserPromptSubmit | (every stop) | prompt_approvals.py | 10 |
 | Pi | agent_before_settle | (every settle) | stop_checks.py | 660 |
 | Pi | tool_call | bash | guard_bash.py | 660 |
 | Pi | tool_result | edit\|write | post_edit.py | 660 |
 
 **`guard_bash.py`**: PreToolUse guard for shell commands, shared by Claude Code, Codex and Pi (via adapters/pi). Blocks irreversible or outward-facing commands. It is a seatbelt against agent mistakes, not a security boundary: a determined command can evade regexes.
 
-**`guard_mcp.py`**: PreToolUse guard for MCP tools that write to shared systems. Reads pass. Writes are denied unless the user approved that service in the last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves, a file the shell guard (guard_bash.py) never lets agents create.
+**`guard_mcp.py`**: PreToolUse guard for MCP tools that write to shared systems. Reads pass. Writes are allowed when the user's current message names the service (prompt_approvals.py), or the user approved it in the last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves. The shell guard (guard_bash.py) never lets agents create either.
 
 **`post_edit.py`**: PostToolUse hook for file edits, shared by Claude Code, Codex and Pi (via adapters/pi). Runs a fast syntax check on each edited file and records that the session edited files, so the Stop hook only runs its checks after real changes.
+
+**`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex. Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), writes to it are allowed until the user's next message. Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the service only to read from it approves writes for that turn too.
 
 **`stop_checks.py`**: Stop hook shared by Claude Code, Codex and Pi (via adapters/pi). Only runs when the session edited files since the last stop. Looks at the lines the branch adds since the merge-base with the default branch (committed or not) and asks the agent to continue, once, for a skipped or focused test, a deleted test file, a debug leftover, a conflict marker, a possible secret, a new option read near a cache, or a temporary compose override left behind. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py.
 
@@ -131,7 +135,7 @@ Every block, and every approved or browser MCP call, is appended to `~/.agents/l
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 
-It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need a short-lived approval that only you can create. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded.
+It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded.
 
 ## Verify: checking the change at the end of every turn
 
