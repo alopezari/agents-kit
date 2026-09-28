@@ -97,10 +97,10 @@ def compute(previous):
     suffix = os.path.basename(spec)[len("spec-"):-len(".md")]
 
     # A PR may have been opened without follow-pr (by hand, or before the flow existed), so ask gh too, once the
-    # branch is pushed: a branch that never left this machine has no PR to ask about.
+    # branch is pushed. @{push}, not @{upstream}: a branch started from origin/main tracks it before it's pushed.
     followed = os.path.exists(os.path.join(reports, f"follow-pr-{suffix}.md"))
     pr, extra = None, {}
-    if followed or git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"):
+    if followed or git("rev-parse", "--verify", "--quiet", "@{push}"):
         state, checked_at = pr_state(previous)
         extra = {"pr_state": state, "pr_checked_at": checked_at}
         pr = {"MERGED": "ship", "CLOSED": "PR closed"}.get(state, "PR open" if followed or state == "OPEN" else None)

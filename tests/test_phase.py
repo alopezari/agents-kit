@@ -116,6 +116,12 @@ def pr_opened_without_follow_pr(base):
     remote = os.path.join(base, "remote.git")
     sh(base, "git", "init", "-q", "--bare", remote)
     sh(repo, "git", "remote", "add", "origin", remote)
+    sh(repo, "git", "push", "-q", "origin", "trunk")
+    sh(repo, "git", "fetch", "-q", "origin")
+    sh(repo, "git", "branch", "-q", "--set-upstream-to", "origin/trunk")
+    os.remove(os.path.join(repo, ".git", "agents", "phase", "feature~cart.json"))
+    assert phase(repo, env) == "staging (you)" and not os.path.exists(calls), \
+        "tracking origin/trunk, as a branch started from it does, isn't being pushed"
     sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "cart")
     sh(repo, "git", "push", "-q", "-u", "origin", "feature/cart")
     for kind in ("verify", "review", "validate"):
