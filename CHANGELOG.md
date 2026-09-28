@@ -4,6 +4,8 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 
 ## [Unreleased]
 
+- The status line shows "PR open" for a pull request opened without follow-pr, instead of an earlier step (#21).
+
 ## [0.4.0] - 2026-09-28
 
 - triage no longer reads a git checkout as a payments signal (#7).
