@@ -87,6 +87,9 @@ def walks_the_flow(base):
     os.chmod(os.path.join(fake, "gh"), 0o755)
     open(guide.replace("staging-guide-", "follow-pr-"), "w").write("# follow-pr\n")
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "PR_STATE": "OPEN"}
+    assert phase(repo, env) == "PR open · redo verify, self-review, validate", "z = 3 is covered by no check"
+    for kind in ("verify", "review", "validate"):
+        sh(repo, "python3", STAMP, "write", "--kind", kind)
     assert phase(repo, env) == "PR open"
     env["PR_STATE"] = "MERGED"
     assert phase(repo, env) == "PR open", "the PR state is cached for a few minutes, not asked on every refresh"

@@ -104,13 +104,13 @@ def compute(previous):
         state, checked_at = pr_state(previous)
         extra = {"pr_state": state, "pr_checked_at": checked_at}
         pr = {"MERGED": "ship", "CLOSED": "PR closed"}.get(state, "PR open" if followed or state == "OPEN" else None)
-    if pr:
+    if pr in ("ship", "PR closed"):
         return pr, extra
 
     changed = review_stamp.changed_paths()[1]
     has_spec = os.path.exists(spec)
     if not has_spec and not changed:
-        return "spec", extra
+        return pr or "spec", extra
     # The spec is a step, not a gate: a branch without one still has its real phase, flagged.
     flag = "" if has_spec else " (no spec)"
     current = review_stamp.fingerprint()
@@ -120,7 +120,11 @@ def compute(previous):
     # The phase is the step after the furthest one done for this exact change; an earlier check that
     # went stale (a red verify, an edit after the self-review) is listed, not shown as the phase.
     reached = max((i + 1 for i, ok in enumerate(done) if ok), default=0)
-    redo = [("verify" if kind == "verify" else step) for (step, kind), ok in zip(steps[:reached], done) if not ok]
+    # On an open PR every check should cover what is pushed, so each one that doesn't is listed.
+    checked = steps if pr else steps[:reached]
+    redo = [("verify" if kind == "verify" else step) for (step, kind), ok in zip(checked, done) if not ok]
+    if pr:
+        return pr + (f" · redo {', '.join(redo)}" if redo else ""), extra
     if reached < len(steps):
         label = steps[reached][0]
     else:
