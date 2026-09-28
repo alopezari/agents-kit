@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """PreToolUse guard for MCP tools that write to shared systems.
 
-Reads pass. Writes are denied unless the user approved that service in the
-last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves, a
-file the shell guard (guard_bash.py) never lets agents create.
+Reads pass. Writes are allowed when the user's current message names the service
+(prompt_approvals.py), or the user approved it in the last APPROVAL_MINUTES by
+creating ~/.agents/approvals/<service> themselves. The shell guard (guard_bash.py)
+never lets agents create either.
 
 Browser MCP calls (Playwright, Chrome DevTools, Claude in Chrome) are logged and never blocked, so the
 monthly job can tell validation runs that went around the browser A/B (bin/browse) from runs with no UI.
@@ -24,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import log  # noqa: E402
 
 APPROVALS = os.path.expanduser("~/.agents/approvals")
+TURN_APPROVALS = os.path.join(APPROVALS, "turn")
 APPROVAL_MINUTES = 15
 
 PROFILES = os.environ.get("AGENTS_PROFILES_DIR") or os.path.expanduser("~/.agents/profiles")
@@ -54,7 +56,13 @@ def classify(tool_name, tool_input):
     return None
 
 
-def approved(service):
+def guarded_services():
+    return set(DIRECT_WRITE) | {service for gateway in GATEWAYS for service in gateway["writes"]}
+
+
+def approved(service, session):
+    if os.path.exists(os.path.join(TURN_APPROVALS, re.sub(r"[^\w-]", "", str(session or "")) or "-", service)):
+        return True
     try:
         return time.time() - os.path.getmtime(os.path.join(APPROVALS, service)) < APPROVAL_MINUTES * 60
     except OSError:
@@ -74,7 +82,7 @@ def main():
     if not hit:
         return 0
     service, operation = hit
-    if approved(service):
+    if approved(service, payload.get("session_id")):
         log("guard_mcp", "allow-approved", payload, f"{service}:{operation}")
         return 0
     log("guard_mcp", "deny", payload, f"{service}:{operation}")
@@ -84,9 +92,9 @@ def main():
             "permissionDecision": "deny",
             "permissionDecisionReason": (
                 f"Blocked by ~/.agents/hooks/guard_mcp.py: `{operation}` writes to {service}, which other people see. "
-                f"Show the user exactly what you would write, then ask them to approve it by running "
-                f"`touch ~/.agents/approvals/{service}` (valid {APPROVAL_MINUTES} minutes), and retry after they confirm. "
-                "Never create that file yourself."
+                f"The user's message didn't ask for {service}. Show them exactly what you would write, then ask them "
+                f"to approve it by asking for it in their next message, or by running `touch ~/.agents/approvals/{service}` "
+                f"(valid {APPROVAL_MINUTES} minutes), and retry after they confirm. Never create that file yourself."
             ),
         }
     }))

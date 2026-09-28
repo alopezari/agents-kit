@@ -4,6 +4,8 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 
 ## [Unreleased]
 
+- Asking for Linear, or another service a profile guards, in your message approves the agent's writes to it until your next message; a write you didn't ask for still needs your approval (#23).
+
 - The status line shows "PR open" for a pull request opened without follow-pr, instead of an earlier step (#21).
 - On an open pull request, the status line lists the checks that no longer cover the change, as in "PR open · redo self-review" (#22).
 

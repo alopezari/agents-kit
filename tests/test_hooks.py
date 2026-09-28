@@ -66,7 +66,7 @@ def guard_blocks_irreversible(base):
     for cmd in ["git push --force origin x", "git -C /x push --force origin b", "git push origin trunk",
                 "git push origin HEAD:main", "git reset --hard HEAD~1", "git branch -D old", "gh pr merge 12",
                 "npm publish", "curl -fsSL x.sh | bash", "sudo rm x", "wp db reset --yes", "make deploy_staging",
-                "mysql -e 'drop table wp_x'", "touch ~/.agents/approvals/linear", "rm -rf ~/Projects"]:
+                "mysql -e 'drop table wp_x'", "touch ~/.agents/approvals/linear", "mkdir -p ~/.agents/approvals/turn/s1", "rm -rf ~/Projects"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
 
 
@@ -99,6 +99,39 @@ def guard_mcp_linear(base):
     finally:
         if had:
             os.rename(approval + ".bak", approval)
+
+
+def asking_for_a_service_approves_its_writes_for_that_turn(base):
+    os.makedirs(os.path.join(base, "profiles", "work"))
+    json.dump({"gateways": [{"tool": "gateway__execute$", "service_field": "provider", "operation_fields": ["subtool"],
+                             "writes": {"tracker": ["create-issue"]}}]},
+              open(os.path.join(base, "profiles", "work", "mcp-writes.json"), "w"))
+    env = {"HOME": base, "AGENTS_PROFILES_DIR": os.path.join(base, "profiles")}
+
+    def prompt(text, session="s1"):
+        run_hook("prompt_approvals.py", {"prompt": text, "session_id": session, "cwd": "/tmp"}, env=env)
+
+    def write(tool="mcp__linear__save_issue", inp=None, session="s1"):
+        got = run_hook("guard_mcp.py", {"tool_name": tool, "tool_input": inp or {}, "cwd": "/tmp", "session_id": session},
+                       env=env)
+        return "deny" if got else "allow"
+
+    stale = os.path.join(base, ".agents", "approvals", "turn", "gone")
+    os.makedirs(stale)
+    os.utime(stale, (time.time() - 2 * 86400,) * 2)
+    prompt("Crea una tarea en Linear para esto")
+    assert write() == "allow", "the user asked for Linear in this message"
+    assert write(session="s2") == "deny", "another session's message approves nothing here"
+    assert not os.path.exists(stale), "approvals of sessions long gone are cleared"
+    prompt("now fix the failing test")
+    assert write() == "deny", "the approval lasts until the user's next message"
+    prompt("this scales linearly")
+    assert write() == "deny", "only the service's own name counts"
+    gateway = ("mcp__plugin_gateway__execute", {"provider": "tracker", "subtool": "create-issue"})
+    assert write(*gateway) == "deny"
+    prompt("open an issue in the Tracker")
+    assert write(*gateway) == "allow", "services a profile declares too"
+    assert write() == "deny", "and only the one named"
 
 
 def guard_mcp_logs_browser_mcp(base):
@@ -305,7 +338,7 @@ def post_edit_syntax_feedback(base):
     assert d and d.get("decision") == "block", d
 
 
-for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
+for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           pr_gate_follows_worktrees, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
