@@ -79,6 +79,11 @@ def kit_prs_are_checked(base):
     assert guard("bash -lc 'cd /tmp && gh pr edit 3 -t ACME-4'", KIT, env) == "", "sh -c that cds out of the kit"
     assert guard('echo "x; cd /tmp" && gh pr edit 3 -t ACME-4', KIT, env) != "", "a cd inside quotes moves nothing"
     assert "can't be read" in guard("gh pr edit 3 -F 'a\x00b'", KIT, env), "a path open() rejects"
+    assert "ACME-4" in guard("sh -c 'cd no-such-dir; gh pr edit 3 -t ACME-4'", KIT, env), "a failed cd leaves gh in the kit"
+    assert "ACME-4" in guard(f"bash -lc 'cd \"{KIT}\" && gh pr edit 3 -t ACME-4'", other, env), "sh -c, a quoted cd"
+    assert "ACME-4" in guard("bash -lc 'gh pr edit 3 --title \"fine\nACME-4\"'", KIT, env), "sh -c, a title of two lines"
+    assert guard_bash.pr_checkout("cd /tmp; cd no-such-dir; gh pr create --fill", KIT) == os.path.realpath("/tmp"), \
+        "a failed cd after another leaves the review gate in the first one's folder"
     assert guard('gh pr edit 3 --title "Fix the flow"', KIT, env) == "", "clean title"
     assert guard('gh pr edit 3 --title "Fix ACME-12 flow"', other, env) == "", "other repositories may name them"
 

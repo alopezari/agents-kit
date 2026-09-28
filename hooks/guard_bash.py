@@ -80,9 +80,12 @@ def pr_checkout(command, cwd):
     """The checkout `gh pr create` acts on: a `cd <dir>` before it, else the worktree holding --head."""
     before = re.split(r"\bgh\s+pr\s+create\b", command)[0]
     cds = re.findall(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before)
+    runs_in = cwd
+    for cd in cds:
+        target = os.path.realpath(os.path.join(runs_in, os.path.expanduser(cd.strip("\"'"))))
+        runs_in = target if os.path.isdir(target) else runs_in  # a failed cd leaves the shell where it was
     if cds:
-        target = os.path.expanduser(cds[-1].strip("\"'"))
-        return os.path.realpath(os.path.join(cwd, target))
+        return runs_in
     head = re.search(r"--head(?:=|\s+)(\S+)", command)
     if head:
         branch = head.group(1).split(":")[-1].strip("\"'")
@@ -229,9 +232,9 @@ def private_terms_in_kit_pr(command, cwd):
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
         # The cds are found in the code (quoted text blanked, or eval's argument opened up) and read from the command.
         runs_in = cwd
-        for cd in re.finditer(r"(?:^|[;&|\n]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", code[:match.start(1)]):
-            target = command[cd.start(1):cd.end(1)]
-            runs_in = os.path.normpath(os.path.join(runs_in, os.path.expanduser(target.strip("\"'"))))
+        for cd in re.finditer(r"(?:^|[;&|\n]\s*)cd\s+(\"[^\"]+\"|'[^']+'|;[^;\n]+;|[^\s;&|]+)", code[:match.start(1)]):
+            target = os.path.normpath(os.path.join(runs_in, os.path.expanduser(command[cd.start(1):cd.end(1)].strip("\"'"))))
+            runs_in = target if os.path.isdir(target) else runs_in  # a failed cd leaves the shell where it was
         exported = dict(re.findall(r"(?:^|[;&|\n]\s*)(?:export\s+)?(GH_REPO|GH_HOST)=([^\s;&|]+)(?=\s*(?:[;&|\n]|$))",
                                    before))
         exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=(\S+)", command[match.start(1):match.end(1)]))
@@ -240,10 +243,10 @@ def private_terms_in_kit_pr(command, cwd):
             args = pr_command_args(command, match.end(1))
         except ValueError:
             # The command starts inside a quote: eval '...' or sh -c '...'. Read its flags from the line split on
-            # spaces, and check the whole line as text, since a quoted title comes apart there.
+            # spaces, and check the rest of the command as text, since a quoted title comes apart there.
             line = command[match.end(1):].split("\n")[0]
             args = [arg.replace('"', "").replace("'", "") for arg in line.split()]
-            values.append(line)
+            values.append(command[match.end(1):])
         repo, host = (exported.get(k, os.environ.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
         for i, arg in enumerate(args[3:], 3):
             flag, eq, inline = arg.partition("=")
