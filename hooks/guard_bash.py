@@ -284,7 +284,8 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
                 # The script is the whole word ('gh pr edit -t 'ACME-4 is one), and every argument of eval, which joins them.
                 stops = "\n;&|)" if re.search(r"\beval\s+\$?$", command[:start]) else " \t\n;&|)"
                 while end < len(command) and command[end] not in stops:
-                    end = quote_around(end + 1)[1] if command[end] in "'\"" else end + 1
+                    quoted = quote_around(end + 1) if command[end] in "'\"" else None
+                    end = quoted[1] if quoted else end + (2 if command[end] == "\\" else 1)
                 prefix = len(re.split(r"[;&|\n]", code[:start])[-1])  # GH_REPO=x sh -c '...'
                 exported.update(re.findall(r"\b(GH_REPO|GH_HOST)=([^\s;&|]+)", command[start - prefix:start]))
                 try:
