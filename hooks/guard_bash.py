@@ -371,8 +371,8 @@ def main():
             "permissionDecision": "deny",
             "permissionDecisionReason": (
                 f"Blocked by ~/.agents/hooks/guard_bash.py: {reason} "
-                "Nothing in this command ran, including any steps chained before or after this one: run those on "
-                "their own. If this is really needed, stop and ask the user to run it themselves."
+                "Nothing in this command ran, including any steps chained before or after the blocked one. "
+                "If this is really needed, stop and ask the user to run it themselves."
             ),
         }
     }))

@@ -54,8 +54,16 @@ def problems(text):
     if not items and re.search(r"^## Acceptance criteria\s*$", text, re.M | re.I):
         errors.append("no numbered criteria under '## Acceptance criteria'")
     change_map = re.search(r"^## Change map\s*$(.*?)(?=^## |\Z)", text, re.M | re.S | re.I)
-    if change_map and not re.search(r"^\s*[-*]\s+\S", change_map.group(1), re.M):
-        errors.append("'## Change map' is empty: list the ways in, derived data and failures, or drop the section")
+    if change_map:
+        # Bullets, numbered items or table rows; a table's header and separator rows aren't items.
+        lines = [line.strip() for line in change_map.group(1).splitlines()
+                 if re.match(r"\s*([-*]|\d+\.|\|)\s*\S", line) and not re.fullmatch(r"\s*\|[\s|:-]*\|?\s*", line)]
+        items = [line for line in lines if not line.startswith("|")] or lines[1:]
+        unfilled = [line for line in items if re.search(r"<(file:line|[^<>]*\s[^<>]*)>", line) or re.fullmatch(r"[-*\d.\s]*[\w ]+:\s*", line)]
+        if not items:
+            errors.append("'## Change map' is empty: list the ways in, derived data and failures, or drop the section")
+        for line in unfilled:
+            errors.append(f"'## Change map' has an unfilled item: {line}")
     return errors, warnings
 
 

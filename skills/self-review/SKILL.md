@@ -32,7 +32,7 @@ Lens definitions are in `lenses.md` next to this file. Triage picks the lenses; 
 
 Stay within triage's time budget. If a lens would need much longer, review the riskiest part and say what you left out.
 
-Give each reviewer: the lens text, the base ref, the task or PR goal in one or two sentences, and this instruction: *report every issue you suspect, each with file:line, the failing scenario, a severity and a confidence (high/medium/low); low-confidence findings are welcome, because step 3 verifies them.* Reviewers are read-only and never edit files.
+Give each reviewer: the lens text, the base ref, the task or PR goal in one or two sentences, the spec's path when there is one (its Change map is where the Correctness tables start), and this instruction: *report every issue you suspect, each with file:line, the failing scenario, a severity and a confidence (high/medium/low); low-confidence findings are welcome, because step 3 verifies them.* Reviewers are read-only and never edit files.
 
 The Correctness lens always runs, at every risk level, and its tables go into the final report. Also run the repo's personal checks when they exist: `~/.agents/repos/<repo>/verify`.
 

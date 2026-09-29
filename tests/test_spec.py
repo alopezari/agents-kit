@@ -59,11 +59,15 @@ def lint_names_every_missing_part(base):
 
 
 def lint_takes_a_change_map_only_when_filled(base):
-    filled = GOOD + "\n## Change map\n- Ways in: installer CLI — install.sh:40\n"
-    status, out = lint(base, filled)
-    assert status == 0, f"a filled map passes, and a spec without one too (GOOD): {out}"
+    for map_text in ("- Ways in: installer CLI — install.sh:40\n", "- Derived data: the Array<string> cache — cache.ts:9\n", "1. Ways in: installer CLI — install.sh:40\n",
+                     "| Kind | Item |\n|---|---|\n| Ways in | installer CLI, install.sh:40 |\n"):
+        status, out = lint(base, GOOD + "\n## Change map\n" + map_text)
+        assert status == 0, f"a filled map passes as bullets, numbers or a table: {map_text!r} {out}"
     status, out = lint(base, GOOD + "\n## Change map\n\n")
     assert status == 1 and "'## Change map' is empty" in out, out
+    for unfilled in ("- Ways in:\n", "- Ways in: <every entry point> — <file:line>\n"):
+        status, out = lint(base, GOOD + "\n## Change map\n" + unfilled)
+        assert status == 1 and "unfilled item" in out, (unfilled, out)
 
 
 def lint_rejects_a_placeholder_verify(base):

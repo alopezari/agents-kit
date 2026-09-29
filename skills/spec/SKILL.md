@@ -68,7 +68,7 @@ The defects reviewers catch most are a rule enforced on one path and not another
 - Failures: <each external call, query or write the change adds, and what the user sees when it fails> — <file:line>
 ```
 
-Build so that every item is handled, and add a criterion when an item needs its own check. The self-review starts its tables from this map.
+Build so that every item is handled, and add a criterion when an item needs its own check. The self-review starts its tables from this map. Run the lint again: it fails on a map left empty or unfilled.
 
 ## 4. Get a second reading
 
@@ -86,7 +86,7 @@ For a Linear issue, or a request that only exists in the conversation, write all
 Verify each finding as the self-review does: **confirmed** (the request says so, quoted) → fix the spec; **rejected** → one line on why; **uncertain** → an open question for the user. Then run the lint again, and log the reading so the monthly job can weigh it:
 
 ```bash
-~/.agents/bin/quality-log lens spec --findings <N> --confirmed <M> --secs <S> --model <codex|claude> --criteria <number of acceptance criteria> --map-items <lines under Change map>
+~/.agents/bin/quality-log lens spec --findings <N> --confirmed <M> --secs <S> --model <codex|claude> --criteria <number of acceptance criteria> --map-items <items under Change map, 0 without one>
 ```
 
 If the other CLI isn't installed or fails, say so when you show the spec and go on without it.
