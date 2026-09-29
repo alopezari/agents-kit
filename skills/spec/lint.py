@@ -43,7 +43,9 @@ def problems(text):
     for item in items:
         number = item.split(".")[0]
         verify = re.search(r"verify:\s*(.*)$", item, re.I)
-        if not verify:
+        if not verify and re.search(r"\bverify\b", item, re.I):
+            errors.append(f"criterion {number}: write its check as '— verify: <test, command or step>', with the colon")
+        elif not verify:
             errors.append(f"criterion {number} has no 'verify:' naming a test, command or manual step")
         elif PLACEHOLDER_VERIFY.fullmatch(verify.group(1).strip()):
             errors.append(f"criterion {number}: 'verify: {verify.group(1).strip()}' names no test, command or step")

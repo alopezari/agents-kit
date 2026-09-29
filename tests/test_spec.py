@@ -54,6 +54,8 @@ def lint_names_every_missing_part(base):
     for problem in ("no title", "no 'Goal:' line", "no '## Out of scope' section", "criterion 3 has no 'verify:'"):
         assert problem in out, (problem, out)
     assert "criterion 2" not in out, f"a verify on a continuation line counts: {out}"
+    status, out = lint(base, GOOD.replace("verify: tests/test_compose.py::plugin", "verify the plugin fixture"))
+    assert status == 1 and "criterion 3: write its check as" in out, f"a verify without its colon says how to fix it: {out}"
 
 
 def lint_rejects_a_placeholder_verify(base):
