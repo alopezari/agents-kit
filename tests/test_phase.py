@@ -73,6 +73,8 @@ def walks_the_flow(base):
     open(spec, "w").write("# Spec\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     assert phase(repo) == "build"
+    sh(repo, "python3", STAMP, "write", "--kind", "verify-empty")
+    assert phase(repo) == "self-review · verify checked nothing", "a verify that checked nothing moves on, flagged"
     sh(repo, "python3", STAMP, "write", "--kind", "verify")
     assert phase(repo) == "self-review"
     sh(repo, "python3", STAMP, "write", "--kind", "review")

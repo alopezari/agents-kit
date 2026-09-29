@@ -2,6 +2,7 @@
 """Record or check that a skill ran on the exact current change.
 
   review_stamp.py write [--kind review|validate|verify]   # end of self-review / validate; the stop hook after a green verify
+                                                   # (--kind verify-empty when that verify checked nothing)
   review_stamp.py check [--kind review|validate|verify]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR

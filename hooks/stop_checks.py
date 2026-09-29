@@ -173,6 +173,12 @@ def main():
     return 0
 
 
+def checked_something(output):
+    """Whether a verify ran any check: verify_changed.py and verify_auto.py print `ran: <check>` for each one."""
+    return any(line.startswith("ran: ") and not line.startswith("ran: nothing to check")
+               for line in output.splitlines())
+
+
 def save_verify_report(root, verify, result):
     """Keep the last verify run as evidence for the end-of-run summary (`~/.agents/bin/reports`)."""
     reports = os.path.expanduser("~/.agents/bin/reports")
@@ -182,8 +188,8 @@ def save_verify_report(root, verify, result):
     output = (result.stdout + result.stderr).strip()[-6000:] or "(no output)"
     if result.returncode != 0:
         verdict = f"FAIL (exit {result.returncode})"
-    elif "skipped: " in output and "ran: " not in output:
-        verdict = "PASS, but every check was skipped"
+    elif not checked_something(output):
+        verdict = "PASS, but nothing was checked"
     else:
         verdict = "PASS"
     try:
@@ -273,9 +279,11 @@ def check_checkout(root, session):
                 tail = (result.stdout + result.stderr).strip()[-3000:]
                 problems.append(f"{verify} failed (exit {result.returncode}):\n{tail}")
             else:
-                # Lets the skills skip re-running verify on a change it already passed.
+                # Lets the skills skip re-running verify on a change it already passed. A run that checked nothing
+                # gets its own stamp, so the flow moves on without reporting it as a pass.
+                kind = "verify" if checked_something(result.stdout + result.stderr) else "verify-empty"
                 stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
-                subprocess.run([sys.executable, stamp, "write", "--kind", "verify"], cwd=root, capture_output=True)
+                subprocess.run([sys.executable, stamp, "write", "--kind", kind], cwd=root, capture_output=True)
         except subprocess.TimeoutExpired:
             verify_failed = True
             problems.append(f"{verify} timed out after {VERIFY_TIMEOUT}s.")

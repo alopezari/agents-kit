@@ -10,7 +10,7 @@ Unit tests prove the pieces. This skill proves the behavior: the change does wha
 
 ## 0. Start from a green verify
 
-`verify` must be green before anything here; there's no point exercising a running system with a unit failure already known. The stop hook runs it after every edit and stamps the change it passed on. So check `python3 ~/.agents/hooks/review_stamp.py check --kind verify` first, and run `~/.agents/repos/<repo>/verify` yourself only when that fails. If it's red, fix it and stop there. The stop hook saves each verify run, with what ran, to `$(~/.agents/bin/reports path verify)`; it is the evidence for this step.
+`verify` must be green before anything here; there's no point exercising a running system with a unit failure already known. The stop hook runs it after every edit and stamps the change it passed on. So check `python3 ~/.agents/hooks/review_stamp.py check --kind verify` first, and run `~/.agents/repos/<repo>/verify` yourself only when that fails. If it's red, fix it and stop there. If only `check --kind verify-empty` passes, verify was green without checking anything (its tools are missing or it found nothing it knows how to check): run the tests related to the change yourself and treat their output as this step's evidence, naming them. The stop hook saves each verify run, with what ran, to `$(~/.agents/bin/reports path verify)`; it is the evidence for this step.
 
 ## 1. Plan the checks
 
