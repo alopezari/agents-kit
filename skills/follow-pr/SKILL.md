@@ -78,7 +78,7 @@ Log every CI failure the change caused and every review comment from someone oth
 
 ```bash
 ~/.agents/bin/quality-log escape <ci|review|bot> --verdict <confirmed|rejected|uncertain> \
-  --category <code from ~/.agents/review-mining/taxonomy.md> --lens <self-review lens that should have caught it> --pr <n>
+  --category <code from ~/.agents/review-mining/taxonomy.md> --lens <self-review lens that should have caught it, or spec> --pr <n>
 ```
 
 `review` is a person, `bot` an automated reviewer. For CI, the verdict is `confirmed`; the lens is the one whose area the failure falls in (Tests for a failing test, Correctness for a wrong result). A comment saying the change doesn't do what was asked is category `C.requirement` with lens `spec`: the spec's second reading should have caught it. CI failures not caused by the change are not escapes.

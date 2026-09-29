@@ -16,7 +16,8 @@ Per merged PR, from GitHub (github.com plus any host a profile lists in review-m
                       opening to merging; before the kit, only where transcripts still exist
 Since the kit, also:
   escapes             follow-pr's logged CI failures and review comments (logs/quality.jsonl, kind "escape"),
-                      each with whether the lens that should have caught it ran on that branch
+                      each with whether the lens that should have caught it ran on that branch, under any of the
+                      earlier names its "rename" entries record
 
 The baseline window (BASELINE_MONTHS before KIT_START) never changes once its follow-up windows have
 passed, so it is cached in baseline.json and fetched again only while any of its PRs is pending.
@@ -176,14 +177,18 @@ def attach_escapes(prs):
         entries = [json.loads(line) for line in open(QUALITY_LOG)]
     except OSError:
         entries = []
+    renamed_from = {}
+    for e in entries:
+        if e.get("kind") == "rename":
+            renamed_from.setdefault((e["repo"], e["to"]), set()).add(e["name"])
     for pr in prs:
         name, branch = pr["repo"].split("/")[1], pr["branch"]
-        names = {branch}
-        while True:  # a branch renamed twice, each time after files moved, logs two renames
-            earlier = {e["name"] for e in entries if e.get("kind") == "rename" and e.get("repo") == name and e.get("to") in names}
-            if earlier <= names:
-                break
-            names |= earlier
+        names, pending = set(), [branch]
+        while pending:  # a branch renamed twice, each time after files moved, logs two renames
+            current = pending.pop()
+            if current not in names:
+                names.add(current)
+                pending += renamed_from.get((name, current), ())
         mine = [e for e in entries if e.get("repo") == name and e.get("branch") in names]
         lenses_run = {e["name"] for e in mine if e.get("kind") == "lens"}
         pr["escapes"] = [{"source": e["name"], "category": e.get("category"), "verdict": e.get("verdict"),

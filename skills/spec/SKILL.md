@@ -61,18 +61,14 @@ Check the shape, and fix what it reports before going on:
 
 The model that wrote the spec shares its blind spots, and a misread requirement is built well and then passes a review judged against the same spec. Have the other model family read it against the request. Pipe in the request as you gathered it: the issue, its comments and the linked PRs and discussion threads that shaped it, not the issue alone.
 
-- **Running on a Claude model →** Codex:
-  ```bash
-  gh issue view <n> --comments | ~/.agents/skills/spec/review-prompt.sh \
-    | codex exec --ephemeral --skip-git-repo-check -s read-only -
-  ```
-- **Running on an OpenAI model →** Claude:
-  ```bash
-  gh issue view <n> --comments | ~/.agents/skills/spec/review-prompt.sh \
-    | claude -p --allowedTools "Read,Grep,Glob" --disallowedTools "Edit,Write"
-  ```
+```bash
+prompt="$({ gh issue view <n> --comments; cat <notes on linked PRs and threads>; } | ~/.agents/skills/spec/review-prompt.sh)"
+```
 
-`gh issue view --comments` covers the issue and its comments; append what else you gathered. For a Linear issue, or a request that only exists in the conversation, write all of it to a file in your scratch directory and redirect that in instead.
+For a Linear issue, or a request that only exists in the conversation, write all of it to a file in your scratch directory and redirect that in instead. If the script fails, fix what it says (usually no spec yet) rather than sending the reviewer an empty prompt. Then:
+
+- **Running on a Claude model →** Codex: `codex exec --ephemeral --skip-git-repo-check -s read-only - <<<"$prompt"`
+- **Running on an OpenAI model →** Claude: `claude -p --allowedTools "Read,Grep,Glob" --disallowedTools "Edit,Write" <<<"$prompt"`
 
 Verify each finding as the self-review does: **confirmed** (the request says so, quoted) → fix the spec; **rejected** → one line on why; **uncertain** → an open question for the user. Then run the lint again, and log the reading so the monthly job can weigh it:
 

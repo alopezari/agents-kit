@@ -12,6 +12,8 @@ import time
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-phase-home-")
 os.makedirs(os.path.expanduser("~/.agents/logs"))
+os.environ["TMPDIR"] = os.path.expanduser("~/tmp")  # path.sh moves specs out of $TMPDIR: never the real one
+os.makedirs(os.environ["TMPDIR"])
 for entry in set(os.listdir(KIT)) - {"logs"}:
     os.symlink(os.path.join(KIT, entry), os.path.expanduser(f"~/.agents/{entry}"))
 os.environ.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
@@ -209,9 +211,25 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     check = subprocess.run(["python3", STAMP, "check", "--kind", "verify"], cwd=repo)
     assert check.returncode == 0, "the verify stamp follows the rename"
     assert phase(repo) == "self-review"
-    renames = [json.loads(line) for line in open(QUALITY_LOG) if '"rename"' in line]
+    renames = [json.loads(line) for line in (open(QUALITY_LOG) if os.path.exists(QUALITY_LOG) else []) if '"rename"' in line]
     assert [(r["repo"], r["name"], r["to"]) for r in renames] == [("shop", "session/wary-falcon", "shop-1/final")], \
         f"lens runs logged on the session branch must still join to the PR's branch: {renames}"
+
+
+def a_rename_log_that_cannot_be_written_leaves_the_spec_path(base):
+    # A sandbox that can't write ~/.agents/logs: the log raised and path.sh printed a traceback, no path.
+    repo = new_repo(base)
+    sh(repo, "git", "checkout", "-q", "-b", "session/x")
+    open(sh(repo, SPEC_PATH), "w").write("# spec\n")
+    sh(repo, "git", "branch", "-m", "feature/x")
+    open(QUALITY_LOG, "a").close()
+    os.chmod(QUALITY_LOG, 0o444)
+    try:
+        result = subprocess.run([SPEC_PATH], cwd=repo, capture_output=True, text=True)
+    finally:
+        os.chmod(QUALITY_LOG, 0o644)
+    assert result.returncode == 0 and result.stdout.strip().endswith("spec-shop-feature~x.md"), result
+    assert "could not log the rename" in result.stderr, result.stderr
 
 
 def slash_and_dash_branches_keep_their_own_files(base):
@@ -260,7 +278,9 @@ def files_under_the_old_dash_key_move_unless_that_branch_exists(base):
         found = sh(repo, SPEC_PATH, env=env)
         open(found, "w").write("# written in the sandbox\n")
         open(found.replace("/spec-", "/review-"), "w").write("# review\n")
-        assert sh(repo, SPEC_PATH, env=env) == found, "while .git stays read-only, the $TMPDIR spec is the one"
+        again = subprocess.run([SPEC_PATH], cwd=repo, capture_output=True, text=True, env=env)
+        assert again.stdout.strip() == found, "while .git stays read-only, the $TMPDIR spec is the one"
+        assert again.stderr == "", f"and quietly, on every call: {again.stderr}"
     finally:
         os.chmod(agents, 0o755)
     moved = sh(repo, SPEC_PATH, env=env)
@@ -289,6 +309,7 @@ def fast_path_serves_cache_and_refreshes(base):
 RESULTS = []
 for test in (status_line_names_the_branch, walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
              red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
+             a_rename_log_that_cannot_be_written_leaves_the_spec_path,
              slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,
              fast_path_serves_cache_and_refreshes):
     base = tempfile.mkdtemp(prefix="agents-test-phase-")

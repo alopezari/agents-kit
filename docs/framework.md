@@ -53,7 +53,7 @@ It also adds the kit's baseline settings where a key is missing, never overwriti
 
 ```mermaid
 flowchart TD
-  T[Issue or request] --> SP[spec skill: acceptance criteria]
+  T[Issue or request] --> SP[spec skill: acceptance criteria, second reading]
   SP --> W[Agent edits code]
   W -->|every shell command| G{guard_bash}
   G -->|irreversible| B[Blocked with the reason]

@@ -83,6 +83,7 @@ def escapes_join_to_their_branch_and_lens(base):
         {"kind": "rename", "repo": "shop", "name": "session/x", "to": "shop-1/draft"},
         {"kind": "rename", "repo": "shop", "name": "shop-1/draft", "to": "feature/cart"},
         {"kind": "lens", "name": "tests", "repo": "shop", "branch": "session/y"},
+        {"kind": "rename", "repo": "blog", "name": "session/y", "to": "feature/cart"},
         {"kind": "escape", "name": "review", "repo": "shop", "branch": "feature/cart", "verdict": "confirmed",
          "category": "C.requirement", "lens": "spec"},
         {"kind": "escape", "name": "bot", "repo": "shop", "branch": "feature/cart", "verdict": "confirmed",

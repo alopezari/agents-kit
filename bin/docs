@@ -282,7 +282,7 @@ def render():
     w("## The life of a task\n")
     for skill in ("spec", "self-review", "validate", "create-pr", "write-pr-description", "follow-pr", "ship"):
         require(f"skills/{skill}/SKILL.md")
-    w("```mermaid\nflowchart TD\n  T[Issue or request] --> SP[spec skill: acceptance criteria]\n  SP --> W[Agent edits code]")
+    w("```mermaid\nflowchart TD\n  T[Issue or request] --> SP[spec skill: acceptance criteria, second reading]\n  SP --> W[Agent edits code]")
     w("  W -->|every shell command| G{guard_bash}\n  G -->|irreversible| B[Blocked with the reason]")
     w("  W -->|every MCP call| GM{guard_mcp}\n  GM -->|shared write without approval| B")
     w("  W -->|every file edit| PE[post_edit: syntax check]\n  PE -->|syntax error| W")

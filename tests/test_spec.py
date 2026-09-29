@@ -7,6 +7,7 @@ import sys
 import tempfile
 
 KIT = os.path.expanduser("~/.agents")
+os.environ["TMPDIR"] = tempfile.mkdtemp(prefix="agents-test-spec-tmp-")  # path.sh moves specs out of $TMPDIR
 LINT = os.path.join(KIT, "skills", "spec", "lint.py")
 REVIEW_PROMPT = os.path.join(KIT, "skills", "spec", "review-prompt.sh")
 SPEC_PATH = os.path.join(KIT, "skills", "spec", "path.sh")
@@ -45,25 +46,36 @@ def lint_passes_the_documented_shape(base):
 
 
 def lint_names_every_missing_part(base):
-    text = GOOD.replace("Goal: The installer", "The installer").replace("## Out of scope\n- Podman.\n\n", "")
+    text = GOOD.replace("# SHOP-12: Require Compose v2\n", "").replace("Goal: The installer", "The installer")
+    text = text.replace("## Out of scope\n- Podman.\n\n", "")
     text = text.replace(" — verify: tests/test_compose.py::plugin", "")
     status, out = lint(base, text)
     assert status == 1, out
-    for problem in ("no 'Goal:' line", "no '## Out of scope' section", "criterion 3 has no 'verify:'"):
+    for problem in ("no title", "no 'Goal:' line", "no '## Out of scope' section", "criterion 3 has no 'verify:'"):
         assert problem in out, (problem, out)
     assert "criterion 2" not in out, f"a verify on a continuation line counts: {out}"
 
 
 def lint_rejects_a_placeholder_verify(base):
-    for placeholder in ("tests", "Manual", "TBD", "unit tests."):
+    for placeholder in ("", "tests", "Manual", "TBD", "unit tests.", "none", "see above", "run the tests"):
         status, out = lint(base, GOOD.replace("verify: tests/test_compose.py::plugin", f"verify: {placeholder}"))
         assert status == 1 and "criterion 3: 'verify:" in out, (placeholder, out)
 
 
-def lint_warns_on_too_many_criteria(base):
+def lint_warns_outside_three_to_six_criteria(base):
     extra = "".join(f"{n}. Case {n} — verify: tests/test_compose.py::case_{n}\n" for n in range(4, 9))
     status, out = lint(base, GOOD.replace("\n## Out of scope", extra + "\n## Out of scope"))
     assert status == 0 and "warn 8 criteria" in out, out
+    status, out = lint(base, GOOD.replace("3. The plugin form", "The plugin form"))
+    assert status == 0 and "warn 2 criteria" in out, out
+    six = "".join(f"{n}. Case {n} — verify: tests/test_compose.py::case_{n}\n" for n in range(4, 7))
+    status, out = lint(base, GOOD.replace("\n## Out of scope", six + "\n## Out of scope"))
+    assert status == 0 and "warn" not in out, out
+
+
+def lint_exits_2_on_an_unreadable_spec(base):
+    result = subprocess.run([LINT, os.path.join(base, "missing.md")], capture_output=True, text=True)
+    assert result.returncode == 2 and "cannot read the spec" in result.stderr, result
 
 
 def review_prompt_bundles_the_request_and_the_spec(base):
@@ -91,7 +103,8 @@ def review_prompt_bundles_the_request_and_the_spec(base):
 
 RESULTS = []
 for test in (lint_passes_the_documented_shape, lint_names_every_missing_part, lint_rejects_a_placeholder_verify,
-             lint_warns_on_too_many_criteria, review_prompt_bundles_the_request_and_the_spec):
+             lint_warns_outside_three_to_six_criteria, lint_exits_2_on_an_unreadable_spec,
+             review_prompt_bundles_the_request_and_the_spec):
     base = tempfile.mkdtemp(prefix="agents-test-spec-")
     try:
         test(base)
@@ -101,6 +114,7 @@ for test in (lint_passes_the_documented_shape, lint_names_every_missing_part, li
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
+shutil.rmtree(os.environ["TMPDIR"], ignore_errors=True)
 for name, error in RESULTS:
     print(f"{'FAIL' if error else 'ok  '} {name}")
     if error:
