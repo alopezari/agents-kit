@@ -14,7 +14,7 @@ Unit tests prove the pieces. This skill proves the behavior: the change does wha
 
 ## 1. Plan the checks
 
-Start from the spec (`~/.agents/skills/spec/path.sh`) or, without one, from the stated goal. The bar is the coverage you'd need to ship with confidence, not a number of cases. For each acceptance criterion, derive checks from these sources until each one is covered:
+Start from the spec (`~/.agents/skills/spec/path.sh`) or, without one, from the stated goal. When there is a spec, run `~/.agents/skills/spec/lint.py` first: a criterion with no real `verify:` leaves nothing to derive checks from, so fix the spec before planning. The bar is the coverage you'd need to ship with confidence, not a number of cases. For each acceptance criterion, derive checks from these sources until each one is covered:
 
 - **Every way in:** each entry point that reaches the behavior (UI, REST, CLI, cron, webhook), taken from the self-review paths table.
 - **Every input class and boundary:** valid, empty, missing, zero, maximum, just past the limit, duplicates, unusual dates.

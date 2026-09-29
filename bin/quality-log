@@ -6,7 +6,8 @@ only perspectives that pay off.
   quality-log test <type> --issues N [--secs S] [--notes "..."]
   quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 
-Appends to ~/.agents/logs/quality.jsonl with the repo, branch and the triage tier.
+Appends to ~/.agents/logs/quality.jsonl with the repo, branch and the triage tier. hooks/review_stamp.py appends
+"rename" lines there too, so review-mining/outcomes.py can join lens runs to a branch renamed after them.
 """
 import json
 import os

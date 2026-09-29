@@ -60,7 +60,7 @@ Inputs (read them from disk):
 - $HOME/.agents/AGENTS.md: the current global instructions.
 - $HOME/.agents/research/review-findings.md: the previous analysis, when a profile provides one.
 - $HOME/.agents/logs/hooks.jsonl: every hook block/nudge (hook, decision, session, cwd, detail).
-- $HOME/.agents/logs/quality.jsonl: one line per review lens or test type run (tier, findings/confirmed or issues, secs, model).
+- $HOME/.agents/logs/quality.jsonl: one line per review lens or test type run (tier, findings/confirmed or issues, secs, model), per escape follow-pr logged, and per branch rename (kind "rename": name is the old branch, to the new one; not a perspective).
 - $HOME/.agents/logs/browser-ab.jsonl: A/B test of browser tools in the validate skill (assign/call/finish events per run).
 - $RUN/sessions.json: my last 200 agent sessions (harness, model, effort, tokens, advisor_calls, prompts, correction_signals).
 
@@ -78,7 +78,7 @@ Steps:
    c. a regression or property test the team could add;
    d. required evidence in the self-review lenses ($HOME/.agents/skills/self-review/lenses.md);
    e. a sentence in AGENTS.md, only when nothing above fits. Keep AGENTS.md short.
-4. From quality.jsonl, add a short "Review and test perspectives" section: per lens and test type, how often triage selected it, findings vs confirmed findings, and time. Recommend dropping or merging a perspective with no confirmed findings over ~20 runs, and tightening a trigger (in ~/.agents/bin/triage) that fires often with nothing found. Propose these as diffs.
+4. From quality.jsonl, add a short "Review and test perspectives" section: per lens and test type, how often triage selected it, findings vs confirmed findings, and time. The spec lens is the spec's second reading: it runs with every spec, not from triage, so it has no trigger to tighten. Its lines carry the spec's number of acceptance criteria: set specs outside 3–6 against the rest by C.requirement escapes on the same branch, and propose making the lint fail outside that range only when the gap shows across several PRs. Recommend dropping or merging a perspective with no confirmed findings over ~20 runs, and tightening a trigger (in ~/.agents/bin/triage) that fires often with nothing found. Propose these as diffs.
    From browser-ab.jsonl, add a short "Browser A/B" section per tool: runs, commands per run, output bytes per run (context cost), failed calls, wall time, checks passed/completed, tool issues and notes. Also count, from hooks.jsonl (decision "browser-mcp"), sessions that drove a browser through an MCP instead of bin/browse, and which of them look like validation: those runs are missing from the test. The test ends on 2026-11-05 or at 10 finished runs per tool, whichever comes first. Recommend one tool only when both tools have at least 10 finished runs; otherwise report the result as inconclusive, give the counts, and propose a new end date (and, if MCP bypasses explain the gap, how to stop them).
    From hooks.jsonl, add a short "Hooks" section: which rules fired, how often, which look like false positives (the agent or the user worked around them) and which caught real problems; propose removing or narrowing noisy rules.
    From sessions.json, add a short "Models and effort" section: sessions per model/effort, how often the advisor (Fable) was consulted and whether sessions that used it had fewer correction signals, how sessions that used effort "auto" compare, and which tasks look over- or under-provisioned. Compare cost per completed task, never per token. Treat it as evidence, not proof.
@@ -89,7 +89,8 @@ Steps:
    - At the PR stage: the escapes follow-pr logged (CI failures the change caused, review comments by people and bots)
      per merged PR, by category and verdict. For each confirmed escape, name the lens that should have caught it and
      whether it ran on that branch. A lens that ran and still let its category through gets a proposed fix to its
-     questions in lenses.md; a lens that never catches anything is a candidate to drop (weigh it with quality.jsonl).
+     questions in lenses.md, or for the spec lens in $HOME/.agents/skills/spec/review-prompt.sh; a lens that never
+     catches anything is a candidate to drop (weigh it with quality.jsonl).
      Rejected comments per bot measure that bot's noise.
    - After merge: judge every follow_ups candidate from its title and shared files. Count it only when it plausibly
      fixes or reverts the original PR (not a lint sweep, a rename across the codebase, or a word that only looks like

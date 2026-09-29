@@ -8,6 +8,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 
 - The status line shows "PR open" for a pull request opened without follow-pr, instead of an earlier step (#21).
 - On an open pull request, the status line lists the checks that no longer cover the change, as in "PR open · redo self-review" (#22).
+- The spec skill gets a second reading from the other model family and a lint for its shape; the self-review flags changes no criterion asks for, follow-pr logs misread requirements as spec escapes, lens runs logged before a branch rename still count for the PR, and a spec written in a sandbox moves out of `$TMPDIR` once `.git` is writable (#24).
 
 ## [0.4.0] - 2026-09-28
 
