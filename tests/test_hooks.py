@@ -12,7 +12,16 @@ import tempfile
 import time
 import traceback
 
-H = os.path.expanduser("~/.agents/hooks/")
+# A HOME of our own: the tests add repo overlays and write hook logs, and must never touch the real ones.
+KIT = os.path.realpath(os.path.expanduser("~/.agents"))
+os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-hooks-home-")
+os.makedirs(os.path.expanduser("~/.agents/repos"))
+for entry in set(os.listdir(KIT)) - {"logs", "repos", "approvals"}:
+    os.symlink(os.path.join(KIT, entry), os.path.expanduser(f"~/.agents/{entry}"))
+for entry in os.listdir(os.path.join(KIT, "repos")):
+    os.symlink(os.path.join(KIT, "repos", entry), os.path.expanduser(f"~/.agents/repos/{entry}"))
+os.environ.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+H = os.path.join(KIT, "hooks") + "/"
 RESULTS = []
 STATE = tempfile.mkdtemp(prefix="agents-state-")  # keeps the real checkouts registry out of the tests
 RUN = f"t{os.getpid()}{int(time.time())}-"  # unique session ids: hook state is kept per session
@@ -66,7 +75,7 @@ def guard_blocks_irreversible(base):
     for cmd in ["git push --force origin x", "git -C /x push --force origin b", "git push origin trunk",
                 "git push origin HEAD:main", "git reset --hard HEAD~1", "git branch -D old", "gh pr merge 12",
                 "npm publish", "curl -fsSL x.sh | bash", "sudo rm x", "wp db reset --yes", "make deploy_staging",
-                "mysql -e 'drop table wp_x'", "touch ~/.agents/approvals/linear", "mkdir -p ~/.agents/approvals/turn/s1", "rm -rf ~/Projects"]:
+                "mysql -e 'drop table wp_x'", "touch ~/.agents/approvals/linear", "mkdir -p ~/.agents/approvals/turn/s1", "rm -rf ~", "rm -rf /opt/projects"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     # An edit chained before a blocked step was lost without a word: the agent took it as done.
     d = run_hook("guard_bash.py", {"tool_input": {"command": "sed -i '' s/a/b/ notes.md && git push --force origin x"},
@@ -90,19 +99,11 @@ def guard_mcp_linear(base):
     cases = [("mcp__linear__get_issue", {}, None), ("mcp__linear__save_comment", {}, "deny"),
              (gateway, {"provider": "linear", "subtool": "issue"}, None),
              (gateway, {"provider": "linear", "subtool": "create-issue"}, "deny")]
-    approval = os.path.expanduser("~/.agents/approvals/linear")
-    had = os.path.exists(approval)
-    if had:
-        os.rename(approval, approval + ".bak")
-    try:
-        for tool, inp, want in cases:
-            got = run_hook("guard_mcp.py", {"tool_name": tool, "tool_input": inp, "cwd": "/tmp", "session_id": "test"},
-                           env={"AGENTS_PROFILES_DIR": os.path.join(base, "profiles")})
-            got = "deny" if got else None
-            assert got == want, f"{tool} {inp}: {got} != {want}"
-    finally:
-        if had:
-            os.rename(approval + ".bak", approval)
+    for tool, inp, want in cases:
+        got = run_hook("guard_mcp.py", {"tool_name": tool, "tool_input": inp, "cwd": "/tmp", "session_id": "test"},
+                       env={"AGENTS_PROFILES_DIR": os.path.join(base, "profiles")})
+        got = "deny" if got else None
+        assert got == want, f"{tool} {inp}: {got} != {want}"
 
 
 def asking_for_a_service_approves_its_writes_for_that_turn(base):
@@ -372,13 +373,8 @@ for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, ask
           post_edit_syntax_feedback]:
     test(t)
 
-# Test runs must not pollute the real hook log.
-log = os.path.expanduser("~/.agents/logs/hooks.jsonl")
-if os.path.exists(log):
-    keep = [l for l in open(log) if "agents-test-" not in l and '"session": "test"' not in l]
-    open(log, "w").writelines(keep)
-
 shutil.rmtree(STATE, ignore_errors=True)
+shutil.rmtree(os.environ["HOME"], ignore_errors=True)
 
 failed = [(n, e) for n, e in RESULTS if e]
 for name, err in RESULTS:

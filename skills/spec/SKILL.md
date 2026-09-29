@@ -99,4 +99,6 @@ If the other CLI isn't installed or fails, say so when you show the spec and go 
 
 ## Afterwards
 
+Build test first: for each criterion whose `verify:` can be an automated test, write that test before the code and run it. It must fail for the reason the criterion names, not on a missing symbol or a setup error; then implement until it passes. Keep the failing output: the self-review's Tests lens asks for it.
+
 The `self-review` skill reads this spec. Its Correctness lens checks every acceptance criterion against the diff, and every change in the diff against the criteria, and the PR description can list them as what was verified. If the scope changes while building, update the spec first.
