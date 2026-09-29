@@ -70,6 +70,23 @@ else echo "FAIL --doctor does not print agents-kit <VERSION>"; fail=1; fi
 if echo "$doctor" | grep -q "  warn  oldtool 1.9.3 is older than 1.10"; then
   echo "ok   --doctor reports a program older than its minimum"
 else echo "FAIL --doctor did not flag oldtool 1.9.3 < 1.10"; fail=1; fi
+# A Codex that no longer runs is reported, whether it fails or its link dangles (the ChatGPT app once moved it).
+made_codex_dir=0; [ -d "$home/.codex" ] || { mkdir "$home/.codex"; made_codex_dir=1; }
+mkdir -p "$home/fakes/failing-codex"
+printf '#!/bin/sh\necho "codex: cannot load its runtime" >&2\nexit 1\n' > "$home/fakes/failing-codex/codex"; chmod +x "$home/fakes/failing-codex/codex"
+doctor=$(PATH="$home/fakes/failing-codex:$PATH" HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
+if echo "$doctor" | grep -q "  warn  codex does not run (codex: cannot load its runtime)"; then
+  echo "ok   --doctor reports a codex that fails to run"
+else echo "FAIL --doctor on a failing codex: $(echo "$doctor" | grep -i codex | head -3)"; fail=1; fi
+# Every program but codex, which is a link to a path that no longer exists.
+mkdir -p "$home/fakes/dangling-codex"
+for program in "$bin"/*; do [ "${program##*/}" = codex ] || ln -s "$program" "$home/fakes/dangling-codex/"; done
+ln -s /Applications/Gone.app/codex "$home/fakes/dangling-codex/codex"
+doctor=$(PATH="$home/fakes/dangling-codex:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
+if echo "$doctor" | grep -q "  warn  codex does not run .*$home/fakes/dangling-codex/codex links to /Applications/Gone.app/codex, which no longer exists"; then
+  echo "ok   --doctor names a dangling codex link"
+else echo "FAIL --doctor on a dangling codex link: $(echo "$doctor" | grep -i codex | head -3)"; fail=1; fi
+[ $made_codex_dir = 1 ] && rmdir "$home/.codex"
 
 # The sample profile, installed as a user would: each extension point must do what its README says.
 semgrep_dir=$(dirname "$(PATH="$real_path" command -v semgrep 2>/dev/null || echo /nonexistent/semgrep)")

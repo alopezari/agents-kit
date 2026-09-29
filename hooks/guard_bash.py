@@ -62,7 +62,7 @@ def dangerous_rm(command, cwd):
         flags = "".join(t.lstrip("-") for t in tokens[1:] if t.startswith("-") and not t.startswith("--"))
         if "r" not in flags.lower() and "--recursive" not in tokens:
             continue
-        home = os.path.expanduser("~")
+        home = os.path.realpath(os.path.expanduser("~"))
         for target in (t for t in tokens[1:] if not t.startswith("-")):
             if "$" in target or "`" in target or "*" == target.strip("/"):
                 return f"Recursive delete of an unresolved or wildcard path: {target}"

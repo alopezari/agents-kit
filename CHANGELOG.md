@@ -11,6 +11,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - The spec skill gets a second reading from the other model family and a lint for its shape; the self-review flags changes no criterion asks for, follow-pr logs misread requirements as spec escapes, lens runs logged before a branch rename still count for the PR, and a spec written in a sandbox moves out of `$TMPDIR` once `.git` is writable (#24).
 - A verify that exits 0 without running any check no longer counts as a pass: the status line says "verify checked nothing", and validate and create-pr ask for the tests run instead. The shell guard recognises the kit's own PRs when `~/.agents` is a worktree (#25).
 - The spec skill maps the change before building (ways in, derived data, failures), and the self-review starts its tables from that map. A command the shell guard blocks now says that nothing in it ran, so steps chained into it aren't taken as done (#26).
+- Specs are built test first: each criterion's test is seen failing before the code, and the self-review asks for that output. `install.sh --doctor`, and with it the weekly health check, warns when Codex no longer runs, naming a dangling link. The shell guard blocks `rm -rf ~` when the home directory is reached through a symlink, and the kit's hook tests no longer touch your `~/.agents` (#27).
 
 ## [0.4.0] - 2026-09-28
 

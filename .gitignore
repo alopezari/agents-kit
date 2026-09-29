@@ -1,5 +1,6 @@
 # Machine-local state and output
 logs/
+.claude/
 backups/
 approvals/
 monitors/state/
