@@ -20,6 +20,7 @@ spec would make the agent build the wrong thing. Compare it with the request bel
 - Criteria that can't be checked as written, or whose verify step would still pass if the behavior were wrong.
 - Scope the spec adds that the request didn't ask for.
 - Assumptions that should be open questions, because the answer would change the work.
+- A Change map missing a way into the behavior, a cache or stored value that reads a new input, or a failure mode.
 
 For each, quote the line of the request or spec it's about, say what's wrong and what the spec should say instead,
 with a confidence (high/medium/low); low-confidence findings are welcome, because they are verified afterwards. Don't

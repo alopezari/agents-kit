@@ -6,7 +6,7 @@ Each lens is a complete brief for one reviewer. Pass it verbatim together with t
 
 You are reviewing for behavior bugs only. Ignore style.
 
-Start by filling in these two tables. They are required output, not optional notes: an empty cell or a missing row is itself a finding. Write "none in diff" only after searching for it.
+Start by filling in these two tables. When the spec has a Change map, start each table from it, then search for what it missed: a path or reader the map left out is a finding. They are required output, not optional notes: an empty cell or a missing row is itself a finding. Write "none in diff" only after searching for it.
 
 **Paths table.** One row per guard, setting, invariant or dedup check the diff adds or changes. Find every other path to the same outcome (other callers, CLI vs cron, preview/dry-run vs real run, retries, other mutation endpoints, REST vs admin UI) with a code search, not from memory.
 

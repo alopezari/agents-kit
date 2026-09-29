@@ -57,7 +57,20 @@ Check the shape, and fix what it reports before going on:
 ~/.agents/skills/spec/lint.py
 ```
 
-## 3. Get a second reading
+## 3. Map the change
+
+The defects reviewers catch most are a rule enforced on one path and not another, and a cache that doesn't vary with a new input. Written rules don't prevent them; a table built before the code does. Add this section to the spec, each item found with a code search, not from memory:
+
+```markdown
+## Change map
+- Ways in: <every entry point that reaches the behavior: callers, CLI, cron, REST, admin UI, retries, preview vs real run> — <file:line>
+- Derived data: <every cache, transient, index or stored value that reads a new or changed input> — <file:line>, or "none: searched <what>"
+- Failures: <each external call, query or write the change adds, and what the user sees when it fails> — <file:line>
+```
+
+Build so that every item is handled, and add a criterion when an item needs its own check. The self-review starts its tables from this map. Run the lint again: it fails on a map left empty or unfilled.
+
+## 4. Get a second reading
 
 The model that wrote the spec shares its blind spots, and a misread requirement is built well and then passes a review judged against the same spec. Have the other model family read it against the request. Pipe in the request as you gathered it: the issue, its comments and the linked PRs and discussion threads that shaped it, not the issue alone.
 
@@ -73,12 +86,12 @@ For a Linear issue, or a request that only exists in the conversation, write all
 Verify each finding as the self-review does: **confirmed** (the request says so, quoted) → fix the spec; **rejected** → one line on why; **uncertain** → an open question for the user. Then run the lint again, and log the reading so the monthly job can weigh it:
 
 ```bash
-~/.agents/bin/quality-log lens spec --findings <N> --confirmed <M> --secs <S> --model <codex|claude> --criteria <number of acceptance criteria>
+~/.agents/bin/quality-log lens spec --findings <N> --confirmed <M> --secs <S> --model <codex|claude> --criteria <number of acceptance criteria> --map-items <items under Change map, 0 without one>
 ```
 
 If the other CLI isn't installed or fails, say so when you show the spec and go on without it.
 
-## 4. Resolve before building
+## 5. Resolve before building
 
 - **Open questions that change the work:** ask the user, or the issue author through the user, before building. Everything else becomes an assumption in the spec, and you proceed.
 - **The request looks wrong or costlier than its author realized:** say so in a sentence, then follow the user's decision.

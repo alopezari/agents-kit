@@ -3,9 +3,9 @@
 
   lint.py [spec.md]     the current branch's spec (path.sh) when no file is given
 
-Fails, naming each problem, on a missing title, Goal line or section, no numbered criteria, and a criterion whose
-`verify:` is missing, empty or only a placeholder; exits 2 when the spec can't be read. Warns, without failing, when
-there are fewer than 3 or more than 6 criteria.
+Fails, naming each problem, on a missing title, Goal line or section, no numbered criteria, a criterion whose
+`verify:` is missing, empty or only a placeholder, and an empty Change map; exits 2 when the spec can't be read.
+Warns, without failing, when there are fewer than 3 or more than 6 criteria.
 """
 import os
 import re
@@ -53,6 +53,17 @@ def problems(text):
         warnings.append(f"{len(items)} criteria: three to six is usual; more often means the issue should be split")
     if not items and re.search(r"^## Acceptance criteria\s*$", text, re.M | re.I):
         errors.append("no numbered criteria under '## Acceptance criteria'")
+    change_map = re.search(r"^## Change map\s*$(.*?)(?=^## |\Z)", text, re.M | re.S | re.I)
+    if change_map:
+        # Bullets, numbered items or table rows; a table's header and separator rows aren't items.
+        lines = [line.strip() for line in change_map.group(1).splitlines()
+                 if re.match(r"\s*([-*]|\d+\.|\|)\s*\S", line) and not re.fullmatch(r"\s*\|[\s|:-]*\|?\s*", line)]
+        items = [line for line in lines if not line.startswith("|")] or lines[1:]
+        unfilled = [line for line in items if re.search(r"<(file:line|[^<>]*\s[^<>]*)>", line) or re.fullmatch(r"[-*\d.\s]*[\w ]+:\s*", line)]
+        if not items:
+            errors.append("'## Change map' is empty: list the ways in, derived data and failures, or drop the section")
+        for line in unfilled:
+            errors.append(f"'## Change map' has an unfilled item: {line}")
     return errors, warnings
 
 
