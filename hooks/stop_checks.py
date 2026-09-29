@@ -179,7 +179,7 @@ def checked_something(output):
                for line in output.splitlines())
 
 
-def save_verify_report(root, verify, result):
+def save_verify_report(root, verify, result, checked):
     """Keep the last verify run as evidence for the end-of-run summary (`~/.agents/bin/reports`)."""
     reports = os.path.expanduser("~/.agents/bin/reports")
     path = subprocess.run([reports, "path", "verify"], cwd=root, capture_output=True, text=True).stdout.strip()
@@ -188,7 +188,7 @@ def save_verify_report(root, verify, result):
     output = (result.stdout + result.stderr).strip()[-6000:] or "(no output)"
     if result.returncode != 0:
         verdict = f"FAIL (exit {result.returncode})"
-    elif not checked_something(output):
+    elif not checked:
         verdict = "PASS, but nothing was checked"
     else:
         verdict = "PASS"
@@ -273,7 +273,8 @@ def check_checkout(root, session):
     if os.access(verify, os.X_OK):
         try:
             result = subprocess.run([verify], cwd=root, capture_output=True, text=True, timeout=VERIFY_TIMEOUT)
-            save_verify_report(root, verify, result)
+            checked = checked_something(result.stdout + "\n" + result.stderr)
+            save_verify_report(root, verify, result, checked)
             if result.returncode != 0:
                 verify_failed = True
                 tail = (result.stdout + result.stderr).strip()[-3000:]
@@ -281,7 +282,7 @@ def check_checkout(root, session):
             else:
                 # Lets the skills skip re-running verify on a change it already passed. A run that checked nothing
                 # gets its own stamp, so the flow moves on without reporting it as a pass.
-                kind = "verify" if checked_something(result.stdout + result.stderr) else "verify-empty"
+                kind = "verify" if checked else "verify-empty"
                 stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
                 subprocess.run([sys.executable, stamp, "write", "--kind", kind], cwd=root, capture_output=True)
         except subprocess.TimeoutExpired:
