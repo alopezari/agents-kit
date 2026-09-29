@@ -3,9 +3,9 @@
 
   lint.py [spec.md]     the current branch's spec (path.sh) when no file is given
 
-Fails, naming each problem, on a missing title, Goal line or section, no numbered criteria, and a criterion whose
-`verify:` is missing, empty or only a placeholder; exits 2 when the spec can't be read. Warns, without failing, when
-there are fewer than 3 or more than 6 criteria.
+Fails, naming each problem, on a missing title, Goal line or section, no numbered criteria, a criterion whose
+`verify:` is missing, empty or only a placeholder, and an empty Change map; exits 2 when the spec can't be read.
+Warns, without failing, when there are fewer than 3 or more than 6 criteria.
 """
 import os
 import re
@@ -53,6 +53,9 @@ def problems(text):
         warnings.append(f"{len(items)} criteria: three to six is usual; more often means the issue should be split")
     if not items and re.search(r"^## Acceptance criteria\s*$", text, re.M | re.I):
         errors.append("no numbered criteria under '## Acceptance criteria'")
+    change_map = re.search(r"^## Change map\s*$(.*?)(?=^## |\Z)", text, re.M | re.S | re.I)
+    if change_map and not re.search(r"^\s*[-*]\s+\S", change_map.group(1), re.M):
+        errors.append("'## Change map' is empty: list the ways in, derived data and failures, or drop the section")
     return errors, warnings
 
 

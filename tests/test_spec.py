@@ -58,6 +58,14 @@ def lint_names_every_missing_part(base):
     assert status == 1 and "criterion 3: write its check as" in out, f"a verify without its colon says how to fix it: {out}"
 
 
+def lint_takes_a_change_map_only_when_filled(base):
+    filled = GOOD + "\n## Change map\n- Ways in: installer CLI — install.sh:40\n"
+    status, out = lint(base, filled)
+    assert status == 0, f"a filled map passes, and a spec without one too (GOOD): {out}"
+    status, out = lint(base, GOOD + "\n## Change map\n\n")
+    assert status == 1 and "'## Change map' is empty" in out, out
+
+
 def lint_rejects_a_placeholder_verify(base):
     for placeholder in ("", "tests", "Manual", "TBD", "unit tests.", "none", "see above", "run the tests"):
         status, out = lint(base, GOOD.replace("verify: tests/test_compose.py::plugin", f"verify: {placeholder}"))
@@ -106,6 +114,7 @@ def review_prompt_bundles_the_request_and_the_spec(base):
 RESULTS = []
 for test in (lint_passes_the_documented_shape, lint_names_every_missing_part, lint_rejects_a_placeholder_verify,
              lint_warns_outside_three_to_six_criteria, lint_exits_2_on_an_unreadable_spec,
+             lint_takes_a_change_map_only_when_filled,
              review_prompt_bundles_the_request_and_the_spec):
     base = tempfile.mkdtemp(prefix="agents-test-spec-")
     try:
