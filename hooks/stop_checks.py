@@ -28,6 +28,7 @@ CHECKOUTS = os.path.join(os.environ.get("AGENTS_STATE_DIR") or os.path.expanduse
 OVERRIDE_NAMES = ("docker-compose.override.yml", "docker-compose.override.yaml", "compose.override.yml", "compose.override.yaml")
 OVERRIDE_MARKER = "agents: temporary override"
 VERIFY_TIMEOUT = 600
+SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "spec", "path.sh"))
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
 
 TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec)/|[._-](test|spec)\.[a-z]+$|Test\.php$", re.I)
@@ -37,6 +38,7 @@ WEAKENED_TEST = re.compile(
 )
 DEBUG_LEFTOVER = re.compile(r"\bvar_dump\(|\bdebugger;|^\s*dd\(|\bbinding\.pry\b|\bbreakpoint\(\)")
 CONFLICT_MARKER = re.compile(r"^(<{7}|>{7})( |$)")
+LOCK_FILE = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|[\w.-]+\.lock)$")
 
 
 def git(args, cwd):
@@ -176,22 +178,19 @@ def main():
 
 def unmapped_files(root, session):
     """Changed code files the branch's spec has no Change map entry for, each returned once per session."""
-    common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], root).strip()
-    name = f"spec-{review_stamp.repo_name(root)}-{review_stamp.branch_key(git(['branch', '--show-current'], root).strip())}.md"
-    for spec in (os.path.join(common, "agents", name), os.path.join(review_stamp.TMP_SPECS, name)):
-        if os.path.isfile(spec):
-            break
-    else:
+    # path.sh finds the spec wherever it is kept: after a branch rename, in a worktree's old place or in $TMPDIR.
+    spec = subprocess.run([SPEC_PATH], cwd=root, capture_output=True, text=True).stdout.strip()
+    if not os.path.isfile(spec):
         return []
     change_map = re.search(r"^## Change map\s*$(.*?)(?=^## |\Z)", open(spec, errors="ignore").read(), re.M | re.S | re.I)
     if not change_map:
         return []
     base = review_stamp.merge_base(root)
-    changed = set(git(["diff", "--name-only", base], root).splitlines())
-    changed |= set(git(["ls-files", "--others", "--exclude-standard"], root).splitlines())
-    # A path, not a bare file name: `app.py` in the map doesn't cover `other/app.py`.
-    unmapped = sorted(p for p in changed if p and not review_stamp.NOT_BEHAVIOR.search(p)
-                      and not re.search(rf"(?<![\w./-]){re.escape(p)}(?![\w/-])", change_map.group(1)))
+    changed = set(git(["-c", "core.quotePath=off", "diff", "--name-only", base], root).splitlines())
+    changed |= set(git(["-c", "core.quotePath=off", "ls-files", "--others", "--exclude-standard"], root).splitlines())
+    # A path, not a bare file name: `app.py` in the map doesn't cover `other/app.py`, nor does `app.py.bak`.
+    unmapped = sorted(p for p in changed if p and not review_stamp.NOT_BEHAVIOR.search(p) and not LOCK_FILE.search(p)
+                      and not re.search(rf"(?<![\w./-])(\./)?{re.escape(p)}(?![\w/-]|\.\w)", change_map.group(1)))
     asked_path = os.path.join(MARKER_DIR, f"{session}.map-asked")
     try:
         asked = set(open(asked_path).read().splitlines())
@@ -282,6 +281,10 @@ def leftover_overrides():
 def check_checkout(root, session):
     """Return (problems, verify_failed) for one checkout."""
     problems = []
+    unmapped = unmapped_files(root, session)
+    if unmapped:  # first, so the cap on listed problems never hides a file it has marked as asked
+        problems.append("Changed code files the spec's Change map doesn't name: " + ", ".join(f"`{p}`" for p in unmapped)
+                        + ". Add each to the map with what it changes, or split it into another branch.")
     lines = list(added_lines(root))
     problems += new_options_near_caches(root, lines)
     problems += leaked_secrets(lines)
@@ -299,8 +302,6 @@ def check_checkout(root, session):
                         "`docker compose up -d` so the stack serves the primary checkout again.")
     deleted = git(["diff", review_stamp.merge_base(root), "--name-only", "--diff-filter=D"], root).splitlines()
     problems += [f"Test file deleted: {p}" for p in deleted if TEST_FILE.search(p)]
-    problems += [f"`{p}` is changed but the spec's Change map doesn't name it: add it to the map with what it changes, "
-                 "or split it into another branch." for p in unmapped_files(root, session)]
 
     verify = os.path.expanduser(f"~/.agents/repos/{review_stamp.repo_name(root)}/verify")
     if not os.access(verify, os.X_OK):

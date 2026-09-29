@@ -358,28 +358,44 @@ def verify_stamp_and_effort_nudge(base):
 
 def stop_asks_once_about_files_outside_the_change_map(base):
     repo = new_repo(base, "zz-agents-drift")
+    for path in ("old.py", "lib/café.py"):
+        os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
+        open(os.path.join(repo, path), "w").write("x = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "more")
     git(repo, "checkout", "-q", "-b", "feat/drift")
     spec = subprocess.run([os.path.expanduser("~/.agents/skills/spec/path.sh")], cwd=repo, capture_output=True,
                           text=True).stdout.strip()
     with_map = ("# Drift\n\nGoal: x.\n\n## Acceptance criteria\n1. y — verify: tests/test_app.py\n\n"
-                "## Change map\n- Ways in: the app — app.py:1\n\n## Assumptions\n- lib/util.py stays as it is.\n")
+                "## Change map\n- Ways in: the app — app.py:1, ./lib/café.py:1, cache.py.bak\n\n"
+                "## Assumptions\n- lib/util.py stays as it is.\n")
     open(spec, "w").write(with_map)
-    for path in ("lib/util.py", "other/app.py", "tests/test_app.py"):
+    open(os.path.join(repo, "committed.py"), "w").write("c = 1\n")
+    git(repo, "add", "committed.py")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "committed")
+    os.remove(os.path.join(repo, "old.py"))
+    for path in ("lib/util.py", "other/app.py", "tests/test_app.py", "package-lock.json"):
         os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
         open(os.path.join(repo, path), "w").write("x = 1\n")
-    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    for path in ("app.py", "lib/café.py"):
+        open(os.path.join(repo, path), "a").write("y = 2\n")
 
     def asked(session, edited):
         reason = stop(RUN + session, repo, [os.path.join(repo, p) for p in edited]).get("reason", "")
-        return sorted(line.split("`")[1] for line in reason.splitlines() if "Change map doesn't name" in line)
-    everything = ["app.py", "lib/util.py", "other/app.py", "tests/test_app.py"]
-    assert asked("d1", everything) == ["lib/util.py", "other/app.py"], \
-        "unmapped code files, including one named only in Assumptions and a same-named file elsewhere"
+        line = next((line for line in reason.splitlines() if "Change map doesn't name" in line), "")
+        return sorted(line.split("`")[1::2])
+    everything = ["app.py", "lib/café.py", "lib/util.py", "other/app.py", "tests/test_app.py", "committed.py"]
+    assert asked("d1", everything) == ["committed.py", "lib/util.py", "old.py", "other/app.py"], \
+        "unmapped code files: committed, deleted, named only in Assumptions, or same-named elsewhere; not lock files"
     assert asked("d1", everything) == [], "each file is asked about once per session"
     open(os.path.join(repo, "cache.py"), "w").write("z = 3\n")
-    assert asked("d1", ["cache.py"]) == ["cache.py"], "a file that drifts later is asked about"
-    open(spec, "w").write(with_map.replace("## Change map\n- Ways in: the app — app.py:1\n\n", ""))
+    assert asked("d1", ["cache.py"]) == ["cache.py"], "a file that drifts later is asked about; cache.py.bak isn't cache.py"
+    open(spec, "w").write(with_map.replace("## Change map\n- Ways in: the app — app.py:1, ./lib/café.py:1, cache.py.bak\n\n", ""))
     assert asked("d2", everything) == [], "a spec without a Change map asks nothing"
+    open(spec, "w").write(with_map)
+    git(repo, "branch", "-m", "feat/drift-renamed")
+    assert asked("d3", ["cache.py"]) == ["cache.py", "committed.py", "lib/util.py", "old.py", "other/app.py"], \
+        "the spec follows a branch rename"
 
 
 def post_edit_syntax_feedback(base):

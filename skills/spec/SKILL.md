@@ -77,7 +77,7 @@ When the change goes through a one-way door (a schema or migration, a public con
 - <chosen option> over <rejected alternative>, because <reason>
 ```
 
-The PR description reuses them, and the self-review's Maintainability and Compatibility lenses check they are there. The lint fails the section when it is empty or unfilled.
+The PR description reuses them, and the self-review asks for them: its Maintainability lens for a new dependency, its Compatibility lens for a contract, schema or migration. The lint fails the section when it is empty or unfilled.
 
 ## 4. Get a second reading
 

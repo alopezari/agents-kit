@@ -75,7 +75,8 @@ def lint_takes_decisions_only_when_filled(base):
     assert status == 0, f"a filled Decisions section passes: {out}"
     status, out = lint(base, GOOD + "\n## Decisions\n\n")
     assert status == 1 and "'## Decisions' is empty" in out, out
-    for unfilled in ("- <chosen option> over <rejected alternative>, because <reason>\n", "- Storage:\n"):
+    for unfilled in ("- <chosen option> over <rejected alternative>, because <reason>\n", "- Storage:\n",
+                     "- <chosen> over postgres, because simpler.\n"):
         status, out = lint(base, GOOD + "\n## Decisions\n" + unfilled)
         assert status == 1 and "'## Decisions' has an unfilled item" in out, (unfilled, out)
 

@@ -62,7 +62,7 @@ def problems(text):
         lines = [line.strip() for line in section.group(1).splitlines()
                  if re.match(r"\s*([-*]|\d+\.|\|)\s*\S", line) and not re.fullmatch(r"\s*\|[\s|:-]*\|?\s*", line)]
         items = [line for line in lines if not line.startswith("|")] or lines[1:]
-        unfilled = [line for line in items if re.search(r"<(file:line|[^<>]*\s[^<>]*)>", line) or re.fullmatch(r"[-*\d.\s]*[\w ]+:\s*", line)]
+        unfilled = [line for line in items if re.search(r"<(file:line|chosen|alternative|reason|[^<>]*\s[^<>]*)>", line) or re.fullmatch(r"[-*\d.\s]*[\w ]+:\s*", line)]
         if not items:
             errors.append(f"'## {name}' is empty: {what}, or drop the section")
         for line in unfilled:
