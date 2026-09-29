@@ -49,6 +49,7 @@ You are reviewing how easy this code will be to change a year from now.
 - Text accuracy: is every comment, docblock, README line, help text and log message true of the code as it now stands? Did the change make existing text elsewhere false?
 - Names: do they say what things mean in the domain?
 - Dead code, debug leftovers, unrelated changes that belong in another PR.
+- New dependencies (triage names each one): what in the repo or the standard library already does this, what code does it replace, what is its licence, is it maintained (recent releases, open issues answered), and how much does it add to the install or bundle? Does the spec's Decisions record why it beats writing the code?
 - Does it follow the conventions of neighbouring files?
 
 ## Security
@@ -77,6 +78,7 @@ You are reviewing what breaks for existing users, data and callers when this shi
 - Data and schema changes: safe on large tables, safe while old and new code run side by side, reversible?
 - Is there a flag or a rollback path for risky behavior changes?
 - Deprecate before removing.
+- A new or changed public contract, schema or migration is a one-way door: does the spec's Decisions record the chosen option, the alternative and why?
 
 ## Operability
 

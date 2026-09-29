@@ -70,6 +70,16 @@ def lint_takes_a_change_map_only_when_filled(base):
         assert status == 1 and "unfilled item" in out, (unfilled, out)
 
 
+def lint_takes_decisions_only_when_filled(base):
+    status, out = lint(base, GOOD + "\n## Decisions\n- Accept v2 by version string over probing flags, because v1 and v2 share flags.\n")
+    assert status == 0, f"a filled Decisions section passes: {out}"
+    status, out = lint(base, GOOD + "\n## Decisions\n\n")
+    assert status == 1 and "'## Decisions' is empty" in out, out
+    for unfilled in ("- <chosen option> over <rejected alternative>, because <reason>\n", "- Storage:\n"):
+        status, out = lint(base, GOOD + "\n## Decisions\n" + unfilled)
+        assert status == 1 and "'## Decisions' has an unfilled item" in out, (unfilled, out)
+
+
 def lint_rejects_a_placeholder_verify(base):
     for placeholder in ("", "tests", "Manual", "TBD", "unit tests.", "none", "see above", "run the tests"):
         status, out = lint(base, GOOD.replace("verify: tests/test_compose.py::plugin", f"verify: {placeholder}"))
@@ -118,7 +128,7 @@ def review_prompt_bundles_the_request_and_the_spec(base):
 RESULTS = []
 for test in (lint_passes_the_documented_shape, lint_names_every_missing_part, lint_rejects_a_placeholder_verify,
              lint_warns_outside_three_to_six_criteria, lint_exits_2_on_an_unreadable_spec,
-             lint_takes_a_change_map_only_when_filled,
+             lint_takes_a_change_map_only_when_filled, lint_takes_decisions_only_when_filled,
              review_prompt_bundles_the_request_and_the_spec):
     base = tempfile.mkdtemp(prefix="agents-test-spec-")
     try:

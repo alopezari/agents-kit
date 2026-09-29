@@ -356,6 +356,32 @@ def verify_stamp_and_effort_nudge(base):
         shutil.rmtree(vdir, ignore_errors=True)
 
 
+def stop_asks_once_about_files_outside_the_change_map(base):
+    repo = new_repo(base, "zz-agents-drift")
+    git(repo, "checkout", "-q", "-b", "feat/drift")
+    spec = subprocess.run([os.path.expanduser("~/.agents/skills/spec/path.sh")], cwd=repo, capture_output=True,
+                          text=True).stdout.strip()
+    with_map = ("# Drift\n\nGoal: x.\n\n## Acceptance criteria\n1. y — verify: tests/test_app.py\n\n"
+                "## Change map\n- Ways in: the app — app.py:1\n\n## Assumptions\n- lib/util.py stays as it is.\n")
+    open(spec, "w").write(with_map)
+    for path in ("lib/util.py", "other/app.py", "tests/test_app.py"):
+        os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
+        open(os.path.join(repo, path), "w").write("x = 1\n")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+
+    def asked(session, edited):
+        reason = stop(RUN + session, repo, [os.path.join(repo, p) for p in edited]).get("reason", "")
+        return sorted(line.split("`")[1] for line in reason.splitlines() if "Change map doesn't name" in line)
+    everything = ["app.py", "lib/util.py", "other/app.py", "tests/test_app.py"]
+    assert asked("d1", everything) == ["lib/util.py", "other/app.py"], \
+        "unmapped code files, including one named only in Assumptions and a same-named file elsewhere"
+    assert asked("d1", everything) == [], "each file is asked about once per session"
+    open(os.path.join(repo, "cache.py"), "w").write("z = 3\n")
+    assert asked("d1", ["cache.py"]) == ["cache.py"], "a file that drifts later is asked about"
+    open(spec, "w").write(with_map.replace("## Change map\n- Ways in: the app — app.py:1\n\n", ""))
+    assert asked("d2", everything) == [], "a spec without a Change map asks nothing"
+
+
 def post_edit_syntax_feedback(base):
     repo = new_repo(base)
     bad = os.path.join(repo, "bad.py")
@@ -369,6 +395,7 @@ for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, ask
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
+          stop_asks_once_about_files_outside_the_change_map,
           post_edit_syntax_feedback]:
     test(t)
 

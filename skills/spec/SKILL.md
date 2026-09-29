@@ -68,7 +68,16 @@ The defects reviewers catch most are a rule enforced on one path and not another
 - Failures: <each external call, query or write the change adds, and what the user sees when it fails> — <file:line>
 ```
 
-Build so that every item is handled, and add a criterion when an item needs its own check. The self-review starts its tables from this map. Run the lint again: it fails on a map left empty or unfilled.
+Build so that every item is handled, and add a criterion when an item needs its own check. The self-review starts its tables from this map. Name every file the change touches by its path: the stop hook asks about a changed code file the map doesn't name, so the spec is updated, or the change split, while building. Run the lint again: it fails on a map left empty or unfilled.
+
+When the change goes through a one-way door (a schema or migration, a public contract, a new dependency), add the decisions a reviewer would otherwise ask about, one line each:
+
+```markdown
+## Decisions
+- <chosen option> over <rejected alternative>, because <reason>
+```
+
+The PR description reuses them, and the self-review's Maintainability and Compatibility lenses check they are there. The lint fails the section when it is empty or unfilled.
 
 ## 4. Get a second reading
 

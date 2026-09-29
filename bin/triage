@@ -95,6 +95,75 @@ def collect(rng):
     return files, added, removed
 
 
+# Files that declare dependencies, by name. deps.txt is the kit's own list of programs.
+MANIFEST = re.compile(r"(^|/)(package\.json|composer\.json|requirements[\w.-]*\.txt|go\.mod|Cargo\.toml|deps\.txt)$")
+
+
+def dependency_names(path, text):
+    """The dependencies a manifest declares; ValueError when it can't be read."""
+    name = os.path.basename(path)
+    if name in ("package.json", "composer.json"):
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError(f"{path} is not a JSON object")
+        sections = (("dependencies", "devDependencies", "peerDependencies", "optionalDependencies") if name == "package.json"
+                    else ("require", "require-dev"))
+        return {dep for s in sections for dep in (data.get(s) or {}) if dep != "php"}
+    lines = [line.split("#")[0].strip() for line in text.splitlines()]
+    if name == "deps.txt":
+        return {line.split()[1].split(">=")[0] for line in lines if len(line.split()) > 1}
+    if name.startswith("requirements"):
+        return {m.group(0).lower() for line in lines if not line.startswith("-") for m in [re.match(r"[A-Za-z0-9._-]+", line)] if m}
+    names, block = set(), False
+    if name == "go.mod":
+        for line in (l.split("//")[0].strip() for l in text.splitlines()):
+            if line.startswith("require ("):
+                block = True
+            elif block and line == ")":
+                block = False
+            elif block and line:
+                names.add(line.split()[0])
+            elif line.startswith("require ") and len(line.split()) >= 3:
+                names.add(line.split()[1])
+        return names
+    for line in lines:  # Cargo.toml
+        header = re.fullmatch(r"\[(.+)\]", line)
+        if header:
+            table = header.group(1)
+            block = bool(re.search(r"(^|\.)(dev-|build-)?dependencies$", table))
+            nested = re.search(r"(^|\.)(dev-|build-)?dependencies\.([\w-]+)$", table)
+            if nested:
+                names.add(nested.group(3))
+        elif block and re.match(r"[\w-]+\s*=", line):
+            names.add(line.split("=")[0].strip())
+    return names
+
+
+def new_dependencies(files, rng):
+    """'new dependency: <name> (<manifest>)' for each name a changed manifest gains, and a line for each it can't read."""
+    if rng:
+        before_ref, after_ref = rng.split("..")
+    else:
+        before_ref, after_ref = git("merge-base", "HEAD", base_ref()).strip() or "HEAD", None
+    found = []
+    for path in (p for p in files if MANIFEST.search(p)):
+        before = subprocess.run(["git", "show", f"{before_ref}:{path}"], capture_output=True, text=True)
+        if after_ref:
+            after = subprocess.run(["git", "show", f"{after_ref}:{path}"], capture_output=True, text=True)
+            after_text = after.stdout if after.returncode == 0 else None
+        else:
+            after_text = open(path, errors="ignore").read() if os.path.isfile(path) else None
+        if after_text is None:
+            continue
+        try:
+            added = dependency_names(path, after_text) - (dependency_names(path, before.stdout) if before.returncode == 0 else set())
+        except ValueError:
+            found.append(f"{path} can't be read at one end of the change: check its dependencies by hand")
+            continue
+        found += [f"new dependency: {name} ({path})" for name in sorted(added)]
+    return found
+
+
 def php_min():
     for candidate in ("composer.json", "src/composer.json"):
         try:
@@ -155,6 +224,9 @@ def triage(rng=None):
         ui = [p for p in behavior if UI_FILE.search(p)]
         if ui:
             lenses["ux-a11y-i18n"] = ui[:3]
+    dependencies = new_dependencies(files, rng)
+    if dependencies:
+        lenses.setdefault("maintainability", []).extend(dependencies)
 
     if behavior and not style_only:
         tests["e2e positive/negative (validate)"] = ["behavior change"]
