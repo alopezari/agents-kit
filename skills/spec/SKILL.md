@@ -73,7 +73,7 @@ For a Linear issue, or a request that only exists in the conversation, write all
 Verify each finding as the self-review does: **confirmed** (the request says so, quoted) → fix the spec; **rejected** → one line on why; **uncertain** → an open question for the user. Then run the lint again, and log the reading so the monthly job can weigh it:
 
 ```bash
-~/.agents/bin/quality-log lens spec --findings <N> --confirmed <M> --secs <S> --model <codex|claude>
+~/.agents/bin/quality-log lens spec --findings <N> --confirmed <M> --secs <S> --model <codex|claude> --criteria <number of acceptance criteria>
 ```
 
 If the other CLI isn't installed or fails, say so when you show the spec and go on without it.
