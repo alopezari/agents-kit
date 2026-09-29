@@ -18,9 +18,8 @@ os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-hooks-home-")
 os.makedirs(os.path.expanduser("~/.agents/repos"))
 for entry in set(os.listdir(KIT)) - {"logs", "repos", "approvals"}:
     os.symlink(os.path.join(KIT, entry), os.path.expanduser(f"~/.agents/{entry}"))
-for entry in os.listdir(os.path.join(KIT, "repos")):
-    os.symlink(os.path.join(KIT, "repos", entry), os.path.expanduser(f"~/.agents/repos/{entry}"))
-os.environ.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+# Only the kit's shared verify code: a personal overlay linked in would be run, or overwritten, by a test's own.
+os.symlink(os.path.join(KIT, "repos", "_shared"), os.path.expanduser("~/.agents/repos/_shared"))
 H = os.path.join(KIT, "hooks") + "/"
 RESULTS = []
 STATE = tempfile.mkdtemp(prefix="agents-state-")  # keeps the real checkouts registry out of the tests

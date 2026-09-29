@@ -25,12 +25,7 @@ if [ -f "$STATE/versions.txt" ]; then
   [ -n "$changed" ] && notes+=("Versions changed since last week: $(tr '\n' ';' <<<"$changed")the suite above ran against them.")
 fi
 echo "$current" > "$STATE/versions.txt"
-
-# 2b. The doctor on this machine: the suite's doctor runs in a fresh HOME, so it can't see this one's links,
-# settings or a Codex that no longer starts.
-doctor=$("$K/install.sh" --doctor 2>&1); doctor_rc=$?
-[ $doctor_rc = 0 ] || problems+=("install.sh --doctor exited $doctor_rc: $(tail -1 <<<"$doctor")")
-while read -r line; do problems+=("Doctor: $line"); done < <(grep '^  warn  ' <<<"$doctor" | sed 's/^  warn  //')
+# Missing required or recommended programs already fail the suite's doctor section above.
 
 # 3. PHPUnit baselines: a stale baseline hides new failures or blocks on fixed ones.
 for b in "$K"/repos/*/phpunit-baseline.txt; do

@@ -51,7 +51,7 @@ LAYOUT = {
     ".github/": "CI: installs the kit on a macOS runner and runs `tests/run.sh` on every pull request, and checks each one adds a changelog line.",
 }
 # Local state that is git-ignored and never documented.
-IGNORED = {".git", ".gitignore", "logs", "backups", "approvals", "research", "profiles", "node_modules", "__pycache__"}
+IGNORED = {".git", ".gitignore", ".claude", "logs", "backups", "approvals", "research", "profiles", "node_modules", "__pycache__"}
 
 
 def read(rel):
