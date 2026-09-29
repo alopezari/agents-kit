@@ -223,13 +223,14 @@ if command -v codex >/dev/null || [ -d "$HOME/.codex" ]; then
   echo "Codex"
   if codex_out=$(codex --version 2>&1); then ok "codex runs ($codex_out)"
   else
-    command -v codex >/dev/null || codex_out="not on PATH"
-    dangling=""
-    IFS=: read -ra path_dirs <<<"$PATH"
-    for dir in "${path_dirs[@]}"; do
-      [ -L "$dir/codex" ] && [ ! -e "$dir/codex" ] && { dangling="; $dir/codex links to $(readlink "$dir/codex"), which no longer exists"; break; }
-    done
-    warn "codex does not run ($(head -1 <<<"$codex_out")$dangling): the self-review's cross-model pass and the spec's second reading need it. Reinstall Codex or relink it."
+    if ! command -v codex >/dev/null; then
+      codex_out="not found on PATH"
+      IFS=: read -ra path_dirs <<<"$PATH"
+      for dir in "${path_dirs[@]}"; do
+        [ -L "$dir/codex" ] && [ ! -e "$dir/codex" ] && { codex_out+="; $dir/codex links to $(readlink "$dir/codex"), which no longer exists"; break; }
+      done
+    fi
+    warn "codex does not run ($(head -1 <<<"$codex_out")): the self-review's cross-model pass and the spec's second reading need it. Reinstall Codex or relink it."
   fi
   link "$KIT/AGENTS.md" "$HOME/.codex/AGENTS.md"
   skills "$HOME/.codex/skills"
