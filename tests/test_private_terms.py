@@ -138,7 +138,27 @@ def kit_commits_are_checked(base):
     assert run([os.path.join(KIT, ".githooks", "commit-msg"), message], other, env).returncode == 0
 
 
-for test in (kit_prs_are_checked, kit_commits_are_checked):
+def kit_is_recognised_when_it_is_a_worktree(base):
+    # A verify testing a branch points ~/.agents at a worktree, whose .git is a file: PRs from the main checkout
+    # went unchecked.
+    sys.path.insert(0, os.path.join(KIT, "hooks"))
+    import guard_bash
+    main, worktree, other = (os.path.join(base, name) for name in ("kit", "kit-worktree", "other"))
+    for repo in (main, other):
+        os.makedirs(repo)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"],
+                       cwd=repo, check=True)
+    subprocess.run(["git", "worktree", "add", "-q", "-b", "feature", worktree], cwd=main, check=True)
+    guard_bash.KIT = os.path.realpath(worktree)
+    assert guard_bash.targets_kit(None, None, main) and guard_bash.targets_kit(None, None, worktree)
+    assert not guard_bash.targets_kit(None, None, other)
+    guard_bash.KIT = os.path.realpath(os.path.join(main, "not-a-repo"))
+    os.makedirs(guard_bash.KIT)
+    assert not guard_bash.targets_kit(None, None, main), "a KIT inside another repository isn't that repository"
+
+
+for test in (kit_prs_are_checked, kit_commits_are_checked, kit_is_recognised_when_it_is_a_worktree):
     base = tempfile.mkdtemp(prefix="agents-test-terms-")
     try:
         test(base)

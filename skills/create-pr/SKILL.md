@@ -13,7 +13,7 @@ Run from the checkout that has the branch. Each line must hold, or the listed st
 
 | Check | Command | If it fails |
 |---|---|---|
-| Verify passed on this change | `python3 ~/.agents/hooks/review_stamp.py check --kind verify` | Let the stop hook run verify (or run `~/.agents/repos/<repo>/verify`), fix what it finds |
+| Verify passed on this change | `python3 ~/.agents/hooks/review_stamp.py check --kind verify` | Let the stop hook run verify (or run `~/.agents/repos/<repo>/verify`), fix what it finds. If only `--kind verify-empty` passes, verify checked nothing: the evidence is the tests you ran instead, named in the description, never "verify passed" |
 | Self-review covers this change | `python3 ~/.agents/hooks/review_stamp.py check` | Run the `self-review` skill |
 | Validated, for behavior changes | `python3 ~/.agents/hooks/review_stamp.py needs-validate && python3 ~/.agents/hooks/review_stamp.py check --kind validate` | Run the `validate` skill |
 | Staging passed, when there is a guide | `~/.agents/bin/reports` shows the staging guide with a `## Results` section, every step PASS | Ask the user for the results (validate, step 7) |
@@ -50,5 +50,5 @@ Run the `follow-pr` skill in the same session (its first run): it waits for CI a
 
 ```
 PR:        <url> (ready | draft: <why>)
-Evidence:  verify <PASS/FAIL> · self-review <stamp ok> · validate <stamp ok | not needed: tests/docs only> · staging <all PASS | none needed | pending: draft>
+Evidence:  verify <PASS | FAIL | checked nothing: <tests run instead>> · self-review <stamp ok> · validate <stamp ok | not needed: tests/docs only> · staging <all PASS | none needed | pending: draft>
 ```

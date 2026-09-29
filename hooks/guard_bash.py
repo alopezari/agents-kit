@@ -239,9 +239,13 @@ def targets_kit(repo, host, cwd):
             return False
         (kit_host, kit_slug), (host, slug) = repo_id(origin), repo_id(repo, host)
         return slug == kit_slug and host in (None, kit_host)
-    common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd,
-                            capture_output=True, text=True).stdout.strip()
-    return bool(common) and os.path.realpath(common) == os.path.join(KIT, ".git")
+    def common_dir(path):
+        return subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=path,
+                              capture_output=True, text=True).stdout.strip()
+    # KIT/.git is a file when ~/.agents is itself a worktree (a verify testing a branch): compare common dirs.
+    # Only KIT's own repository: a ~/.agents that isn't one could sit inside another (a dotfiles repo in HOME).
+    common, kit = common_dir(cwd), common_dir(KIT) if os.path.exists(os.path.join(KIT, ".git")) else ""
+    return bool(common and kit) and os.path.realpath(common) == os.path.realpath(kit)
 
 
 def pr_command_args(command, start):

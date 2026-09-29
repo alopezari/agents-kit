@@ -271,7 +271,7 @@ def stop_falls_back_to_auto_verify(base):
     report = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "verify"], cwd=repo,
                             capture_output=True, text=True).stdout.strip()
     text = open(report).read()
-    assert "verify_auto.py" in text and ("ran: " in text or "every check was skipped" in text), text
+    assert "verify_auto.py" in text and ("ran: " in text or "nothing was checked" in text), text
 
 
 def stop_continues_only_once(base):
@@ -323,15 +323,28 @@ def verify_stamp_and_effort_nudge(base):
     vdir = os.path.expanduser("~/.agents/repos/zz-agents-test-repo")
     os.makedirs(vdir, exist_ok=True)
     try:
+        def stamped(kind):
+            return subprocess.run(["python3", H + "review_stamp.py", "check", "--kind", kind], cwd=repo).returncode == 0
+        report = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "verify"], cwd=repo,
+                                capture_output=True, text=True).stdout.strip()
         open(os.path.join(vdir, "verify"), "w").write("#!/bin/sh\nexit 0\n")
         os.chmod(os.path.join(vdir, "verify"), 0o755)
         open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+        stop(RUN + "s4", repo, [os.path.join(repo, "app.py")])
+        assert not stamped("verify") and stamped("verify-empty"), "a silent green verify checked nothing"
+        open(os.path.join(vdir, "verify"), "w").write("#!/bin/sh\necho 'skipped: ruff (not installed)'\n"
+                                                      "echo 'ran: nothing to check: no changed PHP files'\n")
+        open(os.path.join(repo, "app.py"), "a").write("w = 1\n")
+        stop(RUN + "s5", repo, [os.path.join(repo, "app.py")])
+        assert not stamped("verify") and stamped("verify-empty"), "a green verify that checked nothing isn't a pass"
+        assert "# Verify: PASS, but nothing was checked" in open(report).read()
+        # The verdict reads the whole output: the saved report keeps only its tail.
+        open(os.path.join(vdir, "verify"), "w").write("#!/bin/sh\necho 'ran: pytest tests/test_app.py'\n"
+                                                      "i=0; while [ $i -lt 400 ]; do echo 'skipped: a tool'; i=$((i+1)); done\n")
+        open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
         stop(RUN + "s6", repo, [os.path.join(repo, "app.py")])
-        ok = subprocess.run(["python3", H + "review_stamp.py", "check", "--kind", "verify"], cwd=repo).returncode == 0
-        assert ok, "green verify should stamp the change"
-        report = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "verify"], cwd=repo,
-                                capture_output=True, text=True).stdout.strip()
-        assert "# Verify: PASS" in open(report).read(), "verify should leave its evidence in a report"
+        assert stamped("verify"), "green verify should stamp the change"
+        assert "# Verify: PASS\n" in open(report).read(), "verify should leave its evidence in a report"
         open(os.path.join(vdir, "verify"), "w").write("#!/bin/sh\necho failing; exit 1\n")
         outs = [stop(RUN + "s7", repo, [os.path.join(repo, "app.py")]) for _ in range(2)]
         assert "systemMessage" in outs[1] and "systemMessage" not in outs[0], outs
