@@ -170,14 +170,21 @@ def fetch_window(start, end, now, errors):
 
 
 def attach_escapes(prs):
-    """follow-pr's escapes per PR, and whether the lens that should have caught each one ran on the branch."""
+    """follow-pr's escapes per PR, and whether the lens that should have caught each one ran on the branch, under any
+    of its earlier names: the spec review often runs on a session branch that is renamed before the PR."""
     try:
         entries = [json.loads(line) for line in open(QUALITY_LOG)]
     except OSError:
         entries = []
     for pr in prs:
         name, branch = pr["repo"].split("/")[1], pr["branch"]
-        mine = [e for e in entries if e.get("repo") == name and e.get("branch") == branch]
+        names = {branch}
+        while True:  # a branch renamed twice, each time after files moved, logs two renames
+            earlier = {e["name"] for e in entries if e.get("kind") == "rename" and e.get("repo") == name and e.get("to") in names}
+            if earlier <= names:
+                break
+            names |= earlier
+        mine = [e for e in entries if e.get("repo") == name and e.get("branch") in names]
         lenses_run = {e["name"] for e in mine if e.get("kind") == "lens"}
         pr["escapes"] = [{"source": e["name"], "category": e.get("category"), "verdict": e.get("verdict"),
                           "lens": e.get("lens"), "lens_ran": e.get("lens") in lenses_run}

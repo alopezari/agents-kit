@@ -26,6 +26,7 @@ Assign exactly one primary `cat` (the most specific that fits). Codes:
 
 ## Other categories
 - C.bug — logic/correctness bug (wrong behavior, off-by-one, wrong condition, race)
+- C.requirement — the change doesn't do what was asked: a requirement misread, narrowed or left out, even when the code works as written
 - C.security — security/privacy/permissions/escaping/nonce/capabilities
 - C.reuse — duplicated existing helper/util/component; "use existing X"
 - C.convention — doesn't follow repo/framework conventions or patterns (not naming)

@@ -78,6 +78,22 @@ def escapes_join_to_their_branch_and_lens(base):
     outcomes.attach_escapes(prs)
     assert [(e["source"], e["lens_ran"]) for e in prs[0]["escapes"]] == [("review", True), ("bot", False)], prs
 
+    entries = [
+        {"kind": "lens", "name": "spec", "repo": "shop", "branch": "session/x"},
+        {"kind": "rename", "repo": "shop", "name": "session/x", "to": "shop-1/draft"},
+        {"kind": "rename", "repo": "shop", "name": "shop-1/draft", "to": "feature/cart"},
+        {"kind": "lens", "name": "tests", "repo": "shop", "branch": "session/y"},
+        {"kind": "escape", "name": "review", "repo": "shop", "branch": "feature/cart", "verdict": "confirmed",
+         "category": "C.requirement", "lens": "spec"},
+        {"kind": "escape", "name": "bot", "repo": "shop", "branch": "feature/cart", "verdict": "confirmed",
+         "category": "P4.5", "lens": "tests"},
+    ]
+    open(log, "w").write("".join(json.dumps(e) + "\n" for e in entries))
+    prs = [{"repo": "o/shop", "branch": "feature/cart"}]
+    outcomes.attach_escapes(prs)
+    assert [(e["lens"], e["lens_ran"]) for e in prs[0]["escapes"]] == [("spec", True), ("tests", False)], \
+        f"a lens run follows every rename to the PR's branch, and only those: {prs}"
+
 
 def sessions_join_by_repo_and_branch(base):
     prs = [{"repo": "o/shop", "branch": "feature/cart", "opened": "2026-10-01T12:00:00Z", "merged": "2026-10-02T12:00:00Z"}]

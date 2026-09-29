@@ -18,7 +18,7 @@ Start by filling in these two tables. They are required output, not optional not
 | Input | Cache / derived value | Key varies with it, or invalidated on change? | Evidence (file:line) |
 |---|---|---|---|
 
-**Spec table**, when a spec exists. One row per acceptance criterion.
+**Spec table**, when a spec exists. One row per acceptance criterion. Then one row per part of the diff that no criterion needs, with "none" in the Criterion column. Each is a finding: the fix is to add it to the spec, when it's really part of the work, or to drop it from the diff.
 
 | Criterion | Met? | Evidence (test, command output, or file:line) |
 |---|---|---|

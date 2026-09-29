@@ -51,7 +51,38 @@ What makes criteria useful:
 - **They cover the edges the issue implies but doesn't spell out:** other entry points (CLI, cron, REST), existing data and settings, empty and failure states, backwards compatibility.
 - **Three to six of them.** More usually means the issue should be split; say so.
 
-## 3. Resolve before building
+Check the shape, and fix what it reports before going on:
+
+```bash
+~/.agents/skills/spec/lint.py
+```
+
+## 3. Get a second reading
+
+The model that wrote the spec shares its blind spots, and a misread requirement is built well and then passes a review judged against the same spec. Have the other model family read it against the request. Pipe in the request as you gathered it: the issue, its comments and the linked PRs and discussion threads that shaped it, not the issue alone.
+
+- **Running on a Claude model →** Codex:
+  ```bash
+  gh issue view <n> --comments | ~/.agents/skills/spec/review-prompt.sh \
+    | codex exec --ephemeral --skip-git-repo-check -s read-only -
+  ```
+- **Running on an OpenAI model →** Claude:
+  ```bash
+  gh issue view <n> --comments | ~/.agents/skills/spec/review-prompt.sh \
+    | claude -p --allowedTools "Read,Grep,Glob" --disallowedTools "Edit,Write"
+  ```
+
+`gh issue view --comments` covers the issue and its comments; append what else you gathered. For a Linear issue, or a request that only exists in the conversation, write all of it to a file in your scratch directory and redirect that in instead.
+
+Verify each finding as the self-review does: **confirmed** (the request says so, quoted) → fix the spec; **rejected** → one line on why; **uncertain** → an open question for the user. Then run the lint again, and log the reading so the monthly job can weigh it:
+
+```bash
+~/.agents/bin/quality-log lens spec --findings <N> --confirmed <M> --secs <S> --model <codex|claude>
+```
+
+If the other CLI isn't installed or fails, say so when you show the spec and go on without it.
+
+## 4. Resolve before building
 
 - **Open questions that change the work:** ask the user, or the issue author through the user, before building. Everything else becomes an assumption in the spec, and you proceed.
 - **The request looks wrong or costlier than its author realized:** say so in a sentence, then follow the user's decision.
@@ -59,4 +90,4 @@ What makes criteria useful:
 
 ## Afterwards
 
-The `self-review` skill reads this spec. Its Correctness lens checks every acceptance criterion against the diff, and the PR description can list them as what was verified. If the scope changes while building, update the spec first.
+The `self-review` skill reads this spec. Its Correctness lens checks every acceptance criterion against the diff, and every change in the diff against the criteria, and the PR description can list them as what was verified. If the scope changes while building, update the spec first.

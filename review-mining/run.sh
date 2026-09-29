@@ -89,7 +89,8 @@ Steps:
    - At the PR stage: the escapes follow-pr logged (CI failures the change caused, review comments by people and bots)
      per merged PR, by category and verdict. For each confirmed escape, name the lens that should have caught it and
      whether it ran on that branch. A lens that ran and still let its category through gets a proposed fix to its
-     questions in lenses.md; a lens that never catches anything is a candidate to drop (weigh it with quality.jsonl).
+     questions in lenses.md, or for the spec lens in $HOME/.agents/skills/spec/review-prompt.sh; a lens that never
+     catches anything is a candidate to drop (weigh it with quality.jsonl).
      Rejected comments per bot measure that bot's noise.
    - After merge: judge every follow_ups candidate from its title and shared files. Count it only when it plausibly
      fixes or reverts the original PR (not a lint sweep, a rename across the codebase, or a word that only looks like

@@ -4,7 +4,7 @@
   review_stamp.py write [--kind review|validate|verify]   # end of self-review / validate; the stop hook after a green verify
   review_stamp.py check [--kind review|validate|verify]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
-  review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names
+  review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
   review_stamp.py branch-key                       # the current branch as it appears in those file names
 
 The fingerprint covers every file that differs from the merge-base with the
@@ -15,11 +15,15 @@ written in, so the PR can be opened from the main checkout after a staging hand-
 follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
 """
 import hashlib
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 
+QUALITY_LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
 NOT_BEHAVIOR = re.compile(
     r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$|(^|/)(CHANGELOG|README)",
     re.I,
@@ -94,7 +98,8 @@ def follow_branch_renames():
     earlier = renamed_from(branch)
     # Keys used to turn / into -: such a key is this branch's, unless a branch with that name really exists.
     dashed = [name.replace("/", "-") for name in [branch, *earlier] if "/" in name]
-    for old in [branch_key(name) for name in earlier] + dashed:
+    for old, old_name in [(branch_key(name), name) for name in earlier] + [(key, None) for key in dashed]:
+        moved = False
         moves = [(os.path.join(d, f"{kind}-{repo}-{old}.md"), os.path.join(d, f"{kind}-{repo}-{new}.md"))
                  for d in dirs for kind in REPORT_KINDS]
         moves += [(os.path.join(d, f"browser-ab-spec-{repo}-{old}.json"), os.path.join(d, f"browser-ab-spec-{repo}-{new}.json"))
@@ -105,9 +110,39 @@ def follow_branch_renames():
             if os.path.exists(src) and not os.path.exists(dst) and not (old in dashed and branch_exists(old)):
                 try:
                     os.rename(src, dst)
+                    moved = True
                     print(f"moved {os.path.basename(src)} to {os.path.basename(dst)}", file=sys.stderr)
                 except OSError as error:  # a sandbox with a read-only .git: the caller falls back to $TMPDIR
                     print(f"could not move {src} to {dst}: {error}", file=sys.stderr)
+        if moved and old_name:
+            log_rename(repo, old_name, branch)
+    move_out_of_tmpdir(common, repo, new)
+
+
+def log_rename(repo, old, new):
+    """Lens runs are logged under the branch's name at the time, and the monthly job joins them to the PR's branch."""
+    os.makedirs(os.path.dirname(QUALITY_LOG), exist_ok=True)
+    with open(QUALITY_LOG, "a") as fh:
+        fh.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": "rename", "repo": repo,
+                             "name": old, "to": new}) + "\n")
+
+
+def move_out_of_tmpdir(common, repo, key):
+    """Move this branch's spec and reports, written while a sandbox kept .git read-only, into the shared git dir.
+    macOS clears $TMPDIR, so a spec left there can vanish in the middle of a pull request."""
+    shared, tmp = os.path.join(common, "agents"), os.path.join(os.environ.get("TMPDIR", "/tmp"), "agents-specs")
+    if not os.access(shared if os.path.isdir(shared) else common, os.W_OK):
+        return  # still in the sandbox: path.sh keeps using the $TMPDIR copy, quietly, on every call
+    names = [f"{kind}-{repo}-{key}.md" for kind in REPORT_KINDS] + [f"browser-ab-spec-{repo}-{key}.json"]
+    for name in names:
+        src, dst = os.path.join(tmp, name), os.path.join(shared, name)
+        if os.path.exists(src) and not os.path.exists(dst):
+            try:
+                os.makedirs(shared, exist_ok=True)
+                shutil.move(src, dst)
+                print(f"moved {name} out of $TMPDIR", file=sys.stderr)
+            except OSError as error:
+                print(f"could not move {src} to {dst}: {error}", file=sys.stderr)
 
 
 def branch_exists(name):
