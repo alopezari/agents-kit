@@ -10,7 +10,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - On an open pull request, the status line lists the checks that no longer cover the change, as in "PR open · redo self-review" (#22).
 - The spec skill gets a second reading from the other model family and a lint for its shape; the self-review flags changes no criterion asks for, follow-pr logs misread requirements as spec escapes, lens runs logged before a branch rename still count for the PR, and a spec written in a sandbox moves out of `$TMPDIR` once `.git` is writable (#24).
 - A verify that exits 0 without running any check no longer counts as a pass: the status line says "verify checked nothing", and validate and create-pr ask for the tests run instead. The shell guard recognises the kit's own PRs when `~/.agents` is a worktree (#25).
-- The spec skill maps the change before building (ways in, derived data, failures), and the self-review starts its tables from that map. A command the shell guard blocks now says that nothing in it ran, so steps chained into it aren't taken as done.
+- The spec skill maps the change before building (ways in, derived data, failures), and the self-review starts its tables from that map. A command the shell guard blocks now says that nothing in it ran, so steps chained into it aren't taken as done (#26).
 
 ## [0.4.0] - 2026-09-28
 
