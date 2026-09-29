@@ -62,7 +62,7 @@ Check the shape, and fix what it reports before going on:
 The model that wrote the spec shares its blind spots, and a misread requirement is built well and then passes a review judged against the same spec. Have the other model family read it against the request. Pipe in the request as you gathered it: the issue, its comments and the linked PRs and discussion threads that shaped it, not the issue alone.
 
 ```bash
-prompt="$({ gh issue view <n> --comments; cat <notes on linked PRs and threads>; } | ~/.agents/skills/spec/review-prompt.sh)"
+prompt="$({ gh issue view <n> --comments && cat <notes on linked PRs and threads>; } | ~/.agents/skills/spec/review-prompt.sh)"
 ```
 
 For a Linear issue, or a request that only exists in the conversation, write all of it to a file in your scratch directory and redirect that in instead. If the script fails, fix what it says (usually no spec yet) rather than sending the reviewer an empty prompt. Then:
