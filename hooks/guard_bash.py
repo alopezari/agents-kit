@@ -248,7 +248,39 @@ def unreviewed_pr(command, cwd):
     if ok("needs-validate") and not ok("check", "--kind", "validate"):
         return ("The change touches behavior but has no validation recorded for it. Run the validate skill "
                 "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run.")
+    if not re.search(r"\bgh\s+pr\s+create\b[^;&|\n]*\s(?:--draft|-d)\b", shell_code(command)):
+        return staging_unfinished(cwd)
     return None
+
+
+def staging_unfinished(cwd):
+    stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
+    result = subprocess.run([sys.executable, stamp, "staging"], cwd=cwd, capture_output=True, text=True)
+    if result.returncode == 0:
+        return None
+    return result.stdout.strip() or f"Couldn't read the staging results: {result.stderr.strip()[-300:] or 'no output'}"
+
+
+def unready_pr(command, cwd):
+    """`gh pr ready` marks a PR ready for review: its staging steps before the merge must have passed, with evidence."""
+    code = shell_code(command)
+    match = re.search(r"(?:^|[;&|(\n`])\s*" + PREFIXES + r"gh\s+pr\s+ready\b([^;&|\n]*)", code)
+    if not match or re.search(r"--undo\b", match.group(1)):
+        return None
+    cwd = pr_checkout(command, cwd)
+    target = next((word for word in match.group(1).split() if not word.startswith("-")), None)
+    if target:
+        # A number, URL or branch names the PR; its staging results live under its branch.
+        try:
+            branch = subprocess.run(["gh", "pr", "view", target, "--json", "headRefName", "-q", ".headRefName"],
+                                    cwd=cwd, capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            branch = ""
+        here = subprocess.run(["git", "branch", "--show-current"], cwd=cwd, capture_output=True, text=True).stdout.strip()
+        if not branch or branch != here:
+            return (f"`gh pr ready {target}`: can't check its staging results from here (its branch is "
+                    f"{branch or 'unknown'}, this checkout is on {here or 'no branch'}). Run it from that branch's checkout.")
+    return staging_unfinished(cwd)
 
 
 # The one form both this check and pr_checkout() read the same way: a literal absolute path (no expansion or glob),
@@ -256,7 +288,7 @@ def unreviewed_pr(command, cwd):
 ABSOLUTE_CD_FIRST = re.compile(r"""cd[ \t]+((?:~[\w.-]*)?/[^\s;&|()$`'"\\*?\[]*|"/[^"$`\\]*"|'/[^']*')[ \t]*&&""")
 # Anywhere, not only in command position: a wrapper, `then` or `{` in front must not hide it, and a false match only
 # asks for the cd form.
-GH_PR_WORDS = re.compile(r"\bgh\s+pr\s+(?:create|edit)\b")
+GH_PR_WORDS = re.compile(r"\bgh\s+pr\s+(?:create|edit|ready)\b")
 CD_WORD = re.compile(r"(?<![\w/.-])(?:cd|pushd|popd)(?![\w/.-])")
 
 
@@ -450,7 +482,7 @@ def main():
     command = without_evidence_runner(command)
 
     reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd)
-              or unreviewed_pr(command, cwd))
+              or unreviewed_pr(command, cwd) or unready_pr(command, cwd))
     if not reason:
         for pattern, why in RULES:
             if re.search(pattern, command):

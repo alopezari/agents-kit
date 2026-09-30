@@ -320,6 +320,55 @@ def validate_stamp_needs_evidence(base):
     assert "A1.txt" in listed and "b1.png" in listed and "\x89PNG" not in listed, listed
 
 
+def pr_gate_waits_for_staging(base):
+    repo = new_repo(base)
+    git(repo, "switch", "-q", "-c", "feat/staged")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    for kind in ("review", "validate"):
+        write_stamp(repo, kind)
+    reports = os.path.expanduser("~/.agents/bin/reports")
+    guide = subprocess.run([reports, "path", "staging-guide"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    evidence = subprocess.run([reports, "path", "evidence"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    fake = os.path.join(base, "fake-gh")
+    os.makedirs(fake)
+    with open(os.path.join(fake, "gh"), "w") as fh:
+        fh.write("#!/bin/sh\n[ \"$1 $2\" = \"pr view\" ] && echo feat/staged\n")
+    os.chmod(os.path.join(fake, "gh"), 0o755)
+
+    def decision(command):
+        d = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": "test"},
+                     env={"PATH": fake + ":" + os.environ["PATH"]})
+        return "deny" if d else "allow"
+
+    steps = "# Guide\n## Before the merge\n### S1. Deploy\n### S2. Check\n## After the merge\n### P1. Backfill\n"
+    head = "\n## Results (2026-09-30)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
+    with open(guide, "w") as fh:
+        fh.write(steps)
+    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", f"cd {repo} && ~/.agents/bin/evidence A1 gh pr ready"]:
+        assert decision(command) == "deny", f"staging is pending: {command}"
+    for command in ["gh pr create --draft --fill", "gh pr create -d --fill", "gh pr ready --undo", "gh pr view 12"]:
+        assert decision(command) == "allow", command
+    with open(os.path.join(evidence, "S1.txt"), "w") as fh:
+        fh.write("$ deploy\nexit 0\n")
+    with open(guide, "w") as fh:
+        fh.write(steps + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | looked fine |\n")
+    assert decision("gh pr ready") == "deny", "a PASS with no saved evidence"
+    with open(os.path.join(evidence, "S2.txt"), "w") as fh:
+        fh.write("$ check\nexit 0\n")
+    with open(guide, "w") as fh:
+        fh.write(steps + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n")
+    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12"]:
+        assert decision(command) == "allow", f"every S step passed with evidence: {command}"
+    with open(guide, "w") as fh:
+        fh.write("# Guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")
+    assert decision("gh pr ready") == "allow", "only after-merge steps"
+    with open(os.path.join(fake, "gh"), "w") as fh:
+        fh.write("#!/bin/sh\n[ \"$1 $2\" = \"pr view\" ] && echo someone-else\n")
+    assert decision("gh pr ready 13") == "deny", "another branch's PR can't be checked from this checkout"
+    os.remove(guide)
+    assert decision("gh pr create --fill") == "allow", "no guide, no staging"
+
+
 def pr_gate_follows_worktrees(base):
     main = new_repo(base, "main")
     wt = os.path.join(base, "wt")
@@ -764,7 +813,7 @@ def post_edit_syntax_feedback(base):
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          validate_stamp_needs_evidence, pr_gate_follows_worktrees, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
+          validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
