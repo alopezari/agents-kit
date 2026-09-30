@@ -14,7 +14,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - Specs are built test first: each criterion's test is seen failing before the code, and the self-review asks for that output. `install.sh --doctor`, and with it the weekly health check, warns when Codex no longer runs, naming a dangling link. The shell guard blocks `rm -rf ~` when the home directory is reached through a symlink, and the kit's hook tests no longer touch your `~/.agents` (#27).
 - triage names each dependency a change adds (package.json, composer.json, requirements, go.mod, Cargo.toml, deps.txt) and sends it to the Maintainability lens. Specs record the decisions of one-way doors in `## Decisions`, which the lint checks and the PR description reuses. The stop hook asks once about each changed code file the spec's Change map doesn't name, and the syntax check after editing a Python file no longer writes bytecode into the repo (#28).
 - `bin/ci-wait` waits for the CI of the commit you pushed and prints the failing lines of a failed job; follow-pr uses it. After a turn that pushed, the stop hook asks the agent about that commit's CI when it failed, is still running or can't be read. A Python syntax error after an edit reaches the agent as plain text, not a colour-coded traceback (#29).
-- In Codex, the shell guard only lets a PR command through when it first `cd`s to an absolute path: Codex doesn't pass a command's workdir to hooks (openai/codex#33986), so the review gate could judge the wrong checkout.
+- In Codex, the shell guard only lets a PR command through when it first `cd`s to an absolute path: Codex doesn't pass a command's workdir to hooks (openai/codex#33986), so the review gate could judge the wrong checkout (#30).
 
 ## [0.4.0] - 2026-09-28
 
