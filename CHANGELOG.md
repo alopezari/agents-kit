@@ -19,6 +19,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - The self-review re-checks the whole change after fixes, not only the fix, and asks who a check is meant to stop, so bypasses outside that are rejected at once. triage flags regexes with a nested quantifier, and validate times them on their worst input (#32).
 - A verify stamp comes only from running verify: `stop_checks.py verify` runs it by hand, and `review_stamp.py write` refuses the verify kinds. Each run leaves only its own stamp, so a failed rerun voids an earlier pass, and a timed-out run saves its report. Editing the changelog no longer invalidates the stamps (#33).
 - Validation keeps its evidence: `bin/evidence <id> <command>` runs a check and saves its command, exit code and output next to the reports, screenshots go in the same directory, and the validate stamp refuses a report whose PASS or FAIL rows name no saved file. The README shows how to test a hook change through a real Codex run (#34).
+- A staging guide splits at the merge, and the pull request waits only for the steps before it; the steps after it go to ship. Every step saves its output or screenshot with `bin/evidence` (`EVIDENCE_DIR` works from any directory), and the agent records the results from those files as a table with links.
 
 ## [0.4.0] - 2026-09-28
 

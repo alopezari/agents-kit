@@ -229,7 +229,7 @@ docs            regenerate docs/framework.md
 docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the pre-commit hook)
 ```
 
-**`bin/evidence`**: Run a validation check and keep what it showed: evidence <id> <command> [args...] Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`, which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned.
+**`bin/evidence`**: Run a validation check and keep what it showed: evidence <id> <command> [args...] Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`, which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned. EVIDENCE_DIR saves there instead, from any directory: a staging guide's steps run outside the repository.
 
 **`bin/gh`**: Runs the real gh with git's per-host proxy. gh ignores git's `http.<url>.proxy`, so a host reachable only through a proxy (a SOCKS tunnel, for example) makes it hang. This finds the host a call targets, passes git's proxy for it as HTTPS_PROXY, and fails at once when that proxy isn't answering. Linked ahead of the real gh in PATH (install.sh --doctor shows how).
 

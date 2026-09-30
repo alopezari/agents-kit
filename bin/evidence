@@ -3,6 +3,7 @@
 # Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the
 # command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`,
 # which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned.
+# EVIDENCE_DIR saves there instead, from any directory: a staging guide's steps run outside the repository.
 set -uo pipefail
 if [ $# -lt 2 ]; then
   echo "usage: evidence <id> <command> [args...]" >&2
@@ -13,7 +14,7 @@ if [[ ! $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "evidence: the id names a file in the evidence directory: letters, digits, . _ - (got '$id')" >&2
   exit 64
 fi
-dir="$("$HOME/.agents/bin/reports" path evidence)" || exit 74
+dir="${EVIDENCE_DIR:-$("$HOME/.agents/bin/reports" path evidence)}" || exit 74
 output="$(mktemp)" || exit 74
 # A pipe, not >(tee): macOS's bash 3.2 doesn't wait for a process substitution, so the output could be cut short.
 "$@" 2>&1 | tee "$output"

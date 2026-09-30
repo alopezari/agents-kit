@@ -270,6 +270,11 @@ def validate_stamp_needs_evidence(base):
                           cwd=repo, capture_output=True, text=True)
     with open(os.path.join(evidence, "A8.txt")) as fh:
         assert "last" in fh.read(), "the saved output is complete"
+    elsewhere = os.path.join(base, "staging-evidence")
+    os.makedirs(elsewhere)
+    outside = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "S1", "echo", "from staging"], cwd=base,
+                             capture_output=True, text=True, env={**os.environ, "EVIDENCE_DIR": elsewhere})
+    assert outside.returncode == 0 and "from staging" in open(os.path.join(elsewhere, "S1.txt")).read(), outside.stderr
     escaped = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "../out", "true"], cwd=repo, capture_output=True)
     assert escaped.returncode == 64 and not os.path.exists(os.path.join(os.path.dirname(evidence), "out.txt")), "an id is a file name"
 

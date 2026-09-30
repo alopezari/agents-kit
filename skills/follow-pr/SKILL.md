@@ -64,7 +64,7 @@ A fix is a small change of its own, and gets reviewed and tested in proportion:
 2. Verify runs at the end of the turn (the stop hook).
 3. Self-review, step 4 only: re-run the Correctness lens on the whole change, naming the fix, then `python3 ~/.agents/hooks/review_stamp.py write`.
 4. For behavior changes, validate the checks the fix touches, not the whole plan, saving their evidence and updating their rows in the validation report as in the validate skill (steps 4 and 5), then `python3 ~/.agents/hooks/review_stamp.py write --kind validate`.
-5. If the fix changes something already tested on staging, update the staging guide and ask the user to re-run the affected steps; the PR is not ready until they pass.
+5. If the fix changes something already tested on staging, update the staging guide and ask the user to re-run the affected steps; the PR is not ready until they pass. Record the new round from their evidence, as in validate's step 7.
 6. Push. If the description no longer matches the code, run `write-pr-description` again and `gh pr edit <n> --body-file <pr-body.md>`.
 
 The push starts a new CI run: go back to section 1 and wait for it.

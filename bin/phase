@@ -80,7 +80,9 @@ def staging_phase(guide):
     rounds = text.split("## Results")
     if len(rounds) == 1:
         return "staging (you)"
-    return "staging: fix" if re.search(r"\bFAIL\b", rounds[-1]) else None
+    # A results table's Result column, or else a FAIL anywhere in a list: "no FAIL line" in a PASS row's evidence isn't one.
+    results = re.findall(r"^\|\s*[^|]*\|\s*\**(PASS|FAIL)\b", rounds[-1], re.M) or re.findall(r"\bFAIL\b", rounds[-1])
+    return "staging: fix" if "FAIL" in results else None
 
 
 def compute(previous):

@@ -18,7 +18,7 @@ It must be merged. If it isn't, say so and stop: `follow-pr` is the step before.
 Write the guide in the validate skill's step 6 format: numbered steps, each with **Why**, **Where**, a copy-paste **Run** block with real values, **Expected** and **If not**. Step 0 lists access, tunnel or VPN, and an `export` block with the values later steps reuse.
 
 - **Deploy:** the repository's deploy steps, from `~/.agents/repos/<repo>/notes.md` or the repo's own docs. If neither says how, ask the user instead of guessing.
-- **Light verification, read-only:** a status check of the affected pages or endpoints, one real happy path that changes nothing, the log lines or error rates to watch, and for how long. Take them from the production part of the staging guide (`~/.agents/bin/reports`), and cut anything that writes.
+- **Light verification, read-only:** a status check of the affected pages or endpoints, one real happy path that changes nothing, the log lines or error rates to watch, and for how long. Start from the staging guide's "After the merge" steps (`~/.agents/bin/reports`): they are the checks that needed production. Cut anything that writes unless the guide says it's the point (a backfill, a scoring run), and keep their `~/.agents/bin/evidence P1 …` form so the results come back as files.
 - **When to roll back:** the exact signal (status code, error line, metric) that means "revert now".
 
 Check every command you can before handing it over: `--help` for flags, a dry run, or the same read-only command against staging.
@@ -32,7 +32,7 @@ Before the user deploys, give the rollback in the same format:
 
 ## 3. Close the loop
 
-When the user confirms the deploy went well:
+When the user says the deploy is done, read the verification steps' evidence and append a `## Results after the deploy (<date>)` table to the staging guide, in validate's step 7 shape (`| Step | Result | Evidence |`, P1, P2…). When every step passed:
 
 - **Issue:** draft the update (what shipped, the PR link, how it was verified in production). Writing to a tracker needs the user's approval; the MCP guard enforces it.
 - **Repo notes:** a trap that cost time in this change (a flaky check, a missing setup step, a deploy surprise) goes into `~/.agents/repos/<repo>/notes.md`, or better, into a check.
@@ -46,6 +46,6 @@ PR outcomes (merged, reverted) reach the monthly analysis on their own; nothing 
 Ship:      <PR url>, merged <date>
 Guide:     deploy + <N> verification steps given to the user
 Rollback:  gh pr revert <n> (+ <data left behind, or none>)
-Result:    <what the user reported> | waiting for the deploy
+Result:    <P steps PASS/FAIL, from their evidence> | waiting for the deploy
 Closed:    issue update <drafted/posted> · notes <updated/nothing new> · branch <deleted/kept>
 ```

@@ -106,6 +106,11 @@ def walks_the_flow(base):
     assert phase(repo) == "staging: fix"
     open(guide, "a").write("\n## Results (2026-09-25)\n1. PASS\n")
     assert phase(repo) == "create-pr", "only the latest round of results counts"
+    table = "\n## Results (2026-09-26)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
+    open(guide, "a").write(table + "| S1 | PASS | no FAIL line in [output](e/S1.txt) |\n| S2 | FAIL | total wrong: [output](e/S2.txt) |\n")
+    assert phase(repo) == "staging: fix", "a FAIL row"
+    open(guide, "a").write(table + "| S1 | PASS | no FAIL line in [output](e/S1.txt) |\n| S2 | PASS | [output](e/S2.txt) |\n")
+    assert phase(repo) == "create-pr", "a PASS row whose evidence mentions FAIL is still a pass"
 
     open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
     assert phase(repo) == "build", "an edit after the stamps sends the change back to build"
