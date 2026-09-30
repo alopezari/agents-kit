@@ -100,6 +100,10 @@ def walks_the_flow(base):
     assert phase(repo) == "create-pr"
 
     guide = os.path.join(os.path.dirname(spec), "staging-guide-" + os.path.basename(spec)[len("spec-"):])
+    open(guide, "w").write("# Staging guide\n## Before the merge\n### S1. Deploy\n## After the merge\n### P1. Backfill\n## Results (2026-09-23)\n")
+    assert phase(repo) == "staging (you)", "a Results heading with no results is still pending"
+    open(guide, "w").write("# Staging guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")
+    assert phase(repo) == "create-pr", "a guide with steps only after the merge doesn't hold the PR"
     open(guide, "w").write("# Staging guide\n1. Check the cart\n")
     assert phase(repo) == "staging (you)"
     open(guide, "a").write("\n## Results (2026-09-24)\n1. FAIL: total wrong\n")

@@ -77,11 +77,15 @@ def staging_phase(guide):
         text = open(guide).read()
     except OSError:
         return None
+    before_merge = re.search(r"^## Before the merge\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    if before_merge and not re.search(r"^### S\d", before_merge.group(1), re.M):
+        return None  # every step needs production: the ship skill runs them
     rounds = text.split("## Results")
-    if len(rounds) == 1:
+    # A results table's Result column, or else a PASS or FAIL anywhere in a list: "no FAIL line" in a PASS row isn't one.
+    results = (re.findall(r"^\|\s*[^|]*\|\s*\**(PASS|FAIL)\b", rounds[-1], re.M) or re.findall(r"\b(PASS|FAIL)\b", rounds[-1])
+               if len(rounds) > 1 else [])
+    if not results:
         return "staging (you)"
-    # A results table's Result column, or else a FAIL anywhere in a list: "no FAIL line" in a PASS row's evidence isn't one.
-    results = re.findall(r"^\|\s*[^|]*\|\s*\**(PASS|FAIL)\b", rounds[-1], re.M) or re.findall(r"\bFAIL\b", rounds[-1])
     return "staging: fix" if "FAIL" in results else None
 
 
