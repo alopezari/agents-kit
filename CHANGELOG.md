@@ -17,7 +17,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - In Codex, the shell guard only lets a PR command through when it first `cd`s to an absolute path: Codex doesn't pass a command's workdir to hooks (openai/codex#33986), so the review gate could judge the wrong checkout (#30).
 - The shell guard's PR checks (self-review before opening one, private terms in the kit's) also catch a PR command behind `env`, `command`, `exec`, `nohup` or `time`; triage no longer reads `pr_checkout_*` names as a payments signal (#31).
 - The self-review re-checks the whole change after fixes, not only the fix, and asks who a check is meant to stop, so bypasses outside that are rejected at once. triage flags regexes with a nested quantifier, and validate times them on their worst input (#32).
-- A verify stamp comes only from running verify: `stop_checks.py verify` runs it by hand, and `review_stamp.py write` refuses the verify kinds. Each run leaves only its own stamp, so a failed rerun voids an earlier pass, and a timed-out run saves its report. Editing the changelog no longer invalidates the stamps.
+- A verify stamp comes only from running verify: `stop_checks.py verify` runs it by hand, and `review_stamp.py write` refuses the verify kinds. Each run leaves only its own stamp, so a failed rerun voids an earlier pass, and a timed-out run saves its report. Editing the changelog no longer invalidates the stamps (#33).
 
 ## [0.4.0] - 2026-09-28
 
