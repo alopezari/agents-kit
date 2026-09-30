@@ -8,10 +8,10 @@ The kit gives every coding agent you use the same way of working: one set of ins
 
 - **3 harnesses** share one `AGENTS.md`, 8 skills and 5 hook scripts (Pi has no MCP, so it runs all but `guard_mcp.py`).
 - **21 guard rules** block irreversible or outward-facing shell commands before they run.
-- **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), then the repo's verify.
+- **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **10 command-line tools**: a11y-check, browse, docs, gh, phase, quality-log, repo-name, reports, triage, wp-query-profile.
+- **11 command-line tools**: a11y-check, browse, ci-wait, docs, gh, phase, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -99,7 +99,7 @@ When the change needs manual tests on staging, `validate` ends by handing you th
 | Pi | tool_call | bash | guard_bash.py | 660 |
 | Pi | tool_result | edit\|write | post_edit.py | 660 |
 
-**`guard_bash.py`**: PreToolUse guard for shell commands, shared by Claude Code, Codex and Pi (via adapters/pi). Blocks irreversible or outward-facing commands. It is a seatbelt against agent mistakes, not a security boundary: a determined command can evade regexes.
+**`guard_bash.py`**: PreToolUse guard for shell commands, shared by Claude Code, Codex and Pi (via adapters/pi). Blocks irreversible or outward-facing commands. It is a seatbelt against agent mistakes, not a security boundary: a determined command can evade regexes. Records the checkout of each allowed `git push`, so the stop hook can follow that commit's CI.
 
 **`guard_mcp.py`**: PreToolUse guard for MCP tools that write to shared systems. Reads pass. Writes are allowed when the user's current message names the service (prompt_approvals.py), or the user approved it in the last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves. The shell guard (guard_bash.py) never lets agents create either.
 
@@ -107,7 +107,7 @@ When the change needs manual tests on staging, `validate` ends by handing you th
 
 **`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex. Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), writes to it are allowed until the user's next message. Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the service only to read from it approves writes for that turn too.
 
-**`stop_checks.py`**: Stop hook shared by Claude Code, Codex and Pi (via adapters/pi). Only runs when the session edited files since the last stop. Looks at the lines the branch adds since the merge-base with the default branch (committed or not) and asks the agent to continue, once, for a skipped or focused test, a deleted test file, a debug leftover, a conflict marker, a possible secret, a new option read near a cache, a temporary compose override left behind, or a changed code file the spec's Change map doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py.
+**`stop_checks.py`**: Stop hook shared by Claude Code, Codex and Pi (via adapters/pi). Only runs when the session edited files since the last stop. Looks at the lines the branch adds since the merge-base with the default branch (committed or not) and asks the agent to continue, once, for a skipped or focused test, a deleted test file, a debug leftover, a conflict marker, a possible secret, a new option read near a cache, a temporary compose override left behind, or a changed code file the spec's Change map doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read.
 
 Every block, and every approved or browser MCP call, is appended to `~/.agents/logs/hooks.jsonl`, which the weekly health check reads. Allowed shell commands are not logged.
 
@@ -214,6 +214,12 @@ Harnesses pick a skill by its description; you can also call one by name (`/spec
 browse assign                         pick the tool for this validation run (balanced alternation)
 browse <tool args...>                 run the assigned tool with these args, logging the call
 browse finish --checks N --passed P [--tool-issues K] [--notes "..."]
+```
+
+**`bin/ci-wait`**: Wait for the CI checks of one commit and say how they ended.
+
+```
+ci-wait [--sha SHA] [--timeout SECS] [--once]
 ```
 
 **`bin/docs`**: Generate docs/framework.md, the reference for what the kit does, from the kit's own source.

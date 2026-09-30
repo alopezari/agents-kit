@@ -7,7 +7,8 @@ the agent to continue, once, for a skipped or focused test, a deleted test file,
 leftover, a conflict marker, a possible secret, a new option read near a cache, a
 temporary compose override left behind, or a changed code file the spec's Change map
 doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify
-when it exists, else repos/_shared/verify_auto.py.
+when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even
+one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read.
 
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
 the hook has seen, for the weekly health check.
@@ -28,6 +29,9 @@ CHECKOUTS = os.path.join(os.environ.get("AGENTS_STATE_DIR") or os.path.expanduse
 OVERRIDE_NAMES = ("docker-compose.override.yml", "docker-compose.override.yaml", "compose.override.yml", "compose.override.yaml")
 OVERRIDE_MARKER = "agents: temporary override"
 VERIFY_TIMEOUT = 600
+CI_WAIT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "ci-wait"))
+# Checks show up a little after a push; "no checks" long after it means the repo runs no CI.
+NO_CHECKS_GRACE_SECS = 300
 SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "spec", "path.sh"))
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
 
@@ -138,9 +142,10 @@ def main():
     if payload.get("stop_hook_active"):
         return 0
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
+    problems = ci_after_push(session, payload)
     marker = os.path.join(MARKER_DIR, f"{session}.edited")
     if not os.path.exists(marker):
-        return 0
+        return block(payload, problems, streak=0) if problems else 0
     edited = [p for p in open(marker).read().splitlines() if p]
     os.remove(marker)
 
@@ -152,13 +157,16 @@ def main():
         root = git(["rev-parse", "--show-toplevel"], start).strip() if os.path.isdir(start) else ""
         if root and root not in roots:
             roots.append(root)
-    problems, any_verify_failed = [], False
+    any_verify_failed = False
     for root in roots:
         found, failed_verify = check_checkout(root, session)
         problems += [f"[{review_stamp.repo_name(root)}] {p}" if len(roots) > 1 else p for p in found]
         any_verify_failed = any_verify_failed or failed_verify
     streak = record_verify_streak(session, any_verify_failed)
+    return block(payload, problems, streak) if problems else 0
 
+
+def block(payload, problems, streak):
     if problems:
         reason = (
             "Before finishing, resolve these or explain to the user why they are intended. If you can't resolve one "
@@ -206,6 +214,56 @@ def unmapped_files(root, session):
     except OSError:
         pass  # asking again next stop beats not asking
     return new
+
+
+def ci_after_push(session, payload):
+    """For each checkout this session pushed from, a question when its pushed commit's CI failed, is still running or
+    can't be read; each once per checkout, commit and state."""
+    pushed = os.path.join(MARKER_DIR, f"{session}.pushed")
+    try:
+        roots = sorted(set(open(pushed).read().splitlines()) - {""})
+        pushed_at = os.path.getmtime(pushed)
+    except OSError:
+        return []
+    asked_path = os.path.join(MARKER_DIR, f"{session}.ci-asked")
+    try:
+        asked = set(open(asked_path).read().splitlines())
+    except OSError:
+        asked = set()
+    problems = []
+    for root in roots:
+        sha = git(["rev-parse", "--verify", "--quiet", "@{upstream}"], root).strip()
+        if not sha:
+            continue  # the push failed, or pushed nothing this checkout tracks
+        wait = f"`~/.agents/bin/ci-wait --sha {sha}`"
+        try:
+            result = subprocess.run([CI_WAIT, "--sha", sha, "--once"], cwd=root, capture_output=True, text=True, timeout=90)
+            code, out = result.returncode, result.stdout.strip()
+        except subprocess.TimeoutExpired:
+            code, out = 4, "ci-wait timed out"
+        if code == 3 and time.time() - pushed_at > NO_CHECKS_GRACE_SECS:
+            continue  # this repo runs no CI
+        state = {1: "failed", 2: "running", 3: "running", 4: "unreadable"}.get(code)
+        if not state or f"{root}\t{sha}\t{state}" in asked:
+            continue
+        asked.add(f"{root}\t{sha}\t{state}")
+        names = ", ".join(line.split(":")[0] for line in out.splitlines() if re.match(r"[^ ].*: (?!success|neutral|skipped)", line)
+                          and not line.startswith("ci-wait"))
+        problems.append({
+            "failed": f"CI failed on {sha[:12]} ({names}). Read the failures with {wait} and fix them, or tell the user "
+                      "why not; don't call the work done.",
+            "running": f"CI is still running on {sha[:12]}: wait for it in the foreground with {wait} and act on the result "
+                       "before saying the work is done.",
+            "unreadable": f"Couldn't read CI for {sha[:12]} from GitHub ({out.splitlines()[-1] if out else 'no output'}): "
+                          f"check it with {wait} before calling it passed.",
+        }[state])
+        log("stop_checks", f"ci-{state}", payload, f"{root} {sha[:12]}")
+    try:
+        with open(asked_path, "w") as fh:
+            fh.writelines(line + "\n" for line in sorted(asked))
+    except OSError:
+        pass  # asking again next stop beats not asking
+    return problems
 
 
 def checked_something(output):

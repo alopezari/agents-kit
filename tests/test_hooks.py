@@ -400,6 +400,72 @@ def stop_asks_once_about_files_outside_the_change_map(base):
         "the spec follows a branch rename"
 
 
+FAKE_GH = """#!/bin/sh
+case "$*" in
+  *check-runs*) cat "$FAKE_GH_DIR/runs.json" ;;
+  *) [ -f "$FAKE_GH_DIR/error" ] && { echo "error connecting to api.github.com" >&2; exit 1; }; echo '{"statuses": []}' ;;
+esac
+[ -f "$FAKE_GH_DIR/error" ] && exit 1 || exit 0
+"""
+
+
+def stop_follows_ci_after_a_push(base):
+    remote = os.path.join(base, "remote.git")
+    subprocess.run(["git", "init", "-q", "--bare", remote], check=True)
+    repo = new_repo(base)
+    git(repo, "remote", "add", "origin", remote)
+    git(repo, "checkout", "-q", "-b", "feat/ci")
+    fake = os.path.join(base, "fake-gh")
+    os.makedirs(fake)
+    open(os.path.join(fake, "gh"), "w").write(FAKE_GH)
+    os.chmod(os.path.join(fake, "gh"), 0o755)
+    env = {"PATH": fake + ":" + os.environ["PATH"], "FAKE_GH_DIR": fake}
+
+    def ci(state):
+        if os.path.exists(os.path.join(fake, "error")):
+            os.remove(os.path.join(fake, "error"))
+        if state == "unreadable":
+            open(os.path.join(fake, "error"), "w").write("")
+        runs = [] if state in ("none", "unreadable") else [
+            {"name": "suite", "status": "in_progress" if state == "running" else "completed",
+             "conclusion": {"failed": "failure", "passed": "success"}.get(state), "details_url": ""}]
+        json.dump({"check_runs": runs}, open(os.path.join(fake, "runs.json"), "w"))
+
+    def push(session):
+        open(os.path.join(repo, "app.py"), "a").write("n = 1\n")
+        git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "more")
+        git(repo, "push", "-q", "-u", "origin", "feat/ci")
+        run_hook("guard_bash.py", {"tool_input": {"command": "git push -u origin feat/ci"}, "cwd": repo, "session_id": session})
+        return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    def asked(session):
+        return (run_hook("stop_checks.py", {"session_id": session, "cwd": repo}, env=env) or {}).get("reason", "")
+
+    session = RUN + "ci1"
+    ci("passed")
+    assert asked(session) == "", "a turn with no push asks nothing about CI"
+    sha = push(session)
+    ci("none")
+    assert "still running" in asked(session), "no checks right after the push means they haven't started"
+    ci("failed")
+    reason = asked(session)
+    assert "CI failed" in reason and "suite" in reason and f"ci-wait --sha {sha}" in reason, reason
+    assert asked(session) == "", "the same failure is asked about once"
+    sha = push(session)
+    ci("running")
+    reason = asked(session)
+    assert "still running" in reason and f"ci-wait --sha {sha}" in reason, reason
+    ci("unreadable")
+    assert "Couldn't read CI" in asked(session), "an unknown state isn't taken as passed"
+    ci("passed")
+    assert asked(session) == ""
+    push(session)
+    ci("none")
+    old = time.time() - 3600
+    os.utime(os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", f"{session}.pushed"), (old, old))
+    assert asked(session) == "", "no checks long after the push: the repo has no CI"
+
+
 def post_edit_syntax_feedback(base):
     repo = new_repo(base)
     bad = os.path.join(repo, "bad.py")
@@ -424,7 +490,7 @@ for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, ask
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
-          stop_asks_once_about_files_outside_the_change_map,
+          stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push,
           post_edit_syntax_feedback]:
     test(t)
 

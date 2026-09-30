@@ -3,7 +3,8 @@
 
 Blocks irreversible or outward-facing commands. It is a seatbelt against
 agent mistakes, not a security boundary: a determined command can evade
-regexes.
+regexes. Records the checkout of each allowed `git push`, so the stop hook
+can follow that commit's CI.
 """
 import json
 import os
@@ -17,6 +18,7 @@ from hooklog import log  # noqa: E402
 import private_terms  # noqa: E402
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
+MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
 
 GIT = r"\bgit\s+(?:(?:-C|-c)\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
 PROTECTED_BRANCHES = r"(main|master|trunk|develop|production|release(/[\w.-]+)?)"
@@ -343,6 +345,24 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
     return None
 
 
+def record_push(command, cwd, payload):
+    """Note the checkout of an allowed `git push`, so the stop hook follows the CI of what it pushed."""
+    push = re.search(GIT + r"push\b", shell_code(command))
+    if not push:
+        return
+    target = re.search(r"\bgit\s+-C\s+(\S+)", push.group(0))
+    runs_in = cd_into(cwd, target.group(1)) if target else cwd
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=runs_in, capture_output=True, text=True).stdout.strip()
+    session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
+    if root:
+        try:
+            os.makedirs(MARKER_DIR, exist_ok=True)
+            with open(os.path.join(MARKER_DIR, f"{session}.pushed"), "a") as fh:
+                fh.write(root + "\n")
+        except OSError:
+            pass  # the push still runs; only the CI follow-up is lost
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -362,6 +382,7 @@ def main():
                 reason = why
                 break
     if not reason:
+        record_push(command, cwd, payload)
         return 0
 
     log("guard_bash", "deny", payload, f"{reason} | {command[:200]}")

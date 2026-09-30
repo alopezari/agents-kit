@@ -44,7 +44,7 @@ Add `--draft` only in the exception from step 1. Print the PR URL.
 
 ## 5. Hand over to follow-pr
 
-Run the `follow-pr` skill in the same session (its first run): it waits for CI and the bot reviews that come with it. After that, the user runs it on demand.
+Run the `follow-pr` skill in the same session (its first run): it waits for the pushed commit's CI with `~/.agents/bin/ci-wait` and reads the bot reviews that come with it. After that, the user runs it on demand.
 
 ## Report
 

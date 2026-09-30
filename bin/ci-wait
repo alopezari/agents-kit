@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Wait for the CI checks of one commit and say how they ended.
+
+  ci-wait [--sha SHA] [--timeout SECS] [--once]
+
+Reads the commit's check runs and commit statuses, so CI outside GitHub Actions counts too, keyed on the SHA: a
+check from an earlier push never passes for this one. Waits until every check is done (30 minutes by default;
+--once looks once), prints one line per check and, for a failed GitHub Actions job, the failing lines of its log and its tail.
+Exit: 0 passed, 1 failed, 2 still running, 3 no checks for the commit, 4 GitHub couldn't be read.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+PASSED_RUN = {"success", "neutral", "skipped"}
+GH_TIMEOUT = 30
+# Checks show up some time after the push; before that, "no checks" means "not yet".
+GRACE_SECS = 120
+# A step's log is long and its summary comes last: the failing lines first, then a short tail.
+FAILURE_LINE = re.compile(r"\bFAIL(ED|URE)?\b|\bError\b|error:|Traceback|Assertion", re.I)
+FAILURE_LINES = 40
+LOG_TAIL = 20
+
+
+class Unreadable(Exception):
+    pass
+
+
+def gh(*args):
+    try:
+        result = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Unreadable(str(error))
+    if result.returncode != 0:
+        raise Unreadable(result.stderr.strip()[-300:])
+    return result.stdout
+
+
+def checks(sha):
+    """[(name, state, details url)], state being "running", "passed" or the failing conclusion."""
+    try:
+        runs = json.loads(gh("api", f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs?per_page=100"))["check_runs"]
+        statuses = json.loads(gh("api", f"repos/{{owner}}/{{repo}}/commits/{sha}/status"))["statuses"]
+    except (ValueError, KeyError) as error:
+        raise Unreadable(f"unexpected answer: {error}")
+    found = []
+    for run in runs:
+        if run["status"] != "completed":
+            found.append((run["name"], run["status"], run.get("details_url") or ""))
+        else:
+            found.append((run["name"], run["conclusion"], run.get("details_url") or ""))
+    found += [(s["context"], s["state"], s.get("target_url") or "") for s in statuses]
+    return found
+
+
+def failed(state):
+    return state not in PASSED_RUN | {"queued", "in_progress", "waiting", "requested", "pending"}
+
+
+def running(state):
+    return state in {"queued", "in_progress", "waiting", "requested", "pending"}
+
+
+def failed_log(url):
+    job = re.search(r"/actions/runs/\d+/job/(\d+)", url)
+    if not job:
+        return ""
+    try:
+        lines = gh("run", "view", "--job", job.group(1), "--log-failed").splitlines()
+    except Unreadable as error:
+        return f"    (couldn't read its log: {error})"
+    head = [line for line in lines[:-LOG_TAIL] if FAILURE_LINE.search(line)][:FAILURE_LINES]
+    return "\n".join("    " + line for line in head + (["    ..."] if head else []) + lines[-LOG_TAIL:])
+
+
+def main():
+    args = sys.argv[1:]
+    sha = args[args.index("--sha") + 1] if "--sha" in args else None
+    timeout = float(args[args.index("--timeout") + 1]) if "--timeout" in args else 1800
+    once = "--once" in args
+    if not sha:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    poll = float(os.environ.get("CI_WAIT_POLL_SECS", "20"))  # tests shorten it
+    start = time.time()
+    while True:
+        try:
+            found = checks(sha)
+        except Unreadable as error:
+            print(f"ci-wait: couldn't read the checks of {sha[:12]} from GitHub: {error}")
+            return 4
+        waited = time.time() - start
+        done = found and not any(running(state) for _, state, _ in found)
+        if done or once or waited >= timeout or (not found and waited >= min(GRACE_SECS, timeout)):
+            break
+        time.sleep(min(poll, max(timeout - waited, 0.1)))
+    if not found:
+        print(f"ci-wait: no checks for {sha[:12]}{'' if once else f' after {int(waited)}s'}")
+        return 3
+    for name, state, url in found:
+        print(f"{name}: {state}")
+        if failed(state):
+            log = failed_log(url)
+            if log:
+                print(log)
+    if any(failed(state) for _, state, _ in found):
+        return 1
+    if any(running(state) for _, state, _ in found):
+        print(f"ci-wait: still running on {sha[:12]}" + ("" if once else f" after {int(waited)}s"))
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
