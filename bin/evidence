@@ -9,6 +9,10 @@ if [ $# -lt 2 ]; then
   exit 64
 fi
 id=$1; shift
+if [[ ! $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "evidence: the id names a file in the evidence directory: letters, digits, . _ - (got '$id')" >&2
+  exit 64
+fi
 dir="$("$HOME/.agents/bin/reports" path evidence)" || exit 1
 output="$(mktemp)"
 "$@" > >(tee "$output") 2>&1

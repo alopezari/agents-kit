@@ -52,6 +52,7 @@ def write_stamp(cwd, kind):
         reports = os.path.expanduser("~/.agents/bin/reports")
         path = subprocess.run([reports, "path", "validation"], cwd=cwd, capture_output=True, text=True).stdout.strip()
         evidence = subprocess.run([reports, "path", "evidence"], cwd=cwd, capture_output=True, text=True).stdout.strip()
+        assert os.path.isdir(evidence), f"no evidence directory from {reports}: {evidence!r}"
         with open(path, "w") as fh:
             fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | app runs | + | PASS | a1.txt |\n")
         with open(os.path.join(evidence, "a1.txt"), "w") as fh:
@@ -250,6 +251,8 @@ def validate_stamp_needs_evidence(base):
     assert ran.returncode == 3 and "seen it" in ran.stdout, ran
     assert "python3 -c" in saved and "exit(3)" in saved and repo in saved and "exit 3" in saved and "seen it" in saved, saved
     assert subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "A1"], cwd=repo, capture_output=True).returncode == 64
+    escaped = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "../out", "true"], cwd=repo, capture_output=True)
+    assert escaped.returncode == 64 and not os.path.exists(os.path.join(os.path.dirname(evidence), "out.txt")), "an id is a file name"
 
     def write_validate():
         return subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo, capture_output=True, text=True)

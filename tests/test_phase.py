@@ -37,7 +37,9 @@ def stamp(repo, kind):
         reports = os.path.expanduser("~/.agents/bin/reports")
         with open(sh(repo, reports, "path", "validation"), "w") as fh:
             fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | app runs | + | PASS | a1.txt |\n")
-        with open(os.path.join(sh(repo, reports, "path", "evidence"), "a1.txt"), "w") as fh:
+        evidence = sh(repo, reports, "path", "evidence")
+        assert os.path.isdir(evidence), f"no evidence directory from {reports}: {evidence!r}"
+        with open(os.path.join(evidence, "a1.txt"), "w") as fh:
             fh.write("$ python3 app.py\nexit 0\n")
     return sh(repo, "python3", STAMP, "write", "--kind", kind)
 
@@ -217,6 +219,7 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     guide = spec.replace("spec-shop-", "staging-guide-shop-")
     open(guide, "w").write("# Staging guide\n")
     evidence = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "evidence")
+    assert os.path.isdir(evidence), evidence
     open(os.path.join(evidence, "a1.txt"), "w").write("$ true\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     stamp(repo, "verify")
