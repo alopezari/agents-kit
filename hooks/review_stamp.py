@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Record or check that a skill ran on the exact current change.
 
-  review_stamp.py write [--kind review|validate|verify]   # end of self-review / validate; the stop hook after a green verify
-                                                   # (--kind verify-empty when that verify checked nothing)
+  review_stamp.py write [--kind review|validate]   # end of self-review / validate; verify stamps come only from
+                                                   # its runner (stop_checks.py), through record_verify()
   review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
   review_stamp.py branch-key                       # the current branch as it appears in those file names
 
 The fingerprint covers every file that differs from the merge-base with the
-default branch, by content, so committing stamped changes keeps it valid and
+default branch, by content, except the changelog, so committing stamped changes keeps it valid and
 any later edit invalidates it. Stamps live in the repository's shared git dir, per branch
 (.git/agents/stamps/<branch key>/), never in the tree: they survive removing the worktree they were
 written in, so the PR can be opened from the main checkout after a staging hand-off. They also
@@ -31,6 +31,9 @@ NOT_BEHAVIOR = re.compile(
     r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$|(^|/)(CHANGELOG|README)",
     re.I,
 )
+# A PR's changelog line gets its number after the PR opens, and CI checks the entry: adding it re-runs nothing.
+NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?$", re.I)
+VERIFY_KINDS = ("verify", "verify-empty")
 
 
 def git(*args, cwd=None):
@@ -61,7 +64,7 @@ def merge_base(cwd=None):
 
 def changed_paths():
     merge_base_sha = merge_base()
-    paths = set(git("diff", "--name-only", merge_base_sha).splitlines())
+    paths = set(git("diff", "--no-renames", "--name-only", merge_base_sha).splitlines())  # a rename hides its source
     paths |= set(git("ls-files", "--others", "--exclude-standard").splitlines())
     return merge_base_sha, sorted(p for p in paths if p)
 
@@ -69,7 +72,7 @@ def changed_paths():
 def fingerprint():
     base, paths = changed_paths()
     digest = hashlib.sha256(base.encode())
-    for path in paths:
+    for path in (p for p in paths if not NOT_STAMPED.search(p)):
         digest.update(path.encode())
         digest.update(git("hash-object", path).encode() if os.path.isfile(path) else b"<deleted>")
     return digest.hexdigest()
@@ -173,13 +176,38 @@ def legacy_stamp_path(kind):
     return os.path.join(git("rev-parse", "--absolute-git-dir"), name)
 
 
+def record_verify(kind, checked_fingerprint):
+    """Leave only this verify run's stamp: kind on the fingerprint it checked, or none when kind is None (it failed).
+    Raises OSError when a stamp can't be written or removed, after trying every removal."""
+    errors = []
+    for other in VERIFY_KINDS:
+        for path in (stamp_path(other), legacy_stamp_path(other)):
+            if other != kind or path != stamp_path(kind):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                except OSError as error:
+                    errors.append(error)
+    if errors:
+        raise errors[0]
+    if kind:
+        os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
+        with open(stamp_path(kind), "w") as fh:
+            fh.write(checked_fingerprint)
+
+
 def main():
-    if not git("rev-parse", "--absolute-git-dir"):
-        return 0
-    os.chdir(git("rev-parse", "--show-toplevel"))
     args = sys.argv[1:]
     kind = args[args.index("--kind") + 1] if "--kind" in args else "review"
     command = args[0] if args else "check"
+    if command == "write" and kind in VERIFY_KINDS:
+        print("A verify stamp comes only from running verify: run `python3 ~/.agents/hooks/stop_checks.py verify`, "
+              "which stamps the change when it passes.", file=sys.stderr)
+        return 2
+    if not git("rev-parse", "--absolute-git-dir"):
+        return 0
+    os.chdir(git("rev-parse", "--show-toplevel"))
     if command == "branch-key":
         print(branch_key(git("branch", "--show-current")))
         return 0

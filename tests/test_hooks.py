@@ -200,8 +200,24 @@ def pr_gate_review_and_validation(base):
     assert guard("gh pr create --fill", repo) == "deny", "behavior change needs validation too"
     subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo, capture_output=True)
     assert guard("gh pr create --fill", repo) == "allow"
+    open(os.path.join(repo, "CHANGELOG.md"), "w").write("- A line (#12).\n")
+    assert guard("gh pr create --fill", repo) == "allow", "the changelog line CI checks doesn't invalidate the stamps"
+    os.makedirs(os.path.join(repo, "hooks"))
+    open(os.path.join(repo, "hooks", "changelog_check.py"), "w").write("x = 1\n")
+    assert guard("gh pr create --fill", repo) == "deny", "code named after the changelog is still code"
+    for kind in ("review", "validate"):
+        subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=repo, capture_output=True)
     open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
     assert guard("gh pr create --fill", repo) == "deny", "edit after stamps must invalidate them"
+    git(repo, "checkout", "trunk", "--", "app.py")
+    for kind in ("review", "validate"):
+        subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=repo, capture_output=True)
+    git(repo, "mv", "app.py", "CHANGELOG.txt")
+    assert guard("gh pr create --fill", repo) == "deny", "code renamed to a changelog name is still code removed"
+    for kind in ("verify", "verify-empty"):
+        done = subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=repo, capture_output=True, text=True)
+        checked = subprocess.run(["python3", H + "review_stamp.py", "check", "--kind", kind], cwd=repo)
+        assert done.returncode != 0 and "stop_checks.py verify" in done.stderr and checked.returncode == 1, (kind, done)
 
 
 def pr_gate_follows_worktrees(base):
@@ -395,7 +411,67 @@ def verify_stamp_and_effort_nudge(base):
         stop(RUN + "s6", repo, [os.path.join(repo, "app.py")])
         assert stamped("verify"), "green verify should stamp the change"
         assert "# Verify: PASS\n" in open(report).read(), "verify should leave its evidence in a report"
-        open(os.path.join(vdir, "verify"), "w").write("#!/bin/sh\necho failing; exit 1\n")
+        # Run by hand, verify stamps the change only through the same runner, and only when it passed.
+        def verify_by_hand():
+            return subprocess.run(["python3", H + "stop_checks.py", "verify"], cwd=repo, capture_output=True, text=True,
+                                  stdin=subprocess.DEVNULL, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+        with open(os.path.join(repo, "app.py"), "a") as fh:
+            fh.write("v = 4\n")
+        assert not stamped("verify")
+        done = verify_by_hand()
+        assert done.returncode == 0 and stamped("verify") and "ran: pytest" in done.stdout, done.stdout + done.stderr
+        verify_stamp = subprocess.run(["python3", "-c", f"import sys; sys.path.insert(0, {H!r}); import review_stamp as r; "
+                                       "print(r.stamp_path('verify'))"], cwd=repo, capture_output=True, text=True).stdout.strip()
+        os.chmod(verify_stamp, 0o400)
+        try:
+            done = verify_by_hand()
+        finally:
+            os.chmod(verify_stamp, 0o600)
+        assert done.returncode == 1 and "stamp" in done.stderr, "a pass that couldn't be stamped isn't reported as stamped"
+        verify_by_hand()
+        with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/bin/sh\necho 'ran: nothing to check: no changed files'\n")
+        verify_by_hand()
+        assert stamped("verify-empty") and not stamped("verify"), "the latest run's stamp is the only one left"
+        with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/bin/sh\necho failing; exit 1\n")
+        done = verify_by_hand()
+        assert done.returncode == 1 and not stamped("verify") and not stamped("verify-empty") and "failing" in done.stdout, \
+            "a failing rerun on unchanged code voids the earlier pass: " + done.stdout + done.stderr
+        with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/bin/sh\necho 'ran: nothing to check: no changed files'\n")
+        verify_by_hand()
+        assert stamped("verify-empty")
+        with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/bin/sh\nprintf 'bad \\377 byte\\n'; exit 1\n")
+        done = verify_by_hand()
+        assert done.returncode == 1 and not stamped("verify-empty") and "bad" in done.stdout, \
+            "output that isn't UTF-8 still voids the earlier pass: " + done.stderr
+        verify_by_hand_empty = subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "verify"], cwd="/",
+                                              capture_output=True, text=True)
+        assert verify_by_hand_empty.returncode != 0 and "stop_checks.py verify" in verify_by_hand_empty.stderr, "outside a repo too"
+        with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/bin/sh\necho 'ran: nothing to check: no changed files'\n")
+        verify_by_hand()
+        with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/no/such/interpreter\n")
+        done = verify_by_hand()
+        assert done.returncode == 1 and not stamped("verify-empty") and "interpreter" not in done.stdout, \
+            "a verify that can't start voids the earlier pass: " + done.stderr
+        with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/bin/sh\necho 'ran: pytest'; echo more >> app.py\n")
+        done = verify_by_hand()
+        assert done.returncode == 0 and not stamped("verify"), "an edit made while verify ran is not covered by its stamp"
+        with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/bin/sh\necho 'ran: pytest, then hung'; sleep 5\n")
+        timed_out = subprocess.run(["python3", "-c", f"import sys; sys.path.insert(0, {H!r}); import stop_checks as s; s.VERIFY_TIMEOUT = 1; "
+                                    f"print(s.run_verify({repo!r}))"], cwd=repo, capture_output=True, text=True,
+                                   env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+        with open(report) as fh:
+            saved = fh.read()
+        assert "True" in timed_out.stdout and "timed out" in saved and "then hung" in saved, (timed_out, saved)
+        with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/bin/sh\necho failing; exit 1\n")
         outs = [stop(RUN + "s7", repo, [os.path.join(repo, "app.py")]) for _ in range(2)]
         assert "systemMessage" in outs[1] and "systemMessage" not in outs[0], outs
     finally:

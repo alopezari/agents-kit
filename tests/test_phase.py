@@ -27,6 +27,14 @@ def sh(cwd, *cmd, env=None):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env).stdout.strip()
 
 
+def stamp(repo, kind):
+    """Write a stamp as the kit does: verify kinds only come from the verify runner, which records them in-process."""
+    if kind.startswith("verify"):
+        code = f"import sys; sys.path.insert(0, {os.path.dirname(STAMP)!r}); import review_stamp as r; r.record_verify({kind!r}, r.fingerprint())"
+        return sh(repo, "python3", "-c", code)
+    return sh(repo, "python3", STAMP, "write", "--kind", kind)
+
+
 def phase(repo, env=None, refresh=True):
     return sh(repo, PHASE, *(["--refresh"] if refresh else []), env=env)
 
@@ -73,13 +81,13 @@ def walks_the_flow(base):
     open(spec, "w").write("# Spec\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     assert phase(repo) == "build"
-    sh(repo, "python3", STAMP, "write", "--kind", "verify-empty")
+    stamp(repo, "verify-empty")
     assert phase(repo) == "self-review · verify checked nothing", "a verify that checked nothing moves on, flagged"
-    sh(repo, "python3", STAMP, "write", "--kind", "verify")
+    stamp(repo, "verify")
     assert phase(repo) == "self-review"
-    sh(repo, "python3", STAMP, "write", "--kind", "review")
+    stamp(repo, "review")
     assert phase(repo) == "validate", "app.py is a behavior change, so it needs validation"
-    sh(repo, "python3", STAMP, "write", "--kind", "validate")
+    stamp(repo, "validate")
     assert phase(repo) == "create-pr"
 
     guide = os.path.join(os.path.dirname(spec), "staging-guide-" + os.path.basename(spec)[len("spec-"):])
@@ -101,7 +109,7 @@ def walks_the_flow(base):
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "PR_STATE": "OPEN"}
     assert phase(repo, env) == "PR open · redo verify, self-review, validate", "z = 3 is covered by no check"
     for kind in ("verify", "review", "validate"):
-        sh(repo, "python3", STAMP, "write", "--kind", kind)
+        stamp(repo, kind)
     assert phase(repo, env) == "PR open"
     env["PR_STATE"] = "MERGED"
     assert phase(repo, env) == "PR open", "the PR state is cached for a few minutes, not asked on every refresh"
@@ -117,7 +125,7 @@ def pr_opened_without_follow_pr(base):
     open(spec, "w").write("# Spec\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     for kind in ("verify", "review", "validate"):
-        sh(repo, "python3", STAMP, "write", "--kind", kind)
+        stamp(repo, kind)
     open(spec.replace("spec-shop-", "staging-guide-shop-"), "w").write("# Staging guide\n1. Check the cart\n")
     fake = os.path.join(base, "bin")
     os.makedirs(fake)
@@ -140,7 +148,7 @@ def pr_opened_without_follow_pr(base):
     sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "cart")
     sh(repo, "git", "push", "-q", "-u", "origin", "feature/cart")
     for kind in ("verify", "review", "validate"):
-        sh(repo, "python3", STAMP, "write", "--kind", kind)
+        stamp(repo, kind)
     assert phase(repo, env) == "PR open"
     env["PR_STATE"] = ""
     os.remove(os.path.join(repo, ".git", "agents", "phase", "feature~cart.json"))
@@ -164,8 +172,8 @@ def no_spec_is_flagged_not_a_gate(base):
     sh(repo, "git", "checkout", "-q", "-b", "feature/hotfix")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     assert phase(repo) == "build (no spec)", "code without a spec is being built, not specced"
-    sh(repo, "python3", STAMP, "write", "--kind", "verify")
-    sh(repo, "python3", STAMP, "write", "--kind", "review")
+    stamp(repo, "verify")
+    stamp(repo, "review")
     assert phase(repo) == "validate (no spec)"
 
 
@@ -175,9 +183,9 @@ def staging_hand_off_shows_despite_stale_checks(base):
     spec = sh(repo, SPEC_PATH)
     open(spec, "w").write("# Spec\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
-    sh(repo, "python3", STAMP, "write", "--kind", "review")
+    stamp(repo, "review")
     open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
-    sh(repo, "python3", STAMP, "write", "--kind", "validate")
+    stamp(repo, "validate")
     open(spec.replace("spec-shop-", "staging-guide-shop-"), "w").write("# Staging guide\n1. Check the cart\n")
     assert phase(repo) == "staging (you) · redo verify, self-review", \
         "the session waits on the user's staging test; the stale checks are listed, not shown as the phase"
@@ -190,7 +198,7 @@ def red_verify_after_self_review_stays_at_the_furthest_step(base):
     sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
     open(sh(repo, SPEC_PATH), "w").write("# Spec\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
-    sh(repo, "python3", STAMP, "write", "--kind", "review")
+    stamp(repo, "review")
     assert phase(repo) == "validate · redo verify", "self-review is done; a red verify doesn't send it back to build"
 
 
@@ -202,7 +210,7 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     guide = spec.replace("spec-shop-", "staging-guide-shop-")
     open(guide, "w").write("# Staging guide\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
-    sh(repo, "python3", STAMP, "write", "--kind", "verify")
+    stamp(repo, "verify")
 
     sh(repo, "git", "branch", "-m", "shop-1/draft")
     sh(repo, "git", "branch", "-m", "shop-1/final")
@@ -240,7 +248,7 @@ def slash_and_dash_branches_keep_their_own_files(base):
     sh(repo, "git", "checkout", "-q", "-b", "feature/x")
     open(sh(repo, SPEC_PATH), "w").write("# slash\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
-    sh(repo, "python3", STAMP, "write", "--kind", "review")
+    stamp(repo, "review")
     sh(repo, "git", "stash", "-q")
     sh(repo, "git", "checkout", "-q", "-b", "feature-x", "trunk")
     sh(repo, "git", "stash", "pop", "-q")

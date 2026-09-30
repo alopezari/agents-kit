@@ -13,7 +13,7 @@ Run from the checkout that has the branch. Each line must hold, or the listed st
 
 | Check | Command | If it fails |
 |---|---|---|
-| Verify passed on this change | `python3 ~/.agents/hooks/review_stamp.py check --kind verify` | Let the stop hook run verify (or run `~/.agents/repos/<repo>/verify`), fix what it finds. If only `--kind verify-empty` passes, verify checked nothing: the evidence is the tests you ran instead, named in the description, never "verify passed" |
+| Verify passed on this change | `python3 ~/.agents/hooks/review_stamp.py check --kind verify` | Let the stop hook run verify (or run `python3 ~/.agents/hooks/stop_checks.py verify`), fix what it finds. If only `--kind verify-empty` passes, verify checked nothing: the evidence is the tests you ran instead, named in the description, never "verify passed" |
 | Self-review covers this change | `python3 ~/.agents/hooks/review_stamp.py check` | Run the `self-review` skill |
 | Validated, for behavior changes | `python3 ~/.agents/hooks/review_stamp.py needs-validate && python3 ~/.agents/hooks/review_stamp.py check --kind validate` | Run the `validate` skill |
 | Staging passed, when there is a guide | `~/.agents/bin/reports` shows the staging guide with a `## Results` section, every step PASS | Ask the user for the results (validate, step 7) |
