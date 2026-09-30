@@ -404,9 +404,11 @@ def post_edit_syntax_feedback(base):
     repo = new_repo(base)
     bad = os.path.join(repo, "bad.py")
     open(bad, "w").write("def f(:\n")
-    d = run_hook("post_edit.py", {"session_id": RUN + "s8", "cwd": repo, "tool_input": {"file_path": bad}})
+    # Harnesses set FORCE_COLOR, and Python 3.13+ then colours its tracebacks: the agent must get plain text.
+    d = run_hook("post_edit.py", {"session_id": RUN + "s8", "cwd": repo, "tool_input": {"file_path": bad}},
+                 env={"FORCE_COLOR": "3"})
     assert d and d.get("decision") == "block", d
-    assert "line 1" in d["reason"], d
+    assert "line 1: invalid syntax" in d["reason"] and "\x1b" not in d["reason"] and "Traceback" not in d["reason"], d
     # py_compile wrote bytecode into the user's repo wherever Python keeps it next to the source (CI's did).
     # An explicit cache prefix makes any written bytecode visible on every machine.
     good, prefix = os.path.join(repo, "good.py"), os.path.join(base, "pycache")

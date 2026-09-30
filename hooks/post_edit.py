@@ -20,7 +20,9 @@ CHECKS = {
     ".sh": ["bash", "-n"],
     ".bash": ["bash", "-n"],
     # compile(), not py_compile: py_compile writes bytecode, into the user's repo when Python keeps it next to the source.
-    ".py": [sys.executable, "-c", "import sys; compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec')"],
+    # The error is printed by hand: a traceback is colour-coded on Python 3.13+ when the harness sets FORCE_COLOR.
+    ".py": [sys.executable, "-c", "import sys\ntry: compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec')\n"
+            "except SyntaxError as e: sys.exit(f'line {e.lineno}: {e.msg}\\n{(e.text or \"\").rstrip()}')"],
     ".js": ["node", "--check"],
     ".mjs": ["node", "--check"],
     ".cjs": ["node", "--check"],
