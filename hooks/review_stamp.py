@@ -9,7 +9,7 @@
   review_stamp.py branch-key                       # the current branch as it appears in those file names
 
 The fingerprint covers every file that differs from the merge-base with the
-default branch, by content, so committing stamped changes keeps it valid and
+default branch, by content, except the changelog, so committing stamped changes keeps it valid and
 any later edit invalidates it. Stamps live in the repository's shared git dir, per branch
 (.git/agents/stamps/<branch key>/), never in the tree: they survive removing the worktree they were
 written in, so the PR can be opened from the main checkout after a staging hand-off. They also
@@ -31,6 +31,8 @@ NOT_BEHAVIOR = re.compile(
     r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$|(^|/)(CHANGELOG|README)",
     re.I,
 )
+# A PR's changelog line gets its number after the PR opens, and CI checks the entry: adding it re-runs nothing.
+NOT_STAMPED = re.compile(r"(^|/)CHANGELOG[^/]*$", re.I)
 
 
 def git(*args, cwd=None):
@@ -69,7 +71,7 @@ def changed_paths():
 def fingerprint():
     base, paths = changed_paths()
     digest = hashlib.sha256(base.encode())
-    for path in paths:
+    for path in (p for p in paths if not NOT_STAMPED.search(p)):
         digest.update(path.encode())
         digest.update(git("hash-object", path).encode() if os.path.isfile(path) else b"<deleted>")
     return digest.hexdigest()

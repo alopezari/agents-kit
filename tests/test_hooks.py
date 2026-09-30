@@ -200,8 +200,16 @@ def pr_gate_review_and_validation(base):
     assert guard("gh pr create --fill", repo) == "deny", "behavior change needs validation too"
     subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo, capture_output=True)
     assert guard("gh pr create --fill", repo) == "allow"
+    open(os.path.join(repo, "CHANGELOG.md"), "w").write("- A line (#12).\n")
+    assert guard("gh pr create --fill", repo) == "allow", "the changelog line CI checks doesn't invalidate the stamps"
     open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
     assert guard("gh pr create --fill", repo) == "deny", "edit after stamps must invalidate them"
+    for command in ["python3 ~/.agents/hooks/review_stamp.py write --kind verify", "python3 hooks/review_stamp.py write --kind verify-empty",
+                    "cd /x && review_stamp.py write --kind=verify"]:
+        assert guard(command, repo) == "deny", f"a verify stamp comes from running verify: {command}"
+    for command in ["python3 ~/.agents/hooks/review_stamp.py write", "python3 ~/.agents/hooks/review_stamp.py write --kind validate",
+                    "python3 ~/.agents/hooks/review_stamp.py check --kind verify"]:
+        assert guard(command, repo) == "allow", command
 
 
 def pr_gate_follows_worktrees(base):
@@ -395,7 +403,18 @@ def verify_stamp_and_effort_nudge(base):
         stop(RUN + "s6", repo, [os.path.join(repo, "app.py")])
         assert stamped("verify"), "green verify should stamp the change"
         assert "# Verify: PASS\n" in open(report).read(), "verify should leave its evidence in a report"
+        # Run by hand, verify stamps the change only through the same runner, and only when it passed.
+        def verify_by_hand():
+            return subprocess.run(["python3", H + "stop_checks.py", "verify"], cwd=repo, capture_output=True, text=True,
+                                  stdin=subprocess.DEVNULL, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+        open(os.path.join(repo, "app.py"), "a").write("v = 4\n")
+        assert not stamped("verify")
+        done = verify_by_hand()
+        assert done.returncode == 0 and stamped("verify") and "ran: pytest" in done.stdout, done.stdout + done.stderr
         open(os.path.join(vdir, "verify"), "w").write("#!/bin/sh\necho failing; exit 1\n")
+        open(os.path.join(repo, "app.py"), "a").write("u = 5\n")
+        done = verify_by_hand()
+        assert done.returncode == 1 and not stamped("verify") and "failing" in done.stdout, done.stdout + done.stderr
         outs = [stop(RUN + "s7", repo, [os.path.join(repo, "app.py")]) for _ in range(2)]
         assert "systemMessage" in outs[1] and "systemMessage" not in outs[0], outs
     finally:

@@ -47,6 +47,9 @@ RULES = [
     (r"\b(make|npm\s+run|pnpm(\s+run)?|yarn(\s+run)?|composer(\s+run)?)\s+[\w:.-]*(deploy|release|sync_db|ssh_prod)",
      "`make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production."),
     (r"\bchmod\s+(-R\s+)?777\b", "`chmod 777`: world-writable permissions."),
+    (r"review_stamp\.py\s+write\b[^;&|\n]*--kind[=\s]+verify",
+     "Writing a verify stamp by hand: it comes from running verify. Run `python3 ~/.agents/hooks/stop_checks.py verify`, "
+     "which stamps the change when verify passes."),
     (r"\.agents/approvals", "Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent."),
 ]
 

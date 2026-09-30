@@ -35,7 +35,7 @@ Stay within triage's time budget. If a lens would need much longer, review the r
 
 Give each reviewer: the lens text, the base ref, the task or PR goal in one or two sentences, the spec's path when there is one (its Change map is where the Correctness tables start), and this instruction: *report every issue you suspect, each with file:line, the failing scenario, a severity and a confidence (high/medium/low); low-confidence findings are welcome, because step 3 verifies them.* Reviewers are read-only and never edit files.
 
-The Correctness lens always runs, at every risk level, and its tables go into the final report. Also run the repo's personal checks when they exist: `~/.agents/repos/<repo>/verify`.
+The Correctness lens always runs, at every risk level, and its tables go into the final report. Also run the repo's personal checks when they exist, with `python3 ~/.agents/hooks/stop_checks.py verify`, which runs `~/.agents/repos/<repo>/verify` and stamps a pass.
 
 ### Cross-model reviewer
 
@@ -74,7 +74,7 @@ Findings reported by two independent reviewers, or by both model families, deser
 
 ## 4. Re-check and report
 
-After fixes, re-run the Correctness lens on the whole change again, with the same base, and name the fixes in the goal. A fix can break what the first pass cleared, and a reviewer shown only the fix can't see that. For a very large change, split it into batches that together cover all of it, as in step 2. The stop hook re-runs `verify` when you finish; run it by hand only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
+After fixes, re-run the Correctness lens on the whole change again, with the same base, and name the fixes in the goal. A fix can break what the first pass cleared, and a reviewer shown only the fix can't see that. For a very large change, split it into batches that together cover all of it, as in step 2. The stop hook re-runs `verify` when you finish; run it by hand (`python3 ~/.agents/hooks/stop_checks.py verify`) only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
 
 ```bash
 python3 ~/.agents/hooks/review_stamp.py write

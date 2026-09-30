@@ -11,7 +11,8 @@ when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the
 one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read.
 
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
-the hook has seen, for the weekly health check.
+the hook has seen, for the weekly health check. `stop_checks.py verify` runs verify on the current checkout now,
+saving its report and stamping a pass, which is the only way a verify stamp gets written.
 """
 import json
 import os
@@ -384,30 +385,46 @@ def check_checkout(root, session):
     deleted = git(["diff", review_stamp.merge_base(root), "--name-only", "--diff-filter=D"], root).splitlines()
     problems += [f"Test file deleted: {p}" for p in deleted if TEST_FILE.search(p)]
 
-    verify = os.path.expanduser(f"~/.agents/repos/{review_stamp.repo_name(root)}/verify")
-    if not os.access(verify, os.X_OK):
-        verify = AUTO_VERIFY
-    verify_failed = False
-    if os.access(verify, os.X_OK):
-        try:
-            result = subprocess.run([verify], cwd=root, capture_output=True, text=True, timeout=VERIFY_TIMEOUT)
-            checked = checked_something(result.stdout + "\n" + result.stderr)
-            save_verify_report(root, verify, result, checked)
-            if result.returncode != 0:
-                verify_failed = True
-                tail = (result.stdout + result.stderr).strip()[-3000:]
-                problems.append(f"{verify} failed (exit {result.returncode}):\n{tail}")
-            else:
-                # Lets the skills skip re-running verify on a change it already passed. A run that checked nothing
-                # gets its own stamp, so the flow moves on without reporting it as a pass.
-                kind = "verify" if checked else "verify-empty"
-                stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
-                subprocess.run([sys.executable, stamp, "write", "--kind", kind], cwd=root, capture_output=True)
-        except subprocess.TimeoutExpired:
-            verify_failed = True
-            problems.append(f"{verify} timed out after {VERIFY_TIMEOUT}s.")
+    verify_problems, verify_failed, _ = run_verify(root)
+    problems += verify_problems
     return problems, verify_failed
 
 
+def run_verify(root):
+    """Run the repo's verify in root, save its report and, when it passed, stamp the change: the only path to a
+    verify stamp. Returns (problems, failed, output)."""
+    verify = os.path.expanduser(f"~/.agents/repos/{review_stamp.repo_name(root)}/verify")
+    if not os.access(verify, os.X_OK):
+        verify = AUTO_VERIFY
+    if not os.access(verify, os.X_OK):
+        return [], False, ""
+    try:
+        result = subprocess.run([verify], cwd=root, capture_output=True, text=True, timeout=VERIFY_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return [f"{verify} timed out after {VERIFY_TIMEOUT}s."], True, ""
+    output = result.stdout + result.stderr
+    checked = checked_something(result.stdout + "\n" + result.stderr)
+    save_verify_report(root, verify, result, checked)
+    if result.returncode != 0:
+        return [f"{verify} failed (exit {result.returncode}):\n{output.strip()[-3000:]}"], True, output
+    # Lets the skills skip re-running verify on a change it already passed. A run that checked nothing
+    # gets its own stamp, so the flow moves on without reporting it as a pass.
+    kind = "verify" if checked else "verify-empty"
+    stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
+    subprocess.run([sys.executable, stamp, "write", "--kind", kind], cwd=root, capture_output=True)
+    return [], False, output
+
+
+def verify_here():
+    """`stop_checks.py verify`: run verify on the checkout in the working directory now, as the stop hook would."""
+    root = git(["rev-parse", "--show-toplevel"], os.getcwd()).strip()
+    problems, failed, output = run_verify(root)
+    print(output, end="")
+    for problem in problems:
+        print(problem.splitlines()[0], file=sys.stderr)
+    return 1 if failed else 0
+
+
 if __name__ == "__main__":
-    sys.exit(leftover_overrides() if sys.argv[1:] == ["leftover-overrides"] else main())
+    command = sys.argv[1:]
+    sys.exit(leftover_overrides() if command == ["leftover-overrides"] else verify_here() if command == ["verify"] else main())
