@@ -112,7 +112,7 @@ def quoted_spans(command):
 
 def pr_checkout(command, cwd):
     """The checkout `gh pr create` acts on: a `cd <dir>` before it, else the worktree holding --head."""
-    before = re.split(r"\bgh\s+pr\s+(?:create|ready)\b", command)[0]
+    before = re.split(r"\b" + GH_PR + r"(?:create|ready)\b", command)[0]
     cds = re.findall(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before)
     runs_in = cwd
     for target in cds:
@@ -234,8 +234,28 @@ ENV_CLEARED = re.compile(r"\benv\s+(?:\S+\s+)*?(?:-[0v]*i[0v]*|--ignore-environm
 
 # Where a command starts: after a separator, or after a shell keyword or brace (`then gh pr ready`, `{ gh pr ready; }`).
 COMMAND_START = r"(?:^|[;&|(\n`{]|\b(?:then|do|else|elif|if|while|until)\b|!)\s*"
-# gh's own flags may come between `pr` and the subcommand: `gh pr -R owner/repo ready 12`.
-GH_PR = r"gh\s+pr\s+(?:(?:-R|--repo)(?:=|\s+)\S+\s+)?"
+# gh's --repo may come before or after `pr`, attached or not: `gh -R owner/repo pr ready 12`, `gh pr -Rowner/repo ready`.
+REPO_FLAG = r"(?:(?:-R|--repo)(?:=|\s+)?\S+\s+)?"
+GH_PR = r"gh\s+" + REPO_FLAG + r"pr\s+" + REPO_FLAG
+
+
+def pr_args(command, match, group):
+    """The words of a matched PR command's arguments as the shell passes them, without redirections: a quoted
+    "12" is 12, a quoted title is one word, and `> ready.log` or `2>&1` isn't a PR."""
+    text = command[match.start(group):match.end(group)]  # the raw text: shell_code() masks quoted words
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        words = text.split()
+    args, skip = [], False
+    for word in words:
+        if skip:
+            skip = False
+        elif re.fullmatch(r"\d*(?:>>?|<|>&|<&)", word):
+            skip = True  # its target is the next word
+        elif not re.match(r"\d*[<>]", word):
+            args.append(word)
+    return args
 
 
 def unreviewed_pr(command, cwd):
@@ -255,7 +275,7 @@ def unreviewed_pr(command, cwd):
     if ok("needs-validate") and not ok("check", "--kind", "validate"):
         return ("The change touches behavior but has no validation recorded for it. Run the validate skill "
                 "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run.")
-    if any(not re.search(r"\s(?:--draft|-d)\b", match.group(1)) for match in creates):
+    if any(not {"--draft", "-d"} & set(pr_args(command, match, 1)) for match in creates):
         return staging_unfinished(cwd)  # a draft may wait for staging; any create in the command that isn't one may not
     return None
 
@@ -278,14 +298,9 @@ def unready_pr(command, cwd):
     cwd = pr_checkout(command, cwd)
     here = subprocess.run(["git", "branch", "--show-current"], cwd=cwd, capture_output=True, text=True).stdout.strip()
     for match in readies:
-        if re.search(r"(?:-R|--repo)\b", match.group(1) + match.group(2)):
+        if re.search(r"(?:^|\s)(?:-R|--repo)", match.group(1) + " " + match.group(2)):
             return "`gh pr ready --repo`: the staging results are checked in a checkout of the PR's branch. Run it there without --repo."
-        # The raw text, not the masked one: a quoted "12" is the PR number 12.
-        try:
-            words = shlex.split(command[match.start(2):match.end(2)])
-        except ValueError:
-            words = command[match.start(2):match.end(2)].split()
-        target = next((word for word in words if not word.startswith("-")), None)
+        target = next((word for word in pr_args(command, match, 2) if not word.startswith("-")), None)
         if target:
             # A number, URL or branch names the PR; its staging results live under its branch.
             try:
@@ -304,7 +319,7 @@ def unready_pr(command, cwd):
 ABSOLUTE_CD_FIRST = re.compile(r"""cd[ \t]+((?:~[\w.-]*)?/[^\s;&|()$`'"\\*?\[]*|"/[^"$`\\]*"|'/[^']*')[ \t]*&&""")
 # Anywhere, not only in command position: a wrapper, `then` or `{` in front must not hide it, and a false match only
 # asks for the cd form.
-GH_PR_WORDS = re.compile(r"\bgh\s+pr\s+(?:create|edit|ready)\b")
+GH_PR_WORDS = re.compile(r"\b" + GH_PR + r"(?:create|edit|ready)\b")
 CD_WORD = re.compile(r"(?<![\w/.-])(?:cd|pushd|popd)(?![\w/.-])")
 
 

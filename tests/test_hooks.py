@@ -15,6 +15,7 @@ import traceback
 # A HOME of our own: the tests add repo overlays and write hook logs, and must never touch the real ones.
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-hooks-home-")
+os.environ.pop("EVIDENCE_DIR", None)  # set when a staging step runs this suite: the tests' evidence would land there
 os.makedirs(os.path.expanduser("~/.agents/repos"))
 for entry in set(os.listdir(KIT)) - {"logs", "repos", "approvals"}:
     os.symlink(os.path.join(KIT, entry), os.path.expanduser(f"~/.agents/{entry}"))
@@ -347,8 +348,16 @@ def pr_gate_waits_for_staging(base):
     for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", f"cd {repo} && ~/.agents/bin/evidence A1 gh pr ready",
                     "gh pr create --fill; gh pr create --draft --head other", "gh pr ready --undo && gh pr ready 12",
                     f"cd {repo} && gh pr ready && cd /tmp", "if true; then gh pr ready; fi", "{ gh pr ready; }",
-                    "gh pr ready 12 --repo other/repo", "gh pr -R other/repo ready 12", 'gh pr ready "12"']:
+                    "gh pr ready 12 --repo other/repo", "gh pr -R other/repo ready 12", 'gh pr ready "12"',
+                    "gh -R other/repo pr ready 12", "gh pr ready -Rother/repo 12",
+                    'gh pr create --head "$(git branch --show-current)" --title "Allow --draft PRs" --fill']:
         assert decision(command) == "deny", f"staging is pending: {command}"
+    for heading in ("## Before the merge \n", "## Before the merge ##\n"):
+        with open(guide, "w") as fh:
+            fh.write(steps.replace("## Before the merge\n", heading))
+        assert decision("gh pr ready") == "deny", f"steps under {heading!r} still count"
+    with open(guide, "w") as fh:
+        fh.write(steps)
     for command in ["gh pr create --draft --fill", "gh pr create -d --fill", "gh pr ready --undo", "gh pr view 12"]:
         assert decision(command) == "allow", command
     with open(os.path.join(evidence, "S1.txt"), "w") as fh:
@@ -363,8 +372,12 @@ def pr_gate_waits_for_staging(base):
                  "| S1 | PASS | S1.txt |\n| S2 | PASS | S2.txt |\n")
     assert decision("gh pr ready") == "deny", "a results table without an Evidence column proves nothing"
     with open(guide, "w") as fh:
+        fh.write(steps + head + "| S1 | PASSING | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n")
+    assert decision("gh pr ready") == "deny", "PASSING isn't PASS"
+    with open(guide, "w") as fh:
         fh.write(steps + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n")
-    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", 'gh pr ready "12"', "if true; then gh pr ready; fi"]:
+    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", 'gh pr ready "12"', "if true; then gh pr ready; fi",
+                    "gh pr ready 2>&1", "gh pr ready > ready.log", "gh pr ready 12 2> err.log"]:
         assert decision(command) == "allow", f"every S step passed with evidence: {command}"
     with open(guide, "w") as fh:
         fh.write("# Guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")
@@ -413,6 +426,7 @@ def codex_pr_commands_name_their_checkout(base):
     assert "33986" in codex("gh pr create --fill"), "the checkout it runs in is unknown"
     assert "33986" in codex("gh pr edit 5 --title x")
     assert "33986" in codex("command gh pr create --fill"), "a wrapper doesn't hide it"
+    assert "33986" in codex("gh pr -R o/r create --fill"), "nor gh's --repo flag"
     # Each of these leaves the PR in the unknown workdir, or somewhere the gate would read differently.
     for command in ["cd sub && gh pr create --fill", f"cd {repo}; gh pr create --fill", f"false && cd {repo}; gh pr create --fill",
                     f"cd {repo} | gh pr create --fill", f"cd {repo} && cd - && gh pr create --fill", f"  cd {repo} && gh pr create --fill",

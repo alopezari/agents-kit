@@ -209,7 +209,7 @@ def result_rows(lines, evidence):
             names = [c.strip("*_") for c in cells]
             columns = (names.index("Result"), names.index("Evidence"))
         elif columns and len(cells) > columns[0]:
-            result = re.match(r"[*_]*(PASS|FAIL|NOT RUN)?", cells[columns[0]]).group(1)
+            result = re.match(r"[*_]*(?:(PASS|FAIL|NOT RUN)\b)?", cells[columns[0]]).group(1)
             cell = cells[columns[1]] if len(cells) > columns[1] else ""
             backed = any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files)
             if result:
@@ -250,7 +250,7 @@ def staging_phase(guide, evidence):
     rounds = text.split("## Results")
     latest = rounds[-1] if len(rounds) > 1 else ""
     if re.search(r"^## (Before|After) the merge", text, re.M):
-        before_merge = re.search(r"^## Before the merge\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+        before_merge = re.search(r"^## Before the merge\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
         steps = re.findall(r"^### (S\d+)\b", before_merge.group(1), re.M) if before_merge else []
         if not steps:
             return None  # every step needs production: the ship skill runs them
