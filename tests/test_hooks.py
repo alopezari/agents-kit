@@ -401,11 +401,12 @@ def stop_asks_once_about_files_outside_the_change_map(base):
 
 
 FAKE_GH = """#!/bin/sh
+echo "$*" >> "$FAKE_GH_DIR/calls.log"
+[ -f "$FAKE_GH_DIR/error" ] && { echo "error connecting to api.github.com" >&2; exit 1; }
 case "$*" in
-  *check-runs*) cat "$FAKE_GH_DIR/runs.json" ;;
-  *) [ -f "$FAKE_GH_DIR/error" ] && { echo "error connecting to api.github.com" >&2; exit 1; }; echo '{"statuses": []}' ;;
+  *check-runs*) cat "$FAKE_GH_DIR/runs.jsonl" ;;
 esac
-[ -f "$FAKE_GH_DIR/error" ] && exit 1 || exit 0
+exit 0
 """
 
 
@@ -429,7 +430,7 @@ def stop_follows_ci_after_a_push(base):
         runs = [] if state in ("none", "unreadable") else [
             {"name": "suite", "status": "in_progress" if state == "running" else "completed",
              "conclusion": {"failed": "failure", "passed": "success"}.get(state), "details_url": ""}]
-        json.dump({"check_runs": runs}, open(os.path.join(fake, "runs.json"), "w"))
+        open(os.path.join(fake, "runs.jsonl"), "w").write("".join(json.dumps(r) + "\n" for r in runs))
 
     def push(session):
         open(os.path.join(repo, "app.py"), "a").write("n = 1\n")
@@ -459,11 +460,44 @@ def stop_follows_ci_after_a_push(base):
     assert "Couldn't read CI" in asked(session), "an unknown state isn't taken as passed"
     ci("passed")
     assert asked(session) == ""
-    push(session)
+    assert asked(session) == ""
+    calls = os.path.join(fake, "calls.log")
+    before = open(calls).read()
+    assert asked(session) == "" and open(calls).read() == before, "a checkout whose CI passed isn't queried again"
+
+    # Each checkout has its own push time: an old push with no CI stays quiet when another checkout pushes now.
+    other = os.path.join(base, "other checkout")
+    shutil.copytree(repo, other)
+    pushed = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", f"{session}.pushed")
+    run_hook("guard_bash.py", {"tool_input": {"command": f'git -c color.ui=never -C "{other}" push'}, "cwd": repo,
+                               "session_id": session})
+    open(pushed, "a").write(f"{os.path.realpath(repo)}\t{time.time() - 3600}\n")
     ci("none")
-    old = time.time() - 3600
-    os.utime(os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", f"{session}.pushed"), (old, old))
-    assert asked(session) == "", "no checks long after the push: the repo has no CI"
+    reason = asked(session)
+    assert reason.count("still running") == 1, f"only the checkout pushed just now is still waiting for checks: {reason}"
+    shutil.rmtree(other)
+    run_hook("guard_bash.py", {"tool_input": {"command": "git push"}, "cwd": repo, "session_id": session})
+    ci("failed")
+    reason = asked(session)
+    assert reason.count("CI failed") == 1, f"a checkout removed after its push doesn't stop the others' checks: {reason}"
+
+
+def guard_records_the_pushed_checkout(base):
+    repo, other = new_repo(os.path.join(base, "a")), new_repo(os.path.join(base, "b c"))
+    pushed = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", f"{RUN}push.pushed")
+
+    def recorded(command):
+        if os.path.exists(pushed):
+            os.remove(pushed)
+        run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": RUN + "push"})
+        return sorted({line.split("\t")[0] for line in open(pushed).read().splitlines()}) if os.path.exists(pushed) else []
+
+    here, there = os.path.realpath(repo), os.path.realpath(other)
+    assert recorded("git push") == [here]
+    assert recorded(f'cd "{other}" && git push -u origin HEAD') == [there]
+    assert recorded(f'git --no-pager -C "{other}" push') == [there]
+    assert recorded(f'git push; cd "{other}"; git push') == sorted([here, there])
+    assert recorded("git status && echo 'git push'") == [], "a push only in quoted text isn't one"
 
 
 def post_edit_syntax_feedback(base):
@@ -490,7 +524,7 @@ for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, ask
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
-          stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push,
+          stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push, guard_records_the_pushed_checkout,
           post_edit_syntax_feedback]:
     test(t)
 

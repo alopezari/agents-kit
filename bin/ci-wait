@@ -4,11 +4,13 @@
   ci-wait [--sha SHA] [--timeout SECS] [--once]
 
 Reads the commit's check runs and commit statuses, so CI outside GitHub Actions counts too, keyed on the SHA: a
-check from an earlier push never passes for this one. Waits until every check is done (30 minutes by default;
---once looks once), prints one line per check and, for a failed GitHub Actions job, the failing lines of its log and its tail.
-Exit: 0 passed, 1 failed, 2 still running, 3 no checks for the commit, 4 GitHub couldn't be read.
+check from an earlier push never passes for this one. Waits until every check is done and the set holds for one more look, as checks from another workflow or
+integration can register late (30 minutes by default; --once looks once), prints one line per check and, for a failed GitHub Actions job, the failing lines of its log and its tail.
+Exit: 0 passed, 1 failed, 2 still running, 3 no checks for the commit, 4 GitHub couldn't be read, 64 wrong arguments.
 """
+import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -17,8 +19,9 @@ import time
 
 PASSED_RUN = {"success", "neutral", "skipped"}
 GH_TIMEOUT = 30
-# Checks show up some time after the push; before that, "no checks" means "not yet".
-GRACE_SECS = 120
+# Checks show up some time after the push; before that, "no checks" means "not yet". The stop hook's
+# NO_CHECKS_GRACE_SECS is the same wait: shorter here, and a wait the hook asked for ends as "no CI" too early.
+GRACE_SECS = 300
 # A step's log is long and its summary comes last: the failing lines first, then a short tail.
 FAILURE_LINE = re.compile(r"\bFAIL(ED|URE)?\b|\bError\b|error:|Traceback|Assertion", re.I)
 FAILURE_LINES = 40
@@ -39,20 +42,21 @@ def gh(*args):
     return result.stdout
 
 
+def listed(endpoint, key):
+    """Every item of a paginated list: a failing check on page two must not pass as green."""
+    return [json.loads(line) for line in gh("api", "--paginate", "--jq", f".{key}[]", endpoint).splitlines() if line]
+
+
 def checks(sha):
     """[(name, state, details url)], state being "running", "passed" or the failing conclusion."""
     try:
-        runs = json.loads(gh("api", f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs?per_page=100"))["check_runs"]
-        statuses = json.loads(gh("api", f"repos/{{owner}}/{{repo}}/commits/{sha}/status"))["statuses"]
-    except (ValueError, KeyError) as error:
-        raise Unreadable(f"unexpected answer: {error}")
-    found = []
-    for run in runs:
-        if run["status"] != "completed":
-            found.append((run["name"], run["status"], run.get("details_url") or ""))
-        else:
-            found.append((run["name"], run["conclusion"], run.get("details_url") or ""))
-    found += [(s["context"], s["state"], s.get("target_url") or "") for s in statuses]
+        runs = listed(f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs?per_page=100", "check_runs")
+        statuses = listed(f"repos/{{owner}}/{{repo}}/commits/{sha}/status?per_page=100", "statuses")
+        found = [(run["name"], run["status"] if run["status"] != "completed" else run["conclusion"],
+                  run.get("details_url") or "") for run in runs]
+        found += [(s["context"], s["state"], s.get("target_url") or "") for s in statuses]
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        raise Unreadable(f"unexpected answer: {error!r}")
     return found
 
 
@@ -76,15 +80,27 @@ def failed_log(url):
     return "\n".join("    " + line for line in head + (["    ..."] if head else []) + lines[-LOG_TAIL:])
 
 
+def seconds(text):
+    value = float(text)
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {text}")
+    return value
+
+
 def main():
-    args = sys.argv[1:]
-    sha = args[args.index("--sha") + 1] if "--sha" in args else None
-    timeout = float(args[args.index("--timeout") + 1]) if "--timeout" in args else 1800
-    once = "--once" in args
+    parser = argparse.ArgumentParser(prog="ci-wait", description="Wait for the CI checks of one commit.")
+    parser.add_argument("--sha")
+    parser.add_argument("--timeout", type=seconds, default=1800)
+    parser.add_argument("--once", action="store_true")
+    try:
+        args = parser.parse_args()
+    except SystemExit as exit:  # argparse's own 2 would read as "still running"
+        return 64 if exit.code else 0
+    sha, timeout, once = args.sha, args.timeout, args.once
     if not sha:
         sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     poll = float(os.environ.get("CI_WAIT_POLL_SECS", "20"))  # tests shorten it
-    start = time.time()
+    start, previous = time.time(), None
     while True:
         try:
             found = checks(sha)
@@ -92,9 +108,11 @@ def main():
             print(f"ci-wait: couldn't read the checks of {sha[:12]} from GitHub: {error}")
             return 4
         waited = time.time() - start
-        done = found and not any(running(state) for _, state, _ in found)
+        complete = found and not any(running(state) for _, state, _ in found)
+        done = complete and (any(failed(state) for _, state, _ in found) or found == previous)
         if done or once or waited >= timeout or (not found and waited >= min(GRACE_SECS, timeout)):
             break
+        previous = found if complete else None
         time.sleep(min(poll, max(timeout - waited, 0.1)))
     if not found:
         print(f"ci-wait: no checks for {sha[:12]}{'' if once else f' after {int(waited)}s'}")

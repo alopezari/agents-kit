@@ -11,7 +11,8 @@ KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 CI_WAIT = os.path.join(KIT, "bin", "ci-wait")
 SHA = "a" * 40
 # Answers the two API calls ci-wait makes and `gh run view --log-failed`. Each check-runs call takes the next
-# state from states.json (the last one repeats); a state with "error" makes gh fail as it does offline.
+# state from states.json (the last one repeats); a state with "error" makes gh fail as it does offline, and one with
+# "raw" answers that text. Lists come in pages of 100, and only --paginate reads past the first.
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
 state_dir = os.environ["FAKE_GH_DIR"]
@@ -27,11 +28,17 @@ if args[:1] == ["run"]:
 if state.get("error"):
     print("error connecting to api.github.com", file=sys.stderr)
     sys.exit(1)
-if args[1].endswith("/check-runs?per_page=100"):
+endpoint = args[-1]
+if "/check-runs" in endpoint:
     open(counter, "w").write(str(count + 1))
-    print(json.dumps({"total_count": len(state.get("runs", [])), "check_runs": state.get("runs", [])}))
-elif args[1].endswith("/status"):
-    print(json.dumps({"state": "pending", "statuses": state.get("statuses", [])}))
+    items = state.get("runs", [])
+else:
+    items = state.get("statuses", [])
+if "raw" in state:
+    print(state["raw"])
+    sys.exit(0)
+items = items if "--paginate" in args else items[:100]
+print("\n".join(json.dumps(item) for item in items))
 '''
 
 
@@ -71,6 +78,14 @@ CASES = [  # (name, states, args, exit code, text that must appear, text that mu
      ["suite: in_progress"], ["suite: success"]),
     ("no checks after the grace period", [{"runs": []}], ["--timeout", "1"], 3, ["no checks"], []),
     ("GitHub can't be read", [{"error": True}], [], 4, ["couldn't read"], []),
+    ("a failure on the second page of checks", [{"runs": [run(f"job {n}") for n in range(100)] + [run("late", conclusion="failure")]}],
+     [], 1, ["late: failure"], []),
+    ("a check that registers after the others passed", [{"runs": [run("fast")]}, {"runs": [run("fast"), run("slow", status="queued")]},
+                                                        {"runs": [run("fast"), run("slow", conclusion="failure")]}],
+     ["--timeout", "20"], 1, ["slow: failure"], []),
+    ("an answer missing a field is unreadable, not a failure", [{"raw": '{"status": "completed"}'}], [], 4, ["couldn't read"], []),
+    ("an endless timeout is refused", [{"runs": [run("suite")]}], ["--timeout", "nan"], 64, ["not a number of seconds"], []),
+    ("a flag without its value is refused", [{"runs": [run("suite")]}], ["--timeout"], 64, ["expected one argument"], []),
 ]
 
 fail = 0

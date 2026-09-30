@@ -30,8 +30,10 @@ OVERRIDE_NAMES = ("docker-compose.override.yml", "docker-compose.override.yaml",
 OVERRIDE_MARKER = "agents: temporary override"
 VERIFY_TIMEOUT = 600
 CI_WAIT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "ci-wait"))
-# Checks show up a little after a push; "no checks" long after it means the repo runs no CI.
+# Checks show up a little after a push; "no checks" long after it means the repo runs no CI. ci-wait's
+# GRACE_SECS is the same wait.
 NO_CHECKS_GRACE_SECS = 300
+MAX_PROBLEMS = 20
 SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "spec", "path.sh"))
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
 
@@ -172,10 +174,10 @@ def block(payload, problems, streak):
             "Before finishing, resolve these or explain to the user why they are intended. If you can't resolve one "
             "honestly, report it under **Blocked on me** with what you tried; never work around a check "
             "(skipping or loosening tests, deleting files, disabling a rule, editing the hook):\n- "
-            + "\n- ".join(problems[:20])
+            + "\n- ".join(problems[:MAX_PROBLEMS])
         )
         output = {"decision": "block", "reason": reason}
-        for problem in problems[:20]:
+        for problem in problems[:MAX_PROBLEMS]:
             log("stop_checks", "block", payload, problem)
         if streak >= 2:
             # Hooks can't change effort; on Opus 5.5 raising it mid-session keeps the cache, so nudge the user.
@@ -218,20 +220,29 @@ def unmapped_files(root, session):
 
 def ci_after_push(session, payload):
     """For each checkout this session pushed from, a question when its pushed commit's CI failed, is still running or
-    can't be read; each once per checkout, commit and state."""
-    pushed = os.path.join(MARKER_DIR, f"{session}.pushed")
+    can't be read; each once per checkout, commit and state. A checkout is followed until its CI passed, failed or
+    turned out to have none, so later turns don't query GitHub for it again."""
+    pushed_path = os.path.join(MARKER_DIR, f"{session}.pushed")
     try:
-        roots = sorted(set(open(pushed).read().splitlines()) - {""})
-        pushed_at = os.path.getmtime(pushed)
+        lines = open(pushed_path).read().splitlines()
     except OSError:
         return []
+    pushed_at = {}
+    for line in lines:
+        root, _, at = line.partition("\t")
+        pushed_at[root] = max(pushed_at.get(root, 0.0), float(at or 0))
     asked_path = os.path.join(MARKER_DIR, f"{session}.ci-asked")
     try:
         asked = set(open(asked_path).read().splitlines())
     except OSError:
         asked = set()
-    problems = []
-    for root in roots:
+    problems, followed = [], {}
+    for root, at in sorted(pushed_at.items()):
+        if len(problems) == MAX_PROBLEMS:  # an unshown question isn't asked: keep following its checkout
+            followed[root] = at
+            continue
+        if not os.path.isdir(root):
+            continue  # the worktree was removed after the push
         sha = git(["rev-parse", "--verify", "--quiet", "@{upstream}"], root).strip()
         if not sha:
             continue  # the push failed, or pushed nothing this checkout tracks
@@ -241,9 +252,11 @@ def ci_after_push(session, payload):
             code, out = result.returncode, result.stdout.strip()
         except subprocess.TimeoutExpired:
             code, out = 4, "ci-wait timed out"
-        if code == 3 and time.time() - pushed_at > NO_CHECKS_GRACE_SECS:
+        if code == 3 and time.time() - at > NO_CHECKS_GRACE_SECS:
             continue  # this repo runs no CI
         state = {1: "failed", 2: "running", 3: "running", 4: "unreadable"}.get(code)
+        if state in ("running", "unreadable"):
+            followed[root] = at
         if not state or f"{root}\t{sha}\t{state}" in asked:
             continue
         asked.add(f"{root}\t{sha}\t{state}")
@@ -252,8 +265,9 @@ def ci_after_push(session, payload):
         problems.append({
             "failed": f"CI failed on {sha[:12]} ({names}). Read the failures with {wait} and fix them, or tell the user "
                       "why not; don't call the work done.",
-            "running": f"CI is still running on {sha[:12]}: wait for it in the foreground with {wait} and act on the result "
-                       "before saying the work is done.",
+            "running": f"CI is still running on {sha[:12]}: wait for it in the foreground with {wait} (see the follow-pr "
+                       "skill when your harness caps a command's run time) and act on the result before saying the work "
+                       "is done.",
             "unreadable": f"Couldn't read CI for {sha[:12]} from GitHub ({out.splitlines()[-1] if out else 'no output'}): "
                           f"check it with {wait} before calling it passed.",
         }[state])
@@ -261,6 +275,8 @@ def ci_after_push(session, payload):
     try:
         with open(asked_path, "w") as fh:
             fh.writelines(line + "\n" for line in sorted(asked))
+        with open(pushed_path, "w") as fh:
+            fh.writelines(f"{root}\t{at}\n" for root, at in sorted(followed.items()))
     except OSError:
         pass  # asking again next stop beats not asking
     return problems

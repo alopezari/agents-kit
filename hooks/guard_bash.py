@@ -12,6 +12,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import log  # noqa: E402
@@ -345,20 +346,29 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
     return None
 
 
+def pushed_from(command, cwd):
+    """The directory each `git push` in the command runs in, following earlier `cd`s and every `git -C`."""
+    code, dirs = shell_code(command), []
+    for push in re.finditer(GIT + r"push\b", code):
+        runs_in = cwd
+        for cd in re.finditer(r"(?:^|[;&|(\n]\s*)cd\s+([^\s;&|)]+)", code[:push.start()]):
+            runs_in = cd_into(runs_in, command[cd.start(1):cd.end(1)])
+        for option in re.finditer(r"-C\s+([^\s;&|)]+)", code[push.start():push.end()]):
+            runs_in = cd_into(runs_in, command[push.start() + option.start(1):push.start() + option.end(1)])
+        dirs.append(runs_in)
+    return dirs
+
+
 def record_push(command, cwd, payload):
-    """Note the checkout of an allowed `git push`, so the stop hook follows the CI of what it pushed."""
-    push = re.search(GIT + r"push\b", shell_code(command))
-    if not push:
-        return
-    target = re.search(r"\bgit\s+-C\s+(\S+)", push.group(0))
-    runs_in = cd_into(cwd, target.group(1)) if target else cwd
-    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=runs_in, capture_output=True, text=True).stdout.strip()
+    """Note the checkout and time of each allowed `git push`, so the stop hook follows the CI of what it pushed."""
+    roots = {subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=d, capture_output=True, text=True).stdout.strip()
+             for d in pushed_from(command, cwd)} - {""}
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
-    if root:
+    if roots:
         try:
             os.makedirs(MARKER_DIR, exist_ok=True)
             with open(os.path.join(MARKER_DIR, f"{session}.pushed"), "a") as fh:
-                fh.write(root + "\n")
+                fh.writelines(f"{root}\t{time.time()}\n" for root in sorted(roots))
         except OSError:
             pass  # the push still runs; only the CI follow-up is lost
 
