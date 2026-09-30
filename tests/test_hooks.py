@@ -443,6 +443,17 @@ def verify_stamp_and_effort_nudge(base):
         verify_by_hand()
         assert stamped("verify-empty")
         with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/bin/sh\nprintf 'bad \\377 byte\\n'; exit 1\n")
+        done = verify_by_hand()
+        assert done.returncode == 1 and not stamped("verify-empty") and "bad" in done.stdout, \
+            "output that isn't UTF-8 still voids the earlier pass: " + done.stderr
+        verify_by_hand_empty = subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "verify"], cwd="/",
+                                              capture_output=True, text=True)
+        assert verify_by_hand_empty.returncode != 0 and "stop_checks.py verify" in verify_by_hand_empty.stderr, "outside a repo too"
+        with open(os.path.join(vdir, "verify"), "w") as fh:
+            fh.write("#!/bin/sh\necho 'ran: nothing to check: no changed files'\n")
+        verify_by_hand()
+        with open(os.path.join(vdir, "verify"), "w") as fh:
             fh.write("#!/no/such/interpreter\n")
         done = verify_by_hand()
         assert done.returncode == 1 and not stamped("verify-empty") and "interpreter" not in done.stdout, \

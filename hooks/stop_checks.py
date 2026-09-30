@@ -394,11 +394,12 @@ def run_verify(root):
         verify = AUTO_VERIFY
     if not os.access(verify, os.X_OK):
         problems = [f"No verify to run: neither {verify} nor ~/.agents/repos/<repo>/verify is executable."]
+        save_verify_report(root, verify, "", "FAIL (no verify to run)")
         return problems, True, "", record_verify(root, None, "")
     # Stamped with the content verify started from: an edit made while it ran leaves the change unstamped.
     checked_fingerprint = in_checkout(root, review_stamp.fingerprint)
     try:
-        result = subprocess.run([verify], cwd=root, capture_output=True, text=True, timeout=VERIFY_TIMEOUT)
+        result = subprocess.run([verify], cwd=root, capture_output=True, text=True, errors="replace", timeout=VERIFY_TIMEOUT)
     except subprocess.TimeoutExpired as timeout:
         # On POSIX the partial output comes back as bytes even with text=True.
         output = "".join(part.decode(errors="replace") if isinstance(part, bytes) else part or ""

@@ -178,7 +178,8 @@ def legacy_stamp_path(kind):
 
 def record_verify(kind, checked_fingerprint):
     """Leave only this verify run's stamp: kind on the fingerprint it checked, or none when kind is None (it failed).
-    Raises OSError when a stamp can't be written or removed."""
+    Raises OSError when a stamp can't be written or removed, after trying every removal."""
+    errors = []
     for other in VERIFY_KINDS:
         for path in (stamp_path(other), legacy_stamp_path(other)):
             if other != kind or path != stamp_path(kind):
@@ -186,6 +187,10 @@ def record_verify(kind, checked_fingerprint):
                     os.remove(path)
                 except FileNotFoundError:
                     pass
+                except OSError as error:
+                    errors.append(error)
+    if errors:
+        raise errors[0]
     if kind:
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
         with open(stamp_path(kind), "w") as fh:
@@ -193,12 +198,16 @@ def record_verify(kind, checked_fingerprint):
 
 
 def main():
-    if not git("rev-parse", "--absolute-git-dir"):
-        return 0
-    os.chdir(git("rev-parse", "--show-toplevel"))
     args = sys.argv[1:]
     kind = args[args.index("--kind") + 1] if "--kind" in args else "review"
     command = args[0] if args else "check"
+    if command == "write" and kind in VERIFY_KINDS:
+        print("A verify stamp comes only from running verify: run `python3 ~/.agents/hooks/stop_checks.py verify`, "
+              "which stamps the change when it passes.", file=sys.stderr)
+        return 2
+    if not git("rev-parse", "--absolute-git-dir"):
+        return 0
+    os.chdir(git("rev-parse", "--show-toplevel"))
     if command == "branch-key":
         print(branch_key(git("branch", "--show-current")))
         return 0
@@ -207,10 +216,6 @@ def main():
         return 0
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
-    if command == "write" and kind in VERIFY_KINDS:
-        print("A verify stamp comes only from running verify: run `python3 ~/.agents/hooks/stop_checks.py verify`, "
-              "which stamps the change when it passes.", file=sys.stderr)
-        return 2
     if command == "write":
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
         with open(stamp_path(kind), "w") as fh:
