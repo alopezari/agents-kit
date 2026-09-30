@@ -182,7 +182,8 @@ def pr_gate_review_and_validation(base):
             "eval 'gh pr create --fill'", "bash -lc 'gh pr create --fill'", "sh -c \"cd x && gh pr create --fill\"",
             "command gh pr create --fill", "env GH_HOST=x gh pr create --fill", "env -i PATH=/bin gh pr create --fill",
             "nohup gh pr create --fill", "time gh pr create --fill", "exec gh pr create --fill", "command -- gh pr create --fill",
-            "env -u GH_TOKEN gh pr create --fill", "exec -a gh gh pr create --fill", "time -f %E gh pr create --fill"]
+            "env -u GH_TOKEN gh pr create --fill", "exec -a gh gh pr create --fill", "time -f %E gh pr create --fill",
+            "exec -aSlip gh pr create --fill", "env -uGH_TOKEN gh pr create --fill"]
     for command in runs:
         assert guard(command, repo) == "deny", f"the shell runs gh here: {command!r}"
     inert = ["cat <<EOF\n EOF\ngh pr create --fill\nEOF", "cat <<'END-MARK'\ngh pr create --fill\nEND-MARK",
