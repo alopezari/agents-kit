@@ -74,7 +74,7 @@ Findings reported by two independent reviewers, or by both model families, deser
 
 ## 4. Re-check and report
 
-After fixes, re-run the Correctness lens on the whole change again, with the same base, and name the fixes in the goal. A fix can break what the first pass cleared, and a reviewer shown only the fix can't see that. For a very large change, send the files the fixes touched and their callers. The stop hook re-runs `verify` when you finish; run it by hand only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
+After fixes, re-run the Correctness lens on the whole change again, with the same base, and name the fixes in the goal. A fix can break what the first pass cleared, and a reviewer shown only the fix can't see that. For a very large change, split it into batches that together cover all of it, as in step 2. The stop hook re-runs `verify` when you finish; run it by hand only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
 
 ```bash
 python3 ~/.agents/hooks/review_stamp.py write

@@ -50,7 +50,11 @@ PROPERTY_FN = re.compile(r"function\s+\w*(parse|format|calculate|compute|compare
                          r"|price|round|slug|sanitize|validate)\w*\s*\(", re.I)
 # A regex group that repeats and holds a repeat itself, like (a+)+ or (?:-\S*\s+)*: on a long input that almost
 # matches it can backtrack exponentially. A heuristic over the innermost group; the Performance lens looks further.
-NESTED_QUANTIFIER = re.compile(r"\((?:\\.|[^()\\])*(?<!\\)[*+](?:\\.|[^()\\])*\)[*+{]")
+# Each piece reads a character one way only, so this scan itself can't reconsider the same text two ways.
+_TOKEN = r"(?:\\.|\[(?:\\.|[^\]\\])*\]|\{\d+\}|[^()\\\[*+{])"
+_REPEAT = r"(?:[*+]|\{\d+,\d*\})"
+NESTED_QUANTIFIER = re.compile(r"\(" + _TOKEN + r"*" + _REPEAT + r"(?:" + _TOKEN + r"|[*+{])*\)" + _REPEAT)
+REGEX_LINE_MAX = 2000  # longer added lines are data, not patterns
 BUDGET = {"low": "< 5 min", "standard": "<= 20 min", "high": "<= 45 min"}
 
 
@@ -262,7 +266,8 @@ def triage(rng=None):
         tests[f"php {minimum} syntax (verify)"] = [f"composer requires php {minimum}"]
     if re.search(r"CREATE TABLE|ALTER TABLE|dbDelta|migration", "\n".join(l for _, l in code_added), re.I):
         tests["migration round-trip"] = hits(r"CREATE TABLE|ALTER TABLE|dbDelta|migration", limit=2)
-    nested = [f"{p}: nested quantifier `{m.group(0)}`" for p, l in code_added for m in [NESTED_QUANTIFIER.search(l)] if m][:3]
+    nested = [f"{p}: nested quantifier `{m.group(0)}`" for p, l in code_added if len(l) <= REGEX_LINE_MAX
+              for m in [NESTED_QUANTIFIER.search(l)] if m][:3]
     if nested:
         lenses.setdefault("performance", []).extend(nested)
         tests["regex worst-case timing"] = nested
