@@ -3,7 +3,8 @@
 
 Blocks irreversible or outward-facing commands. It is a seatbelt against
 agent mistakes, not a security boundary: a determined command can evade
-regexes.
+regexes. Records the checkout of each allowed `git push`, so the stop hook
+can follow that commit's CI.
 """
 import json
 import os
@@ -11,12 +12,14 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import log  # noqa: E402
 import private_terms  # noqa: E402
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
+MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
 
 GIT = r"\bgit\s+(?:(?:-C|-c)\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
 PROTECTED_BRANCHES = r"(main|master|trunk|develop|production|release(/[\w.-]+)?)"
@@ -343,6 +346,40 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
     return None
 
 
+def pushed_from(command, cwd):
+    """The directory each `git push` in the command runs in, following earlier `cd`s outside a closed subshell and
+    every `git -C`."""
+    code, dirs = shell_code(command), []
+
+    def word(start, end):
+        return command[start:end].replace("\\ ", " ")
+
+    for push in re.finditer(GIT + r"push\b", code):
+        runs_in = cwd
+        for cd in re.finditer(r"(?:^|[;&|(\n])\s*cd\s+((?:\\ |[^\s;&|)])+)", code[:push.start()]):
+            between = code[cd.end():push.start()]
+            if between.count(")") <= between.count("("):
+                runs_in = cd_into(runs_in, word(cd.start(1), cd.end(1)))
+        for option in re.finditer(r"-C\s+((?:\\ |[^\s;&|)])+)", code[push.start():push.end()]):
+            runs_in = cd_into(runs_in, word(push.start() + option.start(1), push.start() + option.end(1)))
+        dirs.append(runs_in)
+    return dirs
+
+
+def record_push(command, cwd, payload):
+    """Note the checkout and time of each allowed `git push`, so the stop hook follows the CI of what it pushed."""
+    roots = {subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=d, capture_output=True, text=True).stdout.strip()
+             for d in pushed_from(command, cwd)} - {""}
+    session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
+    if roots:
+        try:
+            os.makedirs(MARKER_DIR, exist_ok=True)
+            with open(os.path.join(MARKER_DIR, f"{session}.pushed"), "a") as fh:
+                fh.writelines(f"{root}\t{time.time()}\n" for root in sorted(roots))
+        except OSError:
+            pass  # the push still runs; only the CI follow-up is lost
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -362,6 +399,7 @@ def main():
                 reason = why
                 break
     if not reason:
+        record_push(command, cwd, payload)
         return 0
 
     log("guard_bash", "deny", payload, f"{reason} | {command[:200]}")

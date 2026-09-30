@@ -54,6 +54,9 @@ if ~/.agents/bin/triage --json --range HEAD~1..HEAD 2>/dev/null | jq -e '.tier a
 else echo "FAIL triage"; fail=1; fi
 python3 test_triage.py || fail=1
 
+section "CI wait"
+python3 test_ci_wait.py || fail=1
+
 section "framework reference"
 ~/.agents/bin/docs --check || fail=1
 node ~/.agents/tools/mermaid/check.mjs ~/.agents/docs/framework.md || fail=1

@@ -21,11 +21,17 @@ Fixes go on the branch wherever it is checked out. If that is the user's main ch
 
 ## 1. CI
 
-`gh pr checks <n>` shows the state. On the first run, and after a push, wait for it bounded: poll about every minute for at most 30 minutes. macOS has no `timeout`, so use your harness's background or timeout mechanism rather than an unbounded `--watch`. Still pending after that: report which checks are pending and move on.
+On the first run, and after every push, wait for the checks of the commit you pushed, in the foreground, and read the result before saying anything about the PR:
+
+```bash
+~/.agents/bin/ci-wait --sha "$(git rev-parse HEAD)"
+```
+
+It reads that commit's checks, not whatever `gh pr checks` shows from the previous push, waits up to 30 minutes, and prints each check, with the failing lines of a failed job's log. Exit 0 passed, 1 failed, 2 still running after 30 minutes (report which, and move on), 3 no checks within 5 minutes, or within a shorter `--timeout` (the repo runs no CI on this branch), 4 GitHub couldn't be read (say so; don't report it as passed). When your harness caps a command's run time (Claude Code's is 10 minutes), pass a `--timeout` under the cap and run it again while it exits 2, up to 30 minutes in all. Don't move it to the background: the turn can end before it does, and the stop hook asks about CI still running on a commit you pushed.
 
 For each failing check:
 
-1. Read the failure: `gh run view <run-id> --log-failed | tail -200`.
+1. Read the failure: ci-wait prints its failing lines; for the whole log, `gh run view <run-id> --log-failed | tail -200`.
 2. Decide, with evidence:
    - **Caused by the change**: the failing test or lint touches changed code, or fails the same way locally. Fix it (section 3).
    - **Not caused by the change**: it fails the same way on the base branch (`gh run list --branch <base> --workflow <name> --limit 5`) or in code the PR doesn't touch. Re-run it once (`gh run rerun <run-id> --failed`). If it fails again, report it with the evidence; don't touch unrelated code in this PR.
