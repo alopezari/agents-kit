@@ -344,7 +344,10 @@ def pr_gate_waits_for_staging(base):
     head = "\n## Results (2026-09-30)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
     with open(guide, "w") as fh:
         fh.write(steps)
-    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", f"cd {repo} && ~/.agents/bin/evidence A1 gh pr ready"]:
+    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", f"cd {repo} && ~/.agents/bin/evidence A1 gh pr ready",
+                    "gh pr create --fill; gh pr create --draft --head other", "gh pr ready --undo && gh pr ready 12",
+                    f"cd {repo} && gh pr ready && cd /tmp", "if true; then gh pr ready; fi", "{ gh pr ready; }",
+                    "gh pr ready 12 --repo other/repo", "gh pr -R other/repo ready 12", 'gh pr ready "12"']:
         assert decision(command) == "deny", f"staging is pending: {command}"
     for command in ["gh pr create --draft --fill", "gh pr create -d --fill", "gh pr ready --undo", "gh pr view 12"]:
         assert decision(command) == "allow", command
@@ -356,12 +359,24 @@ def pr_gate_waits_for_staging(base):
     with open(os.path.join(evidence, "S2.txt"), "w") as fh:
         fh.write("$ check\nexit 0\n")
     with open(guide, "w") as fh:
+        fh.write(steps + "\n## Results (2026-09-30)\n\n| Step | Result | Observation |\n|---|---|---|\n"
+                 "| S1 | PASS | S1.txt |\n| S2 | PASS | S2.txt |\n")
+    assert decision("gh pr ready") == "deny", "a results table without an Evidence column proves nothing"
+    with open(guide, "w") as fh:
         fh.write(steps + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n")
-    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12"]:
+    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", 'gh pr ready "12"', "if true; then gh pr ready; fi"]:
         assert decision(command) == "allow", f"every S step passed with evidence: {command}"
     with open(guide, "w") as fh:
         fh.write("# Guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")
     assert decision("gh pr ready") == "allow", "only after-merge steps"
+    with open(guide, "w") as fh:
+        fh.write("# Guide\n## After the merge\n### P1. Backfill\n")
+    assert decision("gh pr ready") == "allow", "no Before-the-merge part at all"
+    os.chmod(guide, 0)
+    try:
+        assert decision("gh pr ready") == "deny", "a guide that can't be read isn't a guide that passed"
+    finally:
+        os.chmod(guide, 0o644)
     with open(os.path.join(fake, "gh"), "w") as fh:
         fh.write("#!/bin/sh\n[ \"$1 $2\" = \"pr view\" ] && echo someone-else\n")
     assert decision("gh pr ready 13") == "deny", "another branch's PR can't be checked from this checkout"

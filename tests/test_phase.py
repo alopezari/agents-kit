@@ -109,7 +109,12 @@ def walks_the_flow(base):
             ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | NOT RUN | Expected PASS; waiting for access |\n", "staging (you)", "NOT RUN is pending"),
             ("| S1 | PASS | no FAIL line |\n| S2 | NOT RUN | need to check there is no FAIL line |\n", "staging (you)", "only the Result column counts"),
             ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | FAIL | [out](e/S2.txt) |\n", "staging: fix", "a FAIL row"),
+            ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n", "staging: no evidence", "no saved files"),
             ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n", "create-pr", "every S step passed")]:
+        if expected == "create-pr":
+            evidence = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "evidence")
+            for name in ("S1.txt", "S2.txt"):
+                open(os.path.join(evidence, name), "w").write("$ step\nexit 0\n")
         open(guide, "w").write(two + head + rows)
         assert phase(repo) == expected, why
     open(guide, "w").write("# Staging guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")

@@ -118,7 +118,11 @@ def compute(previous):
     if reached < len(steps):
         label = steps[reached][0]
     else:
-        label = review_stamp.staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md")) or "create-pr"
+        try:
+            label = review_stamp.staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md"),
+                                               os.path.join(reports, f"evidence-{suffix}")) or "create-pr"
+        except OSError:
+            label = "staging (you)"
     return label + (f" · redo {', '.join(redo)}" if redo else "") + note + flag, extra
 
 

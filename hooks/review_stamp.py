@@ -194,12 +194,12 @@ def report_paths(*kinds):
     return [subprocess.run([reports, "path", kind], capture_output=True, text=True).stdout.strip() for kind in kinds]
 
 
-def unbacked_rows(lines, evidence):
-    """The PASS/FAIL rows of the tables in lines whose Evidence cell names no non-empty file of the evidence directory,
-    as "<first cell>: <evidence cell>"."""
+def result_rows(lines, evidence):
+    """The rows of the tables in lines that have Result and Evidence columns, as (first cell, result, evidence cell,
+    whether that cell names a non-empty file of the evidence directory)."""
     files = [name for name in os.listdir(evidence) if os.path.isfile(os.path.join(evidence, name))
-             and os.path.getsize(os.path.join(evidence, name)) > 0] if os.path.isdir(evidence) else []
-    missing, columns = [], None
+             and os.path.getsize(os.path.join(evidence, name)) > 0] if evidence and os.path.isdir(evidence) else []
+    rows, columns = [], None
     for line in lines:
         # Markdown tables: outer pipes optional, \| is a pipe inside a cell.
         cells = [c.strip() for c in re.split(r"(?<!\\)\|", re.sub(r"^\s*\||(?<!\\)\|\s*$", "", line))] if re.search(r"(?<!\\)\|", line) else None
@@ -208,11 +208,19 @@ def unbacked_rows(lines, evidence):
         elif {"Result", "Evidence"} <= {c.strip("*_") for c in cells}:
             names = [c.strip("*_") for c in cells]
             columns = (names.index("Result"), names.index("Evidence"))
-        elif columns and len(cells) > columns[0] and re.match(r"[*_]*(PASS|FAIL)\b", cells[columns[0]]):
+        elif columns and len(cells) > columns[0]:
+            result = re.match(r"[*_]*(PASS|FAIL|NOT RUN)?", cells[columns[0]]).group(1)
             cell = cells[columns[1]] if len(cells) > columns[1] else ""
-            if not any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files):
-                missing.append(f"{cells[0]}: {cell or '(empty)'}")
-    return missing
+            backed = any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files)
+            if result:
+                rows.append((cells[0], result, cell, backed))
+    return rows
+
+
+def unbacked_rows(lines, evidence):
+    """The PASS/FAIL rows whose Evidence cell names no saved file, as "<first cell>: <evidence cell>"."""
+    return [f"{first}: {cell or '(empty)'}" for first, result, cell, backed in result_rows(lines, evidence)
+            if result in ("PASS", "FAIL") and not backed]
 
 
 def rows_without_evidence():
@@ -231,26 +239,29 @@ def rows_without_evidence():
     return []
 
 
-def staging_phase(guide):
-    """None when there is no guide or every step before the merge passed; otherwise the staging phase, as the
-    status line shows it."""
+def staging_phase(guide, evidence):
+    """None when there is no guide or every step before the merge passed with saved evidence; otherwise the staging
+    phase, as the status line shows it. Raises OSError when the guide exists but can't be read."""
     try:
-        text = open(guide).read()
-    except OSError:
+        with open(guide) as fh:
+            text = fh.read()
+    except FileNotFoundError:
         return None
     rounds = text.split("## Results")
     latest = rounds[-1] if len(rounds) > 1 else ""
-    before_merge = re.search(r"^## Before the merge\n(.*?)(?=^## |\Z)", text, re.M | re.S)
-    if before_merge:
-        steps = re.findall(r"^### (S\d+)\b", before_merge.group(1), re.M)
+    if re.search(r"^## (Before|After) the merge", text, re.M):
+        before_merge = re.search(r"^## Before the merge\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+        steps = re.findall(r"^### (S\d+)\b", before_merge.group(1), re.M) if before_merge else []
         if not steps:
             return None  # every step needs production: the ship skill runs them
-        # Only the Result column counts, and every S step needs one: "no FAIL line" in the evidence isn't a failure.
-        results = dict(re.findall(r"^\|\s*(S\d+)\s*\|\s*\**([A-Z]+(?: [A-Z]+)?)", latest, re.M))
-        if "FAIL" in results.values():
+        # Only a table with Result and Evidence columns counts: "no FAIL line" in the evidence isn't a failure.
+        results = {first: (result, backed) for first, result, _, backed in result_rows(latest.splitlines(), evidence)}
+        if any(results.get(step, ("",))[0] == "FAIL" for step in steps):
             return "staging: fix"
-        return None if all(results.get(step) == "PASS" for step in steps) else "staging (you)"
-    # A guide from before the split: its results table's Result column, or else a PASS or FAIL anywhere in a list.
+        if not all(results.get(step, ("",))[0] == "PASS" for step in steps):
+            return "staging (you)"
+        return None if all(results[step][1] for step in steps) else "staging: no evidence"
+    # A guide from before the split mixed steps that need production: a PASS or FAIL in its latest results settles it.
     results = re.findall(r"^\|\s*[^|]*\|\s*\**(PASS|FAIL)\b", latest, re.M) or re.findall(r"\b(PASS|FAIL)\b", latest)
     if not results:
         return "staging (you)"
@@ -258,25 +269,22 @@ def staging_phase(guide):
 
 
 def staging_unfinished():
-    """Why the pull request can't be ready yet for the staging guide, or None: a step before the merge without a PASS,
-    or a PASS whose evidence wasn't saved."""
+    """Why the pull request can't be ready yet for the staging guide, or None."""
     guide, evidence = report_paths("staging-guide", "evidence")
-    phase = staging_phase(guide)
-    if phase:
-        return (f"The staging guide ({guide}) has steps before the merge without a PASS ({phase}). Ask the user to run "
-                "them, record the results from their evidence (validate skill, step 7), or open the PR with --draft.")
+    if not guide or not evidence:
+        return "Couldn't find this branch's staging guide (bin/reports failed), so its results can't be checked."
     try:
-        with open(guide) as fh:
-            text = fh.read()
-    except OSError:
-        return None  # no guide: nothing to wait for
-    if "## Before the merge" not in text or "## Results" not in text:
-        return None  # a guide from before evidence, or one whose steps all come after the merge
-    missing = unbacked_rows(text.split("## Results")[-1].splitlines(), evidence)
-    if missing:
-        return (f"These staging results name no saved evidence in {evidence}: " + "; ".join(missing)
-                + ". Each step saves its output through bin/evidence, or a screenshot.")
-    return None
+        phase = staging_phase(guide, evidence)
+    except OSError as error:
+        return f"Couldn't read the staging guide: {error}"
+    reasons = {
+        "staging (you)": "has steps before the merge without a PASS. Ask the user to run them and record the results "
+                         "from their evidence (validate skill, step 7), or open the PR with --draft.",
+        "staging: fix": "has a step before the merge that FAILed: fix it and have it re-run.",
+        "staging: no evidence": "has PASS results whose Evidence cell names no saved file in " + evidence + ": each "
+                                "step saves its output through bin/evidence, or a screenshot.",
+    }
+    return f"The staging guide ({guide}) {reasons[phase]}" if phase else None
 
 
 def record_verify(kind, checked_fingerprint):
