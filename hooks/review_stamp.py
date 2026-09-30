@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Record or check that a skill ran on the exact current change.
 
-  review_stamp.py write [--kind review|validate|verify]   # end of self-review / validate; the stop hook after a green verify
-                                                   # (--kind verify-empty when that verify checked nothing)
+  review_stamp.py write [--kind review|validate]   # end of self-review / validate; verify stamps come only from
+                                                   # its runner (stop_checks.py), through record_verify()
   review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
@@ -32,7 +32,8 @@ NOT_BEHAVIOR = re.compile(
     re.I,
 )
 # A PR's changelog line gets its number after the PR opens, and CI checks the entry: adding it re-runs nothing.
-NOT_STAMPED = re.compile(r"(^|/)CHANGELOG[^/]*$", re.I)
+NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?$", re.I)
+VERIFY_KINDS = ("verify", "verify-empty")
 
 
 def git(*args, cwd=None):
@@ -175,6 +176,22 @@ def legacy_stamp_path(kind):
     return os.path.join(git("rev-parse", "--absolute-git-dir"), name)
 
 
+def record_verify(kind, checked_fingerprint):
+    """Leave only this verify run's stamp: kind on the fingerprint it checked, or none when kind is None (it failed).
+    Raises OSError when a stamp can't be written or removed."""
+    for other in VERIFY_KINDS:
+        for path in (stamp_path(other), legacy_stamp_path(other)):
+            if other != kind or path != stamp_path(kind):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+    if kind:
+        os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
+        with open(stamp_path(kind), "w") as fh:
+            fh.write(checked_fingerprint)
+
+
 def main():
     if not git("rev-parse", "--absolute-git-dir"):
         return 0
@@ -190,6 +207,10 @@ def main():
         return 0
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
+    if command == "write" and kind in VERIFY_KINDS:
+        print("A verify stamp comes only from running verify: run `python3 ~/.agents/hooks/stop_checks.py verify`, "
+              "which stamps the change when it passes.", file=sys.stderr)
+        return 2
     if command == "write":
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
         with open(stamp_path(kind), "w") as fh:

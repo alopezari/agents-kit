@@ -7,7 +7,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 ## At a glance
 
 - **3 harnesses** share one `AGENTS.md`, 8 skills and 5 hook scripts (Pi has no MCP, so it runs all but `guard_mcp.py`).
-- **22 guard rules** block irreversible or outward-facing shell commands before they run.
+- **21 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
@@ -131,7 +131,6 @@ Every block, and every approved or browser MCP call, is appended to `~/.agents/l
 - `sudo`: runs with root privileges.
 - `make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production.
 - `chmod 777`: world-writable permissions.
-- Writing a verify stamp by hand: it comes from running verify. Run `python3 ~/.agents/hooks/stop_checks.py verify`, which stamps the change when verify passes.
 - Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent.
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
