@@ -27,7 +27,7 @@ On the first run, and after every push, wait for the checks of the commit you pu
 ~/.agents/bin/ci-wait --sha "$(git rev-parse HEAD)"
 ```
 
-It reads that commit's checks, not whatever `gh pr checks` shows from the previous push, waits up to 30 minutes, and prints each check, with the failing lines of a failed job's log. Exit 0 passed, 1 failed, 2 still running after 30 minutes (report which, and move on), 3 no checks within 5 minutes (the repo runs no CI on this branch), 4 GitHub couldn't be read (say so; don't report it as passed). When your harness caps a command's run time (Claude Code's is 10 minutes), pass a `--timeout` under the cap and run it again while it exits 2, up to 30 minutes in all. Don't move it to the background: the turn can end before it does, and the stop hook asks about CI still running on a commit you pushed.
+It reads that commit's checks, not whatever `gh pr checks` shows from the previous push, waits up to 30 minutes, and prints each check, with the failing lines of a failed job's log. Exit 0 passed, 1 failed, 2 still running after 30 minutes (report which, and move on), 3 no checks within 5 minutes, or within a shorter `--timeout` (the repo runs no CI on this branch), 4 GitHub couldn't be read (say so; don't report it as passed). When your harness caps a command's run time (Claude Code's is 10 minutes), pass a `--timeout` under the cap and run it again while it exits 2, up to 30 minutes in all. Don't move it to the background: the turn can end before it does, and the stop hook asks about CI still running on a commit you pushed.
 
 For each failing check:
 

@@ -56,7 +56,7 @@ def ci_wait(states, *args):
         os.chmod(gh, 0o755)
         json.dump(states, open(os.path.join(base, "states.json"), "w"))
         env = {**os.environ, "PATH": os.path.join(base, "bin") + ":" + os.environ["PATH"], "FAKE_GH_DIR": base,
-               "CI_WAIT_POLL_SECS": "0.2"}
+               "CI_WAIT_POLL_SECS": "0.2", "CI_WAIT_GRACE_SECS": "1"}
         result = subprocess.run([CI_WAIT, "--sha", SHA, *args], capture_output=True, text=True, env=env, timeout=60)
         return result.returncode, result.stdout + result.stderr
     finally:
@@ -66,7 +66,10 @@ def ci_wait(states, *args):
 CASES = [  # (name, states, args, exit code, text that must appear, text that must not)
     ("all passed", [{"runs": [run("suite"), run("lint", conclusion="skipped")]}], [], 0, ["suite: success", "lint: skipped"], []),
     ("a failed Actions job shows its log tail", [{"runs": [run("suite", conclusion="failure", job=7), run("lint")]}], [], 1,
-     ["suite: failure", "FAIL stop_asks_once: AssertionError", "log line 200"], ["log line 100\n", "log line 150\n"]),
+     ["suite: failure", "FAIL stop_asks_once: AssertionError", "log line 200", f"ci-wait: failed on {SHA[:12]}: suite\n"],
+     ["log line 100\n", "log line 150\n"]),
+    ("--no-log names the failure without its log", [{"runs": [run("suite", conclusion="failure", job=7)]}], ["--no-log"], 1,
+     ["suite: failure", "failed on"], ["log line"]),
     ("a failing status from another CI", [{"runs": [run("suite")], "statuses": [{"context": "buildkite", "state": "failure",
                                                                                   "target_url": "https://bk"}]}],
      [], 1, ["buildkite: failure"], []),
@@ -76,7 +79,13 @@ CASES = [  # (name, states, args, exit code, text that must appear, text that mu
      ["suite: queued", "still running"], []),
     ("--once while running doesn't wait", [{"runs": [run("suite", status="in_progress")]}, {"runs": [run("suite")]}], ["--once"], 2,
      ["suite: in_progress"], ["suite: success"]),
-    ("no checks after the grace period", [{"runs": []}], ["--timeout", "1"], 3, ["no checks"], []),
+    ("no checks after the grace period", [{"runs": []}], ["--timeout", "20"], 3, ["no checks"], []),
+    ("no checks yet at a timeout inside the grace period", [{"runs": []}], ["--timeout", "0.5"], 2, ["no checks yet"], []),
+    ("green on the last look before the timeout isn't settled", [{"runs": [run("suite", status="queued")]}, {"runs": [run("suite")]}],
+     ["--timeout", "0.3"], 2, ["still running"], []),
+    ("a state that isn't text is unreadable", [{"runs": [{"name": "suite", "status": [], "conclusion": None}]}], [], 4,
+     ["couldn't read"], []),
+    ("no checks yet, then checks that pass", [{"runs": []}, {"runs": [run("suite")]}], ["--timeout", "20"], 0, ["suite: success"], []),
     ("GitHub can't be read", [{"error": True}], [], 4, ["couldn't read"], []),
     ("a failure on the second page of checks", [{"runs": [run(f"job {n}") for n in range(100)] + [run("late", conclusion="failure")]}],
      [], 1, ["late: failure"], []),

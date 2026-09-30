@@ -107,7 +107,7 @@ When the change needs manual tests on staging, `validate` ends by handing you th
 
 **`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex. Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), writes to it are allowed until the user's next message. Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the service only to read from it approves writes for that turn too.
 
-**`stop_checks.py`**: Stop hook shared by Claude Code, Codex and Pi (via adapters/pi). Only runs when the session edited files since the last stop. Looks at the lines the branch adds since the merge-base with the default branch (committed or not) and asks the agent to continue, once, for a skipped or focused test, a deleted test file, a debug leftover, a conflict marker, a possible secret, a new option read near a cache, a temporary compose override left behind, or a changed code file the spec's Change map doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read.
+**`stop_checks.py`**: Stop hook shared by Claude Code, Codex and Pi (via adapters/pi). After a turn that edited files since the last stop, looks at the lines the branch adds since the merge-base with the default branch (committed or not) and asks the agent to continue, once, for a skipped or focused test, a deleted test file, a debug leftover, a conflict marker, a possible secret, a new option read near a cache, a temporary compose override left behind, or a changed code file the spec's Change map doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read.
 
 Every block, and every approved or browser MCP call, is appended to `~/.agents/logs/hooks.jsonl`, which the weekly health check reads. Allowed shell commands are not logged.
 
@@ -219,7 +219,7 @@ browse finish --checks N --passed P [--tool-issues K] [--notes "..."]
 **`bin/ci-wait`**: Wait for the CI checks of one commit and say how they ended.
 
 ```
-ci-wait [--sha SHA] [--timeout SECS] [--once]
+ci-wait [--sha SHA] [--timeout SECS] [--once] [--no-log]
 ```
 
 **`bin/docs`**: Generate docs/framework.md, the reference for what the kit does, from the kit's own source.

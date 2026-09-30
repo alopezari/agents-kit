@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stop hook shared by Claude Code, Codex and Pi (via adapters/pi).
 
-Only runs when the session edited files since the last stop. Looks at the lines the
+After a turn that edited files since the last stop, looks at the lines the
 branch adds since the merge-base with the default branch (committed or not) and asks
 the agent to continue, once, for a skipped or focused test, a deleted test file, a debug
 leftover, a conflict marker, a possible secret, a new option read near a cache, a
@@ -225,12 +225,13 @@ def ci_after_push(session, payload):
     pushed_path = os.path.join(MARKER_DIR, f"{session}.pushed")
     try:
         lines = open(pushed_path).read().splitlines()
+        written_at = os.path.getmtime(pushed_path)
     except OSError:
         return []
     pushed_at = {}
     for line in lines:
         root, _, at = line.partition("\t")
-        pushed_at[root] = max(pushed_at.get(root, 0.0), float(at or 0))
+        pushed_at[root] = max(pushed_at.get(root, 0.0), float(at) if at else written_at)  # a bare path: an older guard
     asked_path = os.path.join(MARKER_DIR, f"{session}.ci-asked")
     try:
         asked = set(open(asked_path).read().splitlines())
@@ -248,20 +249,22 @@ def ci_after_push(session, payload):
             continue  # the push failed, or pushed nothing this checkout tracks
         wait = f"`~/.agents/bin/ci-wait --sha {sha}`"
         try:
-            result = subprocess.run([CI_WAIT, "--sha", sha, "--once"], cwd=root, capture_output=True, text=True, timeout=90)
+            result = subprocess.run([CI_WAIT, "--sha", sha, "--once", "--no-log"], cwd=root, capture_output=True, text=True, timeout=90)
             code, out = result.returncode, result.stdout.strip()
         except subprocess.TimeoutExpired:
             code, out = 4, "ci-wait timed out"
         if code == 3 and time.time() - at > NO_CHECKS_GRACE_SECS:
             continue  # this repo runs no CI
+        failed_on = [line for line in out.splitlines() if line.startswith("ci-wait: failed on ")]
+        if code == 1 and not failed_on:
+            code = 4  # ci-wait itself broke; a traceback isn't a CI result
         state = {1: "failed", 2: "running", 3: "running", 4: "unreadable"}.get(code)
         if state in ("running", "unreadable"):
             followed[root] = at
         if not state or f"{root}\t{sha}\t{state}" in asked:
             continue
         asked.add(f"{root}\t{sha}\t{state}")
-        names = ", ".join(line.split(":")[0] for line in out.splitlines() if re.match(r"[^ ].*: (?!success|neutral|skipped)", line)
-                          and not line.startswith("ci-wait"))
+        names = failed_on[-1].split(": ", 2)[-1] if failed_on else ""
         problems.append({
             "failed": f"CI failed on {sha[:12]} ({names}). Read the failures with {wait} and fix them, or tell the user "
                       "why not; don't call the work done.",
@@ -275,8 +278,10 @@ def ci_after_push(session, payload):
     try:
         with open(asked_path, "w") as fh:
             fh.writelines(line + "\n" for line in sorted(asked))
+        pushed_since = open(pushed_path).read().splitlines()[len(lines):]  # by a subagent while CI was read
         with open(pushed_path, "w") as fh:
             fh.writelines(f"{root}\t{at}\n" for root, at in sorted(followed.items()))
+            fh.writelines(line + "\n" for line in pushed_since)
     except OSError:
         pass  # asking again next stop beats not asking
     return problems

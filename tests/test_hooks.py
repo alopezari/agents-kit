@@ -402,6 +402,7 @@ def stop_asks_once_about_files_outside_the_change_map(base):
 
 FAKE_GH = """#!/bin/sh
 echo "$*" >> "$FAKE_GH_DIR/calls.log"
+[ -f "$FAKE_GH_DIR/on-call" ] && { sh "$FAKE_GH_DIR/on-call"; rm "$FAKE_GH_DIR/on-call"; }
 [ -f "$FAKE_GH_DIR/error" ] && { echo "error connecting to api.github.com" >&2; exit 1; }
 case "$*" in
   *check-runs*) cat "$FAKE_GH_DIR/runs.jsonl" ;;
@@ -429,7 +430,8 @@ def stop_follows_ci_after_a_push(base):
             open(os.path.join(fake, "error"), "w").write("")
         runs = [] if state in ("none", "unreadable") else [
             {"name": "suite", "status": "in_progress" if state == "running" else "completed",
-             "conclusion": {"failed": "failure", "passed": "success"}.get(state), "details_url": ""}]
+             "conclusion": {"failed": "failure", "passed": "success"}.get(state), "details_url": ""},
+            {"name": "ci/lint: py", "status": "completed", "conclusion": "success", "details_url": ""}]
         open(os.path.join(fake, "runs.jsonl"), "w").write("".join(json.dumps(r) + "\n" for r in runs))
 
     def push(session):
@@ -440,7 +442,10 @@ def stop_follows_ci_after_a_push(base):
         return git(repo, "rev-parse", "HEAD").stdout.strip()
 
     def asked(session):
-        return (run_hook("stop_checks.py", {"session_id": session, "cwd": repo}, env=env) or {}).get("reason", "")
+        out = subprocess.run(["python3", H + "stop_checks.py"], input=json.dumps({"session_id": session, "cwd": repo}),
+                             capture_output=True, text=True, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, **env})
+        assert out.returncode == 0 and not out.stderr, f"the stop hook broke: {out.stderr}"
+        return json.loads(out.stdout).get("reason", "") if out.stdout.strip() else ""
 
     session = RUN + "ci1"
     ci("passed")
@@ -450,22 +455,23 @@ def stop_follows_ci_after_a_push(base):
     assert "still running" in asked(session), "no checks right after the push means they haven't started"
     ci("failed")
     reason = asked(session)
-    assert "CI failed" in reason and "suite" in reason and f"ci-wait --sha {sha}" in reason, reason
+    assert "CI failed" in reason and "(suite)" in reason and f"ci-wait --sha {sha}" in reason, reason
     assert asked(session) == "", "the same failure is asked about once"
     sha = push(session)
     ci("running")
     reason = asked(session)
     assert "still running" in reason and f"ci-wait --sha {sha}" in reason, reason
+    assert asked(session) == "", "a commit still running is asked about once"
     ci("unreadable")
     assert "Couldn't read CI" in asked(session), "an unknown state isn't taken as passed"
     ci("passed")
-    assert asked(session) == ""
     assert asked(session) == ""
     calls = os.path.join(fake, "calls.log")
     before = open(calls).read()
     assert asked(session) == "" and open(calls).read() == before, "a checkout whose CI passed isn't queried again"
 
     # Each checkout has its own push time: an old push with no CI stays quiet when another checkout pushes now.
+    session = RUN + "ci2"
     other = os.path.join(base, "other checkout")
     shutil.copytree(repo, other)
     pushed = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", f"{session}.pushed")
@@ -480,6 +486,20 @@ def stop_follows_ci_after_a_push(base):
     ci("failed")
     reason = asked(session)
     assert reason.count("CI failed") == 1, f"a checkout removed after its push doesn't stop the others' checks: {reason}"
+
+    # A push recorded while the stop reads CI (a subagent's) survives the stop rewriting the file.
+    run_hook("guard_bash.py", {"tool_input": {"command": "git push"}, "cwd": repo, "session_id": session})
+    open(os.path.join(fake, "on-call"), "w").write(f"printf '/pushed/meanwhile\\t{time.time()}\\n' >> '{pushed}'\n")
+    ci("passed")
+    asked(session)
+    assert "/pushed/meanwhile" in open(pushed).read(), open(pushed).read()
+
+    # A bare path, as the guard wrote before push times: it was pushed when the file was last written.
+    session = RUN + "ci3"
+    pushed = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", f"{session}.pushed")
+    open(pushed, "w").write(os.path.realpath(repo) + "\n")
+    ci("none")
+    assert "still running" in asked(session), "a fresh push from an older guard still gets its grace"
 
 
 def guard_records_the_pushed_checkout(base):
@@ -497,6 +517,8 @@ def guard_records_the_pushed_checkout(base):
     assert recorded(f'cd "{other}" && git push -u origin HEAD') == [there]
     assert recorded(f'git --no-pager -C "{other}" push') == [there]
     assert recorded(f'git push; cd "{other}"; git push') == sorted([here, there])
+    assert recorded(f"  cd {other.replace(' ', chr(92) + ' ')} && git push") == [there]
+    assert recorded(f'(cd "{other}" && git status); git push') == [here], "a subshell's cd stays in the subshell"
     assert recorded("git status && echo 'git push'") == [], "a push only in quoted text isn't one"
 
 

@@ -347,14 +347,21 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
 
 
 def pushed_from(command, cwd):
-    """The directory each `git push` in the command runs in, following earlier `cd`s and every `git -C`."""
+    """The directory each `git push` in the command runs in, following earlier `cd`s outside a closed subshell and
+    every `git -C`."""
     code, dirs = shell_code(command), []
+
+    def word(start, end):
+        return command[start:end].replace("\\ ", " ")
+
     for push in re.finditer(GIT + r"push\b", code):
         runs_in = cwd
-        for cd in re.finditer(r"(?:^|[;&|(\n]\s*)cd\s+([^\s;&|)]+)", code[:push.start()]):
-            runs_in = cd_into(runs_in, command[cd.start(1):cd.end(1)])
-        for option in re.finditer(r"-C\s+([^\s;&|)]+)", code[push.start():push.end()]):
-            runs_in = cd_into(runs_in, command[push.start() + option.start(1):push.start() + option.end(1)])
+        for cd in re.finditer(r"(?:^|[;&|(\n])\s*cd\s+((?:\\ |[^\s;&|)])+)", code[:push.start()]):
+            between = code[cd.end():push.start()]
+            if between.count(")") <= between.count("("):
+                runs_in = cd_into(runs_in, word(cd.start(1), cd.end(1)))
+        for option in re.finditer(r"-C\s+((?:\\ |[^\s;&|)])+)", code[push.start():push.end()]):
+            runs_in = cd_into(runs_in, word(push.start() + option.start(1), push.start() + option.end(1)))
         dirs.append(runs_in)
     return dirs
 
