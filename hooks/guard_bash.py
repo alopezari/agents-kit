@@ -227,9 +227,11 @@ def unreviewed_pr(command, cwd):
 
 # The one form both this check and pr_checkout() read the same way: a literal absolute path (no expansion or glob),
 # and && so gh only runs where the cd succeeded.
-ABSOLUTE_CD_FIRST = re.compile(r"""cd[ \t]+((?:~[\w.-]*)?/[^\s;&|()$`'"\\*?\[]*|"/[^"$`\\*?\[]*"|'/[^'*?\[]*')[ \t]*&&""")
-RUNS_GH_PR = re.compile(r"(?:^|[;&|(\n`])\s*(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*(?:(?:command|env|exec|nohup|time)\s+)*"
-                        r"gh\s+pr\s+(?:create|edit)\b")
+ABSOLUTE_CD_FIRST = re.compile(r"""cd[ \t]+((?:~[\w.-]*)?/[^\s;&|()$`'"\\*?\[]*|"/[^"$`\\]*"|'/[^']*')[ \t]*&&""")
+# Anywhere, not only in command position: a wrapper, `then` or `{` in front must not hide it, and a false match only
+# asks for the cd form.
+GH_PR_WORDS = re.compile(r"\bgh\s+pr\s+(?:create|edit)\b")
+CD_WORD = re.compile(r"(?<![\w/.-])(?:cd|pushd|popd)(?![\w/.-])")
 
 
 def pr_checkout_unknown(command, payload):
@@ -237,12 +239,12 @@ def pr_checkout_unknown(command, payload):
     checks would judge the wrong checkout unless the command starts by cd-ing to an existing absolute path, and
     neither cds again nor backgrounds the chain. Guards against a model's slip, not a hostile one."""
     code = shell_code(command)
-    if harness(payload) != "codex" or not RUNS_GH_PR.search(code):
+    if harness(payload) != "codex" or not GH_PR_WORDS.search(code):
         return None
     first = ABSOLUTE_CD_FIRST.match(command)
     if first and os.path.isdir(os.path.expanduser(first.group(1).strip("\"'"))):
         rest = code[first.end():]
-        if not re.search(r"(?:^|[;&|(\n`])\s*(?:cd|pushd|popd)\b", rest) and not re.search(r"(?<![&>])&(?![&>])", rest):
+        if not CD_WORD.search(rest) and not re.search(r"(?<![&>])&(?![&>])", rest):
             return None
     return ("Codex doesn't tell hooks the workdir a command runs in (openai/codex#33986), so this PR command can't be "
             "checked against the right checkout. Start the command with `cd /absolute/path/to/checkout && ` (an existing, "
