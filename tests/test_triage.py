@@ -145,7 +145,9 @@ for rng in ("HEAD~1", "HEAD~1...HEAD"):
 for line, expected in [(r'PREFIXES = r"(?:\w+=\S*\s+|env\s+(?:-\S*\s+)*)*gh"', True), ("const re = /(a+)+$/;", True),
                        (r"PATTERN = re.compile(r'\d+(?:\.\d+)?')", False), ("$ok = preg_match('/^[a-z]+$/', $s);", False),
                        ("const re = /(a{1,})+$/;", True), ("const re = /([+])+/;", False), ("const re = /(x{2}a+)*$/;", True),
-                       ("total = (i+1)*2", False)]:
+                       ("total = (i+1)*2", False), ('patterns = [re.compile(r"(a+)+$")]', True),
+                       ('re.compile(r"safe"); total = (i+1)*2', False), ("const re = /(a+)+$/", True), ("total = a/(i+1)*2/g;", False),
+                       ('re.compile(r"^(?:a?b?)+$")', True), ('re.compile(r"^(a+){20}$")', True), ('re.compile(r"(\\.\\d+)?$")', False)]:
     result = triage_change({}, {"code.py": line + "\n"})
     got = "regex worst-case timing" in result["tests"]
     ok = got == expected and (not expected or "nested quantifier" in " ".join(result["lenses"].get("performance", [])))
@@ -156,9 +158,11 @@ triage_change({}, {"code.py": "x = '(" + "+" * 30000 + "'\n", "b.py": 'P = re.co
 ok = time.time() - started < 3
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} the regex scan stays fast on a long line ({time.time() - started:.1f}s)")
-result = triage_change({}, {"code.py": "".join(f'P{c} = re.compile(r"^({c}+)+$")\n' for c in "wxyz") + 'Q = re.compile(r"(a+)+|(b*)*")\n'})
+long_line = 'L = re.compile(r"' + "a" * 180 + '(b+)+$")'
+result = triage_change({}, {"code.py": "".join(f'P{c} = re.compile(r"^({c}+)+$")\n' for c in "wxyz") + long_line + "\n"})
 timing = result["tests"].get("regex worst-case timing", [])
-ok = len(timing) == 5 and all("^(" in t or "(a+)+|(b*)*" in t for t in timing)
+ok = len(timing) == 5 and all(t.startswith("code.py: `P") and t.endswith('+)+$")`') for t in timing[:4]) \
+    and timing[4] == f"code.py: `{long_line}`"
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} every flagged regex is named for timing, whole: {timing}")
 
