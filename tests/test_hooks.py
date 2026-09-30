@@ -356,12 +356,65 @@ def verify_stamp_and_effort_nudge(base):
         shutil.rmtree(vdir, ignore_errors=True)
 
 
+def stop_asks_once_about_files_outside_the_change_map(base):
+    repo = new_repo(base, "zz-agents-drift")
+    for path in ("old.py", "lib/café.py"):
+        os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
+        open(os.path.join(repo, path), "w").write("x = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "more")
+    git(repo, "checkout", "-q", "-b", "feat/drift")
+    spec = subprocess.run([os.path.expanduser("~/.agents/skills/spec/path.sh")], cwd=repo, capture_output=True,
+                          text=True).stdout.strip()
+    with_map = ("# Drift\n\nGoal: x.\n\n## Acceptance criteria\n1. y — verify: tests/test_app.py\n\n"
+                "## Change map\n- Ways in: the app — app.py:1, ./lib/café.py:1, cache.py.bak\n\n"
+                "## Assumptions\n- lib/util.py stays as it is.\n")
+    open(spec, "w").write(with_map)
+    open(os.path.join(repo, "committed.py"), "w").write("c = 1\n")
+    git(repo, "add", "committed.py")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "committed")
+    os.remove(os.path.join(repo, "old.py"))
+    # Bytecode as a test run leaves it where Python has no pycache prefix (CI's Python; macOS's system one has one).
+    for path in ("lib/util.py", "other/app.py", "tests/test_app.py", "package-lock.json", "__pycache__/app.cpython-314.pyc"):
+        os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
+        open(os.path.join(repo, path), "w").write("x = 1\n")
+    for path in ("app.py", "lib/café.py"):
+        open(os.path.join(repo, path), "a").write("y = 2\n")
+
+    def asked(session, edited):
+        reason = stop(RUN + session, repo, [os.path.join(repo, p) for p in edited]).get("reason", "")
+        line = next((line for line in reason.splitlines() if "Change map doesn't name" in line), "")
+        return sorted(line.split("`")[1::2])
+    everything = ["app.py", "lib/café.py", "lib/util.py", "other/app.py", "tests/test_app.py", "committed.py"]
+    first = asked("d1", everything)
+    assert first == ["committed.py", "lib/util.py", "old.py", "other/app.py"], \
+        f"unmapped code files: committed, deleted, named only in Assumptions, or same-named elsewhere; not lock files: {first}"
+    assert asked("d1", everything) == [], "each file is asked about once per session"
+    open(os.path.join(repo, "cache.py"), "w").write("z = 3\n")
+    assert asked("d1", ["cache.py"]) == ["cache.py"], "a file that drifts later is asked about; cache.py.bak isn't cache.py"
+    open(spec, "w").write(with_map.replace("## Change map\n- Ways in: the app — app.py:1, ./lib/café.py:1, cache.py.bak\n\n", ""))
+    assert asked("d2", everything) == [], "a spec without a Change map asks nothing"
+    open(spec, "w").write(with_map)
+    git(repo, "branch", "-m", "feat/drift-renamed")
+    assert asked("d3", ["cache.py"]) == ["cache.py", "committed.py", "lib/util.py", "old.py", "other/app.py"], \
+        "the spec follows a branch rename"
+
+
 def post_edit_syntax_feedback(base):
     repo = new_repo(base)
     bad = os.path.join(repo, "bad.py")
     open(bad, "w").write("def f(:\n")
     d = run_hook("post_edit.py", {"session_id": RUN + "s8", "cwd": repo, "tool_input": {"file_path": bad}})
     assert d and d.get("decision") == "block", d
+    assert "line 1" in d["reason"], d
+    # py_compile wrote bytecode into the user's repo wherever Python keeps it next to the source (CI's did).
+    # An explicit cache prefix makes any written bytecode visible on every machine.
+    good, prefix = os.path.join(repo, "good.py"), os.path.join(base, "pycache")
+    open(good, "w").write("x = 1\n")
+    assert run_hook("post_edit.py", {"session_id": RUN + "s9", "cwd": repo, "tool_input": {"file_path": good}},
+                    env={"PYTHONPYCACHEPREFIX": prefix}) is None
+    written = [f for _, _, files in os.walk(prefix) for f in files if f.startswith("good.")]
+    assert not written, f"the syntax check must not write bytecode: {written}"
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
@@ -369,6 +422,7 @@ for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, ask
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
+          stop_asks_once_about_files_outside_the_change_map,
           post_edit_syntax_feedback]:
     test(t)
 

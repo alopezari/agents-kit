@@ -30,7 +30,7 @@ git push -u origin "$(git branch --show-current)"
 
 ## 3. Write the title and description
 
-Run the `write-pr-description` skill. Give it the evidence, so the validation section is concrete: `~/.agents/bin/reports` prints the verify, self-review and validation reports and the staging results. Link the issue with the repository's syntax, from the spec (`~/.agents/skills/spec/path.sh`).
+Run the `write-pr-description` skill. Give it the evidence, so the validation section is concrete: `~/.agents/bin/reports` prints the verify, self-review and validation reports and the staging results. Link the issue with the repository's syntax, and give it the spec's `## Decisions` for the approach: a reviewer sees the alternative that was rejected, and why, without asking. Both come from the spec (`~/.agents/skills/spec/path.sh`).
 
 Write the description to a file outside the working tree, for example `"$(dirname "$(~/.agents/skills/spec/path.sh)")/pr-body.md"`.
 

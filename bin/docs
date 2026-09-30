@@ -430,7 +430,11 @@ def render():
     w("- After changing the kit, commit as usual: the pre-commit hook regenerates this file.\n")
 
     w("## Layout\n")
-    entries = sorted(e + ("/" if os.path.isdir(os.path.join(KIT, e)) else "") for e in os.listdir(KIT) if e not in IGNORED)
+    # What git sees: tracked or new, not ignored. Tool caches (.ruff_cache, .claude) ignore themselves or are ignored.
+    listed = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard"], cwd=KIT,
+                            capture_output=True, text=True)
+    top = {path.split("/")[0] for path in listed.stdout.splitlines()} if listed.returncode == 0 else set(os.listdir(KIT))
+    entries = sorted(e + ("/" if os.path.isdir(os.path.join(KIT, e)) else "") for e in top if e not in IGNORED)
     unknown = [e for e in entries if e not in LAYOUT]
     if unknown:
         sys.exit(f"docs: describe {', '.join(unknown)} in LAYOUT in bin/docs")

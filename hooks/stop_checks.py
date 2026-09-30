@@ -4,9 +4,10 @@
 Only runs when the session edited files since the last stop. Looks at the lines the
 branch adds since the merge-base with the default branch (committed or not) and asks
 the agent to continue, once, for a skipped or focused test, a deleted test file, a debug
-leftover, a conflict marker, a possible secret, a new option read near a cache, or a
-temporary compose override left behind. Then runs the repo's verify: the overlay
-in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py.
+leftover, a conflict marker, a possible secret, a new option read near a cache, a
+temporary compose override left behind, or a changed code file the spec's Change map
+doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify
+when it exists, else repos/_shared/verify_auto.py.
 
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
 the hook has seen, for the weekly health check.
@@ -27,6 +28,7 @@ CHECKOUTS = os.path.join(os.environ.get("AGENTS_STATE_DIR") or os.path.expanduse
 OVERRIDE_NAMES = ("docker-compose.override.yml", "docker-compose.override.yaml", "compose.override.yml", "compose.override.yaml")
 OVERRIDE_MARKER = "agents: temporary override"
 VERIFY_TIMEOUT = 600
+SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "spec", "path.sh"))
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
 
 TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec)/|[._-](test|spec)\.[a-z]+$|Test\.php$", re.I)
@@ -36,6 +38,9 @@ WEAKENED_TEST = re.compile(
 )
 DEBUG_LEFTOVER = re.compile(r"\bvar_dump\(|\bdebugger;|^\s*dd\(|\bbinding\.pry\b|\bbreakpoint\(\)")
 CONFLICT_MARKER = re.compile(r"^(<{7}|>{7})( |$)")
+# Generated, never written by hand: lock files, and bytecode that imports and test runs leave next to the source.
+GENERATED_FILE = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|[\w.-]+\.lock)$"
+                            r"|(^|/)__pycache__/|\.py[co]$")
 
 
 def git(args, cwd):
@@ -173,6 +178,36 @@ def main():
     return 0
 
 
+def unmapped_files(root, session):
+    """Changed code files the branch's spec has no Change map entry for, each returned once per session."""
+    # path.sh finds the spec wherever it is kept: after a branch rename, in a worktree's old place or in $TMPDIR.
+    spec = subprocess.run([SPEC_PATH], cwd=root, capture_output=True, text=True).stdout.strip()
+    if not os.path.isfile(spec):
+        return []
+    change_map = re.search(r"^## Change map\s*$(.*?)(?=^## |\Z)", open(spec, errors="ignore").read(), re.M | re.S | re.I)
+    if not change_map:
+        return []
+    base = review_stamp.merge_base(root)
+    changed = set(git(["-c", "core.quotePath=off", "diff", "--name-only", base], root).splitlines())
+    changed |= set(git(["-c", "core.quotePath=off", "ls-files", "--others", "--exclude-standard"], root).splitlines())
+    # A path, not a bare file name: `app.py` in the map doesn't cover `other/app.py`, nor does `app.py.bak`.
+    unmapped = sorted(p for p in changed if p and not review_stamp.NOT_BEHAVIOR.search(p) and not GENERATED_FILE.search(p)
+                      and not re.search(rf"(?<![\w./-])(\./)?{re.escape(p)}(?![\w/-]|\.\w)", change_map.group(1)))
+    asked_path = os.path.join(MARKER_DIR, f"{session}.map-asked")
+    try:
+        asked = set(open(asked_path).read().splitlines())
+    except OSError:
+        asked = set()
+    new = [p for p in unmapped if f"{root}\t{p}" not in asked]
+    try:
+        os.makedirs(MARKER_DIR, exist_ok=True)
+        with open(asked_path, "a") as fh:
+            fh.writelines(f"{root}\t{p}\n" for p in new)
+    except OSError:
+        pass  # asking again next stop beats not asking
+    return new
+
+
 def checked_something(output):
     """Whether a verify ran any check: verify_changed.py and verify_auto.py print `ran: <check>` for each one."""
     return any(line.startswith("ran: ") and not line.startswith("ran: nothing to check")
@@ -248,6 +283,10 @@ def leftover_overrides():
 def check_checkout(root, session):
     """Return (problems, verify_failed) for one checkout."""
     problems = []
+    unmapped = unmapped_files(root, session)
+    if unmapped:  # first, so the cap on listed problems never hides a file it has marked as asked
+        problems.append("Changed code files the spec's Change map doesn't name: " + ", ".join(f"`{p}`" for p in unmapped)
+                        + ". Add each to the map with what it changes, or split it into another branch.")
     lines = list(added_lines(root))
     problems += new_options_near_caches(root, lines)
     problems += leaked_secrets(lines)
