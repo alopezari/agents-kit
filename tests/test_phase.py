@@ -28,10 +28,17 @@ def sh(cwd, *cmd, env=None):
 
 
 def stamp(repo, kind):
-    """Write a stamp as the kit does: verify kinds only come from the verify runner, which records them in-process."""
+    """Write a stamp as the kit does: verify kinds only come from the verify runner, which records them in-process,
+    and validate needs a report with evidence."""
     if kind.startswith("verify"):
         code = f"import sys; sys.path.insert(0, {os.path.dirname(STAMP)!r}); import review_stamp as r; r.record_verify({kind!r}, r.fingerprint())"
         return sh(repo, "python3", "-c", code)
+    if kind == "validate":  # the writer needs a report whose checks name their evidence
+        reports = os.path.expanduser("~/.agents/bin/reports")
+        with open(sh(repo, reports, "path", "validation"), "w") as fh:
+            fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | app runs | + | PASS | a1.txt |\n")
+        with open(os.path.join(sh(repo, reports, "path", "evidence"), "a1.txt"), "w") as fh:
+            fh.write("$ python3 app.py\nexit 0\n")
     return sh(repo, "python3", STAMP, "write", "--kind", kind)
 
 
@@ -209,6 +216,8 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     open(spec, "w").write("# SHOP-1: the spec\n")
     guide = spec.replace("spec-shop-", "staging-guide-shop-")
     open(guide, "w").write("# Staging guide\n")
+    evidence = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "evidence")
+    open(os.path.join(evidence, "a1.txt"), "w").write("$ true\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     stamp(repo, "verify")
 
@@ -218,6 +227,8 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     assert os.path.basename(moved) == "spec-shop-shop-1~final.md", moved
     assert open(moved).read() == "# SHOP-1: the spec\n" and not os.path.exists(spec)
     assert os.path.exists(guide.replace("session~wary-falcon", "shop-1~final")), "reports move with the spec"
+    assert open(os.path.join(evidence.replace("session~wary-falcon", "shop-1~final"), "a1.txt")).read() == "$ true\n", \
+        "the evidence moves with its report"
     check = subprocess.run(["python3", STAMP, "check", "--kind", "verify"], cwd=repo)
     assert check.returncode == 0, "the verify stamp follows the rename"
     assert phase(repo) == "self-review"

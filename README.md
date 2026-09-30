@@ -67,6 +67,21 @@ Every hook is a small program with one contract: a JSON payload on stdin, a JSON
 3. Add a section to `install.sh` and run `install.sh --doctor`. Then test with a harmless blocked command in a scratch repo.
 4. Teach `bin/docs` where the new harness registers its hooks (`HARNESS_OF_SETTINGS` and `harness_hooks`), then commit: the pre-commit hook regenerates `docs/framework.md`.
 
+## Testing a hook change through a real harness
+
+`tests/` feeds the hooks hand-made payloads. To see a branch's hooks run inside Codex itself, with its real payloads, point `HOME` at a directory whose `.agents` is the branch's checkout. Codex's `hooks.json` runs `python3 $HOME/.agents/hooks/<hook>.py`, and it trusts a hook by that command text, so the branch's code runs through the entries you already approved. `CODEX_HOME` keeps Codex's own settings, login and trust, and `GH_CONFIG_DIR` keeps `gh` logged in:
+
+```bash
+H=$(mktemp -d) && ln -s ~/.agents-worktree-<name> "$H/.agents"   # the branch's checkout
+git init -q /tmp/hook-probe && git -C /tmp/hook-probe commit -q --allow-empty -m init
+echo 'Run this shell command once and report what happened: <a command the change should block or allow>' \
+  | HOME="$H" CODEX_HOME=~/.codex GH_CONFIG_DIR=~/.config/gh \
+    codex exec -C /tmp/hook-probe --skip-git-repo-check -s workspace-write --ephemeral -
+tail -3 ~/.agents-worktree-<name>/logs/hooks.jsonl
+```
+
+The hooks log to the branch checkout's `logs/` (not in git), so the last lines show each decision with `"harness": "codex"`. The checkout has no `repos/<repo>/verify` overlay, so the stop hook falls back to the automatic verify. Use a scratch repo: a hook that fails to block lets the command run.
+
 ## Not in git
 
 `logs/`, `backups/`, `research/`, `approvals/`, `monitors/state/`, `review-mining/runs/`, `review-mining/baseline.json` and `usage/*.json` hold local, possibly private data; `site/dist/` is the built website. Profiles are linked in and never committed here.

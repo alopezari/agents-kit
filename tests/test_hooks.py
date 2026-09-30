@@ -46,6 +46,19 @@ def new_repo(base, name="repo", branch="trunk"):
     return path
 
 
+def write_stamp(cwd, kind):
+    """Write a stamp as the skills do: validate first saves a report whose check names its evidence."""
+    if kind == "validate":
+        reports = os.path.expanduser("~/.agents/bin/reports")
+        path = subprocess.run([reports, "path", "validation"], cwd=cwd, capture_output=True, text=True).stdout.strip()
+        evidence = subprocess.run([reports, "path", "evidence"], cwd=cwd, capture_output=True, text=True).stdout.strip()
+        with open(path, "w") as fh:
+            fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | app runs | + | PASS | a1.txt |\n")
+        with open(os.path.join(evidence, "a1.txt"), "w") as fh:
+            fh.write("$ python3 app.py\nexit 0\n")
+    return subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=cwd, capture_output=True, text=True)
+
+
 def guard(command, cwd="/tmp"):
     d = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": cwd, "session_id": "test"})
     return "deny" if d else "allow"
@@ -196,9 +209,9 @@ def pr_gate_review_and_validation(base):
     long_env = "env " + " ".join(f'V{i}="a"' for i in range(22)) + " true"
     started = time.time()
     assert guard(long_env, repo) == "allow" and time.time() - started < 3, "a long env line must not stall the guard"
-    subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "review"], cwd=repo, capture_output=True)
+    write_stamp(repo, "review")
     assert guard("gh pr create --fill", repo) == "deny", "behavior change needs validation too"
-    subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo, capture_output=True)
+    write_stamp(repo, "validate")
     assert guard("gh pr create --fill", repo) == "allow"
     open(os.path.join(repo, "CHANGELOG.md"), "w").write("- A line (#12).\n")
     assert guard("gh pr create --fill", repo) == "allow", "the changelog line CI checks doesn't invalidate the stamps"
@@ -206,18 +219,69 @@ def pr_gate_review_and_validation(base):
     open(os.path.join(repo, "hooks", "changelog_check.py"), "w").write("x = 1\n")
     assert guard("gh pr create --fill", repo) == "deny", "code named after the changelog is still code"
     for kind in ("review", "validate"):
-        subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=repo, capture_output=True)
+        write_stamp(repo, kind)
     open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
     assert guard("gh pr create --fill", repo) == "deny", "edit after stamps must invalidate them"
     git(repo, "checkout", "trunk", "--", "app.py")
     for kind in ("review", "validate"):
-        subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=repo, capture_output=True)
+        write_stamp(repo, kind)
     git(repo, "mv", "app.py", "CHANGELOG.txt")
     assert guard("gh pr create --fill", repo) == "deny", "code renamed to a changelog name is still code removed"
     for kind in ("verify", "verify-empty"):
         done = subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=repo, capture_output=True, text=True)
         checked = subprocess.run(["python3", H + "review_stamp.py", "check", "--kind", kind], cwd=repo)
         assert done.returncode != 0 and "stop_checks.py verify" in done.stderr and checked.returncode == 1, (kind, done)
+
+
+def validate_stamp_needs_evidence(base):
+    repo = new_repo(base)
+    git(repo, "switch", "-q", "-c", "feat/evidence")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    reports = os.path.expanduser("~/.agents/bin/reports")
+    report = subprocess.run([reports, "path", "validation"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    evidence = subprocess.run([reports, "path", "evidence"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    assert os.path.isdir(evidence) and os.path.dirname(evidence) == os.path.dirname(report), (report, evidence)
+    assert os.path.basename(evidence) == os.path.basename(report).replace("validation-", "evidence-")[:-3], evidence
+
+    ran = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "A1", "python3", "-c", "print('seen it'); exit(3)"],
+                         cwd=repo, capture_output=True, text=True)
+    with open(os.path.join(evidence, "A1.txt")) as fh:
+        saved = fh.read()
+    assert ran.returncode == 3 and "seen it" in ran.stdout, ran
+    assert "python3 -c" in saved and "exit(3)" in saved and repo in saved and "exit 3" in saved and "seen it" in saved, saved
+    assert subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "A1"], cwd=repo, capture_output=True).returncode == 64
+
+    def write_validate():
+        return subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo, capture_output=True, text=True)
+
+    def stamped():
+        return subprocess.run(["python3", H + "review_stamp.py", "check", "--kind", "validate"], cwd=repo).returncode == 0
+
+    done = write_validate()
+    assert done.returncode == 2 and "validation report" in done.stderr and not stamped(), done
+    with open(os.path.join(evidence, "empty.png"), "w"):
+        pass
+    with open(report, "w") as fh:
+        fh.write("A. CLI\n\n| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
+                 "| A1 | exits 3 | − | PASS | [output](evidence-x/A1.txt) |\n"
+                 "| A2 | prints | + | PASS | printed it, rc=0 |\n"
+                 "| A3 | staging only | + | NOT RUN | needs staging |\n\n"
+                 "B. UI\n\n| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
+                 "| B1 | page | + | FAIL | ![page](empty.png) |\n"
+                 "| B2 | named inside another name | + | PASS | xA1.txt |\n")
+    done = write_validate()
+    named = {row for row in ("A1", "A2", "A3", "B1", "B2") if f"{row} " in done.stderr or f"{row}:" in done.stderr}
+    assert done.returncode == 2 and named == {"A2", "B1", "B2"} and not stamped(), done.stderr
+    with open(os.path.join(evidence, "b1.png"), "wb") as fh:
+        fh.write(b"\x89PNG")
+    with open(report, "w") as fh:
+        fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
+                 "| A1 | exits 3 | − | PASS | `A1.txt` |\n| A3 | staging only | + | NOT RUN | needs staging |\n"
+                 "| B1 | page | + | FAIL | ![page](evidence-x/b1.png) |\n")
+    done = write_validate()
+    assert done.returncode == 0 and stamped(), done.stderr
+    listed = subprocess.run([reports], cwd=repo, capture_output=True, text=True).stdout
+    assert "A1.txt" in listed and "b1.png" in listed and "\x89PNG" not in listed, listed
 
 
 def pr_gate_follows_worktrees(base):
@@ -227,7 +291,7 @@ def pr_gate_follows_worktrees(base):
     git(main, "worktree", "add", "-q", "-b", "feat/x", wt, "trunk")
     open(os.path.join(wt, "app.py"), "a").write("y = 2\n")
     for kind in ("review", "validate"):
-        subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=wt, capture_output=True)
+        write_stamp(wt, kind)
     assert guard(f"cd {wt} && gh pr create --fill", main) == "allow"
     assert guard("gh pr create --head feat/x --fill", main) == "allow"
 
@@ -239,7 +303,7 @@ def codex_pr_commands_name_their_checkout(base):
     git(repo, "switch", "-q", "-c", "feature")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     for kind in ("review", "validate"):
-        subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=repo, capture_output=True)
+        write_stamp(repo, kind)
 
     def codex(command):
         d = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": "test",
@@ -664,7 +728,7 @@ def post_edit_syntax_feedback(base):
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          pr_gate_follows_worktrees, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
+          validate_stamp_needs_evidence, pr_gate_follows_worktrees, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

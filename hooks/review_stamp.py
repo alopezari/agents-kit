@@ -2,7 +2,8 @@
 """Record or check that a skill ran on the exact current change.
 
   review_stamp.py write [--kind review|validate]   # end of self-review / validate; verify stamps come only from
-                                                   # its runner (stop_checks.py), through record_verify()
+                                                   # its runner (stop_checks.py), through record_verify(), and
+                                                   # validate needs a report whose PASS/FAIL rows name their evidence
   review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
@@ -83,7 +84,7 @@ REPORT_KINDS = ("spec", "verify", "review", "validation", "staging-guide", "foll
 
 
 def branch_file_names(repo, key):
-    return [f"{kind}-{repo}-{key}.md" for kind in REPORT_KINDS] + [f"browser-ab-spec-{repo}-{key}.json"]
+    return [f"{kind}-{repo}-{key}.md" for kind in REPORT_KINDS] + [f"browser-ab-spec-{repo}-{key}.json", f"evidence-{repo}-{key}"]
 
 
 def renamed_from(branch):
@@ -176,6 +177,36 @@ def legacy_stamp_path(kind):
     return os.path.join(git("rev-parse", "--absolute-git-dir"), name)
 
 
+def rows_without_evidence():
+    """Why the validation report can't back a validate stamp: it's missing, or PASS/FAIL rows whose Evidence cell names
+    no non-empty file of the evidence directory. Empty when it can."""
+    reports = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "reports")
+    report = subprocess.run([reports, "path", "validation"], capture_output=True, text=True).stdout.strip()
+    evidence = subprocess.run([reports, "path", "evidence"], capture_output=True, text=True).stdout.strip()
+    try:
+        with open(report) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return [f"No validation report at {report}: save it first (validate skill, step 5)."]
+    files = [name for name in os.listdir(evidence) if os.path.isfile(os.path.join(evidence, name))
+             and os.path.getsize(os.path.join(evidence, name)) > 0] if os.path.isdir(evidence) else []
+    missing, columns = [], None
+    for line in lines:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")] if line.lstrip().startswith("|") else None
+        if not cells:
+            columns = None  # a table per block, each with its own header
+        elif "Result" in cells and "Evidence" in cells:
+            columns = (cells.index("Result"), cells.index("Evidence"))
+        elif columns and len(cells) > max(columns) and re.match(r"(PASS|FAIL)\b", cells[columns[0]]):
+            cell = cells[columns[1]]
+            if not any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files):
+                missing.append(f"{cells[0]}: {cell or '(empty)'}")
+    if missing:
+        return [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for output, "
+                "a screenshot for a UI state):"] + missing
+    return []
+
+
 def record_verify(kind, checked_fingerprint):
     """Leave only this verify run's stamp: kind on the fingerprint it checked, or none when kind is None (it failed).
     Raises OSError when a stamp can't be written or removed, after trying every removal."""
@@ -216,6 +247,10 @@ def main():
         return 0
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
+    unbacked = rows_without_evidence() if command == "write" and kind == "validate" else []
+    if unbacked:
+        print("\n".join(unbacked), file=sys.stderr)
+        return 2
     if command == "write":
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
         with open(stamp_path(kind), "w") as fh:

@@ -1,0 +1,27 @@
+#!/bin/bash
+# Run a validation check and keep what it showed: evidence <id> <command> [args...]
+# Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the
+# command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`,
+# which the shell guard reads as code.
+set -uo pipefail
+if [ $# -lt 2 ]; then
+  echo "usage: evidence <id> <command> [args...]" >&2
+  exit 64
+fi
+id=$1; shift
+dir="$("$HOME/.agents/bin/reports" path evidence)" || exit 1
+output="$(mktemp)"
+"$@" > >(tee "$output") 2>&1
+status=$?
+wait
+quote="'\\''"
+{
+  printf '$'
+  for arg in "$@"; do
+    if [[ $arg =~ ^[A-Za-z0-9_./:=@%+,-]+$ ]]; then printf ' %s' "$arg"; else printf " '%s'" "${arg//\'/$quote}"; fi
+  done
+  printf '\n# in %s, %s, exit %s\n\n' "$PWD" "$(date '+%Y-%m-%d %H:%M:%S %z')" "$status"
+  cat "$output"
+} > "$dir/$id.txt"
+rm -f "$output"
+exit $status

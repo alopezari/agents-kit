@@ -1,7 +1,8 @@
 #!/bin/bash
 # Review and testing reports for the current repo and branch, stored next to the spec (outside the tree).
 #   reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
-#   reports                                          print every report that exists, with its path
+#   reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
+#   reports                                          print every report that exists, with its path, then list the evidence
 set -euo pipefail
 spec="$("$HOME/.agents/skills/spec/path.sh")"
 dir="$(dirname "$spec")"
@@ -10,7 +11,8 @@ suffix="$(basename "$spec" .md)"; suffix="${suffix#spec-}"
 if [ "${1:-}" = "path" ]; then
   case "${2:-}" in
     verify|review|validation|staging-guide|follow-pr) echo "$dir/$2-$suffix.md" ;;
-    *) echo "usage: reports path <verify|review|validation|staging-guide|follow-pr>" >&2; exit 2 ;;
+    evidence) mkdir -p "$dir/evidence-$suffix"; echo "$dir/evidence-$suffix" ;;
+    *) echo "usage: reports path <verify|review|validation|staging-guide|follow-pr|evidence>" >&2; exit 2 ;;
   esac
   exit 0
 fi
@@ -23,4 +25,10 @@ for kind in spec verify review validation staging-guide follow-pr; do
   printf '\n===== %s — %s =====\n\n' "$kind" "$f"
   cat "$f"
 done
+evidence="$dir/evidence-$suffix"
+if [ -d "$evidence" ] && [ -n "$(ls -A "$evidence")" ]; then
+  found=1
+  printf '\n===== evidence — %s =====\n\n' "$evidence"
+  ls -lA "$evidence" | awk 'NR > 1 { size = $5; $1 = $2 = $3 = $4 = $5 = $6 = $7 = $8 = ""; sub(/^ +/, ""); print $0 " (" size " bytes)" }'
+fi
 [ $found = 1 ] || echo "No spec or reports yet for this branch (looked in $dir)."

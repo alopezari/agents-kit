@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **11 command-line tools**: a11y-check, browse, ci-wait, docs, gh, phase, quality-log, repo-name, reports, triage, wp-query-profile.
+- **12 command-line tools**: a11y-check, browse, ci-wait, docs, evidence, gh, phase, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -229,6 +229,8 @@ docs            regenerate docs/framework.md
 docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the pre-commit hook)
 ```
 
+**`bin/evidence`**: Run a validation check and keep what it showed: evidence <id> <command> [args...] Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`, which the shell guard reads as code.
+
 **`bin/gh`**: Runs the real gh with git's per-host proxy. gh ignores git's `http.<url>.proxy`, so a host reachable only through a proxy (a SOCKS tunnel, for example) makes it hang. This finds the host a call targets, passes git's proxy for it as HTTPS_PROXY, and fails at once when that proxy isn't answering. Linked ahead of the real gh in PATH (install.sh --doctor shows how).
 
 **`bin/phase`**: Where the current branch is in the kit's flow, for the status line: spec → build → self-review → validate → staging → create-pr → PR open → ship.
@@ -252,7 +254,8 @@ quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --cate
 
 ```
 reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
-reports                                          print every report that exists, with its path
+reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
+reports                                          print every report that exists, with its path, then list the evidence
 ```
 
 **`bin/triage`**: Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.
