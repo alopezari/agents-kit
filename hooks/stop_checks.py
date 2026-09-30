@@ -38,7 +38,7 @@ WEAKENED_TEST = re.compile(
 )
 DEBUG_LEFTOVER = re.compile(r"\bvar_dump\(|\bdebugger;|^\s*dd\(|\bbinding\.pry\b|\bbreakpoint\(\)")
 CONFLICT_MARKER = re.compile(r"^(<{7}|>{7})( |$)")
-# Generated, never written by hand: lock files, and the bytecode post_edit's py_compile leaves when Python has no pycache prefix.
+# Generated, never written by hand: lock files, and bytecode that imports and test runs leave next to the source.
 GENERATED_FILE = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|[\w.-]+\.lock)$"
                             r"|(^|/)__pycache__/|\.py[co]$")
 

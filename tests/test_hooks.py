@@ -374,7 +374,7 @@ def stop_asks_once_about_files_outside_the_change_map(base):
     git(repo, "add", "committed.py")
     git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "committed")
     os.remove(os.path.join(repo, "old.py"))
-    # Bytecode as post_edit's py_compile leaves it where Python has no pycache prefix (CI's Python did; macOS's doesn't).
+    # Bytecode as a test run leaves it where Python has no pycache prefix (CI's Python; macOS's system one has one).
     for path in ("lib/util.py", "other/app.py", "tests/test_app.py", "package-lock.json", "__pycache__/app.cpython-314.pyc"):
         os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
         open(os.path.join(repo, path), "w").write("x = 1\n")
@@ -406,6 +406,15 @@ def post_edit_syntax_feedback(base):
     open(bad, "w").write("def f(:\n")
     d = run_hook("post_edit.py", {"session_id": RUN + "s8", "cwd": repo, "tool_input": {"file_path": bad}})
     assert d and d.get("decision") == "block", d
+    assert "line 1" in d["reason"], d
+    # py_compile wrote bytecode into the user's repo wherever Python keeps it next to the source (CI's did).
+    # An explicit cache prefix makes any written bytecode visible on every machine.
+    good, prefix = os.path.join(repo, "good.py"), os.path.join(base, "pycache")
+    open(good, "w").write("x = 1\n")
+    assert run_hook("post_edit.py", {"session_id": RUN + "s9", "cwd": repo, "tool_input": {"file_path": good}},
+                    env={"PYTHONPYCACHEPREFIX": prefix}) is None
+    written = [f for _, _, files in os.walk(prefix) for f in files if f.startswith("good.")]
+    assert not written, f"the syntax check must not write bytecode: {written}"
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,

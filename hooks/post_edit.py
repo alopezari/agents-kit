@@ -19,7 +19,8 @@ CHECKS = {
     ".php": ["php", "-l"],
     ".sh": ["bash", "-n"],
     ".bash": ["bash", "-n"],
-    ".py": [sys.executable, "-m", "py_compile"],
+    # compile(), not py_compile: py_compile writes bytecode, into the user's repo when Python keeps it next to the source.
+    ".py": [sys.executable, "-c", "import sys; compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec')"],
     ".js": ["node", "--check"],
     ".mjs": ["node", "--check"],
     ".cjs": ["node", "--check"],
