@@ -111,23 +111,24 @@ Then clean up in one go: temporary scripts and `/tmp` files. Keep the evidence d
 
 Give the user a step-by-step guide they can follow without you and without guessing:
 
-- **Numbered sections**, from "0. Before you start" to a final "Put the environment back as it was".
-- **Step 0 lists everything needed up front:** access and accounts (by name, never secret values), VPN, proxy or tunnel, tools and versions, the branch or build to deploy, what the deploy overwrites, how long the whole guide takes, and a `export VAR=...` block that sets every value later steps reuse (site URL, IDs, branch).
+- **Two parts, split at the merge.** `## Before the merge` holds what staging can prove now, as steps `### S1.`, `### S2.`…, ending with "Put the environment back as it was"; the PR waits only for these. `## After the merge` holds what needs the production deploy (a production dry run, a backfill, a scoring run), as steps `### P1.`…; the `ship` skill takes them over when the user deploys. A step that can't run before the merge never goes in the first part: the PR would wait for it forever. When nothing can be proven before the merge, the first part says so and has no S steps, and the PR doesn't wait.
+- **Step 0 lists everything needed up front:** access and accounts (by name, never secret values), VPN, proxy or tunnel, tools and versions, the branch or build to deploy, what the deploy overwrites, how long the whole guide takes, and a `export VAR=...` block that sets every value later steps reuse (site URL, IDs, branch). It includes `export EVIDENCE_DIR="$(cd <the user's checkout> && ~/.agents/bin/reports path evidence)" && echo "$EVIDENCE_DIR"`, with the checkout's real path, whose Expected is a directory ending in `evidence-<repo>-<branch key>` (an empty value makes `bin/evidence` refuse to run), so every step saves its evidence next to the reports from whichever directory it runs in. Computed there, not pasted as a path: the reports move out of `$TMPDIR` once `.git` is writable.
 - **Every step has four parts:**
   - **Why:** one line on what it proves.
   - **Where:** which machine, terminal, directory or browser page, logged in as whom.
-  - **Run:** a fenced block that works when pasted as is. Fill in real values (URLs, IDs, branch and file names). When a value can only be known at run time, give the command that prints it and store it in a variable. No `<placeholders>`, no "adjust as needed".
+  - **Run:** a fenced block that works when pasted as is. Fill in real values (URLs, IDs, branch and file names). When a value can only be known at run time, give the command that prints it and store it in a variable. No `<placeholders>`, no "adjust as needed". Each command whose output proves the step runs as `~/.agents/bin/evidence S3 <command>` (the step's id; `S3a`, `S3b` when a step has several, since each id is one file; `bash -c '...'` for a pipe), so its output is saved without the user copying anything. A browser step names the screenshot to save, `"$EVIDENCE_DIR/S4-<state>.png"`.
   - **Expected:** the exact output, status code, UI text or log line, and **If not:** what it means and what to do next (retry, collect this output, stop and tell whom).
 - **Check every command you can** before handing it over: run it locally, or with a dry-run or `--help` for its flags, so a typo can't waste the user's staging slot.
 - **Negative steps too,** including one that proves a positive result isn't a false positive: remove the new behavior's trigger and confirm the result changes.
 - **Warnings where they bite.** For example, a staging deploy that includes uncommitted work or overwrites a shared environment, or commands that would launch real runs. Use fake inputs (e.g. version `99.0.0-rc.1`) to exercise guards without real side effects.
 - **Anything that changes shared configuration** (repo variables, feature flags, production settings) is marked as the user's step, never run by you.
+- **Cleanup keeps the evidence.** "Put the environment back" undoes deploys and data, never `$EVIDENCE_DIR`: it is the results' proof.
 
 Give the guide in chat in the user's language, and save an English copy to `$(~/.agents/bin/reports path staging-guide)`.
 
 ## 7. Hand the branch over and record the staging results
 
-When there is a staging guide, the PR waits for its results: the PR description then shows real staging evidence, and a staging failure gets fixed before CI and reviewers spend time on the PR. When the change needs no manual tests, skip this step; `create-pr` comes next.
+When the staging guide has steps before the merge, the PR waits for their results: the PR description then shows real staging evidence, and a staging failure gets fixed before CI and reviewers spend time on the PR. When there is no guide, or its steps all come after the merge, skip this step; `create-pr` comes next.
 
 **If you worked in a linked worktree** (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`), remove it so the user can check the branch out: a branch can be checked out in only one worktree. First prove nothing is lost:
 
@@ -147,8 +148,19 @@ Give the user the hand-off in chat, with real values:
 
 1. `cd <main checkout> && git status --short`. **Expected:** nothing. If it lists files, commit or stash them first.
 2. `git switch <branch> && git pull --ff-only`.
-3. `~/.agents/bin/reports` prints the staging guide at the end. Follow it from step 0, and tell me the result of each step.
+3. `~/.agents/bin/reports` prints the staging guide at the end. Follow its "Before the merge" part from step 0, and tell me when you're done, or at the first step whose output doesn't match its Expected. Each step saves its own evidence, so you don't need to copy outputs.
 
 From here the user owns the checkout. Propose fixes instead of editing it, unless they ask you to.
 
-**When the user reports back,** append their results to the staging-guide report under `## Results (<date>)`, one line per step: PASS or FAIL and what they saw. A failure is a finding: fix it (verify, the self-review re-check and this skill's stamp again), update the guide, and ask for the affected steps to be re-run. When every step passed, continue with `create-pr`.
+**When the user reports back,** read each step's evidence in `$EVIDENCE_DIR` and judge it against the step's Expected yourself; the user's word settles only what left no file (a step they describe, a UI they looked at without a screenshot). Append the results to the staging-guide report:
+
+```
+## Results (<date>)
+
+| Step | Result | Evidence |
+|---|---|---|
+| S1 | PASS | `1.3.0`, no `Error:`: [output](evidence-<repo>-<branch>/S1.txt) |
+| S4 | FAIL | the badge is missing: ![product page](evidence-<repo>-<branch>/S4-product.png) |
+```
+
+One row per step of the "Before the merge" part, with the observation that decided it and a relative link to its file. Ask the user only about a step with no evidence. A failure is a finding: fix it (verify, the self-review re-check and this skill's stamp again), update the guide, and ask for the affected steps to be re-run. When every step passed, continue with `create-pr`.
