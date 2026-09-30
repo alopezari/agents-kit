@@ -179,16 +179,23 @@ def pr_gate_review_and_validation(base):
             "cat <<EOF\nx\nEOF\ncat <<'X'\n`y`\nX\ngh pr create --fill", "echo \"a\\\"$(gh pr create --fill)\"",
             "cat <<'EOF'x\n`true`\nEOFx\ngh pr create --fill", "cat <<EOF'x'\nEOF\nEOFx\ngh pr create --fill",
             "echo \"$\\\n(gh pr create --fill)\"", "echo $\\\n(gh pr create --fill)",
-            "eval 'gh pr create --fill'", "bash -lc 'gh pr create --fill'", "sh -c \"cd x && gh pr create --fill\""]
+            "eval 'gh pr create --fill'", "bash -lc 'gh pr create --fill'", "sh -c \"cd x && gh pr create --fill\"",
+            "command gh pr create --fill", "env GH_HOST=x gh pr create --fill", "env -i PATH=/bin gh pr create --fill",
+            "nohup gh pr create --fill", "time gh pr create --fill", "exec gh pr create --fill", "command -- gh pr create --fill",
+            "env -u GH_TOKEN gh pr create --fill", "exec -a gh gh pr create --fill", "time -f %E gh pr create --fill",
+            "exec -aSlip gh pr create --fill", "env -uGH_TOKEN gh pr create --fill"]
     for command in runs:
         assert guard(command, repo) == "deny", f"the shell runs gh here: {command!r}"
     inert = ["cat <<EOF\n EOF\ngh pr create --fill\nEOF", "cat <<'END-MARK'\ngh pr create --fill\nEND-MARK",
              "echo 'a | gh pr create'", "cat <<-EOF\n\tgh pr create\n\tEOF",
              "python3 - <<'PY'\ns = '`x`|gh pr create $(y)'\nPY", "python3 - <<'PY'\ns = \"bash -lc 'gh pr create'\"\nPY",
              "grep -n 'eval `gh pr create`' notes.md","grep -n '`gh pr create`' notes.md",
-             'echo "\\`gh pr create\\`"']
+             'echo "\\`gh pr create\\`"', "command -v gh pr create"]
     for command in inert:
         assert guard(command, repo) == "allow", f"nothing runs gh here: {command!r}"
+    long_env = "env " + " ".join(f'V{i}="a"' for i in range(22)) + " true"
+    started = time.time()
+    assert guard(long_env, repo) == "allow" and time.time() - started < 3, "a long env line must not stall the guard"
     subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "review"], cwd=repo, capture_output=True)
     assert guard("gh pr create --fill", repo) == "deny", "behavior change needs validation too"
     subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo, capture_output=True)

@@ -206,9 +206,19 @@ def shell_code(command):
     return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(masked) else masked
 
 
+# What can stand before a command's name and still run it: VAR=value assignments, and wrappers that run their
+# arguments, with the options that take a value. Each piece matches one way only: an ambiguous one backtracks
+# exponentially on a long env line and runs past the hook's timeout.
+ASSIGNMENT = r"""\w+=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+"""
+PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+)?"
+            r"|exec\s+(?:-a(?:\s+\S+|\S+)\s+|-[cl]+\s+|--\s+)*|time\s+(?:-[fo](?:\s+\S+|\S+)\s+|-[pv]+\s+|--\s+)*"
+            r"|env\s+(?:-[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir)=\S+\s+|-[i0v]+\s+|--\s+|-\s+)*)*")
+ENV_CLEARED = re.compile(r"\benv\s+(?:\S+\s+)*?(?:-[0v]*i[0v]*|--ignore-environment|-)\s")
+
+
 def unreviewed_pr(command, cwd):
     """Opening a PR requires a self-review stamp for the exact current change."""
-    if not re.search(r"(?:^|[;&|(\n`])\s*(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*gh\s+pr\s+create\b", shell_code(command)):
+    if not re.search(r"(?:^|[;&|(\n`])\s*" + PREFIXES + r"gh\s+pr\s+create\b", shell_code(command)):
         return None
     cwd = pr_checkout(command, cwd)
     stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
@@ -298,7 +308,7 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
     def quote_around(pos):
         return next(((start, end) for start, end in spans if start < pos < end), None)
 
-    for match in re.finditer(r"(?:^|[;&|(\n`])\s*((?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*)gh\s+pr\s+(?:create|edit)\b", code):
+    for match in re.finditer(r"(?:^|[;&|(\n`])\s*(" + PREFIXES + r")gh\s+pr\s+(?:create|edit)\b", code):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
         # The cds are found in the code, where a quote may read as ; around eval's argument, and read from the command.
@@ -334,7 +344,11 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
             args = pr_command_args(command, match.end(1))
         except ValueError:
             continue  # unbalanced quotes: text inside a heredoc or string, not a command gh would run
-        repo, host = (exported.get(k, env.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
+        prefix = command[match.start(1):match.end(1)]
+        inherited = {} if ENV_CLEARED.search(prefix) else dict(env)  # env -i and -u drop what gh would inherit
+        for name in re.findall(r"(?:-u\s*|--unset=)(\w+)", prefix) if "env" in prefix else []:
+            inherited.pop(name, None)
+        repo, host = (exported.get(k, inherited.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
         values, files = [], []
         for i, arg in enumerate(args[3:], 3):
             flag, eq, inline = arg.partition("=")
