@@ -230,11 +230,16 @@ def codex_pr_commands_name_their_checkout(base):
     for command in ["cd sub && gh pr create --fill", f"cd {repo}; gh pr create --fill", f"false && cd {repo}; gh pr create --fill",
                     f"cd {repo} | gh pr create --fill", f"cd {repo} && cd - && gh pr create --fill", f"  cd {repo} && gh pr create --fill",
                     "cd /$TARGET && gh pr create --fill", f'cd "~/x" && gh pr create --fill', f"cd {repo} && sh -c 'cd /tmp && gh pr create'",
-                    f'echo "$(true)"; echo "; cd {repo}"; gh pr create --fill', f'echo "; cd {repo}"; gh pr create --fill']:
+                    f'echo "$(true)"; echo "; cd {repo}"; gh pr create --fill', f'echo "; cd {repo}"; gh pr create --fill',
+                    f"cd {repo} && true & gh pr create --fill", f"cd {repo}/missing && true; gh pr create --fill",
+                    f"cd {os.path.dirname(repo)}/rep? && gh pr create --fill", f"cd\n{repo} && gh pr create --fill"]:
         assert "33986" in codex(command), f"the PR's checkout isn't the one checked: {command!r}"
     assert codex(f"cd {repo} && gh pr create --fill") == "allow"
     assert codex(f'cd "{repo}" && git push && gh pr create --fill') == "allow"
     assert codex("gh pr view 5") == "allow", "only the commands the PR checks judge"
+    for command in [f"cd {repo} && gh pr create --head fix/cd --fill", f"cd {repo} && gh pr create --body-file /tmp/cd.md",
+                    f"cd {repo} && gh pr create --fill 2>&1", "printf %s gh pr create"]:
+        assert codex(command) == "allow", f"nothing here runs the PR elsewhere: {command!r}"
     assert guard("gh pr create --fill", repo) == "allow", "Claude Code's cwd is where the command runs"
 
 

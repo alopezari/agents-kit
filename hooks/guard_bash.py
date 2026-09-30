@@ -225,23 +225,28 @@ def unreviewed_pr(command, cwd):
     return None
 
 
-# The one form both this check and pr_checkout() read the same way: a literal absolute path, and && so gh only runs
-# where the cd succeeded.
-ABSOLUTE_CD_FIRST = re.compile(r"""cd\s+(?:/[^\s;&|()$`'"\\]*|~/[^\s;&|()$`'"\\]*|"/[^"$`\\]*"|'/[^']*')\s*&&""")
+# The one form both this check and pr_checkout() read the same way: a literal absolute path (no expansion or glob),
+# and && so gh only runs where the cd succeeded.
+ABSOLUTE_CD_FIRST = re.compile(r"""cd[ \t]+((?:~[\w.-]*)?/[^\s;&|()$`'"\\*?\[]*|"/[^"$`\\*?\[]*"|'/[^'*?\[]*')[ \t]*&&""")
+RUNS_GH_PR = re.compile(r"(?:^|[;&|(\n`])\s*(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*(?:(?:command|env|exec|nohup|time)\s+)*"
+                        r"gh\s+pr\s+(?:create|edit)\b")
 
 
 def pr_checkout_unknown(command, payload):
     """Codex runs a command in its per-call workdir but sends the session's cwd (openai/codex#33986), so the PR
-    checks would judge the wrong checkout unless the command starts by cd-ing to an absolute path, and cds nowhere else."""
+    checks would judge the wrong checkout unless the command starts by cd-ing to an existing absolute path, and
+    neither cds again nor backgrounds the chain. Guards against a model's slip, not a hostile one."""
     code = shell_code(command)
-    if harness(payload) != "codex" or not re.search(r"\bgh\s+pr\s+(?:create|edit)\b", code):
+    if harness(payload) != "codex" or not RUNS_GH_PR.search(code):
         return None
     first = ABSOLUTE_CD_FIRST.match(command)
-    if first and not re.search(r"\b(?:cd|pushd|popd)\b", code[first.end():]):
-        return None
+    if first and os.path.isdir(os.path.expanduser(first.group(1).strip("\"'"))):
+        rest = code[first.end():]
+        if not re.search(r"(?:^|[;&|(\n`])\s*(?:cd|pushd|popd)\b", rest) and not re.search(r"(?<![&>])&(?![&>])", rest):
+            return None
     return ("Codex doesn't tell hooks the workdir a command runs in (openai/codex#33986), so this PR command can't be "
-            "checked against the right checkout. Start the command with `cd /absolute/path/to/checkout && ` (a literal "
-            "path, no other cd), and don't set a workdir.")
+            "checked against the right checkout. Start the command with `cd /absolute/path/to/checkout && ` (an existing, "
+            "literal path; no other cd, no `&`), and don't set a workdir.")
 
 
 def repo_id(repo, default_host=None):
