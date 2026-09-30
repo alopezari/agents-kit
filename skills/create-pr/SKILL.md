@@ -18,7 +18,7 @@ Run from the checkout that has the branch. Each line must hold, or the listed st
 | Validated, for behavior changes | `python3 ~/.agents/hooks/review_stamp.py needs-validate && python3 ~/.agents/hooks/review_stamp.py check --kind validate` | Run the `validate` skill |
 | Staging passed, when the guide has steps before the merge | `~/.agents/bin/reports` shows the staging guide's latest `## Results` table with every "Before the merge" step PASS and linked evidence | Ask the user to run the guide, then record the results from its evidence (validate, step 7) |
 
-The shell guard enforces the two stamps on `gh pr create`; this table catches the rest before you get there.
+The shell guard enforces the two stamps on `gh pr create`, and the staging results on `gh pr create` without `--draft` and on `gh pr ready` (`python3 ~/.agents/hooks/review_stamp.py staging` says what's missing); this table catches the rest before you get there.
 
 One exception: when the repo can only deploy to staging from a PR (its notes say so), open the PR as a draft with the staging results pending, say so in the description, and mark it ready when they pass.
 

@@ -111,8 +111,8 @@ def quoted_spans(command):
 
 
 def pr_checkout(command, cwd):
-    """The checkout `gh pr create` acts on: a `cd <dir>` before it, else the worktree holding --head."""
-    before = re.split(r"\bgh\s+pr\s+create\b", command)[0]
+    """The checkout `gh pr create` or `gh pr ready` acts on: a `cd <dir>` before it, else the worktree holding --head."""
+    before = re.split(r"\b" + GH_PR + r"(?:create|ready)\b", command)[0]
     cds = re.findall(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before)
     runs_in = cwd
     for target in cds:
@@ -232,9 +232,39 @@ def without_evidence_runner(command):
 ENV_CLEARED = re.compile(r"\benv\s+(?:\S+\s+)*?(?:-[0v]*i[0v]*|--ignore-environment|-)\s")
 
 
+# Where a command starts: after a separator, or after a shell keyword or brace (`then gh pr ready`, `{ gh pr ready; }`).
+COMMAND_START = r"(?:^|[;&|(\n`{]|\b(?:then|do|else|elif|if|while|until)\b|!)\s*"
+# gh's --repo may come before or after `pr`, attached or not: `gh -R owner/repo pr ready 12`, `gh pr -Rowner/repo ready`.
+REPO_FLAG = r"(?:(?:-R|--repo)(?:=|\s+)?\S+\s+)?"
+GH_PR = r"gh\s+" + REPO_FLAG + r"pr\s+" + REPO_FLAG
+
+
+def pr_args(command, match, group):
+    """The words of a matched PR command's arguments as the shell passes them, without redirections or a comment:
+    a quoted "12" is 12, a quoted title is one word, and `> ready.log`, `2>&1` or `# --draft` isn't an argument."""
+    text = command[match.start(group):match.end(group)]  # the raw text: shell_code() masks quoted words
+    lexer = shlex.shlex(text, posix=True)
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:
+        words = text.split()
+    args, skip = [], False
+    for word in words:
+        if skip:
+            skip = False
+        elif re.fullmatch(r"\d*(?:>>?|<|>&|<&)", word):
+            skip = True  # its target is the next word
+        elif not re.match(r"\d*[<>]", word):
+            args.append(word)
+    return args
+
+
 def unreviewed_pr(command, cwd):
-    """Opening a PR requires a self-review stamp for the exact current change."""
-    if not re.search(r"(?:^|[;&|(\n`])\s*" + PREFIXES + r"gh\s+pr\s+create\b", shell_code(command)):
+    """Opening a PR requires a self-review stamp for the exact current change, a validate stamp for a behavior
+    change, and, unless it's a draft, the staging steps before the merge passed."""
+    creates = list(re.finditer(COMMAND_START + PREFIXES + GH_PR + r"create\b([^;&|\n]*)", shell_code(command)))
+    if not creates:
         return None
     cwd = pr_checkout(command, cwd)
     stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
@@ -248,7 +278,52 @@ def unreviewed_pr(command, cwd):
     if ok("needs-validate") and not ok("check", "--kind", "validate"):
         return ("The change touches behavior but has no validation recorded for it. Run the validate skill "
                 "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run.")
+    if any(not {"--draft", "-d"} & set(pr_args(command, match, 1)) for match in creates):
+        return staging_reason(cwd)  # a draft may wait for staging; any create in the command that isn't one may not
     return None
+
+
+def staging_reason(cwd):
+    """Why `review_stamp.py staging` holds the PR in cwd, or None when it passes; a check that fails silently holds it too."""
+    stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
+    result = subprocess.run([sys.executable, stamp, "staging"], cwd=cwd, capture_output=True, text=True)
+    if result.returncode == 0:
+        return None
+    return result.stdout.strip() or f"Couldn't read the staging results: {result.stderr.strip()[-300:] or 'no output'}"
+
+
+def unready_pr(command, cwd):
+    """`gh pr ready` marks a PR ready for review: its staging steps before the merge must have passed, with evidence."""
+    code = shell_code(command)
+    readies = [m for m in re.finditer(COMMAND_START + PREFIXES + r"(" + GH_PR + r")ready\b([^;&|\n]*)", code)
+               if "--undo" not in pr_args(command, m, 2)]
+    if not readies:
+        return None
+    cwd = pr_checkout(command, cwd)
+    if not os.path.isdir(cwd):  # a hook that crashes lets the command through
+        return f"`gh pr ready`: its checkout {cwd} doesn't exist, so its staging results can't be checked."
+    here = subprocess.run(["git", "branch", "--show-current"], cwd=cwd, capture_output=True, text=True).stdout.strip()
+    targets = set()
+    for match in readies:
+        if re.search(r"(?:^|\s)(?:-R|--repo)", match.group(1) + " " + match.group(2)):
+            return ("`gh pr ready --repo`: the staging results are checked in a checkout of the PR's branch. "
+                    "Run it there without --repo.")
+        targets.add(next((word for word in pr_args(command, match, 2) if not word.startswith("-")), None))
+    targets.discard(None)
+    if len(targets) > 1:  # each lookup may take its whole timeout, and the hook's own runs out at 10 s
+        return "One `gh pr ready` per command: run each PR's from its own branch's checkout."
+    for target in targets:
+        # A number, URL or branch names the PR; its staging results live under its branch.
+        try:
+            branch = subprocess.run(["gh", "pr", "view", target, "--json", "headRefName", "-q", ".headRefName"],
+                                    cwd=cwd, capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            branch = ""
+        if not branch or branch != here:
+            return (f"`gh pr ready {target}`: can't check its staging results from here (its branch is "
+                    f"{branch or 'unknown'}, this checkout is on {here or 'no branch'}). "
+                    "Run it from that branch's checkout.")
+    return staging_reason(cwd)
 
 
 # The one form both this check and pr_checkout() read the same way: a literal absolute path (no expansion or glob),
@@ -256,7 +331,7 @@ def unreviewed_pr(command, cwd):
 ABSOLUTE_CD_FIRST = re.compile(r"""cd[ \t]+((?:~[\w.-]*)?/[^\s;&|()$`'"\\*?\[]*|"/[^"$`\\]*"|'/[^']*')[ \t]*&&""")
 # Anywhere, not only in command position: a wrapper, `then` or `{` in front must not hide it, and a false match only
 # asks for the cd form.
-GH_PR_WORDS = re.compile(r"\bgh\s+pr\s+(?:create|edit)\b")
+GH_PR_WORDS = re.compile(r"\b" + GH_PR + r"(?:create|edit|ready)\b")
 CD_WORD = re.compile(r"(?<![\w/.-])(?:cd|pushd|popd)(?![\w/.-])")
 
 
@@ -324,7 +399,7 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
     def quote_around(pos):
         return next(((start, end) for start, end in spans if start < pos < end), None)
 
-    for match in re.finditer(r"(?:^|[;&|(\n`])\s*(" + PREFIXES + r")gh\s+pr\s+(?:create|edit)\b", code):
+    for match in re.finditer(r"(?:^|[;&|(\n`])\s*(" + PREFIXES + r")" + GH_PR + r"(?:create|edit)\b", code):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
         # The cds are found in the code, where a quote may read as ; around eval's argument, and read from the command.
@@ -366,7 +441,7 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
             inherited.pop(name, None)
         repo, host = (exported.get(k, inherited.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
         values, files = [], []
-        for i, arg in enumerate(args[3:], 3):
+        for i, arg in enumerate(args[1:], 1):  # gh's -R may come before `pr`
             flag, eq, inline = arg.partition("=")
             if re.fullmatch(r"-[tbFR]..*", arg):  # -tTitle: gh accepts short flags with the value attached
                 flag, eq, inline = arg[:2], "=", arg[2:]
@@ -450,7 +525,7 @@ def main():
     command = without_evidence_runner(command)
 
     reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd)
-              or unreviewed_pr(command, cwd))
+              or unreviewed_pr(command, cwd) or unready_pr(command, cwd))
     if not reason:
         for pattern, why in RULES:
             if re.search(pattern, command):

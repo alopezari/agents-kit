@@ -5,6 +5,8 @@
                                                    # its runner (stop_checks.py), through record_verify(), and
                                                    # validate needs a report whose PASS/FAIL rows name their evidence
   review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
+  review_stamp.py staging                          # exit 1 if the staging guide has steps before the merge without
+                                                   # a PASS backed by saved evidence
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
   review_stamp.py branch-key                       # the current branch as it appears in those file names
@@ -187,20 +189,17 @@ def legacy_stamp_path(kind):
     return os.path.join(git("rev-parse", "--absolute-git-dir"), name)
 
 
-def rows_without_evidence():
-    """Why the validation report can't back a validate stamp: it's missing, or PASS/FAIL rows whose Evidence cell names
-    no non-empty file of the evidence directory. Empty when it can."""
+def report_paths(*kinds):
     reports = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "reports")
-    report = subprocess.run([reports, "path", "validation"], capture_output=True, text=True).stdout.strip()
-    evidence = subprocess.run([reports, "path", "evidence"], capture_output=True, text=True).stdout.strip()
-    try:
-        with open(report) as fh:
-            lines = fh.read().splitlines()
-    except OSError:
-        return [f"No validation report at {report}: save it first (validate skill, step 5)."]
+    return [subprocess.run([reports, "path", kind], capture_output=True, text=True).stdout.strip() for kind in kinds]
+
+
+def result_rows(lines, evidence):
+    """The PASS, FAIL and NOT RUN rows of the tables in lines that have Result and Evidence columns, as (first cell,
+    result, evidence cell, whether that cell names a non-empty file of the evidence directory)."""
     files = [name for name in os.listdir(evidence) if os.path.isfile(os.path.join(evidence, name))
-             and os.path.getsize(os.path.join(evidence, name)) > 0] if os.path.isdir(evidence) else []
-    missing, columns = [], None
+             and os.path.getsize(os.path.join(evidence, name)) > 0] if evidence and os.path.isdir(evidence) else []
+    rows, columns = [], None
     for line in lines:
         # Markdown tables: outer pipes optional, \| is a pipe inside a cell.
         cells = [c.strip() for c in re.split(r"(?<!\\)\|", re.sub(r"^\s*\||(?<!\\)\|\s*$", "", line))] if re.search(r"(?<!\\)\|", line) else None
@@ -209,14 +208,83 @@ def rows_without_evidence():
         elif {"Result", "Evidence"} <= {c.strip("*_") for c in cells}:
             names = [c.strip("*_") for c in cells]
             columns = (names.index("Result"), names.index("Evidence"))
-        elif columns and len(cells) > columns[0] and re.match(r"[*_]*(PASS|FAIL)\b", cells[columns[0]]):
+        elif columns and len(cells) > columns[0]:
+            result = re.match(r"[*_]*(?:(PASS|FAIL|NOT RUN)\b)?", cells[columns[0]]).group(1)
             cell = cells[columns[1]] if len(cells) > columns[1] else ""
-            if not any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files):
-                missing.append(f"{cells[0]}: {cell or '(empty)'}")
+            backed = any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files)
+            if result:
+                rows.append((cells[0], result, cell, backed))
+    return rows
+
+
+def unbacked_rows(lines, evidence):
+    """The PASS/FAIL rows whose Evidence cell names no saved file, as "<first cell>: <evidence cell>"."""
+    return [f"{first}: {cell or '(empty)'}" for first, result, cell, backed in result_rows(lines, evidence)
+            if result in ("PASS", "FAIL") and not backed]
+
+
+def rows_without_evidence():
+    """Why the validation report can't back a validate stamp: it's missing, or PASS/FAIL rows whose Evidence cell names
+    no non-empty file of the evidence directory. Empty when it can."""
+    report, evidence = report_paths("validation", "evidence")
+    try:
+        with open(report) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return [f"No validation report at {report}: save it first (validate skill, step 5)."]
+    missing = unbacked_rows(lines, evidence)
     if missing:
         return [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for output, "
                 "a screenshot for a UI state):"] + missing
     return []
+
+
+def staging_phase(guide, evidence):
+    """None when there is no guide or every step before the merge passed with saved evidence; otherwise the staging
+    phase, as the status line shows it. Raises OSError when the guide exists but can't be read."""
+    try:
+        with open(guide) as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return None
+    rounds = re.split(r"^## Results(?! after the deploy)", text, flags=re.M)  # ship's table holds P steps only
+    latest = rounds[-1] if len(rounds) > 1 else ""
+    if re.search(r"^## (Before|After) the merge", text, re.M):
+        before_merge = re.search(r"^## Before the merge\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+        steps = re.findall(r"^### (S\d+)\b", before_merge.group(1), re.M) if before_merge else []
+        if not steps:
+            return None  # every step needs production: the ship skill runs them
+        # Only a table with Result and Evidence columns counts: "no FAIL line" in the evidence isn't a failure.
+        results = {first: (result, backed) for first, result, _, backed in result_rows(latest.splitlines(), evidence)}
+        if any(results.get(step, ("",))[0] == "FAIL" for step in steps):
+            return "staging: fix"
+        if not all(results.get(step, ("",))[0] == "PASS" for step in steps):
+            return "staging (you)"
+        return None if all(results[step][1] for step in steps) else "staging: no evidence"
+    # A guide from before the split mixed steps that need production: a PASS or FAIL in its latest results settles it.
+    results = re.findall(r"^\|\s*[^|]*\|\s*\**(PASS|FAIL)\b", latest, re.M) or re.findall(r"\b(PASS|FAIL)\b", latest)
+    if not results:
+        return "staging (you)"
+    return "staging: fix" if "FAIL" in results else None
+
+
+def staging_unfinished():
+    """Why the pull request can't be ready yet for the staging guide, or None."""
+    guide, evidence = report_paths("staging-guide", "evidence")
+    if not guide or not evidence:
+        return "Couldn't find this branch's staging guide (bin/reports failed), so its results can't be checked."
+    try:
+        phase = staging_phase(guide, evidence)
+    except OSError as error:
+        return f"Couldn't read the staging guide: {error}"
+    reasons = {
+        "staging (you)": "has steps before the merge without a PASS. Ask the user to run them and record the results "
+                         "from their evidence (validate skill, step 7), or open the PR with --draft.",
+        "staging: fix": "has a step before the merge that FAILed: fix it and have it re-run.",
+        "staging: no evidence": "has PASS results whose Evidence cell names no saved file in " + evidence + ": each "
+                                "step saves its output through bin/evidence, or a screenshot.",
+    }
+    return f"The staging guide ({guide}) {reasons[phase]}" if phase else None
 
 
 def record_verify(kind, checked_fingerprint):
@@ -257,6 +325,11 @@ def main():
     if command == "follow-renames":
         follow_branch_renames()
         return 0
+    if command == "staging":
+        unfinished = staging_unfinished()
+        if unfinished:
+            print(unfinished)
+        return 1 if unfinished else 0
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
     unbacked = rows_without_evidence() if command == "write" and kind == "validate" else []

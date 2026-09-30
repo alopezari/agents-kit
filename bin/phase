@@ -9,7 +9,6 @@ Prints nothing outside a git repo, on the default branch or when detached.
 """
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -71,31 +70,6 @@ def pr_state(previous):
     return (out or previous.get("pr_state") or "UNKNOWN"), time.time()
 
 
-def staging_phase(guide):
-    """None when there is no guide or every step passed; otherwise the staging phase."""
-    try:
-        text = open(guide).read()
-    except OSError:
-        return None
-    rounds = text.split("## Results")
-    latest = rounds[-1] if len(rounds) > 1 else ""
-    before_merge = re.search(r"^## Before the merge\n(.*?)(?=^## |\Z)", text, re.M | re.S)
-    if before_merge:
-        steps = re.findall(r"^### (S\d+)\b", before_merge.group(1), re.M)
-        if not steps:
-            return None  # every step needs production: the ship skill runs them
-        # Only the Result column counts, and every S step needs one: "no FAIL line" in the evidence isn't a failure.
-        results = dict(re.findall(r"^\|\s*(S\d+)\s*\|\s*\**([A-Z]+(?: [A-Z]+)?)", latest, re.M))
-        if "FAIL" in results.values():
-            return "staging: fix"
-        return None if all(results.get(step) == "PASS" for step in steps) else "staging (you)"
-    # A guide from before the split: its results table's Result column, or else a PASS or FAIL anywhere in a list.
-    results = re.findall(r"^\|\s*[^|]*\|\s*\**(PASS|FAIL)\b", latest, re.M) or re.findall(r"\b(PASS|FAIL)\b", latest)
-    if not results:
-        return "staging (you)"
-    return "staging: fix" if "FAIL" in results else None
-
-
 def compute(previous):
     """The phase label, plus the PR fields to keep in the cache."""
     toplevel = git("rev-parse", "--show-toplevel")
@@ -143,7 +117,11 @@ def compute(previous):
     if reached < len(steps):
         label = steps[reached][0]
     else:
-        label = staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md")) or "create-pr"
+        try:
+            label = review_stamp.staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md"),
+                                               os.path.join(reports, f"evidence-{suffix}")) or "create-pr"
+        except OSError:
+            label = "staging (you)"
     return label + (f" · redo {', '.join(redo)}" if redo else "") + note + flag, extra
 
 

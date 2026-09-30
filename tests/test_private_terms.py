@@ -39,6 +39,7 @@ def kit_prs_are_checked(base):
     assert "ACME-12" in guard('gh pr edit 3 --title "Fix ACME-12 flow"', KIT, env), "title, from the kit's checkout"
     assert "ACME-7" in guard(f"gh pr edit 3 --body-file {body}", KIT, env), "description file"
     assert "ACME-12" in guard('gh pr create -R alopezari/agents-kit --title=ACME-12 --body x', other, env), "--repo"
+    assert "ACME-12" in guard('gh -R alopezari/agents-kit pr create --title=ACME-12 --body x', other, env), "--repo before pr"
     assert "ACME-9" in guard('gh pr edit 3 --title "Fix a|b; ACME-9" && echo done', KIT, env), "operators inside quotes"
     assert "ACME-4" in guard('gh pr edit 3 -t fine && gh pr edit 3 -t ACME-4', KIT, env), "every gh command"
     kit_pr = "https://github.com/alopezari/agents-kit/pull/3"
