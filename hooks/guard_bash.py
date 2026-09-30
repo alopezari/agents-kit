@@ -206,9 +206,14 @@ def shell_code(command):
     return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(masked) else masked
 
 
+# What can stand before a command's name and still run it: VAR=value assignments, and wrappers that run their arguments.
+PREFIXES = (r"(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+|(?:command|exec|nohup|time)\s+(?:-\S*\s+)*"
+            r"|env\s+(?:-\S*\s+|\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*)*")
+
+
 def unreviewed_pr(command, cwd):
     """Opening a PR requires a self-review stamp for the exact current change."""
-    if not re.search(r"(?:^|[;&|(\n`])\s*(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*gh\s+pr\s+create\b", shell_code(command)):
+    if not re.search(r"(?:^|[;&|(\n`])\s*" + PREFIXES + r"gh\s+pr\s+create\b", shell_code(command)):
         return None
     cwd = pr_checkout(command, cwd)
     stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
@@ -298,7 +303,7 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
     def quote_around(pos):
         return next(((start, end) for start, end in spans if start < pos < end), None)
 
-    for match in re.finditer(r"(?:^|[;&|(\n`])\s*((?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*)gh\s+pr\s+(?:create|edit)\b", code):
+    for match in re.finditer(r"(?:^|[;&|(\n`])\s*(" + PREFIXES + r")gh\s+pr\s+(?:create|edit)\b", code):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
         # The cds are found in the code, where a quote may read as ; around eval's argument, and read from the command.
