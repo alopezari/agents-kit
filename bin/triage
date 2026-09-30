@@ -49,10 +49,11 @@ GIT_CHECKOUT = re.compile(r"\bgit(\b|_)|actions/checkout|worktree|\bbranch|\b(pr
 PROPERTY_FN = re.compile(r"function\s+\w*(parse|format|calculate|compute|compare|convert|normali[sz]e|version|date|week"
                          r"|price|round|slug|sanitize|validate)\w*\s*\(", re.I)
 # Where a line's regex text sits: string literals on a line that calls a regex API or holds a raw string, and
-# /.../ literals where an expression starts (not a division). Each piece reads a character one way, so it's linear.
+# /.../ literals where an expression starts (not a division). Each piece reads a character one way, and a try at a
+# literal stops at the next /, so the scan stays linear. An unescaped / inside [...] ends the literal early: a miss.
 REGEX_API = re.compile(r"""\br["']|\bre\.\w+\(|preg_\w+\(|RegExp\(|=~""")
 STRING_LITERAL = re.compile(r""""((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'""")
-SLASH_LITERAL = re.compile(r"(?:^|[=(,:!&|?{;]|\breturn)\s*/((?:[^/\\\n\[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+)/[a-z]*")
+SLASH_LITERAL = re.compile(r"(?:^|[=(,:!&|?{;]|\breturn)\s*/((?:[^/\\\n\[]|\\.|\[(?:[^\]\\\n/]|\\.)*\])+)/[a-z]*")
 BOUNDED_REPEAT = re.compile(r"\{\d+,")
 FIXED_REPEAT = re.compile(r"\{\d+")
 REGEX_LINE_MAX = 2000  # longer added lines are data, not patterns

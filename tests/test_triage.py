@@ -154,7 +154,8 @@ for line, expected in [(r'PREFIXES = r"(?:\w+=\S*\s+|env\s+(?:-\S*\s+)*)*gh"', T
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} {'regex timing' if expected else 'no regex timing'}: {line}")
 started = time.time()
-triage_change({}, {"code.py": "x = '(" + "+" * 30000 + "'\n", "b.py": 'P = re.compile(r"(a+' + "b{1}" * 30 + ')$")\n'})
+triage_change({}, {"code.py": "x = '(" + "+" * 30000 + "'\n", "b.py": 'P = re.compile(r"(a+' + "b{1}" * 30 + ')$")\n',
+                   "c.py": "".join('D = "' + "=/[" * 650 + '"\n' for _ in range(300))})
 ok = time.time() - started < 3
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} the regex scan stays fast on a long line ({time.time() - started:.1f}s)")
