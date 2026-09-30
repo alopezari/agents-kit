@@ -11,7 +11,8 @@ GIT_SENSE = ["cwd = pr_checkout(command, cwd)", "git checkout -b fix", "- uses: 
              "# the main checkout serves the stack", "for path in known_checkouts():", "git_checkout(command, cwd)",
              "def pr_checkout_unknown(command, payload):"]
 SHOP_SENSE = ["return wc_get_checkout_url();", "'wc-blocks-checkout',", "if ( is_checkout() ) {",
-              "// Redirect to the checkout page", "git checkout-free refund( $order );", "// Render the checkout-page"]
+              "// Redirect to the checkout page", "git checkout-free refund( $order );", "// Render the checkout-page",
+              "function remember_checkout_details() { return get_checkout_url(); }"]
 
 
 def payments_signal(line):

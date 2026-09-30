@@ -206,9 +206,14 @@ def shell_code(command):
     return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(masked) else masked
 
 
-# What can stand before a command's name and still run it: VAR=value assignments, and wrappers that run their arguments.
-PREFIXES = (r"(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+|(?:command|exec|nohup|time)\s+(?:-\S*\s+)*"
-            r"|env\s+(?:-\S*\s+|\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*)*")
+# What can stand before a command's name and still run it: VAR=value assignments, and wrappers that run their
+# arguments, with the options that take a value. Each piece matches one way only: an ambiguous one backtracks
+# exponentially on a long env line and runs past the hook's timeout.
+ASSIGNMENT = r"""\w+=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+"""
+PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+)?|exec\s+(?:-a\s+\S+\s+|-[cl]+\s+|--\s+)*"
+            r"|time\s+(?:-[fo]\s+\S+\s+|-[pv]+\s+|--\s+)*|env\s+(?:-[uCS]\s+\S+\s+|--(?:unset|chdir)=\S+\s+|-[i0v]+\s+|--\s+|-\s+)*)*")
+# env -i or -u drops what the agent's own environment would pass to gh.
+ENV_CLEARED = re.compile(r"\benv\s+(?:\S+\s+)*?(?:-[i0v]*i|-u|--unset|--ignore-environment|-)(?:\s|=)")
 
 
 def unreviewed_pr(command, cwd):
@@ -339,7 +344,8 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
             args = pr_command_args(command, match.end(1))
         except ValueError:
             continue  # unbalanced quotes: text inside a heredoc or string, not a command gh would run
-        repo, host = (exported.get(k, env.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
+        inherited = {} if ENV_CLEARED.search(command[match.start(1):match.end(1)]) else env
+        repo, host = (exported.get(k, inherited.get(k, "")).strip("\"'") or None for k in ("GH_REPO", "GH_HOST"))
         values, files = [], []
         for i, arg in enumerate(args[3:], 3):
             flag, eq, inline = arg.partition("=")

@@ -47,6 +47,8 @@ def kit_prs_are_checked(base):
     for wrapped in ["env GH_REPO=alopezari/agents-kit gh pr edit 3 -t ACME-4", "command gh pr edit 3 -R alopezari/agents-kit -t ACME-4",
                     "nohup gh pr edit 3 -R alopezari/agents-kit -t ACME-4"]:
         assert "ACME-4" in guard(wrapped, other, env), f"a wrapper in front: {wrapped}"
+    assert "ACME-4" in guard("env -i PATH=/bin gh pr edit 3 -t ACME-4", KIT, {**env, "GH_REPO": "someone/other"}), \
+        "env -i drops the inherited GH_REPO, so gh acts on the kit"
     assert "can't be read" in guard("gh pr edit 3 -F - <<< body", KIT, env), "a body from stdin can't be checked"
     assert "can't be read" in guard("printf x > new.md && gh pr edit 3 -F new.md", KIT, env), "a file made later"
     assert "shell expansion" in guard('gh pr edit 3 -t "$TITLE"', KIT, env), "text the shell produces"
