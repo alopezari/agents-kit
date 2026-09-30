@@ -224,11 +224,17 @@ def codex_pr_commands_name_their_checkout(base):
         return d["hookSpecificOutput"]["permissionDecisionReason"] if d else "allow"
 
     assert "33986" in codex("gh pr create --fill"), "the checkout it runs in is unknown"
-    assert "33986" in codex("cd sub && gh pr create --fill"), "a relative cd starts from the unknown workdir"
     assert "33986" in codex("gh pr edit 5 --title x")
-    assert "33986" in codex('echo "; cd /tmp"; gh pr create --fill'), "a cd in quoted text runs nowhere"
+    assert "33986" in codex("command gh pr create --fill"), "a wrapper doesn't hide it"
+    # Each of these leaves the PR in the unknown workdir, or somewhere the gate would read differently.
+    for command in ["cd sub && gh pr create --fill", f"cd {repo}; gh pr create --fill", f"false && cd {repo}; gh pr create --fill",
+                    f"cd {repo} | gh pr create --fill", f"cd {repo} && cd - && gh pr create --fill", f"  cd {repo} && gh pr create --fill",
+                    "cd /$TARGET && gh pr create --fill", f'cd "~/x" && gh pr create --fill', f"cd {repo} && sh -c 'cd /tmp && gh pr create'",
+                    f'echo "$(true)"; echo "; cd {repo}"; gh pr create --fill', f'echo "; cd {repo}"; gh pr create --fill']:
+        assert "33986" in codex(command), f"the PR's checkout isn't the one checked: {command!r}"
     assert codex(f"cd {repo} && gh pr create --fill") == "allow"
-    assert codex(f"cd '{repo}' && gh pr view 5") == "allow" and codex("gh pr view 5") == "allow", "only commands the checks judge"
+    assert codex(f'cd "{repo}" && git push && gh pr create --fill') == "allow"
+    assert codex("gh pr view 5") == "allow", "only the commands the PR checks judge"
     assert guard("gh pr create --fill", repo) == "allow", "Claude Code's cwd is where the command runs"
 
 

@@ -225,18 +225,23 @@ def unreviewed_pr(command, cwd):
     return None
 
 
+# The one form both this check and pr_checkout() read the same way: a literal absolute path, and && so gh only runs
+# where the cd succeeded.
+ABSOLUTE_CD_FIRST = re.compile(r"""cd\s+(?:/[^\s;&|()$`'"\\]*|~/[^\s;&|()$`'"\\]*|"/[^"$`\\]*"|'/[^']*')\s*&&""")
+
+
 def pr_checkout_unknown(command, payload):
     """Codex runs a command in its per-call workdir but sends the session's cwd (openai/codex#33986), so the PR
-    checks would judge the wrong checkout unless the command first cds to an absolute path."""
+    checks would judge the wrong checkout unless the command starts by cd-ing to an absolute path, and cds nowhere else."""
     code = shell_code(command)
-    pr = re.search(r"(?:^|[;&|(\n`])\s*(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*gh\s+pr\s+(?:create|edit)\b", code)
-    if harness(payload) != "codex" or not pr:
+    if harness(payload) != "codex" or not re.search(r"\bgh\s+pr\s+(?:create|edit)\b", code):
         return None
-    cd = re.search(r"(?:^|[;&|\n])\s*cd\s+([^\s;&|)]+)", code[:pr.start()])
-    if cd and command[cd.start(1):cd.end(1)].strip("\"'")[:1] in ("/", "~"):
+    first = ABSOLUTE_CD_FIRST.match(command)
+    if first and not re.search(r"\b(?:cd|pushd|popd)\b", code[first.end():]):
         return None
     return ("Codex doesn't tell hooks the workdir a command runs in (openai/codex#33986), so this PR command can't be "
-            "checked against the right checkout. Run it as `cd /absolute/path/to/checkout && gh pr ...`, without a workdir.")
+            "checked against the right checkout. Start the command with `cd /absolute/path/to/checkout && ` (a literal "
+            "path, no other cd), and don't set a workdir.")
 
 
 def repo_id(repo, default_host=None):
