@@ -195,8 +195,8 @@ def report_paths(*kinds):
 
 
 def result_rows(lines, evidence):
-    """The rows of the tables in lines that have Result and Evidence columns, as (first cell, result, evidence cell,
-    whether that cell names a non-empty file of the evidence directory)."""
+    """The PASS, FAIL and NOT RUN rows of the tables in lines that have Result and Evidence columns, as (first cell,
+    result, evidence cell, whether that cell names a non-empty file of the evidence directory)."""
     files = [name for name in os.listdir(evidence) if os.path.isfile(os.path.join(evidence, name))
              and os.path.getsize(os.path.join(evidence, name)) > 0] if evidence and os.path.isdir(evidence) else []
     rows, columns = [], None
@@ -247,7 +247,7 @@ def staging_phase(guide, evidence):
             text = fh.read()
     except FileNotFoundError:
         return None
-    rounds = text.split("## Results")
+    rounds = re.split(r"^## Results(?! after the deploy)", text, flags=re.M)  # ship's table holds P steps only
     latest = rounds[-1] if len(rounds) > 1 else ""
     if re.search(r"^## (Before|After) the merge", text, re.M):
         before_merge = re.search(r"^## Before the merge\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)

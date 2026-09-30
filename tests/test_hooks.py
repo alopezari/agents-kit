@@ -333,13 +333,17 @@ def pr_gate_waits_for_staging(base):
     fake = os.path.join(base, "fake-gh")
     os.makedirs(fake)
     with open(os.path.join(fake, "gh"), "w") as fh:
-        fh.write("#!/bin/sh\n[ \"$1 $2\" = \"pr view\" ] && echo feat/staged\n")
+        fh.write("#!/bin/sh\n[ \"$1 $2 $3\" = \"pr view 12\" ] && echo feat/staged\n"
+                 "[ \"$1 $2 $3\" = \"pr view 13\" ] && echo someone-else\nexit 0\n")
     os.chmod(os.path.join(fake, "gh"), 0o755)
 
-    def decision(command):
+    def reason(command):
         d = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": "test"},
                      env={"PATH": fake + ":" + os.environ["PATH"]})
-        return "deny" if d else "allow"
+        return d["hookSpecificOutput"]["permissionDecisionReason"] if d else None
+
+    def decision(command):
+        return "deny" if reason(command) else "allow"
 
     steps = "# Guide\n## Before the merge\n### S1. Deploy\n### S2. Check\n## After the merge\n### P1. Backfill\n"
     head = "\n## Results (2026-09-30)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
@@ -350,8 +354,12 @@ def pr_gate_waits_for_staging(base):
                     f"cd {repo} && gh pr ready && cd /tmp", "if true; then gh pr ready; fi", "{ gh pr ready; }",
                     "gh pr ready 12 --repo other/repo", "gh pr -R other/repo ready 12", 'gh pr ready "12"',
                     "gh -R other/repo pr ready 12", "gh pr ready -Rother/repo 12",
-                    'gh pr create --head "$(git branch --show-current)" --title "Allow --draft PRs" --fill']:
+                    'gh pr create --head "$(git branch --show-current)" --title "Allow --draft PRs" --fill',
+                    "gh pr create --fill # --draft", "gh pr ready 12 # --undo"]:
         assert decision(command) == "deny", f"staging is pending: {command}"
+    gone = run_hook("guard_bash.py", {"tool_input": {"command": "gh pr ready"}, "cwd": os.path.join(base, "gone"),
+                                      "session_id": "test"}, env={"PATH": fake + ":" + os.environ["PATH"]})
+    assert gone and "doesn't exist" in gone["hookSpecificOutput"]["permissionDecisionReason"], "a crash would allow"
     for heading in ("## Before the merge \n", "## Before the merge ##\n"):
         with open(guide, "w") as fh:
             fh.write(steps.replace("## Before the merge\n", heading))
@@ -377,21 +385,37 @@ def pr_gate_waits_for_staging(base):
     with open(guide, "w") as fh:
         fh.write(steps + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n")
     for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", 'gh pr ready "12"', "if true; then gh pr ready; fi",
-                    "gh pr ready 2>&1", "gh pr ready > ready.log", "gh pr ready 12 2> err.log"]:
+                    "gh pr ready 2>&1", "gh pr ready > ready.log", "gh pr ready 12 2> err.log", "gh pr ready 12; gh pr ready 12"]:
         assert decision(command) == "allow", f"every S step passed with evidence: {command}"
+    for command in ["gh pr ready 12 --repo o/r", "gh pr -R o/r ready 12", "gh -R o/r pr ready 12", "gh pr ready -Ro/r 12"]:
+        assert "--repo" in (reason(command) or ""), f"staging passed, but not checked for that repo: {command}"
+    assert "someone-else" in (reason('gh pr ready "13"') or ""), "a quoted target is still the target"
+    assert "unknown" in (reason("gh pr ready 99") or ""), "a PR gh can't find"
+    assert "One `gh pr ready`" in (reason("gh pr ready 12; gh pr ready 13") or ""), "one lookup per command"
+    with open(guide, "a") as fh:
+        fh.write("\n## Results after the deploy (2026-10-01)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
+                 "| P1 | PASS | [out](e/S1.txt) |\n")
+    assert decision("gh pr ready") == "allow", "ship's table after the deploy isn't the staging results"
+    for rows, expected in [("| S1 | FAIL | [out](e/S1.txt) |\n| S1 | PASS | [out](e/S1.txt) |\n", "allow"),
+                           ("| S1 | PASS | [out](e/S1.txt) |\n| S1 | FAIL | [out](e/S1.txt) |\n", "deny")]:
+        with open(guide, "w") as fh:
+            fh.write(steps + head + rows + "| S2 | PASS | [out](e/S2.txt) |\n")
+        assert decision("gh pr ready") == expected, f"a step's last row decides: {rows!r}"
+    with open(guide, "wb") as fh:
+        fh.write(b"# Guide\n## Before the merge\n### S1. \xff\xfe\n")
+    assert "Couldn't read the staging results" in (reason("gh pr ready") or ""), "a check that crashes holds the PR"
     with open(guide, "w") as fh:
         fh.write("# Guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")
     assert decision("gh pr ready") == "allow", "only after-merge steps"
     with open(guide, "w") as fh:
         fh.write("# Guide\n## After the merge\n### P1. Backfill\n")
     assert decision("gh pr ready") == "allow", "no Before-the-merge part at all"
-    os.chmod(guide, 0)
-    try:
-        assert decision("gh pr ready") == "deny", "a guide that can't be read isn't a guide that passed"
-    finally:
-        os.chmod(guide, 0o644)
-    with open(os.path.join(fake, "gh"), "w") as fh:
-        fh.write("#!/bin/sh\n[ \"$1 $2\" = \"pr view\" ] && echo someone-else\n")
+    if os.geteuid() != 0:  # root reads it anyway
+        os.chmod(guide, 0)
+        try:
+            assert decision("gh pr ready") == "deny", "a guide that can't be read isn't a guide that passed"
+        finally:
+            os.chmod(guide, 0o644)
     assert decision("gh pr ready 13") == "deny", "another branch's PR can't be checked from this checkout"
     os.remove(guide)
     assert decision("gh pr create --fill") == "allow", "no guide, no staging"
@@ -427,6 +451,7 @@ def codex_pr_commands_name_their_checkout(base):
     assert "33986" in codex("gh pr edit 5 --title x")
     assert "33986" in codex("command gh pr create --fill"), "a wrapper doesn't hide it"
     assert "33986" in codex("gh pr -R o/r create --fill"), "nor gh's --repo flag"
+    assert "33986" in codex("gh pr ready 12"), "marking ready checks the checkout too"
     # Each of these leaves the PR in the unknown workdir, or somewhere the gate would read differently.
     for command in ["cd sub && gh pr create --fill", f"cd {repo}; gh pr create --fill", f"false && cd {repo}; gh pr create --fill",
                     f"cd {repo} | gh pr create --fill", f"cd {repo} && cd - && gh pr create --fill", f"  cd {repo} && gh pr create --fill",

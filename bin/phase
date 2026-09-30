@@ -9,7 +9,6 @@ Prints nothing outside a git repo, on the default branch or when detached.
 """
 import json
 import os
-import re
 import subprocess
 import sys
 import time
