@@ -77,7 +77,7 @@ flowchart TD
   MG --> SH[ship skill: your deploy + verification guide, rollback ready, close the loop]
 ```
 
-The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards invalidates it. A green verify that ran no check (no `ran:` line) leaves a separate stamp, and the status line says "verify checked nothing".
+The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards but the changelog invalidates it. Only running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no check (no `ran:` line) leaves a separate stamp, and the status line says "verify checked nothing".
 
 When the change needs manual tests on staging, `validate` ends by handing you the branch: if the agent worked in a git worktree, it removes it (only once everything is committed and pushed) so you can switch to the branch in your main checkout. The spec, the reports, the staging guide and the review stamps live in the repository's shared `.git/agents/`, so they survive the hand-off: run `bin/reports` there. The PR is opened after you report the staging results, so its description carries them.
 

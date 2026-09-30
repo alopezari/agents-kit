@@ -393,7 +393,8 @@ def run_verify(root):
     if not os.access(verify, os.X_OK):
         verify = AUTO_VERIFY
     if not os.access(verify, os.X_OK):
-        return [f"No verify to run: neither {verify} nor ~/.agents/repos/<repo>/verify is executable."], True, "", None
+        problems = [f"No verify to run: neither {verify} nor ~/.agents/repos/<repo>/verify is executable."]
+        return problems, True, "", record_verify(root, None, "")
     # Stamped with the content verify started from: an edit made while it ran leaves the change unstamped.
     checked_fingerprint = in_checkout(root, review_stamp.fingerprint)
     try:
@@ -404,6 +405,9 @@ def run_verify(root):
                          for part in (timeout.stdout, timeout.stderr))
         save_verify_report(root, verify, output, f"FAIL (timed out after {VERIFY_TIMEOUT}s)")
         return [f"{verify} timed out after {VERIFY_TIMEOUT}s."], True, output, record_verify(root, None, "")
+    except OSError as error:
+        save_verify_report(root, verify, "", f"FAIL (couldn't start: {error})")
+        return [f"{verify} couldn't start: {error}"], True, "", record_verify(root, None, "")
     output = result.stdout + result.stderr
     checked = checked_something(result.stdout + "\n" + result.stderr)
     if result.returncode != 0:

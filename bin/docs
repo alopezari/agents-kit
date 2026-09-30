@@ -297,7 +297,8 @@ def render():
     w("  FP -->|ready to merge| MG{You merge}\n  MG --> SH[ship skill: your deploy + verification guide, rollback ready, close the loop]\n```\n")
     w("The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up "
       "in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a "
-      "stamp of the exact change in `.git/`; editing anything afterwards invalidates it. A green verify that ran no "
+      "stamp of the exact change in `.git/`; editing anything afterwards but the changelog invalidates it. Only "
+      "running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no "
       "check (no `ran:` line) leaves a separate stamp, and the status line says \"verify checked nothing\".\n")
     w("When the change needs manual tests on staging, `validate` ends by handing you the branch: if the agent worked in "
       "a git worktree, it removes it (only once everything is committed and pushed) so you can switch to the branch in "

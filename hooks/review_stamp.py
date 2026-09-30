@@ -64,7 +64,7 @@ def merge_base(cwd=None):
 
 def changed_paths():
     merge_base_sha = merge_base()
-    paths = set(git("diff", "--name-only", merge_base_sha).splitlines())
+    paths = set(git("diff", "--no-renames", "--name-only", merge_base_sha).splitlines())  # a rename hides its source
     paths |= set(git("ls-files", "--others", "--exclude-standard").splitlines())
     return merge_base_sha, sorted(p for p in paths if p)
 
