@@ -385,8 +385,9 @@ def stop_asks_once_about_files_outside_the_change_map(base):
         line = next((line for line in reason.splitlines() if "Change map doesn't name" in line), "")
         return sorted(line.split("`")[1::2])
     everything = ["app.py", "lib/café.py", "lib/util.py", "other/app.py", "tests/test_app.py", "committed.py"]
-    assert asked("d1", everything) == ["committed.py", "lib/util.py", "old.py", "other/app.py"], \
-        "unmapped code files: committed, deleted, named only in Assumptions, or same-named elsewhere; not lock files"
+    first = asked("d1", everything)
+    assert first == ["committed.py", "lib/util.py", "old.py", "other/app.py"], \
+        f"unmapped code files: committed, deleted, named only in Assumptions, or same-named elsewhere; not lock files: {first}"
     assert asked("d1", everything) == [], "each file is asked about once per session"
     open(os.path.join(repo, "cache.py"), "w").write("z = 3\n")
     assert asked("d1", ["cache.py"]) == ["cache.py"], "a file that drifts later is asked about; cache.py.bak isn't cache.py"
