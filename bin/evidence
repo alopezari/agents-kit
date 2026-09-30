@@ -13,11 +13,13 @@ if [[ ! $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "evidence: the id names a file in the evidence directory: letters, digits, . _ - (got '$id')" >&2
   exit 64
 fi
-dir="$("$HOME/.agents/bin/reports" path evidence)" || exit 1
+dir="$("$HOME/.agents/bin/reports" path evidence)" || exit 74
 output="$(mktemp)" || exit 74
-"$@" > >(tee "$output") 2>&1
-status=$?
-wait
+# A pipe, not >(tee): macOS's bash 3.2 doesn't wait for a process substitution, so the output could be cut short.
+"$@" 2>&1 | tee "$output"
+statuses=("${PIPESTATUS[@]}")
+status=${statuses[0]}
+if [ "${statuses[1]}" != 0 ]; then echo "evidence: couldn't capture the output" >&2; rm -f "$output"; exit 74; fi
 quote="'\\''"
 {
   printf '$'

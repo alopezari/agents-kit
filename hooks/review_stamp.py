@@ -206,10 +206,11 @@ def rows_without_evidence():
         cells = [c.strip() for c in re.split(r"(?<!\\)\|", re.sub(r"^\s*\||(?<!\\)\|\s*$", "", line))] if re.search(r"(?<!\\)\|", line) else None
         if not cells:
             columns = None  # a table per block, each with its own header
-        elif "Result" in cells and "Evidence" in cells:
-            columns = (cells.index("Result"), cells.index("Evidence"))
-        elif columns and len(cells) > max(columns) and re.match(r"[*_]*(PASS|FAIL)\b", cells[columns[0]]):
-            cell = cells[columns[1]]
+        elif {"Result", "Evidence"} <= {c.strip("*_") for c in cells}:
+            names = [c.strip("*_") for c in cells]
+            columns = (names.index("Result"), names.index("Evidence"))
+        elif columns and len(cells) > columns[0] and re.match(r"[*_]*(PASS|FAIL)\b", cells[columns[0]]):
+            cell = cells[columns[1]] if len(cells) > columns[1] else ""
             if not any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files):
                 missing.append(f"{cells[0]}: {cell or '(empty)'}")
     if missing:

@@ -92,7 +92,11 @@ def guard_blocks_irreversible(base):
         assert guard(cmd) == "deny", f"should deny: {cmd}"
         assert guard(f"~/.agents/bin/evidence A1 {cmd}") == "deny", f"the evidence runner runs it all the same: {cmd}"
     assert guard("cd /tmp && evidence B2 sudo ls") == "deny"
+    for wrapped in ["  evidence A1 rm -rf /opt/projects", 'evidence "A1" rm -rf /opt/projects']:
+        assert guard(wrapped) == "deny", wrapped
     assert guard("~/.agents/bin/evidence A1 git status") == "allow"
+    started = time.time()
+    assert guard(";" * 60000 + "x/" * 30000) == "allow" and time.time() - started < 3, "a long line must not stall the guard"
     # An edit chained before a blocked step was lost without a word: the agent took it as done.
     d = run_hook("guard_bash.py", {"tool_input": {"command": "sed -i '' s/a/b/ notes.md && git push --force origin x"},
                                    "cwd": "/tmp", "session_id": "test"})
@@ -216,6 +220,7 @@ def pr_gate_review_and_validation(base):
     write_stamp(repo, "review")
     assert guard("gh pr create --fill", repo) == "deny", "behavior change needs validation too"
     assert guard(f"cd {repo} && ~/.agents/bin/evidence A1 gh pr create --fill", repo) == "deny", "the PR gate sees through the runner"
+    assert guard("env X=1 evidence A1 gh pr create --fill", repo) == "deny"
     write_stamp(repo, "validate")
     assert guard("gh pr create --fill", repo) == "allow"
     open(os.path.join(repo, "CHANGELOG.md"), "w").write("- A line (#12).\n")
@@ -261,6 +266,10 @@ def validate_stamp_needs_evidence(base):
     finally:
         os.chmod(evidence, 0o700)
     assert unsaved.returncode == 74 and "A9.txt" in unsaved.stderr, "evidence that couldn't be saved isn't a pass: " + unsaved.stderr
+    slow = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "A8", "bash", "-c", "echo first; sleep 1; echo last"],
+                          cwd=repo, capture_output=True, text=True)
+    with open(os.path.join(evidence, "A8.txt")) as fh:
+        assert "last" in fh.read(), "the saved output is complete"
     escaped = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "../out", "true"], cwd=repo, capture_output=True)
     assert escaped.returncode == 64 and not os.path.exists(os.path.join(os.path.dirname(evidence), "out.txt")), "an id is a file name"
 
@@ -284,11 +293,13 @@ def validate_stamp_needs_evidence(base):
                  "| B2 | named inside another name | + | PASS | xA1.txt |\n"
                  "| B3 | a \\| b in the check | + | PASS | rc=0 |\n"
                  "| B4 | bold result | + | **PASS** | rc=0 |\n"
-                 "| B5 | empty evidence | + | PASS ||\n\n"
+                 "| B5 | empty evidence | + | PASS ||\n"
+                 "| B6 | no evidence cell | + | PASS |\n\n"
+                 "D. Bold header\n\n| # | Check | Case | **Result** | **Evidence** |\n|---|---|---|---|---|\n| D1 | x | + | PASS | rc=0 |\n\n"
                  "C. No outer pipes\n\n# | Check | Case | Result | Evidence\n---|---|---|---|---\nC1 | x | + | PASS | rc=0\n")
     done = write_validate()
-    named = {row for row in ("A1", "A2", "A3", "B1", "B2", "B3", "B4", "B5", "C1") if f"{row}:" in done.stderr}
-    assert done.returncode == 2 and named == {"A2", "B1", "B2", "B3", "B4", "B5", "C1"} and not stamped(), done.stderr
+    named = {row for row in ("A1", "A2", "A3", "B1", "B2", "B3", "B4", "B5", "B6", "C1", "D1") if f"{row}:" in done.stderr}
+    assert done.returncode == 2 and named == {"A2", "B1", "B2", "B3", "B4", "B5", "B6", "C1", "D1"} and not stamped(), done.stderr
     with open(os.path.join(evidence, "b1.png"), "wb") as fh:
         fh.write(b"\x89PNG")
     with open(report, "w") as fh:
