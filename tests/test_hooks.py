@@ -209,6 +209,45 @@ def pr_gate_follows_worktrees(base):
     assert guard("gh pr create --head feat/x --fill", main) == "allow"
 
 
+def codex_pr_commands_name_their_checkout(base):
+    # Codex runs a command in its per-call workdir but sends the hook the session's cwd (openai/codex#33986): a PR
+    # opened from an unreviewed checkout would be judged by the reviewed one the session started in.
+    repo = new_repo(base)
+    git(repo, "switch", "-q", "-c", "feature")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    for kind in ("review", "validate"):
+        subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=repo, capture_output=True)
+
+    def codex(command):
+        d = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": "test",
+                                       "turn_id": "t1"}, env={"AGENTS_HARNESS": ""})
+        return d["hookSpecificOutput"]["permissionDecisionReason"] if d else "allow"
+
+    assert "33986" in codex("gh pr create --fill"), "the checkout it runs in is unknown"
+    assert "33986" in codex("gh pr edit 5 --title x")
+    assert "33986" in codex("command gh pr create --fill"), "a wrapper doesn't hide it"
+    # Each of these leaves the PR in the unknown workdir, or somewhere the gate would read differently.
+    for command in ["cd sub && gh pr create --fill", f"cd {repo}; gh pr create --fill", f"false && cd {repo}; gh pr create --fill",
+                    f"cd {repo} | gh pr create --fill", f"cd {repo} && cd - && gh pr create --fill", f"  cd {repo} && gh pr create --fill",
+                    "cd /$TARGET && gh pr create --fill", f'cd "~/x" && gh pr create --fill', f"cd {repo} && sh -c 'cd /tmp && gh pr create'",
+                    f'echo "$(true)"; echo "; cd {repo}"; gh pr create --fill', f'echo "; cd {repo}"; gh pr create --fill',
+                    f"cd {repo} && true & gh pr create --fill", f"cd {repo}/missing && true; gh pr create --fill",
+                    f"cd {os.path.dirname(repo)}/rep? && gh pr create --fill", f"cd\n{repo} && gh pr create --fill",
+                    "env GH_HOST=github.com gh pr create --fill", "if true; then gh pr create --fill; fi", "{ gh pr edit 5 --title x; }",
+                    f"cd {repo} && {{ cd /tmp; gh pr create --fill; }}", f"cd {repo} && command cd /tmp && gh pr create --fill"]:
+        assert "33986" in codex(command), f"the PR's checkout isn't the one checked: {command!r}"
+    assert codex(f"cd {repo} && gh pr create --fill") == "allow"
+    assert codex(f'cd "{repo}" && git push && gh pr create --fill') == "allow"
+    assert codex("gh pr view 5") == "allow", "only the commands the PR checks judge"
+    bracketed = os.path.join(base, "repo[1]")
+    shutil.copytree(repo, bracketed)
+    assert codex(f"cd '{bracketed}' && gh pr view 5 && gh pr create --fill") == "allow", "quoted, a [ is only a character"
+    for command in [f"cd {repo} && gh pr create --head fix/cd --fill", f"cd {repo} && gh pr create --body-file /tmp/cd.md",
+                    f"cd {repo} && gh pr create --fill 2>&1"]:
+        assert codex(command) == "allow", f"nothing here runs the PR elsewhere: {command!r}"
+    assert guard("gh pr create --fill", repo) == "allow", "Claude Code's cwd is where the command runs"
+
+
 # --- stop checks --------------------------------------------------------------------------------
 def reports_survive_worktree_removal(base):
     main = new_repo(base, "main")
@@ -542,7 +581,7 @@ def post_edit_syntax_feedback(base):
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          pr_gate_follows_worktrees, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
+          pr_gate_follows_worktrees, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

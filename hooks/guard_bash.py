@@ -15,7 +15,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from hooklog import log  # noqa: E402
+from hooklog import harness, log  # noqa: E402
 import private_terms  # noqa: E402
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
@@ -225,6 +225,32 @@ def unreviewed_pr(command, cwd):
     return None
 
 
+# The one form both this check and pr_checkout() read the same way: a literal absolute path (no expansion or glob),
+# and && so gh only runs where the cd succeeded.
+ABSOLUTE_CD_FIRST = re.compile(r"""cd[ \t]+((?:~[\w.-]*)?/[^\s;&|()$`'"\\*?\[]*|"/[^"$`\\]*"|'/[^']*')[ \t]*&&""")
+# Anywhere, not only in command position: a wrapper, `then` or `{` in front must not hide it, and a false match only
+# asks for the cd form.
+GH_PR_WORDS = re.compile(r"\bgh\s+pr\s+(?:create|edit)\b")
+CD_WORD = re.compile(r"(?<![\w/.-])(?:cd|pushd|popd)(?![\w/.-])")
+
+
+def pr_checkout_unknown(command, payload):
+    """Codex runs a command in its per-call workdir but sends the session's cwd (openai/codex#33986), so the PR
+    checks would judge the wrong checkout unless the command starts by cd-ing to an existing absolute path, and
+    neither cds again nor backgrounds the chain. Guards against a model's slip, not a hostile one."""
+    code = shell_code(command)
+    if harness(payload) != "codex" or not GH_PR_WORDS.search(code):
+        return None
+    first = ABSOLUTE_CD_FIRST.match(command)
+    if first and os.path.isdir(os.path.expanduser(first.group(1).strip("\"'"))):
+        rest = code[first.end():]
+        if not CD_WORD.search(rest) and not re.search(r"(?<![&>])&(?![&>])", rest):
+            return None
+    return ("Codex doesn't tell hooks the workdir a command runs in (openai/codex#33986), so this PR command can't be "
+            "checked against the right checkout. Start the command with `cd /absolute/path/to/checkout && ` (an existing, "
+            "literal path; no other cd, no `&`), and don't set a workdir.")
+
+
 def repo_id(repo, default_host=None):
     """(host, owner/repo) from OWNER/REPO, HOST/OWNER/REPO, a URL (a PR's too) or a git remote URL."""
     path = re.sub(r"^(?:\w+://)?(?:[^@/]+@)?", "", repo.strip()).replace(":", "/")
@@ -392,7 +418,8 @@ def main():
         return 0
     cwd = os.path.realpath(payload.get("cwd") or os.getcwd())
 
-    reason = dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd)
+    reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd)
+              or unreviewed_pr(command, cwd))
     if not reason:
         for pattern, why in RULES:
             if re.search(pattern, command):

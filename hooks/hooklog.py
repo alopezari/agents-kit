@@ -9,6 +9,10 @@ import time
 LOG = os.path.expanduser("~/.agents/logs/hooks.jsonl")
 
 
+def harness(payload):
+    return os.environ.get("AGENTS_HARNESS") or ("codex" if payload.get("turn_id") else "claude-code")
+
+
 def log(hook, decision, payload, detail):
     try:
         os.makedirs(os.path.dirname(LOG), exist_ok=True)
@@ -19,7 +23,7 @@ def log(hook, decision, payload, detail):
                 "decision": decision,
                 "session": payload.get("session_id"),
                 "cwd": payload.get("cwd"),
-                "harness": os.environ.get("AGENTS_HARNESS") or ("codex" if payload.get("turn_id") else "claude-code"),
+                "harness": harness(payload),
                 "detail": detail[:500],
             }) + "\n")
     except Exception:
