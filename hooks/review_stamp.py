@@ -2,7 +2,8 @@
 """Record or check that a skill ran on the exact current change.
 
   review_stamp.py write [--kind review|validate]   # end of self-review / validate; verify stamps come only from
-                                                   # its runner (stop_checks.py), through record_verify()
+                                                   # its runner (stop_checks.py), through record_verify(), and
+                                                   # validate needs a report whose PASS/FAIL rows name their evidence
   review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
@@ -83,7 +84,7 @@ REPORT_KINDS = ("spec", "verify", "review", "validation", "staging-guide", "foll
 
 
 def branch_file_names(repo, key):
-    return [f"{kind}-{repo}-{key}.md" for kind in REPORT_KINDS] + [f"browser-ab-spec-{repo}-{key}.json"]
+    return [f"{kind}-{repo}-{key}.md" for kind in REPORT_KINDS] + [f"browser-ab-spec-{repo}-{key}.json", f"evidence-{repo}-{key}"]
 
 
 def renamed_from(branch):
@@ -120,12 +121,22 @@ def follow_branch_renames():
                 try:
                     os.rename(src, dst)
                     moved = True
+                    if dst.endswith(".md"):  # reports link their evidence by its directory's name
+                        relink_evidence(dst, f"evidence-{repo}-{old}", f"evidence-{repo}-{new}")
                     print(f"moved {os.path.basename(src)} to {os.path.basename(dst)}", file=sys.stderr)
                 except OSError as error:  # a sandbox with a read-only .git: the caller falls back to $TMPDIR
                     print(f"could not move {src} to {dst}: {error}", file=sys.stderr)
         if moved and old_name:
             log_rename(repo, old_name, branch)
     move_out_of_tmpdir(common, repo, new)
+
+
+def relink_evidence(report, old_dir, new_dir):
+    with open(report) as fh:
+        text = fh.read()
+    if old_dir in text:
+        with open(report, "w") as fh:
+            fh.write(text.replace(old_dir, new_dir))
 
 
 def log_rename(repo, old, new):
@@ -176,6 +187,38 @@ def legacy_stamp_path(kind):
     return os.path.join(git("rev-parse", "--absolute-git-dir"), name)
 
 
+def rows_without_evidence():
+    """Why the validation report can't back a validate stamp: it's missing, or PASS/FAIL rows whose Evidence cell names
+    no non-empty file of the evidence directory. Empty when it can."""
+    reports = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "reports")
+    report = subprocess.run([reports, "path", "validation"], capture_output=True, text=True).stdout.strip()
+    evidence = subprocess.run([reports, "path", "evidence"], capture_output=True, text=True).stdout.strip()
+    try:
+        with open(report) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return [f"No validation report at {report}: save it first (validate skill, step 5)."]
+    files = [name for name in os.listdir(evidence) if os.path.isfile(os.path.join(evidence, name))
+             and os.path.getsize(os.path.join(evidence, name)) > 0] if os.path.isdir(evidence) else []
+    missing, columns = [], None
+    for line in lines:
+        # Markdown tables: outer pipes optional, \| is a pipe inside a cell.
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", re.sub(r"^\s*\||(?<!\\)\|\s*$", "", line))] if re.search(r"(?<!\\)\|", line) else None
+        if not cells:
+            columns = None  # a table per block, each with its own header
+        elif {"Result", "Evidence"} <= {c.strip("*_") for c in cells}:
+            names = [c.strip("*_") for c in cells]
+            columns = (names.index("Result"), names.index("Evidence"))
+        elif columns and len(cells) > columns[0] and re.match(r"[*_]*(PASS|FAIL)\b", cells[columns[0]]):
+            cell = cells[columns[1]] if len(cells) > columns[1] else ""
+            if not any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files):
+                missing.append(f"{cells[0]}: {cell or '(empty)'}")
+    if missing:
+        return [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for output, "
+                "a screenshot for a UI state):"] + missing
+    return []
+
+
 def record_verify(kind, checked_fingerprint):
     """Leave only this verify run's stamp: kind on the fingerprint it checked, or none when kind is None (it failed).
     Raises OSError when a stamp can't be written or removed, after trying every removal."""
@@ -216,6 +259,10 @@ def main():
         return 0
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
+    unbacked = rows_without_evidence() if command == "write" and kind == "validate" else []
+    if unbacked:
+        print("\n".join(unbacked), file=sys.stderr)
+        return 2
     if command == "write":
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
         with open(stamp_path(kind), "w") as fh:

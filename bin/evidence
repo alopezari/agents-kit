@@ -1,0 +1,33 @@
+#!/bin/bash
+# Run a validation check and keep what it showed: evidence <id> <command> [args...]
+# Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the
+# command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`,
+# which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned.
+set -uo pipefail
+if [ $# -lt 2 ]; then
+  echo "usage: evidence <id> <command> [args...]" >&2
+  exit 64
+fi
+id=$1; shift
+if [[ ! $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "evidence: the id names a file in the evidence directory: letters, digits, . _ - (got '$id')" >&2
+  exit 64
+fi
+dir="$("$HOME/.agents/bin/reports" path evidence)" || exit 74
+output="$(mktemp)" || exit 74
+# A pipe, not >(tee): macOS's bash 3.2 doesn't wait for a process substitution, so the output could be cut short.
+"$@" 2>&1 | tee "$output"
+statuses=("${PIPESTATUS[@]}")
+status=${statuses[0]}
+if [ "${statuses[1]}" != 0 ]; then echo "evidence: couldn't capture the output" >&2; rm -f "$output"; exit 74; fi
+quote="'\\''"
+{
+  printf '$'
+  for arg in "$@"; do
+    if [[ $arg =~ ^[A-Za-z0-9_./:=@%+,-]+$ ]]; then printf ' %s' "$arg"; else printf " '%s'" "${arg//\'/$quote}"; fi
+  done
+  printf '\n# in %s, %s, exit %s\n\n' "$PWD" "$(date '+%Y-%m-%d %H:%M:%S %z')" "$status"
+  cat "$output"
+} > "$dir/$id.txt" || { echo "evidence: couldn't save $dir/$id.txt" >&2; rm -f "$output"; exit 74; }
+rm -f "$output"
+exit $status

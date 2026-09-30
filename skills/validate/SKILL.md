@@ -47,9 +47,11 @@ Never run deploys, `sync_db`, SSH to shared hosts, or commands that reset the lo
 
 ## 3. Run the full unit suite
 
-Where `verify` already runs the whole unit suite (the repo notes say so), the verify stamp from step 0 covers this step: don't run it again. Elsewhere, run the whole suite once, including what `verify` skips (Docker suites, slow groups when the change touches them). Compare against `~/.agents/repos/<repo>/phpunit-baseline.txt`: only new failures count.
+Where `verify` already runs the whole unit suite (the repo notes say so), the verify stamp from step 0 covers this step: don't run it again, and keep its report as this step's evidence with `cp "$(~/.agents/bin/reports path verify)" "$(~/.agents/bin/reports path evidence)/unit-suite-verify.md"`. That report keeps the last 6,000 characters of the output; when a check rests on earlier lines, run the suite through `bin/evidence` instead. Elsewhere, run the whole suite once, including what `verify` skips (Docker suites, slow groups when the change touches them). Compare against `~/.agents/repos/<repo>/phpunit-baseline.txt`: only new failures count.
 
 ## 4. Run the local checks with temporary scripts
+
+Every check leaves evidence the user can open instead of re-running it, in the branch's evidence directory: `EV="$(~/.agents/bin/reports path evidence)"`. Run each check through `~/.agents/bin/evidence <id> <command> [args...]`: it prints the output and keeps the exit code, and saves `$EV/<id>.txt` with the command, directory, time, exit code and full output. It takes argv, so a pipe or a script piped to a container goes in `bash -c '...'`. For a UI state, save a screenshot as `$EV/<id>-<state>.png`. A unit-test run behind a PASS is evidence too: run it through `bin/evidence`.
 
 - **PHP inside WordPress:** pipe a throwaway script to `wp eval-file -` inside the container, so nothing lands in the working tree (the script must start with `<?php`). Give it a small helper and one line per check:
   ```php
@@ -60,7 +62,7 @@ Where `verify` already runs the whole unit suite (the repo notes say so), the ve
 - **CLI:** run both from source and the built artifact when both ship, and diff their output. Check exit codes, including the error ones.
 - **UI:** an A/B test between Playwright CLI and agent-browser is running until 2026-11-05, so don't pick the tool yourself:
   1. Run `~/.agents/bin/browse assign` once per validation run. It prints the tool assigned to this run.
-  2. Send every browser command through `~/.agents/bin/browse <command>`, using the assigned tool's syntax (`playwright-cli --help` or `agent-browser --help`). Log in, assert on the DOM with explicit selectors and expected values, and take screenshots of the states that matter, saved outside the working tree.
+  2. Send every browser command through `~/.agents/bin/browse <command>`, using the assigned tool's syntax (`playwright-cli --help` or `agent-browser --help`). Log in, assert on the DOM with explicit selectors and expected values, and take a screenshot of every state a check asserts on, saved to `$EV/<id>-<state>.png`.
   3. End with `~/.agents/bin/browse finish --checks <N> --passed <P> --tool-issues <K> --notes "<what the tool made hard, if anything>"`.
 
   Don't use the Playwright MCP for validation while the test runs, so the data stays comparable. You choose the selectors and judge the results, so don't add an AI browser layer (Stagehand and the like) on top: it adds nondeterminism and a second model to a check that has to be reproducible.
@@ -84,7 +86,7 @@ Where `verify` already runs the whole unit suite (the repo notes say so), the ve
 
 ## 5. Report and clean up
 
-Report a table per block, `# | Check | Case (+/−) | Result | Evidence`. Result is PASS, FAIL or NOT RUN. Evidence is what you observed: the command and the relevant output lines, a status code and response excerpt, a query count, or a screenshot path. "Works" is not evidence, and a check without evidence counts as NOT RUN. Then list:
+Report a table per block, `# | Check | Case (+/−) | Result | Evidence`. Result is PASS, FAIL or NOT RUN. Evidence is what you observed, in a few words (the status code, the output line, the query count), plus a link to its file in the evidence directory: `[output](evidence-<repo>-<branch>/A1.txt)`, and `![login page](evidence-<repo>-<branch>/C2-login.png)` for a screenshot, so it shows in the report. The links are relative, since the report and the directory sit side by side; `basename "$EV"` prints the directory's name. "Works" is not evidence, and a check without evidence counts as NOT RUN: the validate stamp refuses a PASS or FAIL row whose Evidence cell names no saved file. Then list:
 - what was only unit-tested;
 - what failed and was fixed in the same change;
 - what couldn't run locally, and why.
@@ -103,7 +105,7 @@ Record the validation. Opening a PR is blocked for behavior changes until this s
 python3 ~/.agents/hooks/review_stamp.py write --kind validate
 ```
 
-Then clean up in one go: temporary scripts, screenshots and `/tmp` files. Revert the override (delete it, then `docker compose up -d`), restore the state you recorded, and confirm with `git status --short` that the working tree only holds the change itself.
+Then clean up in one go: temporary scripts and `/tmp` files. Keep the evidence directory: it is the report's proof. Revert the override (delete it, then `docker compose up -d`), restore the state you recorded, and confirm with `git status --short` that the working tree only holds the change itself.
 
 ## 6. Guide for what only staging or production can test
 

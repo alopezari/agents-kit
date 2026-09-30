@@ -213,6 +213,22 @@ ASSIGNMENT = r"""\w+=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+"""
 PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+)?"
             r"|exec\s+(?:-a(?:\s+\S+|\S+)\s+|-[cl]+\s+|--\s+)*|time\s+(?:-[fo](?:\s+\S+|\S+)\s+|-[pv]+\s+|--\s+)*"
             r"|env\s+(?:-[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir)=\S+\s+|-[i0v]+\s+|--\s+|-\s+)*)*")
+# bin/evidence <id> runs the rest of its line. A one-character lookbehind, with its path cut in Python: a path
+# pattern tried after every separator was quadratic on a long line.
+EVIDENCE_RUNNER = re.compile(r"(?<![^\s;&|(`/])evidence\s+(['\"]?)[A-Za-z0-9][\w.-]*\1\s+")
+
+
+def without_evidence_runner(command):
+    """The command as the shell runs it once bin/evidence steps aside: the checks that look for a command at the start
+    of one must see it there."""
+    kept, last = [], 0
+    for match in EVIDENCE_RUNNER.finditer(command):
+        start = match.start()
+        while start > last and command[start - 1] not in " \t\n;&|(`":
+            start -= 1
+        kept.append(command[last:start])
+        last = match.end()
+    return "".join(kept) + command[last:]
 ENV_CLEARED = re.compile(r"\benv\s+(?:\S+\s+)*?(?:-[0v]*i[0v]*|--ignore-environment|-)\s")
 
 
@@ -431,6 +447,7 @@ def main():
     if not command:
         return 0
     cwd = os.path.realpath(payload.get("cwd") or os.getcwd())
+    command = without_evidence_runner(command)
 
     reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd)
               or unreviewed_pr(command, cwd))
