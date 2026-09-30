@@ -40,6 +40,7 @@ Goal: <one or two sentences on the user-visible outcome, in the issue's terms>
 
 ## Assumptions
 - <routine calls you made, stated so they can be corrected>
+- <for a check that stops something (a guard, validation, permission, rate limit): who it stops — an honest mistake, a careless model or user, or a deliberate attacker>
 
 ## Open questions
 - <only questions whose answer would change the work>

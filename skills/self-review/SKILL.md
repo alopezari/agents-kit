@@ -18,6 +18,7 @@ Two things make self-review work:
 - Base: the PR's target branch, else `trunk`/`main`/`master`/`develop`, whichever exists. Use `git merge-base HEAD <base>`.
 - Review committed and uncommitted changes together: `git diff <merge-base>` plus untracked files.
 - Goal: if `~/.agents/skills/spec/path.sh` points at an existing file, that spec's goal and acceptance criteria are the goal every reviewer gets. Otherwise, state the goal in one or two sentences.
+- For a check that stops something (a guard, validation, permission, rate limit), the goal says who it stops: an honest mistake, a careless model or user, or a deliberate attacker. Without it, reviewers report bypasses the check was never meant to stop, and each round goes to rejecting them.
 - Run `~/.agents/bin/triage` in the checkout. It prints the risk tier, the lenses to run with the signal behind each, how much to send cross-model, and a time budget. Run what it selects. Add a lens it missed only when you can name the risk, and say so in the report.
 
 ## 2. Run the lenses
@@ -62,7 +63,7 @@ Reviewers produce false positives, and a fix for a non-bug is a new bug. For eac
 1. Reproduce it: read the code path end to end, or better, write or run a test that fails.
 2. Give it exactly one verdict, each with evidence you observed, not an argument:
    - **Confirmed**: a failing test or command output, or the file:line trace that reaches the defect.
-   - **Rejected**: the file:line where it's already handled, or a test or command that shows the scenario can't happen.
+   - **Rejected**: the file:line where it's already handled, or a test or command that shows the scenario can't happen. A bypass only an actor outside the check's stated threat model would write is rejected with that reason.
    - **Uncertain**: the concern, and the evidence that would settle it.
 
    A verdict without evidence is uncertain. Forcing this choice beats adding reviewers ([arXiv 2608.18167](https://arxiv.org/abs/2608.18167)).
@@ -73,7 +74,7 @@ Findings reported by two independent reviewers, or by both model families, deser
 
 ## 4. Re-check and report
 
-After fixes, re-run the Correctness lens on the new diff only. The stop hook re-runs `verify` when you finish; run it by hand only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
+After fixes, re-run the Correctness lens on the whole change again, with the same base, and name the fixes in the goal. A fix can break what the first pass cleared, and a reviewer shown only the fix can't see that. For a very large change, split it into batches that together cover all of it, as in step 2. The stop hook re-runs `verify` when you finish; run it by hand only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
 
 ```bash
 python3 ~/.agents/hooks/review_stamp.py write

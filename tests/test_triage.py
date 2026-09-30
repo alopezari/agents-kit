@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 TRIAGE = os.path.expanduser("~/.agents/bin/triage")
 GIT_SENSE = ["cwd = pr_checkout(command, cwd)", "git checkout -b fix", "- uses: actions/checkout@v4",
@@ -49,7 +50,8 @@ def triage_change(before, after):
         write(after)
         git("add", "-A")
         git("commit", "-q", "-m", "change")
-        out = subprocess.run([TRIAGE, "--json", "--range", "HEAD~1..HEAD"], cwd=repo, capture_output=True, text=True)
+        out = subprocess.run([TRIAGE, "--json", "--range", "HEAD~1..HEAD"], cwd=repo, capture_output=True, text=True,
+                             timeout=60)
         return json.loads(out.stdout)
 
 
@@ -138,6 +140,32 @@ for rng in ("HEAD~1", "HEAD~1...HEAD"):
         ok = out.returncode == 0 and "new dependency: left-pad" in maintainability(json.loads(out.stdout))
         fail |= not ok
         print(f"{'ok  ' if ok else 'FAIL'} dependencies, --range {rng}: {out.stderr.strip()[-120:] or 'named'}")
+
+# A group that repeats and repeats inside backtracks exponentially on a long near-miss (#31's guard took 31 s).
+for line, expected in [(r'PREFIXES = r"(?:\w+=\S*\s+|env\s+(?:-\S*\s+)*)*gh"', True), ("const re = /(a+)+$/;", True),
+                       (r"PATTERN = re.compile(r'\d+(?:\.\d+)?')", False), ("$ok = preg_match('/^[a-z]+$/', $s);", False),
+                       ("const re = /(a{1,})+$/;", True), ("const re = /([+])+/;", False), ("const re = /(x{2}a+)*$/;", True),
+                       ("total = (i+1)*2", False), ('patterns = [re.compile(r"(a+)+$")]', True),
+                       ('re.compile(r"safe"); total = (i+1)*2', False), ("const re = /(a+)+$/", True), ("total = a/(i+1)*2/g;", False),
+                       ('re.compile(r"^(?:a?b?)+$")', True), ('re.compile(r"^(a+){20}$")', True), ('re.compile(r"(\\.\\d+)?$")', False)]:
+    result = triage_change({}, {"code.py": line + "\n"})
+    got = "regex worst-case timing" in result["tests"]
+    ok = got == expected and (not expected or "nested quantifier" in " ".join(result["lenses"].get("performance", [])))
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {'regex timing' if expected else 'no regex timing'}: {line}")
+started = time.time()
+triage_change({}, {"code.py": "x = '(" + "+" * 30000 + "'\n", "b.py": 'P = re.compile(r"(a+' + "b{1}" * 30 + ')$")\n',
+                   "c.py": "".join('D = "' + "=/[" * 650 + '"\n' for _ in range(300))})
+ok = time.time() - started < 3
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} the regex scan stays fast on a long line ({time.time() - started:.1f}s)")
+long_line = 'L = re.compile(r"' + "a" * 180 + '(b+)+$")'
+result = triage_change({}, {"code.py": "".join(f'P{c} = re.compile(r"^({c}+)+$")\n' for c in "wxyz") + long_line + "\n"})
+timing = result["tests"].get("regex worst-case timing", [])
+ok = len(timing) == 5 and all(t.startswith("code.py: `P") and t.endswith('+)+$")`') for t in timing[:4]) \
+    and timing[4] == f"code.py: `{long_line}`"
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} every flagged regex is named for timing, whole: {timing}")
 
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected

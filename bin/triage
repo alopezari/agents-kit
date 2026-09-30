@@ -48,6 +48,59 @@ GIT_CHECKOUT = re.compile(r"\bgit(\b|_)|actions/checkout|worktree|\bbranch|\b(pr
                           re.I)
 PROPERTY_FN = re.compile(r"function\s+\w*(parse|format|calculate|compute|compare|convert|normali[sz]e|version|date|week"
                          r"|price|round|slug|sanitize|validate)\w*\s*\(", re.I)
+# Where a line's regex text sits: string literals on a line that calls a regex API or holds a raw string, and
+# /.../ literals where an expression starts (not a division). Each piece reads a character one way, and a try at a
+# literal stops at the next /, so the scan stays linear. An unescaped / inside [...] ends the literal early: a miss.
+REGEX_API = re.compile(r"""\br["']|\bre\.\w+\(|preg_\w+\(|RegExp\(|=~""")
+STRING_LITERAL = re.compile(r""""((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'""")
+SLASH_LITERAL = re.compile(r"(?:^|[=(,:!&|?{;]|\breturn)\s*/((?:[^/\\\n\[]|\\.|\[(?:[^\]\\\n/]|\\.)*\])+)/[a-z]*")
+BOUNDED_REPEAT = re.compile(r"\{\d+,")
+FIXED_REPEAT = re.compile(r"\{\d+")
+REGEX_LINE_MAX = 2000  # longer added lines are data, not patterns
+
+
+def regex_texts(line):
+    texts = [m.group(1) for m in SLASH_LITERAL.finditer(line)]
+    if REGEX_API.search(line):
+        texts += [m.group(1) if m.group(1) is not None else m.group(2) for m in STRING_LITERAL.finditer(line)]
+    return texts
+
+
+def nested_quantifier(line):
+    """Whether a regex group that repeats holds a repeat itself, like (a+)+, (?:a?b?)+ or (a+){20}: on a long input
+    that almost matches it can backtrack exponentially. One pass with a stack of open groups, so the scan itself
+    stays linear; a heuristic that points the Performance lens and the timing test at the pattern."""
+    def inner_repeat_at(k):  # ? right after ( or after another quantifier is syntax, not a repeat
+        return k < len(line) and (line[k] in "*+" or bool(BOUNDED_REPEAT.match(line, k))
+                                  or (line[k] == "?" and k > 0 and line[k - 1] not in "(*+?}"))
+
+    def repeat_at(k):
+        return k < len(line) and (line[k] in "*+" or bool(FIXED_REPEAT.match(line, k)))
+
+    open_groups, i = [], 0  # each: whether a repeat was seen inside
+    while i < len(line):
+        c = line[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "[":  # a character class: its * and + are characters
+            i += 2 if line[i + 1:i + 2] == "]" or line[i + 1:i + 3] == "^]" else 1
+            while i < len(line) and line[i] != "]":
+                i += 2 if line[i] == "\\" else 1
+        elif c == "(":
+            open_groups.append(False)
+        elif c == ")" and open_groups:
+            had_repeat = open_groups.pop()
+            if had_repeat and repeat_at(i + 1):
+                return True
+            if open_groups and (had_repeat or repeat_at(i + 1)):
+                open_groups[-1] = True
+        elif inner_repeat_at(i) and open_groups:
+            open_groups[-1] = True
+        i += 1
+    return False
+
+
 BUDGET = {"low": "< 5 min", "standard": "<= 20 min", "high": "<= 45 min"}
 
 
@@ -259,6 +312,11 @@ def triage(rng=None):
         tests[f"php {minimum} syntax (verify)"] = [f"composer requires php {minimum}"]
     if re.search(r"CREATE TABLE|ALTER TABLE|dbDelta|migration", "\n".join(l for _, l in code_added), re.I):
         tests["migration round-trip"] = hits(r"CREATE TABLE|ALTER TABLE|dbDelta|migration", limit=2)
+    nested = [f"{p}: `{l.strip()}`" for p, l in code_added
+              if len(l) <= REGEX_LINE_MAX and any(nested_quantifier(t) for t in regex_texts(l))]
+    if nested:
+        lenses.setdefault("performance", []).extend(f"nested quantifier in {n[:200]}" for n in nested[:3])
+        tests["regex worst-case timing"] = nested  # every one: each needs its own timing
     prop = [f"{p}: {m.group(0)}" for p, l in code_added for m in [PROPERTY_FN.search(l)] if m][:3]
     if prop:
         tests["property-based"] = prop
