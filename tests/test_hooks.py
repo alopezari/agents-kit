@@ -374,7 +374,8 @@ def stop_asks_once_about_files_outside_the_change_map(base):
     git(repo, "add", "committed.py")
     git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "committed")
     os.remove(os.path.join(repo, "old.py"))
-    for path in ("lib/util.py", "other/app.py", "tests/test_app.py", "package-lock.json"):
+    # Bytecode as post_edit's py_compile leaves it where Python has no pycache prefix (CI's Python did; macOS's doesn't).
+    for path in ("lib/util.py", "other/app.py", "tests/test_app.py", "package-lock.json", "__pycache__/app.cpython-314.pyc"):
         os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
         open(os.path.join(repo, path), "w").write("x = 1\n")
     for path in ("app.py", "lib/café.py"):

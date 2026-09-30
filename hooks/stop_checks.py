@@ -38,7 +38,9 @@ WEAKENED_TEST = re.compile(
 )
 DEBUG_LEFTOVER = re.compile(r"\bvar_dump\(|\bdebugger;|^\s*dd\(|\bbinding\.pry\b|\bbreakpoint\(\)")
 CONFLICT_MARKER = re.compile(r"^(<{7}|>{7})( |$)")
-LOCK_FILE = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|[\w.-]+\.lock)$")
+# Generated, never written by hand: lock files, and the bytecode post_edit's py_compile leaves when Python has no pycache prefix.
+GENERATED_FILE = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|[\w.-]+\.lock)$"
+                            r"|(^|/)__pycache__/|\.py[co]$")
 
 
 def git(args, cwd):
@@ -189,7 +191,7 @@ def unmapped_files(root, session):
     changed = set(git(["-c", "core.quotePath=off", "diff", "--name-only", base], root).splitlines())
     changed |= set(git(["-c", "core.quotePath=off", "ls-files", "--others", "--exclude-standard"], root).splitlines())
     # A path, not a bare file name: `app.py` in the map doesn't cover `other/app.py`, nor does `app.py.bak`.
-    unmapped = sorted(p for p in changed if p and not review_stamp.NOT_BEHAVIOR.search(p) and not LOCK_FILE.search(p)
+    unmapped = sorted(p for p in changed if p and not review_stamp.NOT_BEHAVIOR.search(p) and not GENERATED_FILE.search(p)
                       and not re.search(rf"(?<![\w./-])(\./)?{re.escape(p)}(?![\w/-]|\.\w)", change_map.group(1)))
     asked_path = os.path.join(MARKER_DIR, f"{session}.map-asked")
     try:
