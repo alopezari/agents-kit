@@ -213,6 +213,8 @@ ASSIGNMENT = r"""\w+=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+"""
 PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+)?"
             r"|exec\s+(?:-a(?:\s+\S+|\S+)\s+|-[cl]+\s+|--\s+)*|time\s+(?:-[fo](?:\s+\S+|\S+)\s+|-[pv]+\s+|--\s+)*"
             r"|env\s+(?:-[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir)=\S+\s+|-[i0v]+\s+|--\s+|-\s+)*)*")
+# bin/evidence <id> runs the rest of its line: the checks that look for a command at the start of one must see it there.
+EVIDENCE_RUNNER = re.compile(r"(^|[;&|(\n`]\s*)(?:\S*/)?evidence\s+[A-Za-z0-9][\w.-]*\s+")
 ENV_CLEARED = re.compile(r"\benv\s+(?:\S+\s+)*?(?:-[0v]*i[0v]*|--ignore-environment|-)\s")
 
 
@@ -431,6 +433,7 @@ def main():
     if not command:
         return 0
     cwd = os.path.realpath(payload.get("cwd") or os.getcwd())
+    command = EVIDENCE_RUNNER.sub(r"\1", command)
 
     reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd)
               or unreviewed_pr(command, cwd))

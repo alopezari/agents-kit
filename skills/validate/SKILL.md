@@ -47,7 +47,7 @@ Never run deploys, `sync_db`, SSH to shared hosts, or commands that reset the lo
 
 ## 3. Run the full unit suite
 
-Where `verify` already runs the whole unit suite (the repo notes say so), the verify stamp from step 0 covers this step: don't run it again. Elsewhere, run the whole suite once, including what `verify` skips (Docker suites, slow groups when the change touches them). Compare against `~/.agents/repos/<repo>/phpunit-baseline.txt`: only new failures count.
+Where `verify` already runs the whole unit suite (the repo notes say so), the verify stamp from step 0 covers this step: don't run it again, and keep its report as this step's evidence with `cp "$(~/.agents/bin/reports path verify)" "$(~/.agents/bin/reports path evidence)/unit-suite-verify.md"`. Elsewhere, run the whole suite once, including what `verify` skips (Docker suites, slow groups when the change touches them). Compare against `~/.agents/repos/<repo>/phpunit-baseline.txt`: only new failures count.
 
 ## 4. Run the local checks with temporary scripts
 

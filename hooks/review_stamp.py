@@ -121,12 +121,22 @@ def follow_branch_renames():
                 try:
                     os.rename(src, dst)
                     moved = True
+                    if dst.endswith(".md"):  # reports link their evidence by its directory's name
+                        relink_evidence(dst, f"evidence-{repo}-{old}", f"evidence-{repo}-{new}")
                     print(f"moved {os.path.basename(src)} to {os.path.basename(dst)}", file=sys.stderr)
                 except OSError as error:  # a sandbox with a read-only .git: the caller falls back to $TMPDIR
                     print(f"could not move {src} to {dst}: {error}", file=sys.stderr)
         if moved and old_name:
             log_rename(repo, old_name, branch)
     move_out_of_tmpdir(common, repo, new)
+
+
+def relink_evidence(report, old_dir, new_dir):
+    with open(report) as fh:
+        text = fh.read()
+    if old_dir in text:
+        with open(report, "w") as fh:
+            fh.write(text.replace(old_dir, new_dir))
 
 
 def log_rename(repo, old, new):
@@ -192,12 +202,13 @@ def rows_without_evidence():
              and os.path.getsize(os.path.join(evidence, name)) > 0] if os.path.isdir(evidence) else []
     missing, columns = [], None
     for line in lines:
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")] if line.lstrip().startswith("|") else None
+        # Markdown tables: outer pipes optional, \| is a pipe inside a cell.
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", re.sub(r"^\s*\||(?<!\\)\|\s*$", "", line))] if re.search(r"(?<!\\)\|", line) else None
         if not cells:
             columns = None  # a table per block, each with its own header
         elif "Result" in cells and "Evidence" in cells:
             columns = (cells.index("Result"), cells.index("Evidence"))
-        elif columns and len(cells) > max(columns) and re.match(r"(PASS|FAIL)\b", cells[columns[0]]):
+        elif columns and len(cells) > max(columns) and re.match(r"[*_]*(PASS|FAIL)\b", cells[columns[0]]):
             cell = cells[columns[1]]
             if not any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files):
                 missing.append(f"{cells[0]}: {cell or '(empty)'}")

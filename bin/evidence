@@ -2,7 +2,7 @@
 # Run a validation check and keep what it showed: evidence <id> <command> [args...]
 # Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the
 # command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`,
-# which the shell guard reads as code.
+# which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned.
 set -uo pipefail
 if [ $# -lt 2 ]; then
   echo "usage: evidence <id> <command> [args...]" >&2
@@ -14,7 +14,7 @@ if [[ ! $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   exit 64
 fi
 dir="$("$HOME/.agents/bin/reports" path evidence)" || exit 1
-output="$(mktemp)"
+output="$(mktemp)" || exit 74
 "$@" > >(tee "$output") 2>&1
 status=$?
 wait
@@ -26,6 +26,6 @@ quote="'\\''"
   done
   printf '\n# in %s, %s, exit %s\n\n' "$PWD" "$(date '+%Y-%m-%d %H:%M:%S %z')" "$status"
   cat "$output"
-} > "$dir/$id.txt"
+} > "$dir/$id.txt" || { echo "evidence: couldn't save $dir/$id.txt" >&2; rm -f "$output"; exit 74; }
 rm -f "$output"
 exit $status

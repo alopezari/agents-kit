@@ -69,13 +69,13 @@ Every hook is a small program with one contract: a JSON payload on stdin, a JSON
 
 ## Testing a hook change through a real harness
 
-`tests/` feeds the hooks hand-made payloads. To see a branch's hooks run inside Codex itself, with its real payloads, point `HOME` at a directory whose `.agents` is the branch's checkout. Codex's `hooks.json` runs `python3 $HOME/.agents/hooks/<hook>.py`, and it trusts a hook by that command text, so the branch's code runs through the entries you already approved. `CODEX_HOME` keeps Codex's own settings, login and trust, and `GH_CONFIG_DIR` keeps `gh` logged in:
+`tests/` feeds the hooks hand-made payloads. To see a branch's hooks run inside Codex itself, with its real payloads, point `HOME` at a directory whose `.agents` is the branch's checkout. Codex's `hooks.json` runs `python3 $HOME/.agents/hooks/<hook>.py`, and it trusts a hook by that command text, so the branch's code runs through the entries you already approved. `CODEX_HOME` keeps Codex's own settings, login and trust, and `GH_CONFIG_DIR` keeps `gh` logged in; they come before `HOME=` because bash and zsh expand `~` with the `HOME` assigned before it:
 
 ```bash
 H=$(mktemp -d) && ln -s ~/.agents-worktree-<name> "$H/.agents"   # the branch's checkout
 git init -q /tmp/hook-probe && git -C /tmp/hook-probe commit -q --allow-empty -m init
 echo 'Run this shell command once and report what happened: <a command the change should block or allow>' \
-  | HOME="$H" CODEX_HOME=~/.codex GH_CONFIG_DIR=~/.config/gh \
+  | CODEX_HOME=~/.codex GH_CONFIG_DIR=~/.config/gh HOME="$H" \
     codex exec -C /tmp/hook-probe --skip-git-repo-check -s workspace-write --ephemeral -
 tail -3 ~/.agents-worktree-<name>/logs/hooks.jsonl
 ```

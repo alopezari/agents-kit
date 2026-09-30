@@ -221,6 +221,8 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     evidence = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "evidence")
     assert os.path.isdir(evidence), evidence
     open(os.path.join(evidence, "a1.txt"), "w").write("$ true\n")
+    validation = spec.replace("spec-shop-", "validation-shop-")
+    open(validation, "w").write(f"| A1 | x | + | PASS | [out]({os.path.basename(evidence)}/a1.txt) |\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     stamp(repo, "verify")
 
@@ -232,6 +234,8 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     assert os.path.exists(guide.replace("session~wary-falcon", "shop-1~final")), "reports move with the spec"
     assert open(os.path.join(evidence.replace("session~wary-falcon", "shop-1~final"), "a1.txt")).read() == "$ true\n", \
         "the evidence moves with its report"
+    moved_validation = validation.replace("session~wary-falcon", "shop-1~final")
+    assert "(evidence-shop-shop-1~final/a1.txt)" in open(moved_validation).read(), "its links follow the move"
     check = subprocess.run(["python3", STAMP, "check", "--kind", "verify"], cwd=repo)
     assert check.returncode == 0, "the verify stamp follows the rename"
     assert phase(repo) == "self-review"
