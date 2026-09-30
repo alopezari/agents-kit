@@ -70,6 +70,7 @@ Where `verify` already runs the whole unit suite (the repo notes say so), the ve
 - **Accessibility:** `~/.agents/bin/a11y-check <url>...` runs axe on the pages the change touches and lists serious and critical violations. Compare with the same pages before the change when a violation looks pre-existing.
 - **Property-based:** for the parser, calculation or comparison functions triage names, write a few properties (round-trip, ordering, idempotence, bounds) and check them over generated inputs with a loop in a throwaway script or the repo's PBT library. Keep a property as a real test only if it found something or pins an important invariant.
 - **Mutation (high risk only):** mutate the changed lines (flip conditions, off-by-one bounds, remove calls) and check the tests catch each one: with Infection `--git-diff-lines` when the repo has a coverage driver, otherwise by hand for the 5–10 riskiest lines. Treat surviving mutants as missing tests, not as noise. Time-box it to 10 minutes.
+- **Regex worst-case timing:** for each regex triage names, time it on a long input that almost matches (many repetitions of the repeated part, then a character that fails the match), growing the input until the time is clear: linear is fine, doubling per few characters is a finding. Keep the timing as a test with a bound well under the caller's timeout.
 - **Migration round-trip:** run the migration up, down and up again on a copy of local data, and check the data and schema match.
 
 **Data rules:**

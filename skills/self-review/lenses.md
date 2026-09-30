@@ -68,6 +68,7 @@ You are reviewing for behavior at 100× today's data and traffic.
 - Queries or remote calls inside loops (N+1); missing batching or priming.
 - Unbounded work: queries without `LIMIT`/pagination, loops over unbounded sets, payloads without size limits, external calls without timeouts.
 - Work added to hot paths: code that runs on every request or page load, global hooks, autoloaded options, middleware.
+- Regexes over long or outside input: a group that repeats and repeats inside, or alternatives that can match the same text, backtrack exponentially on a near-miss. Time the worst input.
 - Cache behavior: hit rate, stampedes when it expires, memory size.
 - Background jobs: batch sizes, retry storms, idempotency.
 

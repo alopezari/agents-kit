@@ -139,6 +139,15 @@ for rng in ("HEAD~1", "HEAD~1...HEAD"):
         fail |= not ok
         print(f"{'ok  ' if ok else 'FAIL'} dependencies, --range {rng}: {out.stderr.strip()[-120:] or 'named'}")
 
+# A group that repeats and repeats inside backtracks exponentially on a long near-miss (#31's guard took 31 s).
+for line, expected in [(r'PREFIXES = r"(?:\w+=\S*\s+|env\s+(?:-\S*\s+)*)*gh"', True), ("const re = /(a+)+$/;", True),
+                       (r"PATTERN = re.compile(r'\d+(?:\.\d+)?')", False), ("$ok = preg_match('/^[a-z]+$/', $s);", False)]:
+    result = triage_change({}, {"code.py": line + "\n"})
+    got = "regex worst-case timing" in result["tests"]
+    ok = got == expected and (not expected or "nested quantifier" in " ".join(result["lenses"].get("performance", [])))
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {'regex timing' if expected else 'no regex timing'}: {line}")
+
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected
     fail |= not ok
