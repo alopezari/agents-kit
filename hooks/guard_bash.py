@@ -15,7 +15,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from hooklog import log  # noqa: E402
+from hooklog import harness, log  # noqa: E402
 import private_terms  # noqa: E402
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
@@ -225,6 +225,20 @@ def unreviewed_pr(command, cwd):
     return None
 
 
+def pr_checkout_unknown(command, payload):
+    """Codex runs a command in its per-call workdir but sends the session's cwd (openai/codex#33986), so the PR
+    checks would judge the wrong checkout unless the command first cds to an absolute path."""
+    code = shell_code(command)
+    pr = re.search(r"(?:^|[;&|(\n`])\s*(?:\w+=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*gh\s+pr\s+(?:create|edit)\b", code)
+    if harness(payload) != "codex" or not pr:
+        return None
+    cd = re.search(r"(?:^|[;&|\n])\s*cd\s+([^\s;&|)]+)", code[:pr.start()])
+    if cd and command[cd.start(1):cd.end(1)].strip("\"'")[:1] in ("/", "~"):
+        return None
+    return ("Codex doesn't tell hooks the workdir a command runs in (openai/codex#33986), so this PR command can't be "
+            "checked against the right checkout. Run it as `cd /absolute/path/to/checkout && gh pr ...`, without a workdir.")
+
+
 def repo_id(repo, default_host=None):
     """(host, owner/repo) from OWNER/REPO, HOST/OWNER/REPO, a URL (a PR's too) or a git remote URL."""
     path = re.sub(r"^(?:\w+://)?(?:[^@/]+@)?", "", repo.strip()).replace(":", "/")
@@ -392,7 +406,8 @@ def main():
         return 0
     cwd = os.path.realpath(payload.get("cwd") or os.getcwd())
 
-    reason = dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd)
+    reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd)
+              or unreviewed_pr(command, cwd))
     if not reason:
         for pattern, why in RULES:
             if re.search(pattern, command):
