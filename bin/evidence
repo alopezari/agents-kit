@@ -14,6 +14,10 @@ if [[ ! $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "evidence: the id names a file in the evidence directory: letters, digits, . _ - (got '$id')" >&2
   exit 64
 fi
+if [ -n "${EVIDENCE_DIR+set}" ] && [ -z "$EVIDENCE_DIR" ]; then
+  echo "evidence: EVIDENCE_DIR is set but empty: the guide's step 0 couldn't find the evidence directory" >&2
+  exit 74
+fi
 dir="${EVIDENCE_DIR:-$("$HOME/.agents/bin/reports" path evidence)}" || exit 74
 output="$(mktemp)" || exit 74
 # A pipe, not >(tee): macOS's bash 3.2 doesn't wait for a process substitution, so the output could be cut short.

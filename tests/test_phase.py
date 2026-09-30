@@ -102,6 +102,16 @@ def walks_the_flow(base):
     guide = os.path.join(os.path.dirname(spec), "staging-guide-" + os.path.basename(spec)[len("spec-"):])
     open(guide, "w").write("# Staging guide\n## Before the merge\n### S1. Deploy\n## After the merge\n### P1. Backfill\n## Results (2026-09-23)\n")
     assert phase(repo) == "staging (you)", "a Results heading with no results is still pending"
+    two = "# Staging guide\n## Before the merge\n### S1. Deploy\n### S2. Check\n## After the merge\n### P1. Backfill\n"
+    head = "\n## Results (2026-09-23)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
+    for rows, expected, why in [
+            ("| S1 | PASS | [out](e/S1.txt) |\n", "staging (you)", "S2 has no result yet"),
+            ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | NOT RUN | Expected PASS; waiting for access |\n", "staging (you)", "NOT RUN is pending"),
+            ("| S1 | PASS | no FAIL line |\n| S2 | NOT RUN | need to check there is no FAIL line |\n", "staging (you)", "only the Result column counts"),
+            ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | FAIL | [out](e/S2.txt) |\n", "staging: fix", "a FAIL row"),
+            ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n", "create-pr", "every S step passed")]:
+        open(guide, "w").write(two + head + rows)
+        assert phase(repo) == expected, why
     open(guide, "w").write("# Staging guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")
     assert phase(repo) == "create-pr", "a guide with steps only after the merge doesn't hold the PR"
     open(guide, "w").write("# Staging guide\n1. Check the cart\n")

@@ -275,6 +275,9 @@ def validate_stamp_needs_evidence(base):
     outside = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "S1", "echo", "from staging"], cwd=base,
                              capture_output=True, text=True, env={**os.environ, "EVIDENCE_DIR": elsewhere})
     assert outside.returncode == 0 and "from staging" in open(os.path.join(elsewhere, "S1.txt")).read(), outside.stderr
+    unset_dir = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "S2", "true"], cwd=base, capture_output=True, text=True,
+                               env={**os.environ, "EVIDENCE_DIR": ""})
+    assert unset_dir.returncode == 74 and "EVIDENCE_DIR" in unset_dir.stderr, "an empty EVIDENCE_DIR means step 0 failed"
     escaped = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "../out", "true"], cwd=repo, capture_output=True)
     assert escaped.returncode == 64 and not os.path.exists(os.path.join(os.path.dirname(evidence), "out.txt")), "an id is a file name"
 

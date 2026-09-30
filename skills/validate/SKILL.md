@@ -112,7 +112,7 @@ Then clean up in one go: temporary scripts and `/tmp` files. Keep the evidence d
 Give the user a step-by-step guide they can follow without you and without guessing:
 
 - **Two parts, split at the merge.** `## Before the merge` holds what staging can prove now, as steps `### S1.`, `### S2.`…, ending with "Put the environment back as it was"; the PR waits only for these. `## After the merge` holds what needs the production deploy (a production dry run, a backfill, a scoring run), as steps `### P1.`…; the `ship` skill takes them over when the user deploys. A step that can't run before the merge never goes in the first part: the PR would wait for it forever. When nothing can be proven before the merge, the first part says so and has no S steps, and the PR doesn't wait.
-- **Step 0 lists everything needed up front:** access and accounts (by name, never secret values), VPN, proxy or tunnel, tools and versions, the branch or build to deploy, what the deploy overwrites, how long the whole guide takes, and a `export VAR=...` block that sets every value later steps reuse (site URL, IDs, branch). It includes `export EVIDENCE_DIR="$(cd <the user's checkout> && ~/.agents/bin/reports path evidence)"`, with the checkout's real path, so every step saves its evidence next to the reports from whichever directory it runs in. Computed there, not pasted as a path: the reports move out of `$TMPDIR` once `.git` is writable.
+- **Step 0 lists everything needed up front:** access and accounts (by name, never secret values), VPN, proxy or tunnel, tools and versions, the branch or build to deploy, what the deploy overwrites, how long the whole guide takes, and a `export VAR=...` block that sets every value later steps reuse (site URL, IDs, branch). It includes `export EVIDENCE_DIR="$(cd <the user's checkout> && ~/.agents/bin/reports path evidence)" && echo "$EVIDENCE_DIR"`, with the checkout's real path, whose Expected is a directory ending in `evidence-<repo>-<branch key>` (an empty value makes `bin/evidence` refuse to run), so every step saves its evidence next to the reports from whichever directory it runs in. Computed there, not pasted as a path: the reports move out of `$TMPDIR` once `.git` is writable.
 - **Every step has four parts:**
   - **Why:** one line on what it proves.
   - **Where:** which machine, terminal, directory or browser page, logged in as whom.
@@ -128,7 +128,7 @@ Give the guide in chat in the user's language, and save an English copy to `$(~/
 
 ## 7. Hand the branch over and record the staging results
 
-When there is a staging guide, the PR waits for its results: the PR description then shows real staging evidence, and a staging failure gets fixed before CI and reviewers spend time on the PR. When the change needs no manual tests, skip this step; `create-pr` comes next.
+When the staging guide has steps before the merge, the PR waits for their results: the PR description then shows real staging evidence, and a staging failure gets fixed before CI and reviewers spend time on the PR. When there is no guide, or its steps all come after the merge, skip this step; `create-pr` comes next.
 
 **If you worked in a linked worktree** (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`), remove it so the user can check the branch out: a branch can be checked out in only one worktree. First prove nothing is lost:
 
