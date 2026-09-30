@@ -16,7 +16,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - `bin/ci-wait` waits for the CI of the commit you pushed and prints the failing lines of a failed job; follow-pr uses it. After a turn that pushed, the stop hook asks the agent about that commit's CI when it failed, is still running or can't be read. A Python syntax error after an edit reaches the agent as plain text, not a colour-coded traceback (#29).
 - In Codex, the shell guard only lets a PR command through when it first `cd`s to an absolute path: Codex doesn't pass a command's workdir to hooks (openai/codex#33986), so the review gate could judge the wrong checkout (#30).
 - The shell guard's PR checks (self-review before opening one, private terms in the kit's) also catch a PR command behind `env`, `command`, `exec`, `nohup` or `time`; triage no longer reads `pr_checkout_*` names as a payments signal (#31).
-- The self-review re-checks the whole change after fixes, not only the fix, and asks who a check is meant to stop, so bypasses outside that are rejected at once. triage flags regexes with a nested quantifier, and validate times them on their worst input.
+- The self-review re-checks the whole change after fixes, not only the fix, and asks who a check is meant to stop, so bypasses outside that are rejected at once. triage flags regexes with a nested quantifier, and validate times them on their worst input (#32).
 
 ## [0.4.0] - 2026-09-28
 
