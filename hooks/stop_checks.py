@@ -397,7 +397,11 @@ def run_verify(root):
         save_verify_report(root, verify, "", "FAIL (no verify to run)")
         return problems, True, "", record_verify(root, None, "")
     # Stamped with the content verify started from: an edit made while it ran leaves the change unstamped.
-    checked_fingerprint = in_checkout(root, review_stamp.fingerprint)
+    try:
+        checked_fingerprint = in_checkout(root, review_stamp.fingerprint)
+    except RuntimeError as error:
+        # An earlier run's stamp must not outlive a run that couldn't check anything.
+        return [f"Couldn't fingerprint the change, so verify can't stamp it: {error}"], True, "", record_verify(root, None, "")
     try:
         result = subprocess.run([verify], cwd=root, capture_output=True, text=True, errors="replace", timeout=VERIFY_TIMEOUT)
     except subprocess.TimeoutExpired as timeout:

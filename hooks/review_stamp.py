@@ -13,9 +13,10 @@
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
   review_stamp.py branch-key                       # the current branch as it appears in those file names
 
-The fingerprint covers every file that differs from the merge-base with the
-default branch, by content, except the changelog, so committing stamped changes keeps it valid and
-any later edit invalidates it. Stamps live in the repository's shared git dir, per branch
+A stamp covers every file that differs from the merge-base with the default branch, except the
+changelog, so committing stamped changes keeps it valid and any later edit invalidates it. Review,
+validate and staging stamps hold the branch's diff, so merging the default branch keeps them unless it
+moves the changed lines or their context; verify's holds the files' content, so the tests run again. Stamps live in the repository's shared git dir, per branch
 (.git/agents/stamps/<branch key>/), never in the tree: they survive removing the worktree they were
 written in, so the PR can be opened from the main checkout after a staging hand-off. They also
 follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
@@ -27,6 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 QUALITY_LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
@@ -37,12 +39,25 @@ NOT_BEHAVIOR = re.compile(
     re.I,
 )
 # CI checks the changelog entry, and it is often written last: adding it re-runs nothing.
-NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?$|(^|/)changelog\.d/[^/]+\.md$", re.I)
+NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?\Z|(^|/)changelog\.d/[^/]+\.md\Z", re.I)
 VERIFY_KINDS = ("verify", "verify-empty")
 
 
 def git(*args, cwd=None):
     return subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd).stdout.strip()
+
+
+def git_checked(*args, env=None):
+    """git's output as bytes; a failure raises, since an empty answer would make every change look stamped."""
+    result = subprocess.run(["git", *args], capture_output=True, env=env)
+    if result.returncode != 0:
+        raise RuntimeError(f"git {args[0]} failed: {' '.join(result.stderr.decode(errors='replace').split())}")
+    return result.stdout
+
+
+def git_paths(command, *args):
+    """The paths a git listing prints, NUL-separated so no name is quoted or split."""
+    return [os.fsdecode(p) for p in git_checked(command, "-z", *args).split(b"\0") if p]
 
 
 def base_ref(cwd=None):
@@ -69,8 +84,8 @@ def merge_base(cwd=None):
 
 def changed_paths():
     merge_base_sha = merge_base()
-    paths = set(git("diff", "--no-renames", "--name-only", merge_base_sha).splitlines())  # a rename hides its source
-    paths |= set(git("ls-files", "--others", "--exclude-standard").splitlines())
+    paths = set(git_paths("diff", "--no-renames", "--name-only", merge_base_sha))  # a rename hides its source
+    paths |= set(git_paths("ls-files", "--others", "--exclude-standard"))
     return merge_base_sha, sorted(p for p in paths if p)
 
 
@@ -78,9 +93,50 @@ def fingerprint():
     base, paths = changed_paths()
     digest = hashlib.sha256(base.encode())
     for path in (p for p in paths if not NOT_STAMPED.search(p)):
-        digest.update(path.encode())
-        digest.update(git("hash-object", path).encode() if os.path.isfile(path) else b"<deleted>")
+        digest.update(os.fsencode(path))
+        digest.update(git_checked("hash-object", "--", path).strip() if os.path.isfile(path) else b"<deleted>")
     return digest.hexdigest()
+
+
+def change_fingerprint():
+    """The branch's own change: its diff against where it left the default branch, untracked files included, without
+    the hunks' line numbers or the base's blob ids. Merging the default branch keeps it unless the merge moves the
+    changed lines or their context."""
+    base, paths = changed_paths()
+    stamped = [f":(literal){p}" for p in paths if not NOT_STAMPED.search(p)]
+    digest = hashlib.sha256()
+    if not stamped:
+        return digest.hexdigest()
+    # Untracked files enter a copy of the index as intent-to-add, so they diff exactly as they will once added.
+    fd, index = tempfile.mkstemp(prefix="agents-stamp-index-")
+    os.close(fd)
+    try:
+        real_index = os.fsdecode(git_checked("rev-parse", "--path-format=absolute", "--git-path", "index").rstrip(b"\n"))
+        if os.path.exists(real_index):
+            shutil.copyfile(real_index, index)
+        else:
+            os.remove(index)
+        env = {**os.environ, "GIT_INDEX_FILE": index}
+        untracked = git_paths("ls-files", "--others", "--exclude-standard", "--", *stamped)
+        commands = [["add", "--intent-to-add", "--", *(f":(literal){p}" for p in untracked)]] if untracked else []
+        commands.append(["diff", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "-U3", base,
+                         "--", *stamped])
+        for args in commands:
+            # Bytes: decoding could make two different changes hash alike.
+            patch = git_checked(*args, env=env)
+    finally:
+        if os.path.exists(index):
+            os.remove(index)
+    for line in patch.split(b"\n"):
+        if not line.startswith(b"index "):
+            digest.update(re.sub(rb"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", b"@@", line) + b"\n")
+    return digest.hexdigest()
+
+
+def fingerprint_for(kind):
+    # Verify reruns the tests on the code as it is, the default branch's changes included; review, validation and
+    # staging judged the branch's own change, which a merge of the default branch doesn't alter.
+    return fingerprint() if kind in VERIFY_KINDS else change_fingerprint()
 
 
 # Files skills/spec/path.sh and bin/reports name <kind>-<repo>-<branch key>.md, next to the spec.
@@ -346,7 +402,7 @@ def main():
         follow_branch_renames()
         return 0
     if command == "staging":
-        unfinished = staging_unfinished(stamp_matches("staging", fingerprint()))
+        unfinished = staging_unfinished(stamp_matches("staging", change_fingerprint()))
         if unfinished:
             print(unfinished)
         return 1 if unfinished else 0
@@ -367,11 +423,15 @@ def main():
     if command == "write":
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
         with open(stamp_path(kind), "w") as fh:
-            fh.write(fingerprint())
+            fh.write(fingerprint_for(kind))
         print(f"{kind} stamp written")
         return 0
-    return 0 if stamp_matches(kind, fingerprint()) else 1
+    return 0 if stamp_matches(kind, fingerprint_for(kind)) else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except RuntimeError as error:  # a git query the stamp needs failed: no stamp can be written or matched
+        print(f"review_stamp: {error}", file=sys.stderr)
+        sys.exit(2)

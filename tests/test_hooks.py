@@ -247,6 +247,95 @@ def pr_gate_review_and_validation(base):
         assert done.returncode != 0 and "stop_checks.py verify" in done.stderr and checked.returncode == 1, (kind, done)
 
 
+def stamps_survive_merging_the_default_branch(base):
+    repo = new_repo(base)
+    commit = ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam"]
+    lines = [f"line_{n} = {n}\n" for n in range(1, 31)]
+    open(os.path.join(repo, "app.py"), "w").write("".join(lines))
+    open(os.path.join(repo, "other.py"), "w").write("z = 1\n")
+    git(repo, "add", "-A")
+    git(repo, *commit, "thirty lines")
+    git(repo, "switch", "-q", "-c", "feature")
+    open(os.path.join(repo, "app.py"), "w").write("".join(lines[:14] + ["line_15 = 'changed'\n"] + lines[15:]))
+    git(repo, *commit, "the change")
+
+    def check(kind):
+        return subprocess.run(["python3", H + "review_stamp.py", "check", "--kind", kind], cwd=repo).returncode == 0
+
+    def on_trunk(edit):
+        git(repo, "switch", "-q", "trunk")
+        edit()
+        git(repo, *commit, "trunk moves")
+        git(repo, "switch", "-q", "feature")
+        merged = git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-edit", "trunk")
+        assert merged.returncode == 0, merged.stderr
+
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    code = f"import sys; sys.path.insert(0, {H!r}); import review_stamp as r; r.record_verify('verify', r.fingerprint())"
+    subprocess.run(["python3", "-c", code], cwd=repo, check=True)
+    assert check("review") and check("validate") and check("verify")
+
+    on_trunk(lambda: open(os.path.join(repo, "other.py"), "w").write("z = 2\n"))
+    assert check("review") and check("validate"), "merging trunk leaves the branch's own diff as it was"
+    assert guard("gh pr create --fill", repo) == "allow", "so the gate still holds the review and validation"
+    assert not check("verify"), "but verify ran on code without trunk's change: it runs again"
+    on_trunk(lambda: open(os.path.join(repo, "app.py"), "w").write("".join(["line_1 = 'trunk'\n"] + lines[1:])))
+    assert check("review"), "a trunk edit outside the change's context lines, in the same file"
+    on_trunk(lambda: open(os.path.join(repo, "app.py"), "w").write(
+        "".join(["line_1 = 'trunk'\n"] + lines[1:11] + ["line_12 = 'trunk'\n"] + lines[12:])))
+    assert not check("review") and not check("validate"), "a trunk edit next to the change: what was reviewed moved"
+    assert guard("gh pr create --fill", repo) == "deny"
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    open(os.path.join(repo, "new.py"), "w").write("a = 1\n")
+    assert not check("review"), "an untracked file is part of the change"
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    open(os.path.join(repo, "new.py"), "w").write("a = 2\n")
+    assert not check("review"), "and so is its content"
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    git(repo, "add", "new.py")
+    git(repo, *commit, "add new.py")
+    assert check("review"), "committing a reviewed untracked file keeps the stamp"
+    for before, after, why in [("x = 2\n", "x = 2 \n", "trailing whitespace"), ("x = 2\n", "x = 2\r\n", "a line ending"),
+                               (b"s = '\xe9'\n", b"s = '\xe8'\n", "a byte that isn't UTF-8")]:
+        mode = "wb" if isinstance(before, bytes) else "w"
+        open(os.path.join(repo, "edge.py"), mode, **({} if mode == "wb" else {"newline": ""})).write(before)
+        for kind in ("review", "validate"):
+            assert write_stamp(repo, kind).returncode == 0, f"stamping {why}"
+        assert check("review"), why
+        open(os.path.join(repo, "edge.py"), mode, **({} if mode == "wb" else {"newline": ""})).write(after)
+        assert not check("review"), f"changing {why} is an edit"
+    open(os.path.join(repo, ".gitattributes"), "w").write("*.cfg diff=nocomments\n")
+    git(repo, "config", "diff.nocomments.textconv", "sed -e s/#.*//")
+    open(os.path.join(repo, "app.cfg"), "w").write("a = 1  # one\n")
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    open(os.path.join(repo, "app.cfg"), "w").write("a = 1  # two\n")
+    assert not check("review"), "a diff text converter can't hide an edit"
+    for name, kind in [(n, k) for n in ("año.py", 'a"b.py', "tab\tname.py", "CHANGELOG.md\n") for k in ("review", "validate", "verify")]:
+        open(os.path.join(repo, name), "w").write(f"{kind} = 1\n")
+        if kind == "verify":
+            subprocess.run(["python3", "-c", code], cwd=repo, check=True)
+        else:
+            assert write_stamp(repo, kind).returncode == 0
+        open(os.path.join(repo, name), "w").write(f"{kind} = 2\n")
+        assert not check(kind), f"an edit to {name!r}, a name git quotes, invalidates the {kind} stamp"
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    index = os.path.join(repo, ".git", "index")
+    saved = open(index, "rb").read()
+    open(index, "wb").write(b"not an index")
+    assert not check("review") and not check("verify"), "a git failure isn't an empty change"
+    phase = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "--refresh"], cwd=repo, capture_output=True,
+                           text=True)
+    assert phase.stdout.startswith("stamps: git"), ("the status line says it failed", phase)
+    open(index, "wb").write(saved)
+    assert check("review")
+
+
 def validate_stamp_needs_evidence(base):
     repo = new_repo(base)
     git(repo, "switch", "-q", "-c", "feat/evidence")
@@ -917,7 +1006,7 @@ def post_edit_syntax_feedback(base):
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

@@ -1,0 +1,1 @@
+- Merging the default branch into a pull request no longer invalidates its self-review, validate and staging stamps when the branch's own diff is unchanged; verify still runs again on the merged code. An edit to a file with a non-ASCII name now invalidates the stamps too. Stamps written before this change count as stale once.
