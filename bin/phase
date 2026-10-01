@@ -48,16 +48,6 @@ def on_default_branch():
     return review_stamp.base_ref().split("/")[-1] == git("branch", "--show-current")
 
 
-def stamp_matches(kind, current):
-    for path in (review_stamp.stamp_path(kind), review_stamp.legacy_stamp_path(kind)):
-        try:
-            if open(path).read().strip() == current:
-                return True
-        except OSError:
-            continue
-    return False
-
-
 def pr_state(previous):
     """OPEN, MERGED or CLOSED from gh, at most every PR_TTL seconds; the last known state when gh fails."""
     if time.time() - previous.get("pr_checked_at", 0) < PR_TTL and previous.get("pr_state"):
@@ -103,8 +93,9 @@ def compute(previous):
     current = review_stamp.fingerprint()
     needs_validate = any(not review_stamp.NOT_BEHAVIOR.search(p) for p in changed)
     steps = [("build", "verify"), ("self-review", "review")] + ([("validate", "validate")] if needs_validate else [])
-    checked_nothing = not stamp_matches("verify", current) and stamp_matches("verify-empty", current)
-    done = [stamp_matches(kind, current) or (kind == "verify" and checked_nothing) for _, kind in steps]
+    checked_nothing = (not review_stamp.stamp_matches("verify", current)
+                       and review_stamp.stamp_matches("verify-empty", current))
+    done = [review_stamp.stamp_matches(kind, current) or (kind == "verify" and checked_nothing) for _, kind in steps]
     # The phase is the step after the furthest one done for this exact change; an earlier check that
     # went stale (a red verify, an edit after the self-review) is listed, not shown as the phase.
     reached = max((i + 1 for i, ok in enumerate(done) if ok), default=0)
@@ -114,7 +105,8 @@ def compute(previous):
     note = " · verify checked nothing" if checked_nothing else ""
     try:
         staging = review_stamp.staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md"),
-                                             os.path.join(reports, f"evidence-{suffix}"), stamp_matches("staging", current))
+                                             os.path.join(reports, f"evidence-{suffix}"),
+                                             review_stamp.stamp_matches("staging", current))
     except OSError:
         staging = "staging (you)"
     if pr and staging == "staging: re-run":

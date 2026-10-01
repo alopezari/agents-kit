@@ -121,6 +121,7 @@ def walks_the_flow(base):
     passed = two + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n"
     stamp(repo, "staging")
     assert phase(repo) == "create-pr", "every S step passed for this exact change"
+    os.remove(os.path.join(repo, ".git", "agents", "stamps", "feature~cart", "staging.stamp"))  # the guides below need none
     open(guide, "w").write("# Staging guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")
     assert phase(repo) == "create-pr", "a guide with steps only after the merge doesn't hold the PR"
     open(guide, "w").write("# Staging guide\n1. Check the cart\n")
@@ -149,7 +150,11 @@ def walks_the_flow(base):
         stamp(repo, kind)
     assert phase(repo, env) == "PR open"
     open(guide, "w").write(passed)
-    assert phase(repo, env) == "PR open · redo staging", "z = 3 came after the staging run"
+    stamp(repo, "staging")
+    open(os.path.join(repo, "app.py"), "a").write("w = 4\n")
+    for kind in ("verify", "review", "validate"):
+        stamp(repo, kind)
+    assert phase(repo, env) == "PR open · redo staging", "w = 4 came after the staging run"
     stamp(repo, "staging")
     assert phase(repo, env) == "PR open"
     env["PR_STATE"] = "MERGED"

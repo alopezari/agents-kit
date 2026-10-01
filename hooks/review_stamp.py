@@ -191,6 +191,17 @@ def legacy_stamp_path(kind):
     return os.path.join(git("rev-parse", "--absolute-git-dir"), name)
 
 
+def stamp_matches(kind, current):
+    for path in (stamp_path(kind), legacy_stamp_path(kind)):
+        try:
+            with open(path) as fh:
+                if fh.read().strip() == current:
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def report_paths(*kinds):
     reports = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "reports")
     return [subprocess.run([reports, "path", kind], capture_output=True, text=True).stdout.strip() for kind in kinds]
@@ -345,12 +356,12 @@ def main():
         print("\n".join(unbacked), file=sys.stderr)
         return 2
     if command == "write" and kind == "staging":
-        if not os.path.exists(report_paths("staging-guide")[0]):
-            print("This branch has no staging guide: there are no staging results to stamp.", file=sys.stderr)
-            return 2
         unfinished = staging_unfinished(stamped=True)
         if unfinished:
             print(unfinished, file=sys.stderr)
+            return 2
+        if not os.path.exists(report_paths("staging-guide")[0]):
+            print("This branch has no staging guide: there are no staging results to stamp.", file=sys.stderr)
             return 2
     if command == "write":
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
@@ -359,17 +370,6 @@ def main():
         print(f"{kind} stamp written")
         return 0
     return 0 if stamp_matches(kind, fingerprint()) else 1
-
-
-def stamp_matches(kind, current):
-    for path in (stamp_path(kind), legacy_stamp_path(kind)):
-        try:
-            with open(path) as fh:
-                if fh.read().strip() == current:
-                    return True
-        except OSError:
-            continue
-    return False
 
 
 if __name__ == "__main__":
