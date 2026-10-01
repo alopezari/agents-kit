@@ -247,6 +247,55 @@ def pr_gate_review_and_validation(base):
         assert done.returncode != 0 and "stop_checks.py verify" in done.stderr and checked.returncode == 1, (kind, done)
 
 
+def stamps_survive_merging_the_default_branch(base):
+    repo = new_repo(base)
+    commit = ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam"]
+    lines = [f"line_{n} = {n}\n" for n in range(1, 31)]
+    open(os.path.join(repo, "app.py"), "w").write("".join(lines))
+    open(os.path.join(repo, "other.py"), "w").write("z = 1\n")
+    git(repo, "add", "-A")
+    git(repo, *commit, "thirty lines")
+    git(repo, "switch", "-q", "-c", "feature")
+    open(os.path.join(repo, "app.py"), "w").write("".join(lines[:14] + ["line_15 = 'changed'\n"] + lines[15:]))
+    git(repo, *commit, "the change")
+
+    def check(kind):
+        return subprocess.run(["python3", H + "review_stamp.py", "check", "--kind", kind], cwd=repo).returncode == 0
+
+    def on_trunk(edit):
+        git(repo, "switch", "-q", "trunk")
+        edit()
+        git(repo, *commit, "trunk moves")
+        git(repo, "switch", "-q", "feature")
+        merged = git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-edit", "trunk")
+        assert merged.returncode == 0, merged.stderr
+
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    code = f"import sys; sys.path.insert(0, {H!r}); import review_stamp as r; r.record_verify('verify', r.fingerprint())"
+    subprocess.run(["python3", "-c", code], cwd=repo, check=True)
+    assert check("review") and check("validate") and check("verify")
+
+    on_trunk(lambda: open(os.path.join(repo, "other.py"), "w").write("z = 2\n"))
+    assert check("review") and check("validate"), "merging trunk leaves the branch's own diff as it was"
+    assert guard("gh pr create --fill", repo) == "allow", "so the gate still holds the review and validation"
+    assert not check("verify"), "but verify ran on code without trunk's change: it runs again"
+    on_trunk(lambda: open(os.path.join(repo, "app.py"), "w").write("".join(["line_1 = 'trunk'\n"] + lines[1:])))
+    assert check("review"), "a trunk edit outside the change's context lines, in the same file"
+    on_trunk(lambda: open(os.path.join(repo, "app.py"), "w").write(
+        "".join(["line_1 = 'trunk'\n"] + lines[1:11] + ["line_12 = 'trunk'\n"] + lines[12:])))
+    assert not check("review") and not check("validate"), "a trunk edit next to the change: what was reviewed moved"
+    assert guard("gh pr create --fill", repo) == "deny"
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    open(os.path.join(repo, "new.py"), "w").write("a = 1\n")
+    assert not check("review"), "an untracked file is part of the change"
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    open(os.path.join(repo, "new.py"), "w").write("a = 2\n")
+    assert not check("review"), "and so is its content"
+
+
 def validate_stamp_needs_evidence(base):
     repo = new_repo(base)
     git(repo, "switch", "-q", "-c", "feat/evidence")
@@ -913,7 +962,7 @@ def post_edit_syntax_feedback(base):
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

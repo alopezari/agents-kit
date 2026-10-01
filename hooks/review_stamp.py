@@ -13,9 +13,10 @@
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
   review_stamp.py branch-key                       # the current branch as it appears in those file names
 
-The fingerprint covers every file that differs from the merge-base with the
-default branch, by content, except the changelog, so committing stamped changes keeps it valid and
-any later edit invalidates it. Stamps live in the repository's shared git dir, per branch
+A stamp covers every file that differs from the merge-base with the default branch, except the
+changelog, so committing stamped changes keeps it valid and any later edit invalidates it. Review,
+validate and staging stamps hold the branch's diff, so merging the default branch keeps them unless it
+moves the changed lines or their context; verify's holds the files' content, so the tests run again. Stamps live in the repository's shared git dir, per branch
 (.git/agents/stamps/<branch key>/), never in the tree: they survive removing the worktree they were
 written in, so the PR can be opened from the main checkout after a staging hand-off. They also
 follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
@@ -81,6 +82,30 @@ def fingerprint():
         digest.update(path.encode())
         digest.update(git("hash-object", path).encode() if os.path.isfile(path) else b"<deleted>")
     return digest.hexdigest()
+
+
+def change_fingerprint():
+    """The branch's own change: its diff against where it left the default branch, without the hunks' line numbers
+    or the base's blob ids, plus untracked files. Merging the default branch keeps it unless the merge moves the
+    changed lines or their context."""
+    base, paths = changed_paths()
+    stamped = [p for p in paths if not NOT_STAMPED.search(p)]
+    digest = hashlib.sha256()
+    if stamped:
+        diff = git("diff", "--no-renames", "--no-color", "--no-ext-diff", "--binary", "-U3", base, "--",
+                   *(f":(literal){p}" for p in stamped))
+        for line in diff.splitlines():
+            if not line.startswith("index "):
+                digest.update(re.sub(r"^@@ [^@]* @@", "@@", line).encode() + b"\n")
+    for path in git("ls-files", "--others", "--exclude-standard", "--", *(f":(literal){p}" for p in stamped)).splitlines() if stamped else []:
+        digest.update(path.encode() + git("hash-object", path).encode())
+    return digest.hexdigest()
+
+
+def fingerprint_for(kind):
+    # Verify reruns the tests on the code as it is, the default branch's changes included; review, validation and
+    # staging judged the branch's own change, which a merge of the default branch doesn't alter.
+    return fingerprint() if kind in VERIFY_KINDS else change_fingerprint()
 
 
 # Files skills/spec/path.sh and bin/reports name <kind>-<repo>-<branch key>.md, next to the spec.
@@ -345,7 +370,7 @@ def main():
         follow_branch_renames()
         return 0
     if command == "staging":
-        unfinished = staging_unfinished(stamp_matches("staging", fingerprint()))
+        unfinished = staging_unfinished(stamp_matches("staging", change_fingerprint()))
         if unfinished:
             print(unfinished)
         return 1 if unfinished else 0
@@ -366,10 +391,10 @@ def main():
     if command == "write":
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
         with open(stamp_path(kind), "w") as fh:
-            fh.write(fingerprint())
+            fh.write(fingerprint_for(kind))
         print(f"{kind} stamp written")
         return 0
-    return 0 if stamp_matches(kind, fingerprint()) else 1
+    return 0 if stamp_matches(kind, fingerprint_for(kind)) else 1
 
 
 if __name__ == "__main__":
