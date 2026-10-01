@@ -142,7 +142,7 @@ Then, in the worktree:
 git switch --detach
 ```
 
-It stays at the same commit, on no branch, so don't commit there: later work on the branch happens in the main checkout, with `cd <main checkout> && …`, and this session's status line shows no branch. Never switch the main checkout's branch yourself: the user may have work there. The spec, the reports and the stamps live in the repository's shared `.git/agents/`. The tool that created the worktree for the session (Xirp, Claude Code) removes it when the session is archived; one you created yourself with `git worktree add`, tell the user to remove once the session is over: `git worktree remove <worktree path>`.
+It stays at the same commit, on no branch, so don't commit there: later work on the branch happens in the main checkout, with `cd <main checkout> && …`, and this session's status line shows no branch. Never switch the main checkout's branch yourself: the user may have work there. The spec, the reports and the stamps live in the repository's shared `.git/agents/`. The tool that created the worktree for the session (Xirp, Claude Code) removes it when the session is archived; one you created yourself with `git worktree add`, tell the user to remove once the session is over, with a check that nothing was committed there since: `git -C <worktree path> merge-base --is-ancestor HEAD origin/<branch> && git worktree remove <worktree path>`.
 
 Give the user the hand-off in chat, with real values:
 
