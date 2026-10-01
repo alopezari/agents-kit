@@ -25,7 +25,7 @@ Each pull request adds its own file under `changelog.d/` (see its README); CI ch
 - Validate's staging hand-off detaches its worktree from the branch instead of removing it, so the session doesn't go on in a deleted directory where the repository's hooks fail on every command (#38).
 - The shell guard denies a command when one of its checks crashes, or when its git and stamp calls use up the time the harness gives the hook, instead of letting the command through (#39).
 - Staging results expire when the change does: once they pass, `review_stamp.py write --kind staging` records them for the exact change, and after any later edit the guard holds `gh pr ready` and the status line shows "redo staging" until the affected steps pass again (#40).
-- Each pull request adds its changelog entry as its own file under `changelog.d/`, without a number, so pull requests merged in a batch no longer conflict on CHANGELOG.md and need no extra commit for their number; `bin/changelog release` assembles the entries and adds the numbers.
+- Each pull request adds its changelog entry as its own file under `changelog.d/`, without a number, so pull requests merged in a batch no longer conflict on CHANGELOG.md and need no extra commit for their number; `bin/changelog release` assembles the entries and adds the numbers (#41).
 
 ## [0.4.0] - 2026-09-28
 
