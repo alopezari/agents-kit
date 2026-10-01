@@ -21,6 +21,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - Validation keeps its evidence: `bin/evidence <id> <command>` runs a check and saves its command, exit code and output next to the reports, screenshots go in the same directory, and the validate stamp refuses a report whose PASS or FAIL rows name no saved file. The README shows how to test a hook change through a real Codex run (#34).
 - A staging guide splits at the merge, and the pull request waits only for the steps before it; the steps after it go to ship. Every step saves its output or screenshot with `bin/evidence` (`EVIDENCE_DIR` works from any directory), and the agent records the results from those files as a table with links (#35).
 - The shell guard holds `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence; `review_stamp.py staging` says what's missing (#36).
+- Staging results expire when the change does: once they pass, `review_stamp.py write --kind staging` records them for the exact change, and after any later edit the guard holds `gh pr ready` and the status line shows "redo staging" until the affected steps pass again.
 
 ## [0.4.0] - 2026-09-28
 

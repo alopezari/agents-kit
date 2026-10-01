@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Record or check that a skill ran on the exact current change.
 
-  review_stamp.py write [--kind review|validate]   # end of self-review / validate; verify stamps come only from
-                                                   # its runner (stop_checks.py), through record_verify(), and
-                                                   # validate needs a report whose PASS/FAIL rows name their evidence
-  review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
+  review_stamp.py write [--kind review|validate|staging]   # end of self-review / validate / recording staging
+                                                   # results; verify stamps come only from its runner
+                                                   # (stop_checks.py), through record_verify(); validate needs a
+                                                   # report whose PASS/FAIL rows name their evidence, and staging
+                                                   # every step before the merge passed with evidence
+  review_stamp.py check [--kind review|validate|staging|verify|verify-empty]   # exit 1 if the change differs from the stamped one
   review_stamp.py staging                          # exit 1 if the staging guide has steps before the merge without
-                                                   # a PASS backed by saved evidence
+                                                   # a PASS backed by saved evidence, or passed for an earlier change
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
   review_stamp.py branch-key                       # the current branch as it appears in those file names
@@ -239,9 +241,10 @@ def rows_without_evidence():
     return []
 
 
-def staging_phase(guide, evidence):
-    """None when there is no guide or every step before the merge passed with saved evidence; otherwise the staging
-    phase, as the status line shows it. Raises OSError when the guide exists but can't be read."""
+def staging_phase(guide, evidence, stamped):
+    """None when there is no guide, or every step before the merge passed with saved evidence and the staging stamp
+    covers the current change (stamped); otherwise the staging phase, as the status line shows it. Raises OSError
+    when the guide exists but can't be read."""
     try:
         with open(guide) as fh:
             text = fh.read()
@@ -260,7 +263,9 @@ def staging_phase(guide, evidence):
             return "staging: fix"
         if not all(results.get(step, ("",))[0] == "PASS" for step in steps):
             return "staging (you)"
-        return None if all(results[step][1] for step in steps) else "staging: no evidence"
+        if not all(results[step][1] for step in steps):
+            return "staging: no evidence"
+        return None if stamped else "staging: re-run"
     # A guide from before the split mixed steps that need production: a PASS or FAIL in its latest results settles it.
     results = re.findall(r"^\|\s*[^|]*\|\s*\**(PASS|FAIL)\b", latest, re.M) or re.findall(r"\b(PASS|FAIL)\b", latest)
     if not results:
@@ -268,13 +273,13 @@ def staging_phase(guide, evidence):
     return "staging: fix" if "FAIL" in results else None
 
 
-def staging_unfinished():
+def staging_unfinished(stamped):
     """Why the pull request can't be ready yet for the staging guide, or None."""
     guide, evidence = report_paths("staging-guide", "evidence")
     if not guide or not evidence:
         return "Couldn't find this branch's staging guide (bin/reports failed), so its results can't be checked."
     try:
-        phase = staging_phase(guide, evidence)
+        phase = staging_phase(guide, evidence, stamped)
     except OSError as error:
         return f"Couldn't read the staging guide: {error}"
     reasons = {
@@ -283,6 +288,9 @@ def staging_unfinished():
         "staging: fix": "has a step before the merge that FAILed: fix it and have it re-run.",
         "staging: no evidence": "has PASS results whose Evidence cell names no saved file in " + evidence + ": each "
                                 "step saves its output through bin/evidence, or a screenshot.",
+        "staging: re-run": "passed for an earlier version of the change, or its results were never stamped: ask the "
+                           "user which steps the changes since touch and have them re-run (validate skill, step 7), "
+                           "then `python3 ~/.agents/hooks/review_stamp.py write --kind staging`.",
     }
     return f"The staging guide ({guide}) {reasons[phase]}" if phase else None
 
@@ -326,7 +334,7 @@ def main():
         follow_branch_renames()
         return 0
     if command == "staging":
-        unfinished = staging_unfinished()
+        unfinished = staging_unfinished(stamp_matches("staging", fingerprint()))
         if unfinished:
             print(unfinished)
         return 1 if unfinished else 0
@@ -336,21 +344,32 @@ def main():
     if unbacked:
         print("\n".join(unbacked), file=sys.stderr)
         return 2
+    if command == "write" and kind == "staging":
+        if not os.path.exists(report_paths("staging-guide")[0]):
+            print("This branch has no staging guide: there are no staging results to stamp.", file=sys.stderr)
+            return 2
+        unfinished = staging_unfinished(stamped=True)
+        if unfinished:
+            print(unfinished, file=sys.stderr)
+            return 2
     if command == "write":
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
         with open(stamp_path(kind), "w") as fh:
             fh.write(fingerprint())
         print(f"{kind} stamp written")
         return 0
-    current = fingerprint()
+    return 0 if stamp_matches(kind, fingerprint()) else 1
+
+
+def stamp_matches(kind, current):
     for path in (stamp_path(kind), legacy_stamp_path(kind)):
         try:
             with open(path) as fh:
                 if fh.read().strip() == current:
-                    return 0
+                    return True
         except OSError:
             continue
-    return 1
+    return False
 
 
 if __name__ == "__main__":

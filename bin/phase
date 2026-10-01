@@ -112,16 +112,19 @@ def compute(previous):
     checked = steps if pr else steps[:reached]
     redo = [("verify" if kind == "verify" else step) for (step, kind), ok in zip(checked, done) if not ok]
     note = " · verify checked nothing" if checked_nothing else ""
+    try:
+        staging = review_stamp.staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md"),
+                                             os.path.join(reports, f"evidence-{suffix}"), stamp_matches("staging", current))
+    except OSError:
+        staging = "staging (you)"
+    if pr and staging == "staging: re-run":
+        redo.append("staging")
     if pr:
         return pr + (f" · redo {', '.join(redo)}" if redo else "") + note, extra
     if reached < len(steps):
         label = steps[reached][0]
     else:
-        try:
-            label = review_stamp.staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md"),
-                                               os.path.join(reports, f"evidence-{suffix}")) or "create-pr"
-        except OSError:
-            label = "staging (you)"
+        label = staging or "create-pr"
     return label + (f" · redo {', '.join(redo)}" if redo else "") + note + flag, extra
 
 
