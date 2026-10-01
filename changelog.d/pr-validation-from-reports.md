@@ -1,1 +1,0 @@
-- `bin/pr-validation` prints a pull request's validation section from the branch's reports (verify, self-review, validation, staging), and create-pr starts the description from it instead of from memory.
