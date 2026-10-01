@@ -109,7 +109,8 @@ def compute(previous):
                                              review_stamp.stamp_matches("staging", current))
     except OSError:
         staging = "staging (you)"
-    if pr and staging == "staging: re-run":
+    # A re-run after staging once passed (its stamp exists) is outstanding whatever it shows: a FAIL, a step left.
+    if pr and (staging == "staging: re-run" or (staging and os.path.exists(review_stamp.stamp_path("staging")))):
         redo.append("staging")
     if pr:
         return pr + (f" · redo {', '.join(redo)}" if redo else "") + note, extra

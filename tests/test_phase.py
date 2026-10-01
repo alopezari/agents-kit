@@ -155,6 +155,10 @@ def walks_the_flow(base):
     for kind in ("verify", "review", "validate"):
         stamp(repo, kind)
     assert phase(repo, env) == "PR open · redo staging", "w = 4 came after the staging run"
+    for rows in ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | FAIL | [out](e/S2.txt) |\n", "| S1 | PASS | [out](e/S1.txt) |\n"):
+        open(guide, "w").write(two + head + rows)
+        assert phase(repo, env) == "PR open · redo staging", f"a re-run that hasn't passed yet: {rows!r}"
+    open(guide, "w").write(passed)
     stamp(repo, "staging")
     assert phase(repo, env) == "PR open"
     env["PR_STATE"] = "MERGED"
