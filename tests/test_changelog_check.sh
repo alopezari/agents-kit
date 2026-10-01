@@ -30,7 +30,11 @@ case_ fail "a line in CHANGELOG.md alone fails: entries go in changelog.d/" \
 case_ fail "editing an existing fragment fails" "printf -- '- Reworded.\n' > changelog.d/older.md"
 case_ fail "an empty fragment fails" ": > changelog.d/feat~x.md"
 case_ fail "a fragment with only an empty bullet fails" "printf -- '- \n' > changelog.d/feat~x.md"
+case_ fail "a bullet with only a tab after it fails: the release drops it" "printf -- '- \\t\\n' > changelog.d/feat~x.md"
+case_ pass "a fragment named after a non-ASCII branch passes" "printf -- '- New entry.\\n' > changelog.d/feat~año.md"
 case_ fail "a file outside changelog.d/ fails" "printf -- '- New entry.\n' > notes.md"
+case_ fail "a fragment in a subdirectory fails: the release doesn't read it" \
+  "mkdir -p changelog.d/sub && printf -- '- New entry.\\n' > changelog.d/sub/x.md"
 case_ fail "editing changelog.d/README.md isn't an entry" "printf -- '- New entry.\n' >> changelog.d/README.md"
 git checkout -q main && git branch -qD branch
 
@@ -61,9 +65,16 @@ ok "a reused entry name takes the number of its own merge" "$(grep -c '^- Thing 
 commit "release 0.2.1" && git tag v0.2.1
 
 printf -- '- Committed straight to main.\n' > changelog.d/direct.md && commit direct
+# A later, unrelated merge has the direct commit in its history, but didn't bring it in.
+git checkout -q -b feat/11 main && echo 11 > code-11.txt && commit "work 11"
+git checkout -q main && git -c user.name=t -c user.email=t@t merge -q --no-ff feat/11 -m "Merge pull request #11 from o/feat-11"
 before=$(cat CHANGELOG.md VERSION)
 out=$("$changelog" release 0.3.0 2>&1); code=$?
 ok "a fragment no merge brought in fails" "$code" 1
 ok "and names it" "$(echo "$out" | grep -c 'changelog.d/direct.md')" 1
+ok "and changes nothing" "$(cat CHANGELOG.md VERSION)" "$before"
+git rm -q changelog.d/direct.md && commit "drop direct"
+"$changelog" release 0.2.1 > /dev/null 2>&1; ok "releasing a version CHANGELOG.md already has fails" "$?" 1
+"$changelog" release 00.3.0 > /dev/null 2>&1; ok "a version with a leading zero fails" "$?" 1
 ok "and changes nothing" "$(cat CHANGELOG.md VERSION)" "$before"
 exit $fail

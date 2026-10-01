@@ -3,17 +3,19 @@
 #   .github/changelog-check origin/main
 set -euo pipefail
 base=$1
-added=$(git diff --name-only --diff-filter=A "$base" -- 'changelog.d/*.md' | grep -v '^changelog.d/README.md$' || true)
+# Only files directly under changelog.d/: bin/changelog release reads no subdirectory.
+added=$(git -c core.quotePath=false diff --name-only --diff-filter=A "$base" -- 'changelog.d/*.md' | grep -E '^changelog\.d/[^/]+\.md$' | grep -v '^changelog.d/README.md$' || true)
 if [ -z "$added" ]; then
   echo "No new file under changelog.d/. Add changelog.d/<branch>.md with a \"- \" line saying what this pull request"
   echo "changes for someone using the kit (no PR number: the release adds it), or label the pull request"
   echo "\"no changelog\" if nothing changes for them."
   exit 1
 fi
-for file in $added; do
-  if ! grep -qE '^- +[^ ]' "$file"; then
+while IFS= read -r file; do
+  if ! grep -qE '^- +[^[:space:]]' "$file"; then
     echo "$file has no \"- \" line with text: write what this pull request changes for someone using the kit."
     exit 1
   fi
-done
-echo "New changelog entries:"; cat $added
+done <<< "$added"
+echo "New changelog entries:"
+while IFS= read -r file; do cat "$file"; done <<< "$added"

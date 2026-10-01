@@ -35,30 +35,33 @@ def entries():
     return found
 
 
+def is_ancestor(commit, of):
+    return subprocess.run(["git", "merge-base", "--is-ancestor", commit, of], timeout=GIT_TIMEOUT).returncode == 0
+
+
 def pull_request(path, span, merges):
-    """The number of the first merge since the last release, in the order they landed, whose history adds path. Only
-    since the last release: a later branch can reuse a released entry's name."""
+    """The number of the first merge since the last release, in the order they landed, that brought in the commit adding
+    path: its branch has the commit and the base it merged into doesn't. Only since the last release: a later branch can
+    reuse a released entry's name."""
     added = git("log", "--diff-filter=A", "--format=%H", *span, "--", path).splitlines()
     if not added:
         return None
     for sha, subject in merges:
         number = re.match(r"Merge pull request #(\d+)", subject)
-        if number and subprocess.run(["git", "merge-base", "--is-ancestor", added[-1], sha],
-                                     timeout=GIT_TIMEOUT).returncode == 0:
+        if number and is_ancestor(added[-1], f"{sha}^2") and not is_ancestor(added[-1], f"{sha}^1"):
             return number.group(1)
     return None
 
 
 def with_number(line, number):
-    text = line.rstrip(".")
-    return f"{text} (#{number})." if line.endswith(".") else f"{line} (#{number})"
+    return f"{line[:-1]} (#{number})." if line.endswith(".") else f"{line} (#{number})"
 
 
 def release(version):
-    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+    if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
         sys.exit(f"changelog: {version!r} isn't a version like 0.5.0")
     os.chdir(git("rev-parse", "--show-toplevel"))
-    last_release = git("describe", "--tags", "--abbrev=0") if git("tag", "--list", "v*") else ""
+    last_release = git("describe", "--tags", "--abbrev=0", "--match", "v*") if git("tag", "--list", "v*") else ""
     span = [f"{last_release}..HEAD"] if last_release else ["HEAD"]
     merges = [line.split(" ", 1) for line in
               git("log", "--first-parent", "--merges", "--reverse", "--format=%H %s", *span).splitlines()]
@@ -76,6 +79,8 @@ def release(version):
 
     with open("CHANGELOG.md") as fh:
         text = fh.read()
+    if re.search(rf"^## \[{re.escape(version)}\]", text, re.M):
+        sys.exit(f"changelog: CHANGELOG.md already has a {version} section")
     section = re.search(r"^## \[Unreleased\]\n(.*?)(?=^## )", text, re.M | re.S)
     if not section:
         sys.exit("changelog: CHANGELOG.md has no '## [Unreleased]' section followed by a release")
