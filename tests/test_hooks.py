@@ -438,6 +438,11 @@ def guard_fails_closed(base):
     started = time.time()
     hung = reason("gh pr create --head feat/x --fill", repo, env={"PATH": fake + ":" + os.environ["PATH"]})
     assert "The guard failed (TimeoutExpired" in (hung or "") and time.time() - started < 10, (hung, time.time() - started)
+    with open(os.path.join(fake, "git"), "w") as fh:
+        fh.write("#!/bin/sh\nsleep 5\n")  # each call within a per-call limit, together past the hook's 10 s
+    started = time.time()
+    slow = reason("gh pr create --head feat/x --fill", repo, env={"PATH": fake + ":" + os.environ["PATH"]})
+    assert "TimeoutExpired" in (slow or "") and time.time() - started < 10, (slow, time.time() - started)
     assert reason("ls", gone) is None, "a command no check needs git for still runs"
 
 
