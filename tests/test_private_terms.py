@@ -116,6 +116,22 @@ def kit_prs_are_checked(base):
     assert guard('gh pr edit 3 --title "Fix ACME-12 flow"', other, env) == "", "other repositories may name them"
 
 
+def pr_text_is_checked_before_gh(base):
+    env, _ = setup(base)
+    body = os.path.join(base, "body.md")
+    open(body, "w").write("Fixes the flow.\n\nSee ACME-7 and the Secret Project notes.\n")
+    terms = os.path.join(KIT, "hooks", "private_terms.py")
+    found = run([sys.executable, terms, "pr", "Fix ACME-12 flow", body], base, env)
+    assert found.returncode == 1, found
+    assert found.stderr.splitlines()[1:] == ["  title: ACME-12", "  description line 3: ACME-7, Secret Project"], found.stderr
+    open(body, "w").write("Fixes the flow.\n")
+    assert run([sys.executable, terms, "pr", "Fix the flow", body], base, env).returncode == 0, "clean"
+    missing = run([sys.executable, terms, "pr", "Fix the flow", os.path.join(base, "none.md")], base, env)
+    assert missing.returncode == 2 and "none.md" in missing.stderr, ("an unreadable file isn't clean", missing)
+    assert "private_terms.py pr" in guard('gh pr edit 3 --title "Fix ACME-12 flow"', KIT, env), \
+        "the guard's denial says how to find each term's line"
+
+
 def kit_commits_are_checked(base):
     env, other = setup(base)
     open(os.path.join(other, "a.bin"), "wb").write(b"\0\xff binary ACME-5\n")
@@ -166,7 +182,7 @@ def kit_is_recognised_when_it_is_a_worktree(base):
     assert not guard_bash.targets_kit(None, None, main), "a KIT inside another repository isn't that repository"
 
 
-for test in (kit_prs_are_checked, kit_commits_are_checked, kit_is_recognised_when_it_is_a_worktree):
+for test in (kit_prs_are_checked, pr_text_is_checked_before_gh, kit_commits_are_checked, kit_is_recognised_when_it_is_a_worktree):
     base = tempfile.mkdtemp(prefix="agents-test-terms-")
     try:
         test(base)

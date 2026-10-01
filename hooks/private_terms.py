@@ -6,6 +6,9 @@ names them: it only checks the kit's own commits and pull requests against every
 
   private_terms.py staged           the lines a commit adds (pre-commit)
   private_terms.py message <file>   a commit message (commit-msg)
+  private_terms.py pr <title> <body file>
+                                    a pull request's title and description, before `gh pr create|edit` on the kit:
+                                    names each term with where it is (the title, or the description's line)
 
 Exits 1 and names the matches when any are found. guard_bash.py uses found() for `gh pr create|edit`.
 """
@@ -41,7 +44,25 @@ def staged_additions():
     return names + "\n".join(l[1:] for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++"))
 
 
+def pr_text(title, body_file):
+    """Each place in a pull request's title and description that names a private term, with the terms there."""
+    places = [("title", title)] + [(f"description line {n}", line)
+                                   for n, line in enumerate(open(body_file).read().splitlines(), 1)]
+    return [f"{where}: {', '.join(terms)}" for where, text in places for terms in [found(text)] if terms]
+
+
 def main(args):
+    if len(args) == 3 and args[0] == "pr":
+        try:
+            places = pr_text(args[1], args[2])
+        except (OSError, UnicodeDecodeError) as error:
+            print(f"Can't read the description file {args[2]}: {error}", file=sys.stderr)
+            return 2
+        if places:
+            print("Private terms from a profile in this pull request; the kit is public, so rewrite these:\n  "
+                  + "\n  ".join(places), file=sys.stderr)
+            return 1
+        return 0
     if args == ["staged"]:
         where, text = "the staged changes", staged_additions()
     elif len(args) == 2 and args[0] == "message":

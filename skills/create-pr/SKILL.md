@@ -36,6 +36,12 @@ Write the description to a file outside the working tree, for example `"$(dirnam
 
 ## 4. Open it
 
+For a pull request to the kit itself (`~/.agents`, which is public), check the title and description for a profile's private terms first. It names each one and the line it's on; rewrite those, then run it again:
+
+```bash
+python3 ~/.agents/hooks/private_terms.py pr "<title>" <pr-body.md>
+```
+
 ```bash
 gh pr create --base <base> --head "$(git branch --show-current)" --title "<title>" --body-file <pr-body.md>
 ```
