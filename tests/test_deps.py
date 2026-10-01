@@ -32,6 +32,11 @@ def declared():
     return programs
 
 
+def is_script(first_line, interpreter):
+    """A shebang naming the interpreter; a document whose first line mentions `python3 …` isn't Python."""
+    return first_line.startswith("#!") and interpreter in first_line
+
+
 def python_files():
     files = subprocess.run(["git", "ls-files"], cwd=KIT, capture_output=True, text=True, check=True).stdout.split()
     for rel in files:
@@ -39,7 +44,7 @@ def python_files():
             source = open(os.path.join(KIT, rel)).read()
         except (UnicodeDecodeError, IsADirectoryError):
             continue
-        if rel.endswith(".py") or "python" in source.split("\n", 1)[0]:
+        if rel.endswith(".py") or is_script(source.split("\n", 1)[0], "python"):
             yield rel, source
 
 
@@ -55,9 +60,9 @@ def called():
         except (UnicodeDecodeError, IsADirectoryError):
             continue
         first = source.split("\n", 1)[0]
-        if rel.endswith(".py") or "python" in first:
+        if rel.endswith(".py") or is_script(first, "python"):
             patterns = PYTHON_CALLS
-        elif rel.endswith(".sh") or "bash" in first or first == "#!/bin/sh":
+        elif rel.endswith(".sh") or is_script(first, "bash") or first == "#!/bin/sh":
             patterns = SHELL_CALLS
         else:
             continue
