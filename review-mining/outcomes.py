@@ -172,25 +172,40 @@ def fetch_window(start, end, now, errors):
     return prs
 
 
-def attach_escapes(prs):
-    """follow-pr's escapes per PR, and whether the lens that should have caught each one ran on the branch, under any
-    of its earlier names: the spec review often runs on a session branch that is renamed before the PR."""
+def quality_log():
     try:
-        entries = [json.loads(line) for line in open(QUALITY_LOG)]
+        return [json.loads(line) for line in open(QUALITY_LOG)]
     except OSError:
-        entries = []
+        return []
+
+
+def renames(entries):
     renamed_from = {}
     for e in entries:
         if e.get("kind") == "rename":
             renamed_from.setdefault((e["repo"], e["to"]), set()).add(e["name"])
+    return renamed_from
+
+
+def branch_names(renamed_from, repo, branch):
+    """The branch and every earlier name its rename lines record."""
+    names, pending = set(), [branch]
+    while pending:  # a branch renamed twice, each time after files moved, logs two renames
+        current = pending.pop()
+        if current not in names:
+            names.add(current)
+            pending += renamed_from.get((repo, current), ())
+    return names
+
+
+def attach_escapes(prs):
+    """follow-pr's escapes per PR, and whether the lens that should have caught each one ran on the branch, under any
+    of its earlier names: the spec review often runs on a session branch that is renamed before the PR."""
+    entries = quality_log()
+    renamed_from = renames(entries)
     for pr in prs:
-        name, branch = pr["repo"].split("/")[1], pr["branch"]
-        names, pending = set(), [branch]
-        while pending:  # a branch renamed twice, each time after files moved, logs two renames
-            current = pending.pop()
-            if current not in names:
-                names.add(current)
-                pending += renamed_from.get((name, current), ())
+        name = pr["repo"].split("/")[1]
+        names = branch_names(renamed_from, name, pr["branch"])
         mine = [e for e in entries if e.get("repo") == name and e.get("branch") in names]
         lenses_run = {e["name"] for e in mine if e.get("kind") == "lens"}
         pr["escapes"] = [{"source": e["name"], "category": e.get("category"), "verdict": e.get("verdict"),
@@ -199,6 +214,7 @@ def attach_escapes(prs):
 
 
 def attach_sessions(prs, sessions):
+    renamed_from = renames(quality_log())
     for pr in prs:
         name = pr["repo"].split("/")[1]
         on_branch = [s for s in sessions if pr["branch"] in s.get("branches", []) and name in (s.get("project") or "")]
@@ -216,18 +232,19 @@ def attach_sessions(prs, sessions):
             "effort": sorted({e for s in on_branch for e in s.get("effort", [])}),
             "hours_to_pr": round((opened - first).total_seconds() / 3600, 1),
             "hours_to_merge": round((merged - opened).total_seconds() / 3600, 1),
-            "phases": phases_on_branch(on_branch, pr["branch"]),
+            "phases": phases_on_branches(on_branch, branch_names(renamed_from, name, pr["branch"])),
         }
 
 
-def phases_on_branch(sessions, branch):
-    """Tokens and active minutes per phase of the flow, summed over the sessions' turns on this branch."""
+def phases_on_branches(sessions, branches):
+    """Tokens and active minutes per phase of the flow, summed over the sessions' turns on these branches."""
     total = {}
     for session in sessions:
-        for phase, spent in (session.get("phases") or {}).get(branch, {}).items():
-            into = total.setdefault(phase, dict.fromkeys(spent, 0))
-            for key, value in spent.items():
-                into[key] = round(into.get(key, 0) + value, 1)
+        for branch in branches:
+            for phase, spent in (session.get("phases") or {}).get(branch, {}).items():
+                into = total.setdefault(phase, dict.fromkeys(spent, 0))
+                for key, value in spent.items():
+                    into[key] = round(into.get(key, 0) + value, 1)
     return total
 
 

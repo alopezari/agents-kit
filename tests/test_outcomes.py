@@ -110,14 +110,17 @@ def sessions_join_by_repo_and_branch(base):
          "minutes": 99, "tokens": {"in": 999, "out": 999, "cache_read": 0}, "models": {"haiku": 1}, "effort": ["low"],
          "phases": {"feature/cart": {"build": {"out": 999, "cache_read": 0, "cache_write": 0, "minutes": 99}}}},
     ]
+    outcomes.QUALITY_LOG = os.path.join(base, "quality.jsonl")
+    with open(outcomes.QUALITY_LOG, "w") as fh:  # the spec ran on the session branch, renamed before the PR
+        fh.write(json.dumps({"kind": "rename", "repo": "shop", "name": "session/x", "to": "feature/cart"}) + "\n")
     outcomes.attach_sessions(prs, sessions)
     assert prs[0]["sessions"] == {"count": 2, "tokens": 165, "cache_read_tokens": 9000, "minutes": 40,
                                   "models": ["opus", "sonnet"], "effort": ["high", "medium"],
                                   "hours_to_pr": 2.0, "hours_to_merge": 24.0,
-                                  "phases": {"build": {"out": 35, "cache_read": 0, "cache_write": 0, "minutes": 14.5}, "validate": {"out": 20, "cache_read": 0, "cache_write": 0, "minutes": 5}}}, prs[0]["sessions"]
+                                  "phases": {"build": {"out": 535, "cache_read": 0, "cache_write": 0, "minutes": 23.5}, "validate": {"out": 20, "cache_read": 0, "cache_write": 0, "minutes": 5}}}, prs[0]["sessions"]
     counts = dict.fromkeys(("review_threads", "changes_requested", "red_pushes", "commits_after_first_review"), 0)
     assert outcomes.summarize([{**prs[0], **counts, "follow_ups": "pending"}])["sessions_joined"]["per_phase"]["validate"]["minutes"] == 5, \
-        "phases on the PR's branch only, summed over its sessions in its repo"
+        "phases on the PR's branch and its earlier names only, summed over its sessions in its repo"
 
 
 def quality_log_names_the_repo_not_the_worktree(base):
