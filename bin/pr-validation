@@ -18,7 +18,8 @@ RESULTS = ("PASS", "FAIL", "NOT RUN")
 
 
 def public(text):
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text).replace("\\|", "|")
+    # Inline links, whose target may hold balanced parentheses, and reference links.
+    text = re.sub(r"\[([^\]]*)\](?:\((?:[^()]|\([^()]*\))*\)|\[[^\]]*\])", r"\1", text).replace("\\|", "|")
     return re.sub(re.escape(os.path.expanduser("~")) + r"(?=/)", "~", text)
 
 
@@ -31,16 +32,16 @@ def read(path):
 
 
 def verify_line(text):
-    verdict = re.search(r"^# Verify: (\w+)", text, re.M)
+    verdict = re.search(r"^# Verify: (.+)$", text, re.M)
     checks, pythons = [], []
-    for ran in re.findall(r"^ran: (.+)$", text, re.M):
+    for ran in re.findall(r"^ran: (?!nothing to check)(.+)$", text, re.M):
         check, _, python = ran.partition(" with Python ")
         if python and python not in pythons:
             pythons.append(python)
         if check not in checks:
             checks.append(check)
-    line = f"- Verify: {verdict.group(1) if verdict else 'no verdict'}, {len(checks)} check{'s' * (len(checks) != 1)}"
-    line += f": {', '.join(checks)}" if checks else ""
+    line = f"- Verify: {verdict.group(1).rstrip('.') if verdict else 'no verdict'}"
+    line += f", {len(checks)} check{'s' * (len(checks) != 1)}: {', '.join(checks)}" if checks else ""
     line += f" (also under Python {', '.join(pythons)})" if pythons else ""
     return [public(line) + "."]
 
@@ -48,7 +49,7 @@ def verify_line(text):
 def review_lines(text):
     header = next((line.strip() for line in text.splitlines() if line.startswith("Self-review")), "Self-review")
     findings = [(kind, summary.split(" — ")[0].strip().rstrip(".") + ".")
-                for kind, summary in re.findall(r"^(Fixed|Rejected|Open):\s+(.+)$", text, re.M)
+                for kind, summary in re.findall(r"^(Fixed|Rejected|Open):[ \t]*(\S.*)$", text, re.M)
                 if summary.strip().rstrip(".").lower() != "none"]
     counts = ", ".join(f"{sum(k == kind for k, _ in findings)} {kind.lower()}" for kind in ("Fixed", "Rejected", "Open"))
     return [public(f"- {header}: {counts}.")] + [public(f"  - {kind}: {summary}") for kind, summary in findings]
@@ -71,15 +72,16 @@ def validation_lines(text):
     counts = ", ".join(f"{n} {result}" for result in RESULTS for n in [sum(r == result for _, r, _ in rows)] if n)
     lines = [f"- Validation, {len(rows)} check{'s' * (len(rows) != 1)}: {counts or 'none'}."]
     lines += [f"  - {first} {result}: {check}" for first, result, check in rows]
-    lines += [f"  - Not run: {rest}" for rest in re.findall(r"^Not run:\s*(.+)$", text, re.M)]
+    lines += [f"  - Not run: {rest}" for rest in re.findall(r"^Not run:[ \t]*(\S.*)$", text, re.M)]
     return [public(line) for line in lines]
 
 
 def staging_lines(text, evidence):
-    rounds = re.split(r"^## Results(?! after the deploy)([^\n]*)\n", text, flags=re.M)
-    if len(rounds) < 3:
+    # The latest round before the merge, up to the next section: ship appends the production results after it.
+    rounds = list(re.finditer(r"^## Results(?! after the deploy)([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S))
+    if not rounds:
         return ["- Staging: no results yet."]
-    heading, latest = rounds[-2], rounds[-1]
+    heading, latest = rounds[-1].group(1), rounds[-1].group(2)
     when = re.search(r"\(([^)]*)\)", heading)
     steps = ", ".join(f"{first} {result}" for first, result, _, _ in review_stamp.result_rows(latest.splitlines(), evidence))
     return [public(f"- Staging{f' (results of {when.group(1)})' if when else ''}: {steps or 'no step results'}.")]

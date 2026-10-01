@@ -82,6 +82,28 @@ def counts_open_findings_and_skips_absent_reports(base):
                           "  - Open: the refund total may round twice.\n"), out.stdout
 
 
+def keeps_qualified_verdicts_and_bounded_sections(base):
+    repo = new_repo(base)
+    write(repo, "verify", "# Verify: PASS, but nothing was checked\n\nran: nothing to check: no changed files\n")
+    write(repo, "review", "Self-review (risk: low; lenses: correctness)\nFixed:\nRejected: none.\n")
+    write(repo, "validation", f"| # | Check | Result | Evidence |\n|---|---|---|---|\n"
+                              f"| A1 | Saved to [the log]({HOME}/work(copy)/acme/log.txt) and [the trace][t] | PASS | a1.txt |\n"
+                              "\nNot run:\n## Details\n")
+    write(repo, "staging-guide", "# Staging guide\n\n## Before the merge\n\n### S1 Pay\n\n"
+                                 "## Results (2026-09-30)\n\n| Step | Result | Evidence |\n|---|---|---|\n| S1 | PASS | s1.txt |\n\n"
+                                 "## Results after the deploy (2026-10-02)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
+                                 "| P1 | FAIL | p1.txt |\n")
+    out = sh(repo, PR_VALIDATION)
+    assert out.stdout == ("## Validation\n\n- Verify: PASS, but nothing was checked.\n"
+                          "- Self-review (risk: low; lenses: correctness): 0 fixed, 0 rejected, 0 open.\n"
+                          "- Validation, 1 check: 1 PASS.\n  - A1 PASS: Saved to the log and the trace\n"
+                          "- Staging (results of 2026-09-30): S1 PASS.\n"), out.stdout
+    with open(sh(repo, REPORTS, "path", "staging-guide").stdout.strip(), "a") as fh:
+        fh.write("\n## Results (2026-10-01)")
+    assert sh(repo, PR_VALIDATION).stdout.endswith("- Staging (results of 2026-10-01): no step results.\n"), \
+        "a latest round at the end of the file, still empty, isn't the earlier PASS"
+
+
 def a_missing_verify_or_review_fails_naming_it(base):
     repo = new_repo(base)
     write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
@@ -91,7 +113,7 @@ def a_missing_verify_or_review_fails_naming_it(base):
 
 
 for test in (builds_the_section_from_every_report, counts_open_findings_and_skips_absent_reports,
-             a_missing_verify_or_review_fails_naming_it):
+             keeps_qualified_verdicts_and_bounded_sections, a_missing_verify_or_review_fails_naming_it):
     base = tempfile.mkdtemp(prefix="agents-test-pr-validation-")
     try:
         test(base)
