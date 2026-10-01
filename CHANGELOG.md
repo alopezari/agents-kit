@@ -1,6 +1,6 @@
 # Changelog
 
-Each pull request adds a line under Unreleased; CI checks it, unless the pull request is labeled "no changelog" because nothing changes for someone using the kit. A release moves those lines under a new version, sets `VERSION` to it and tags the commit `v<version>`. Versions follow [semantic versioning](https://semver.org): a minor version while the kit is below 1.0, a major one for anything that breaks an installed profile. 0.1.0 and 0.2.0 group the work before versioning started, by day, and have no tags.
+Each pull request adds its own file under `changelog.d/` (see its README); CI checks it, unless the pull request is labeled "no changelog" because nothing changes for someone using the kit. `bin/changelog release <version>` moves those entries and any lines under Unreleased under a new version, adds each entry's pull request number and sets `VERSION`; then the release is committed and tagged `v<version>`. Versions follow [semantic versioning](https://semver.org): a minor version while the kit is below 1.0, a major one for anything that breaks an installed profile. 0.1.0 and 0.2.0 group the work before versioning started, by day, and have no tags.
 
 ## [Unreleased]
 
@@ -25,6 +25,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - Validate's staging hand-off detaches its worktree from the branch instead of removing it, so the session doesn't go on in a deleted directory where the repository's hooks fail on every command (#38).
 - The shell guard denies a command when one of its checks crashes, or when its git and stamp calls use up the time the harness gives the hook, instead of letting the command through (#39).
 - Staging results expire when the change does: once they pass, `review_stamp.py write --kind staging` records them for the exact change, and after any later edit the guard holds `gh pr ready` and the status line shows "redo staging" until the affected steps pass again (#40).
+- Each pull request adds its changelog entry as its own file under `changelog.d/`, without a number, so pull requests merged in a batch no longer conflict on CHANGELOG.md and need no extra commit for their number; `bin/changelog release` assembles the entries and adds the numbers.
 
 ## [0.4.0] - 2026-09-28
 

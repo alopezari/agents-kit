@@ -1,31 +1,69 @@
 #!/bin/bash
-# .github/changelog-check against a throwaway repo: a new Unreleased line passes, anything else fails.
+# .github/changelog-check and bin/changelog release against throwaway repos.
 set -uo pipefail
 repo=$(mktemp -d "${TMPDIR:-/tmp}/agents-changelog-XXXXXX")
 trap 'rm -rf "$repo"' EXIT
 check_script="$HOME/.agents/.github/changelog-check"
+changelog="$HOME/.agents/bin/changelog"
 fail=0
+ok() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (got $2, expected $3)"; fail=1; fi; }
+commit() { git add -A && git -c user.name=t -c user.email=t@t commit -qm "$1"; }
+
 cd "$repo" && git init -q -b main
 printf '# Changelog\n\n## [Unreleased]\n\n- Old entry (#1).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n' > CHANGELOG.md
-git add -A && git -c user.name=t -c user.email=t@t commit -qm base
+mkdir changelog.d && printf -- '- Already released elsewhere.\n' > changelog.d/older.md
+echo '# One file per pull request' > changelog.d/README.md
+echo 0.1.0 > VERSION
+commit base
 
-case_() {  # case_ <expect pass|fail> <description> <CHANGELOG.md content>
-  printf '%b' "$3" > CHANGELOG.md
+case_() {  # case_ <expect pass|fail> <description> <command that changes the branch>
+  git checkout -q -B branch main
+  eval "$3"
+  commit "$2" >/dev/null 2>&1
   if "$check_script" main >/dev/null 2>&1; then got=pass; else got=fail; fi
-  if [ "$got" = "$1" ]; then echo "ok   $2"; else echo "FAIL $2 (got $got)"; fail=1; fi
+  ok "$2" "$got" "$1"
 }
-case_ pass "a new line under Unreleased passes" \
-  '# Changelog\n\n## [Unreleased]\n\n- Old entry (#1).\n- New entry (#2).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n'
-case_ fail "no change fails" \
-  '# Changelog\n\n## [Unreleased]\n\n- Old entry (#1).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n'
-case_ fail "a new line under a released version fails" \
-  '# Changelog\n\n## [Unreleased]\n\n- Old entry (#1).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n- Sneaked in (#2).\n'
-case_ fail "rewording the intro fails" \
-  '# Changelog, edited\n\n## [Unreleased]\n\n- Old entry (#1).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n'
-case_ fail "a line under another heading after Unreleased fails" \
-  '# Changelog\n\n## [Unreleased]\n\n- Old entry (#1).\n\n## Notes\n\n- Not an entry (#2).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n'
-case_ fail "an empty bullet fails" \
-  '# Changelog\n\n## [Unreleased]\n\n- Old entry (#1).\n- \n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n'
-case_ pass "rewording an existing entry counts as new" \
-  '# Changelog\n\n## [Unreleased]\n\n- Old entry, clarified (#1).\n\n## [0.1.0] - 2026-09-24\n\n- First (#0).\n'
+case_ pass "a new fragment passes" "printf -- '- New entry.\n' > changelog.d/feat~x.md"
+case_ fail "no change fails" ":"
+case_ fail "a line in CHANGELOG.md alone fails: entries go in changelog.d/" \
+  "sed -i.bak 's/^- Old entry (#1)./&\n- New entry./' CHANGELOG.md && rm CHANGELOG.md.bak"
+case_ fail "editing an existing fragment fails" "printf -- '- Reworded.\n' > changelog.d/older.md"
+case_ fail "an empty fragment fails" ": > changelog.d/feat~x.md"
+case_ fail "a fragment with only an empty bullet fails" "printf -- '- \n' > changelog.d/feat~x.md"
+case_ fail "a file outside changelog.d/ fails" "printf -- '- New entry.\n' > notes.md"
+case_ fail "editing changelog.d/README.md isn't an entry" "printf -- '- New entry.\n' >> changelog.d/README.md"
+git checkout -q main && git branch -qD branch
+
+# A release: two merged pull requests, and the line already under Unreleased.
+git rm -q changelog.d/older.md && commit "drop the old fragment"
+for pr in 7 8; do
+  git checkout -q -b "feat/$pr" main
+  printf -- "- Thing $pr.\n" > "changelog.d/feat~$pr.md"
+  echo "$pr" > "code-$pr.txt" && commit "work $pr"
+  git checkout -q main && git -c user.name=t -c user.email=t@t merge -q --no-ff "feat/$pr" -m "Merge pull request #$pr from o/feat-$pr"
+done
+"$changelog" release 0.2.0 > /dev/null 2>&1; ok "release exits 0" "$?" 0
+expected=$(printf '## [Unreleased]\n\n## [0.2.0] - %s\n\n- Old entry (#1).\n- Thing 7 (#7).\n- Thing 8 (#8).\n\n## [0.1.0] - 2026-09-24' "$(date +%F)")
+ok "release moves Unreleased and each fragment, with its PR number, under the version" \
+  "$(sed -n '/^## \[Unreleased\]/,/^## \[0.1.0\]/p' CHANGELOG.md)" "$expected"
+ok "release deletes the fragments it released, and keeps the README" "$(ls changelog.d)" README.md
+ok "release sets VERSION" "$(cat VERSION)" 0.2.0
+commit "release 0.2.0"
+git tag v0.2.0
+
+# A later branch reusing a released entry's name gets its own number, not the first merge since the release.
+git checkout -q -b feat/9 main && printf -- "- Thing 9.\n" > changelog.d/feat~9.md && commit "work 9"
+git checkout -q main && git -c user.name=t -c user.email=t@t merge -q --no-ff feat/9 -m "Merge pull request #9 from o/feat-9"
+git checkout -q -B feat/7 main && printf -- "- Thing 7 again.\n" > "changelog.d/feat~7.md" && commit "work 10"
+git checkout -q main && git -c user.name=t -c user.email=t@t merge -q --no-ff feat/7 -m "Merge pull request #10 from o/feat-7"
+"$changelog" release 0.2.1 > /dev/null 2>&1
+ok "a reused entry name takes the number of its own merge" "$(grep -c '^- Thing 7 again (#10)\.$' CHANGELOG.md)" 1
+commit "release 0.2.1" && git tag v0.2.1
+
+printf -- '- Committed straight to main.\n' > changelog.d/direct.md && commit direct
+before=$(cat CHANGELOG.md VERSION)
+out=$("$changelog" release 0.3.0 2>&1); code=$?
+ok "a fragment no merge brought in fails" "$code" 1
+ok "and names it" "$(echo "$out" | grep -c 'changelog.d/direct.md')" 1
+ok "and changes nothing" "$(cat CHANGELOG.md VERSION)" "$before"
 exit $fail

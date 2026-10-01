@@ -1,15 +1,19 @@
 #!/bin/bash
-# Pass when this checkout's CHANGELOG.md has a "- " line under Unreleased that <base ref> doesn't have.
+# Pass when this checkout adds a file under changelog.d/ (not its README) that <base ref> doesn't have, with a "- " line.
 #   .github/changelog-check origin/main
 set -euo pipefail
 base=$1
-unreleased() { awk '/^## \[Unreleased\]/ { on = 1; next } /^## / { on = 0 } on && /^- +[^ ]/'; }
-before=$(git show "$base:CHANGELOG.md" | unreleased | sort)
-after=$(unreleased < CHANGELOG.md | sort)
-added=$(comm -13 <(echo "$before") <(echo "$after"))
+added=$(git diff --name-only --diff-filter=A "$base" -- 'changelog.d/*.md' | grep -v '^changelog.d/README.md$' || true)
 if [ -z "$added" ]; then
-  echo "CHANGELOG.md has no new line under Unreleased. Add one saying what this pull request changes for someone"
-  echo "using the kit, or label the pull request \"no changelog\" if nothing changes for them."
+  echo "No new file under changelog.d/. Add changelog.d/<branch>.md with a \"- \" line saying what this pull request"
+  echo "changes for someone using the kit (no PR number: the release adds it), or label the pull request"
+  echo "\"no changelog\" if nothing changes for them."
   exit 1
 fi
-echo "New under Unreleased:"; echo "$added"
+for file in $added; do
+  if ! grep -qE '^- +[^ ]' "$file"; then
+    echo "$file has no \"- \" line with text: write what this pull request changes for someone using the kit."
+    exit 1
+  fi
+done
+echo "New changelog entries:"; cat $added

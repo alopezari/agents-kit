@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Cut a release from the changelog entries: each pull request adds its own changelog.d/<branch>.md, without a number.
+
+  changelog release <version>   move CHANGELOG.md's Unreleased lines and every changelog.d/ entry under
+                                "## [<version>] - <today>", each entry ending in the number of the pull request that
+                                merged it, delete the entries and set VERSION; then commit and tag v<version> yourself
+
+The number comes from the merge commit ("Merge pull request #N …") that brought the entry into the current branch.
+An entry no merge brought in (committed straight to the branch, or squashed) stops the release and changes nothing.
+"""
+import datetime
+import os
+import re
+import subprocess
+import sys
+
+GIT_TIMEOUT = 30
+
+
+def git(*args):
+    result = subprocess.run(["git", *args], capture_output=True, text=True, timeout=GIT_TIMEOUT)
+    if result.returncode != 0:
+        sys.exit(f"changelog: git {' '.join(args)} failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def entries():
+    """The changelog.d/ entries, as (path, lines)."""
+    found = []
+    for name in sorted(os.listdir("changelog.d")) if os.path.isdir("changelog.d") else []:
+        if name.endswith(".md") and name != "README.md":
+            path = os.path.join("changelog.d", name)
+            with open(path) as fh:
+                found.append((path, [line.rstrip() for line in fh if re.match(r"- +\S", line)]))
+    return found
+
+
+def pull_request(path, span, merges):
+    """The number of the first merge since the last release, in the order they landed, whose history adds path. Only
+    since the last release: a later branch can reuse a released entry's name."""
+    added = git("log", "--diff-filter=A", "--format=%H", *span, "--", path).splitlines()
+    if not added:
+        return None
+    for sha, subject in merges:
+        number = re.match(r"Merge pull request #(\d+)", subject)
+        if number and subprocess.run(["git", "merge-base", "--is-ancestor", added[-1], sha],
+                                     timeout=GIT_TIMEOUT).returncode == 0:
+            return number.group(1)
+    return None
+
+
+def with_number(line, number):
+    text = line.rstrip(".")
+    return f"{text} (#{number})." if line.endswith(".") else f"{line} (#{number})"
+
+
+def release(version):
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        sys.exit(f"changelog: {version!r} isn't a version like 0.5.0")
+    os.chdir(git("rev-parse", "--show-toplevel"))
+    last_release = git("describe", "--tags", "--abbrev=0") if git("tag", "--list", "v*") else ""
+    span = [f"{last_release}..HEAD"] if last_release else ["HEAD"]
+    merges = [line.split(" ", 1) for line in
+              git("log", "--first-parent", "--merges", "--reverse", "--format=%H %s", *span).splitlines()]
+    released, missing = [], []
+    for path, lines in entries():
+        number = pull_request(path, span, merges)
+        if number is None:
+            missing.append(path)
+        else:
+            released.append((int(number), [with_number(line, number) for line in lines], path))
+    if missing:
+        sys.exit("changelog: no merged pull request brought in " + ", ".join(missing)
+                 + ". Add its number to its line in CHANGELOG.md's Unreleased section by hand and delete the file, "
+                   "then run the release again.")
+
+    with open("CHANGELOG.md") as fh:
+        text = fh.read()
+    section = re.search(r"^## \[Unreleased\]\n(.*?)(?=^## )", text, re.M | re.S)
+    if not section:
+        sys.exit("changelog: CHANGELOG.md has no '## [Unreleased]' section followed by a release")
+    unreleased = [line for line in section.group(1).splitlines() if line.startswith("- ")]
+    lines = unreleased + [line for _, entry_lines, _ in sorted(released) for line in entry_lines]
+    if not lines:
+        sys.exit("changelog: nothing to release: no line under Unreleased and no entry in changelog.d/")
+    today = datetime.date.today().isoformat()
+    body = f"## [Unreleased]\n\n## [{version}] - {today}\n\n" + "\n".join(lines) + "\n\n"
+    with open("CHANGELOG.md", "w") as fh:
+        fh.write(text[:section.start()] + body + text[section.end():])
+    with open("VERSION", "w") as fh:
+        fh.write(version + "\n")
+    for _, _, path in released:
+        os.remove(path)
+    print(f"Released {len(lines)} lines as {version}. Review CHANGELOG.md, commit, and tag v{version}.")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3 or sys.argv[1] != "release":
+        sys.exit(__doc__.split("\n\n")[1])
+    release(sys.argv[2])

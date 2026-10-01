@@ -43,7 +43,8 @@ BASELINE_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "basel
 BOT = re.compile(r"\[bot\]$|copilot|coderabbit|claude|codex|gemini|github-actions|dependabot", re.I)
 FOLLOW_UP_TITLE = re.compile(r"\b(revert|fix|hotfix|regression|bug)", re.I)
 # Files nearly every PR touches; sharing only these doesn't make a later PR a follow-up.
-INCIDENTAL_FILE = re.compile(r"(^|/)(changelog[^/]*|readme[^/]*|package-lock\.json|composer\.lock|pnpm-lock\.yaml|yarn\.lock)$", re.I)
+INCIDENTAL_FILE = re.compile(r"(^|/)(changelog[^/]*|readme[^/]*|package-lock\.json|composer\.lock|pnpm-lock\.yaml|yarn\.lock)$"
+                             r"|(^|/)changelog\.d/", re.I)
 
 PR_FIELDS = """title url createdAt mergedAt headRefName author { login }
   reviewThreads(first: 100) { nodes { comments(first: 1) { nodes { author { login } } } } }

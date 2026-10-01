@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **12 command-line tools**: a11y-check, browse, ci-wait, docs, evidence, gh, phase, quality-log, repo-name, reports, triage, wp-query-profile.
+- **13 command-line tools**: a11y-check, browse, changelog, ci-wait, docs, evidence, gh, phase, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -77,7 +77,7 @@ flowchart TD
   MG --> SH[ship skill: your deploy + verification guide, rollback ready, close the loop]
 ```
 
-The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards but the changelog invalidates it. Only running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no check (no `ran:` line) leaves a separate stamp, and the status line says "verify checked nothing".
+The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Only running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no check (no `ran:` line) leaves a separate stamp, and the status line says "verify checked nothing".
 
 When the change needs manual tests on staging, `validate` ends by handing you the branch: if the agent worked in a git worktree, it detaches it from the branch (only once everything is committed and pushed) so you can switch to the branch in your main checkout, and keeps the directory its session runs in. The spec, the reports, the staging guide and the review stamps live in the repository's shared `.git/agents/`, so they survive the hand-off: run `bin/reports` there. The PR is opened after you report the staging results, so its description carries them.
 
@@ -215,6 +215,12 @@ Harnesses pick a skill by its description; you can also call one by name (`/spec
 browse assign                         pick the tool for this validation run (balanced alternation)
 browse <tool args...>                 run the assigned tool with these args, logging the call
 browse finish --checks N --passed P [--tool-issues K] [--notes "..."]
+```
+
+**`bin/changelog`**: Cut a release from the changelog entries: each pull request adds its own changelog.d/<branch>.md, without a number.
+
+```
+changelog release <version>   move CHANGELOG.md's Unreleased lines and every changelog.d/ entry under
 ```
 
 **`bin/ci-wait`**: Wait for the CI checks of one commit and say how they ended.
@@ -367,7 +373,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | Path | Purpose |
 |---|---|
 | `.githooks/` | Keeps this reference in sync on every commit. |
-| `.github/` | CI: installs the kit on a macOS runner and runs `tests/run.sh` on every pull request, and checks each one adds a changelog line. |
+| `.github/` | CI: installs the kit on a macOS runner and runs `tests/run.sh` on every pull request, and checks each one adds a changelog entry under `changelog.d/`. |
 | `AGENTS.md` | The instructions every harness loads (linked as CLAUDE.md / AGENTS.md). |
 | `CHANGELOG.md` | What changed in each version, and how a release is cut. |
 | `LICENSE` | MIT. |
@@ -375,6 +381,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `VERSION` | The kit's version; `install.sh --doctor` prints it. |
 | `adapters/` | Per-harness glue: the Pi extension, the Claude Code status line, Codex profiles. |
 | `bin/` | Command-line tools the skills and people call. |
+| `changelog.d/` | One changelog entry per pull request, waiting for the next release (`bin/changelog release`). |
 | `deps.txt` | Every program the kit runs, by tier; `install.sh` installs and checks them. |
 | `docs/` | This reference and the research behind the instructions. |
 | `examples/` | A sample profile with one of each extension point, to copy as the start of your own. |

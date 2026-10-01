@@ -36,8 +36,8 @@ NOT_BEHAVIOR = re.compile(
     r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$|(^|/)(CHANGELOG|README)",
     re.I,
 )
-# A PR's changelog line gets its number after the PR opens, and CI checks the entry: adding it re-runs nothing.
-NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?$", re.I)
+# CI checks the changelog entry, and it is often written last: adding it re-runs nothing.
+NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?$|(^|/)changelog\.d/[^/]+\.md$", re.I)
 VERIFY_KINDS = ("verify", "verify-empty")
 
 
