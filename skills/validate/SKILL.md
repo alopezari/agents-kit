@@ -86,7 +86,7 @@ Every check leaves evidence the user can open instead of re-running it, in the b
 
 ## 5. Report and clean up
 
-Report a table per block, `# | Check | Case (+/−) | Result | Evidence`. Result is PASS, FAIL or NOT RUN. Evidence is what you observed, in a few words (the status code, the output line, the query count), plus a link to its file in the evidence directory: `[output](evidence-<repo>-<branch>/A1.txt)`, and `![login page](evidence-<repo>-<branch>/C2-login.png)` for a screenshot, so it shows in the report. The links are relative, since the report and the directory sit side by side; `basename "$EV"` prints the directory's name. "Works" is not evidence, and a check without evidence counts as NOT RUN: the validate stamp refuses a PASS or FAIL row whose Evidence cell names no saved file. Then list:
+Report a table per block, `# | Check | Case (+/−) | Result | Evidence`. Result is PASS, FAIL or NOT RUN. Evidence is what you observed, in a few words (the status code, the output line, the query count), plus a link to its file by its absolute path, `$EV` written out: `[output](/Users/me/repo/.git/agents/evidence-repo-feat~x/A1.txt)`, and `![login page](/Users/me/repo/.git/agents/evidence-repo-feat~x/C2-login.png)` for a screenshot, so it shows in the report. Absolute, so the link opens with a click from the terminal as well as from the report. "Works" is not evidence, and a check without evidence counts as NOT RUN: the validate stamp refuses a PASS or FAIL row whose Evidence cell names no saved file. Then list:
 - what was only unit-tested;
 - what failed and was fixed in the same change;
 - what couldn't run locally, and why.
@@ -159,8 +159,8 @@ From here the user owns the checkout. Propose fixes instead of editing it, unles
 
 | Step | Result | Evidence |
 |---|---|---|
-| S1 | PASS | `1.3.0`, no `Error:`: [output](evidence-<repo>-<branch>/S1.txt) |
-| S4 | FAIL | the badge is missing: ![product page](evidence-<repo>-<branch>/S4-product.png) |
+| S1 | PASS | `1.3.0`, no `Error:`: [output](/Users/me/repo/.git/agents/evidence-repo-feat~x/S1.txt) |
+| S4 | FAIL | the badge is missing: ![product page](/Users/me/repo/.git/agents/evidence-repo-feat~x/S4-product.png) |
 ```
 
-One row per step of the "Before the merge" part, with the observation that decided it and a relative link to its file. Ask the user only about a step with no evidence. A failure is a finding: fix it (verify, the self-review re-check and this skill's stamp again), update the guide, and ask for the affected steps to be re-run. When every step passed, continue with `create-pr`.
+One row per step of the "Before the merge" part, with the observation that decided it and a link to its file by its absolute path. Ask the user only about a step with no evidence. A failure is a finding: fix it (verify, the self-review re-check and this skill's stamp again), update the guide, and ask for the affected steps to be re-run. When every step passed, continue with `create-pr`.
