@@ -1,0 +1,1 @@
+- A staging step that FAILed in the latest results round now holds the pull request even when a later section of the guide has a PASS row for it.
