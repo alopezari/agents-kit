@@ -29,6 +29,7 @@ LAYOUT = {
     "LICENSE": "MIT.",
     "VERSION": "The kit's version; `install.sh --doctor` prints it.",
     "CHANGELOG.md": "What changed in each version, and how a release is cut.",
+    "changelog.d/": "One changelog entry per pull request, waiting for the next release (`bin/changelog release`).",
     "deps.txt": "Every program the kit runs, by tier; `install.sh` installs and checks them.",
     "examples/": "A sample profile with one of each extension point, to copy as the start of your own.",
     "install.sh": "Wires the kit into each installed harness; `--doctor` reports without changing anything.",
@@ -48,7 +49,7 @@ LAYOUT = {
     "tests/": "The regression suite: `tests/run.sh`.",
     "docs/": "This reference and the research behind the instructions.",
     ".githooks/": "Keeps this reference in sync on every commit.",
-    ".github/": "CI: installs the kit on a macOS runner and runs `tests/run.sh` on every pull request, and checks each one adds a changelog line.",
+    ".github/": "CI: installs the kit on a macOS runner and runs `tests/run.sh` on every pull request, and checks each one adds a changelog entry under `changelog.d/`.",
 }
 # Local state that is git-ignored and never documented.
 IGNORED = {".git", ".gitignore", ".claude", "logs", "backups", "approvals", "research", "profiles", "node_modules", "__pycache__"}
@@ -297,7 +298,7 @@ def render():
     w("  FP -->|ready to merge| MG{You merge}\n  MG --> SH[ship skill: your deploy + verification guide, rollback ready, close the loop]\n```\n")
     w("The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up "
       "in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a "
-      "stamp of the exact change in `.git/`; editing anything afterwards but the changelog invalidates it. Only "
+      "stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Only "
       "running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no "
       "check (no `ran:` line) leaves a separate stamp, and the status line says \"verify checked nothing\".\n")
     w("When the change needs manual tests on staging, `validate` ends by handing you the branch: if the agent worked in "

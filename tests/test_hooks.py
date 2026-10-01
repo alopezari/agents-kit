@@ -226,6 +226,9 @@ def pr_gate_review_and_validation(base):
     assert guard("gh pr create --fill", repo) == "allow"
     open(os.path.join(repo, "CHANGELOG.md"), "w").write("- A line (#12).\n")
     assert guard("gh pr create --fill", repo) == "allow", "the changelog line CI checks doesn't invalidate the stamps"
+    os.makedirs(os.path.join(repo, "changelog.d"))
+    open(os.path.join(repo, "changelog.d", "feat~x.md"), "w").write("- A line.\n")
+    assert guard("gh pr create --fill", repo) == "allow", "nor does its own changelog.d entry"
     os.makedirs(os.path.join(repo, "hooks"))
     open(os.path.join(repo, "hooks", "changelog_check.py"), "w").write("x = 1\n")
     assert guard("gh pr create --fill", repo) == "deny", "code named after the changelog is still code"

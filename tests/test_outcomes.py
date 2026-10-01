@@ -38,13 +38,14 @@ def pr_metrics_count_people_not_me_or_bots(base):
 
 
 def follow_ups_need_a_shared_file_and_a_fix_title(base):
-    prs = [{"repo": "o/shop", "number": 1, "merged": "2026-10-01T10:00:00Z", "files": ["src/cart.php", "CHANGELOG.md"]},
+    prs = [{"repo": "o/shop", "number": 1, "merged": "2026-10-01T10:00:00Z", "files": ["src/cart.php", "CHANGELOG.md", "changelog.d/cart.md"]},
            {"repo": "o/shop", "number": 2, "merged": "2026-10-25T10:00:00Z", "files": ["src/cart.php"]}]
     later = [
         {"number": 1, "title": "Fix cart totals", "url": "u1", "files": {"nodes": [{"path": "src/cart.php"}]}},
         {"number": 5, "title": "Fix cart rounding", "url": "u5", "files": {"nodes": [{"path": "src/cart.php"}]}},
         {"number": 6, "title": "Revert \"Cart totals\"", "url": "u6", "files": {"nodes": [{"path": "src/cart.php"}]}},
         {"number": 7, "title": "Fix changelog typo", "url": "u7", "files": {"nodes": [{"path": "CHANGELOG.md"}]}},
+        {"number": 9, "title": "Fix the entry", "url": "u9", "files": {"nodes": [{"path": "changelog.d/cart.md"}]}},
         {"number": 8, "title": "Add cart widget", "url": "u8", "files": {"nodes": [{"path": "src/cart.php"}]}},
     ]
     queries = []
