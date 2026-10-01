@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **13 command-line tools**: a11y-check, browse, changelog, ci-wait, docs, evidence, gh, phase, quality-log, repo-name, reports, triage, wp-query-profile.
+- **14 command-line tools**: a11y-check, browse, changelog, ci-wait, docs, evidence, gh, phase, pr-validation, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -245,6 +245,12 @@ docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the 
 ```
 phase             print the cached phase at once; refresh it in the background when older than 15 s
 phase --refresh   work it out now from the spec, stamps, reports and PR state, cache it and print it
+```
+
+**`bin/pr-validation`**: Print a pull request's "## Validation" section from the branch's reports, so it states what they record.
+
+```
+pr-validation    verify's verdict and what it ran, the self-review's findings, each validation check with its
 ```
 
 **`bin/quality-log`**: Record what a review lens or test type produced, and what got past them, so the monthly job can keep only perspectives that pay off.
