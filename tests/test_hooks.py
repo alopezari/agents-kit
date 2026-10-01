@@ -367,6 +367,13 @@ def pr_gate_waits_for_staging(base):
         assert decision("gh pr ready") == "deny", f"steps under {heading!r} still count"
     with open(guide, "w") as fh:
         fh.write(steps)
+
+    def write_staging():
+        return subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "staging"], cwd=repo,
+                              capture_output=True, text=True)
+
+    refused = write_staging()
+    assert refused.returncode == 2 and "without a PASS" in refused.stdout + refused.stderr, refused
     for command in ["gh pr create --draft --fill", "gh pr create -d --fill", "gh pr ready --undo", "gh pr view 12"]:
         assert decision(command) == "allow", command
     with open(os.path.join(evidence, "S1.txt"), "w") as fh:
@@ -385,6 +392,14 @@ def pr_gate_waits_for_staging(base):
     assert decision("gh pr ready") == "deny", "PASSING isn't PASS"
     with open(guide, "w") as fh:
         fh.write(steps + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n")
+    assert "re-run" in (reason("gh pr ready") or ""), "results nobody stamped for this change"
+    assert write_staging().returncode == 0
+    open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
+    assert "re-run" in (reason("gh pr ready") or ""), "an edit after the staging run"
+    for kind in ("review", "validate"):
+        write_stamp(repo, kind)
+    assert "re-run" in (reason("gh pr create --fill") or ""), "on every path the gate holds"
+    assert write_staging().returncode == 0, "re-stamped once the affected steps passed again"
     for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", 'gh pr ready "12"', "if true; then gh pr ready; fi",
                     "gh pr ready 2>&1", "gh pr ready > ready.log", "gh pr ready 12 2> err.log", "gh pr ready 12; gh pr ready 12"]:
         assert decision(command) == "allow", f"every S step passed with evidence: {command}"
@@ -420,6 +435,8 @@ def pr_gate_waits_for_staging(base):
     assert decision("gh pr ready 13") == "deny", "another branch's PR can't be checked from this checkout"
     os.remove(guide)
     assert decision("gh pr create --fill") == "allow", "no guide, no staging"
+    nothing = write_staging()
+    assert nothing.returncode == 2 and "no staging guide" in nothing.stdout + nothing.stderr, nothing
 
 
 def guard_fails_closed(base):

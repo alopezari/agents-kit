@@ -110,13 +110,18 @@ def walks_the_flow(base):
             ("| S1 | PASS | no FAIL line |\n| S2 | NOT RUN | need to check there is no FAIL line |\n", "staging (you)", "only the Result column counts"),
             ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | FAIL | [out](e/S2.txt) |\n", "staging: fix", "a FAIL row"),
             ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n", "staging: no evidence", "no saved files"),
-            ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n", "create-pr", "every S step passed")]:
-        if expected == "create-pr":
+            ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n", "staging: re-run",
+             "every S step passed, but no staging stamp covers this change")]:
+        if expected == "staging: re-run":
             evidence = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "evidence")
             for name in ("S1.txt", "S2.txt"):
                 open(os.path.join(evidence, name), "w").write("$ step\nexit 0\n")
         open(guide, "w").write(two + head + rows)
         assert phase(repo) == expected, why
+    passed = two + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n"
+    stamp(repo, "staging")
+    assert phase(repo) == "create-pr", "every S step passed for this exact change"
+    os.remove(os.path.join(repo, ".git", "agents", "stamps", "feature~cart", "staging.stamp"))  # the guides below need none
     open(guide, "w").write("# Staging guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")
     assert phase(repo) == "create-pr", "a guide with steps only after the merge doesn't hold the PR"
     open(guide, "w").write("# Staging guide\n1. Check the cart\n")
@@ -143,6 +148,18 @@ def walks_the_flow(base):
     assert phase(repo, env) == "PR open · redo verify, self-review, validate", "z = 3 is covered by no check"
     for kind in ("verify", "review", "validate"):
         stamp(repo, kind)
+    assert phase(repo, env) == "PR open"
+    open(guide, "w").write(passed)
+    stamp(repo, "staging")
+    open(os.path.join(repo, "app.py"), "a").write("w = 4\n")
+    for kind in ("verify", "review", "validate"):
+        stamp(repo, kind)
+    assert phase(repo, env) == "PR open · redo staging", "w = 4 came after the staging run"
+    for rows in ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | FAIL | [out](e/S2.txt) |\n", "| S1 | PASS | [out](e/S1.txt) |\n"):
+        open(guide, "w").write(two + head + rows)
+        assert phase(repo, env) == "PR open · redo staging", f"a re-run that hasn't passed yet: {rows!r}"
+    open(guide, "w").write(passed)
+    stamp(repo, "staging")
     assert phase(repo, env) == "PR open"
     env["PR_STATE"] = "MERGED"
     assert phase(repo, env) == "PR open", "the PR state is cached for a few minutes, not asked on every refresh"

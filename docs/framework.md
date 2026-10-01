@@ -134,7 +134,7 @@ Every block, and every approved or browser MCP call, is appended to `~/.agents/l
 - Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent.
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
-- `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence.
+- `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
 
 It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded.
 

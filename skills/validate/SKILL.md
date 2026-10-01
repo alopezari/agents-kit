@@ -164,3 +164,5 @@ From here the user owns the checkout. Propose fixes instead of editing it, unles
 ```
 
 One row per step of the "Before the merge" part, with the observation that decided it and a link to its file by its absolute path. Ask the user only about a step with no evidence. A failure is a finding: fix it (verify, the self-review re-check and this skill's stamp again), update the guide, and ask for the affected steps to be re-run. When every step passed, continue with `create-pr`.
+
+Record that they passed for this exact change: `python3 ~/.agents/hooks/review_stamp.py write --kind staging`. It refuses while a step lacks a PASS backed by evidence, and any later edit makes it stale: the guard then holds `gh pr ready` and the status line shows "staging: re-run" until the affected steps pass again and the stamp is rewritten.
