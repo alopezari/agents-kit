@@ -106,6 +106,8 @@ def failing_tests(cmd, cwd, not_run, junit_host=None, test_filter=""):
 
 
 TEST_FILE = re.compile(r"Test\.php$")
+# PHPStan's message when its config excludes every file it is given (exit 0 before 2.0, non-zero after).
+PHPSTAN_NOTHING_IN_SCOPE = "No files found to analyse"
 
 
 def link_ignored_dirs(root, tmp):
@@ -136,15 +138,16 @@ def link_ignored_dirs(root, tmp):
 def red_check(root, cwd_rel, cmd, changed_tests, not_run):
     """Run the changed tests against HEAD without the change: at least one must fail.
 
-    Builds a pristine copy of the merge-base with `git archive`, symlinks untracked dependency dirs
+    Builds a pristine copy of the merge-base with `git checkout-index`, symlinks untracked dependency dirs
     (vendor/...) from the working tree, copies in the changed test files, and runs only those
     test classes. Returns an error message when every test passes without the change.
     """
     tmp = tempfile.mkdtemp(prefix="agents-red-")
     try:
-        archive = subprocess.Popen(["git", "archive", review_stamp.merge_base(root)], cwd=root, stdout=subprocess.PIPE)
-        subprocess.run(["tar", "-x", "-C", tmp], stdin=archive.stdout, check=True)
-        archive.wait()
+        # Not `git archive`: it drops export-ignore paths, and repos often export-ignore their tests/.
+        index = {**os.environ, "GIT_INDEX_FILE": os.path.join(tmp, ".agents-red-index")}
+        subprocess.run(["git", "read-tree", review_stamp.merge_base(root)], cwd=root, env=index, check=True)
+        subprocess.run(["git", "checkout-index", "--all", f"--prefix={tmp}/"], cwd=root, env=index, check=True)
         link_ignored_dirs(root, tmp)
         for test in changed_tests:
             os.makedirs(os.path.dirname(os.path.join(tmp, test)), exist_ok=True)
@@ -267,6 +270,9 @@ def main():
 
     if args.phpstan and rel:
         out = run_json(shlex.split(args.phpstan) + ["--error-format=json", "--no-progress", *rel], tool_cwd, not_run)
+        if not out and PHPSTAN_NOTHING_IN_SCOPE in not_run[-1]:
+            not_run.pop()
+            ran.append(f"phpstan: none of the {len(rel)} changed files is in its configured paths")
         for fpath, data in (out.get("files") or {}).items():
             repo_path = os.path.relpath(os.path.realpath(fpath), os.path.realpath(root))
             for m in data.get("messages", []):
