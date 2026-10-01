@@ -130,19 +130,19 @@ Give the guide in chat in the user's language, and save an English copy to `$(~/
 
 When the staging guide has steps before the merge, the PR waits for their results: the PR description then shows real staging evidence, and a staging failure gets fixed before CI and reviewers spend time on the PR. When there is no guide, or its steps all come after the merge, skip this step; `create-pr` comes next.
 
-**If you worked in a linked worktree** (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`), remove it so the user can check the branch out: a branch can be checked out in only one worktree. First prove nothing is lost:
+**If you worked in a linked worktree** (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`), free the branch so the user can check it out: a branch can be checked out in only one worktree. Detach the worktree from it rather than removing it: the session keeps running in that directory, and once it is gone every repository hook run from it fails ("Cannot find module …/.claude/hooks/…") and the shell guard can't check PR commands. First prove nothing is lost:
 
-1. `git status --porcelain` prints nothing. Untracked files would be deleted with the worktree; commit them or ask.
+1. `git status --porcelain` prints nothing. Uncommitted work would stay behind in the worktree, off the branch; commit it or ask.
 2. The branch is pushed: `git push -u origin <branch>` if it has no upstream yet, then `git rev-parse HEAD` equals `git rev-parse @{upstream}`.
 3. The main checkout is the first `worktree` line of `git worktree list --porcelain`.
 
-Then leave the worktree (its directory is about to disappear) and remove it from the main checkout:
+Then, in the worktree:
 
 ```bash
-cd <main checkout> && git worktree remove <worktree path> && git worktree prune
+git switch --detach
 ```
 
-Never add `--force`, and never switch the main checkout's branch yourself: the user may have work there. The spec, the reports and the review and validate stamps live in the repository's shared `.git/agents/`, so they survive. If a tool created the worktree for its session (Xirp, for example), say so, so the user can archive that session too.
+It stays at the same commit, on no branch, so don't commit there: later work on the branch happens in the main checkout, with `cd <main checkout> && …`, and this session's status line shows no branch. Never switch the main checkout's branch yourself: the user may have work there. The spec, the reports and the stamps live in the repository's shared `.git/agents/`. The tool that created the worktree for the session (Xirp, Claude Code) removes it when the session is archived; one you created yourself with `git worktree add`, tell the user to remove once the session is over, with a check that nothing was committed there since: `git -C <worktree path> merge-base --is-ancestor HEAD origin/<branch> && git worktree remove <worktree path>`.
 
 Give the user the hand-off in chat, with real values:
 

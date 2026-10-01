@@ -22,6 +22,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - A staging guide splits at the merge, and the pull request waits only for the steps before it; the steps after it go to ship. Every step saves its output or screenshot with `bin/evidence` (`EVIDENCE_DIR` works from any directory), and the agent records the results from those files as a table with links (#35).
 - The shell guard holds `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence; `review_stamp.py staging` says what's missing (#36).
 - Evidence links in validation reports and staging results, and the report paths in the final message, are absolute, so a click opens them (#37).
+- Validate's staging hand-off detaches its worktree from the branch instead of removing it, so the session doesn't go on in a deleted directory where the repository's hooks fail on every command (#38).
 
 ## [0.4.0] - 2026-09-28
 
