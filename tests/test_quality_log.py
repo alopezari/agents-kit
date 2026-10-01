@@ -14,7 +14,8 @@ def setup(base):
     """A HOME of its own, so the log written is the test's, not the real one."""
     home = os.path.join(base, "home")
     os.makedirs(os.path.join(home, ".agents", "bin"))
-    for rel in ("bin/quality-log", "bin/repo-name"):
+    os.makedirs(os.path.join(home, ".agents", "review-mining"))
+    for rel in ("bin/quality-log", "bin/repo-name", "review-mining/taxonomy.md"):
         shutil.copy(os.path.join(KIT, rel), os.path.join(home, ".agents", rel))
     return home
 
@@ -34,12 +35,12 @@ def writes_well_formed_entries(base):
     home = setup(base)
     assert log(home, "lens", "correctness", "--findings", "10", "--confirmed", "6", "--secs", "600", "--model", "codex").returncode == 0
     assert log(home, "test", "e2e", "--issues", "1", "--secs", "30", "--notes", "found the 0.005 rounding").returncode == 0
-    assert log(home, "escape", "bot", "--verdict", "confirmed", "--category", "C.logic", "--lens", "correctness",
+    assert log(home, "escape", "bot", "--verdict", "confirmed", "--category", "P3.2a", "--lens", "Tests",
                "--pr", "42").returncode == 0
     lens, test, escape = entries(home)
     assert (lens["name"], lens["findings"], lens["confirmed"], lens["secs"], lens["model"]) == ("correctness", 10, 6, 600, "codex"), lens
     assert (test["issues"], test["notes"]) == (1, "found the 0.005 rounding"), test
-    assert (escape["name"], escape["verdict"], escape["pr"]) == ("bot", "confirmed", 42), escape
+    assert (escape["name"], escape["verdict"], escape["lens"], escape["pr"]) == ("bot", "confirmed", "tests", 42), escape
 
 
 def refuses_malformed_entries(base):
@@ -51,7 +52,10 @@ def refuses_malformed_entries(base):
         (["lens", "correctness", "--confirmed", "6"], "a required count missing"),
         (["lens", "correctness", "--findings", "1", "--confirmed", "1", "--model", "gpt"], "an unknown model"),
         (["lens", "correctness", "--findings", "1", "--confirmed", "1", "--sec", "5"], "an unknown flag"),
-        (["escape", "bot", "--verdict", "maybe", "--category", "C.logic", "--lens", "correctness", "--pr", "1"], "an unknown verdict"),
+        (["escape", "bot", "--verdict", "maybe", "--category", "C.bug", "--lens", "correctness", "--pr", "1"], "an unknown verdict"),
+        (["escape", "bot", "--verdict", "confirmed", "--category", "", "--lens", "correctness", "--pr", "1"], "an empty category"),
+        (["escape", "ci", "--verdict", "confirmed", "--category", "tests", "--lens", "tests", "--pr", "1"], "not a taxonomy code"),
+        (["test", "e2e positive/negative (validate)", "--issues", "0"], "triage's label, not a test type"),
         (["test", "e2e"], "no issue count"),
     ]:
         out = log(home, *args)

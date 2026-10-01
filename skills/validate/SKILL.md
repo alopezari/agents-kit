@@ -93,7 +93,7 @@ Report a table per block, `# | Check | Case (+/−) | Result | Evidence`. Result
 
 Save the report to `$(~/.agents/bin/reports path validation)`.
 
-Log every test type that ran, so the monthly job can drop the ones that never find anything:
+Log every test type that ran, so the monthly job can drop the ones that never find anything. `<type>` is one lowercase word: `unit`, `e2e`, `integration`, `browser`, `query-budget`, `accessibility`, `property-based`, `mutation`, `migration-round-trip` or `visual`, not triage's longer label:
 
 ```bash
 ~/.agents/bin/quality-log test <type> --issues <N> --secs <S> --notes "<what it found>"

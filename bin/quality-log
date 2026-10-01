@@ -19,6 +19,7 @@ import sys
 import time
 
 LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
+TAXONOMY = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "review-mining", "taxonomy.md")
 
 
 def git(*args):
@@ -33,6 +34,16 @@ def parse(argv):
     def name(value):
         if not re.fullmatch(word, value):
             raise argparse.ArgumentTypeError(f"{value!r} isn't one lowercase word (letters, digits, -)")
+        return value
+
+    def lens_name(value):  # follow-pr names lenses as the skills do: "Tests", "Correctness"
+        return name(value.lower())
+
+    def category(value):
+        with open(TAXONOMY) as fh:
+            codes = re.findall(r"^- ([A-Z]\d?\.[0-9a-z-]+) ", fh.read(), re.M)
+        if value not in codes:
+            raise argparse.ArgumentTypeError(f"{value!r} isn't a code in review-mining/taxonomy.md")
         return value
 
     def count(value):
@@ -56,8 +67,8 @@ def parse(argv):
     escape = kinds.add_parser("escape", allow_abbrev=False)
     escape.add_argument("name", choices=("ci", "review", "bot"))
     escape.add_argument("--verdict", choices=("confirmed", "rejected", "uncertain"), required=True)
-    escape.add_argument("--category", required=True)
-    escape.add_argument("--lens", type=name, required=True)
+    escape.add_argument("--category", type=category, required=True)
+    escape.add_argument("--lens", type=lens_name, required=True)
     escape.add_argument("--pr", type=count, required=True)
     args = vars(parser.parse_args(argv))  # exits 2 on anything malformed, before the log is opened
     return args.pop("kind"), args.pop("name"), {k: v for k, v in args.items() if v is not None}
