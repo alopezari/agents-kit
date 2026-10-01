@@ -75,6 +75,7 @@ Drawn from an analysis of ~2,700 human code-review comments. Write changes that 
 - When you must ask, prepare a concrete, reviewable proposal first, and keep working on independent parts meanwhile.
 - Keep the original goal through corrections and side questions.
 - When a hook or check blocks you and you can't satisfy it honestly, report it as a blocker with what you tried. Never work around it: no skipped or loosened tests, disabled rules, rewritten commands to dodge a guard, or edits to the kit's hooks.
+- Keep tool output short: every line stays in context and is re-read on every later turn. Read the part of a file you need (a line range, a `grep`), not the whole file; `git diff --stat` before a full diff, then the diff of one path; `git log --oneline -n 10`; `| tail -20` or a `grep` on long command output.
 - Subagents multiply cost and time: each re-establishes context and you re-read its report. Use them for large, genuinely independent work (wide multi-file investigations, parallel tracks), not for a few reads or edits you can do yourself. Brief each one precisely, never let two edit the same files, and don't redo their work once they report.
 
 ## Pull requests

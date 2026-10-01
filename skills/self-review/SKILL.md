@@ -41,10 +41,12 @@ The Correctness lens always runs, at every risk level, and its tables go into th
 
 Use the other model family from the model you're running on. The harness doesn't decide it; Pi, for example, can run either family.
 
-- **Running on a Claude model →** Codex. Pass the whole change in the prompt; Codex's own command runner can fail in non-interactive runs, and a reviewer that can't read the code returns nothing:
+- **Running on a Claude model →** Codex. Pass the whole change in the prompt; Codex's own command runner can fail in non-interactive runs, and a reviewer that can't read the code returns nothing. A pass takes about ten minutes, so start it in the background as soon as the diff is ready, and run the same-model lenses meanwhile; for behavior changes, start validate's local checks too. Then read only its **Found** section; the rest is its working, and every line read stays in context:
   ```bash
+  out=$(mktemp "${TMPDIR:-/tmp}/codex-review.XXXXXX")
   ~/.agents/skills/self-review/bundle.sh <base> Correctness "<goal>" \
-    | codex exec --ephemeral --skip-git-repo-check -s read-only -
+    | codex exec --ephemeral --skip-git-repo-check -s read-only - > "$out" 2>/dev/null   # in the background
+  sed -n '/\*\*Found\*\*/,$p' "$out"                                                     # once it finishes
   ```
   Run it once per lens you send cross-model. For a very large diff, split it by directory and review the riskiest parts.
 - **Running on an OpenAI model (Codex, or Pi on GPT) →** Claude:
