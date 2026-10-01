@@ -400,7 +400,8 @@ def run_verify(root):
     try:
         checked_fingerprint = in_checkout(root, review_stamp.fingerprint)
     except RuntimeError as error:
-        return [f"Couldn't fingerprint the change, so verify can't stamp it: {error}"], True, "", None
+        # An earlier run's stamp must not outlive a run that couldn't check anything.
+        return [f"Couldn't fingerprint the change, so verify can't stamp it: {error}"], True, "", record_verify(root, None, "")
     try:
         result = subprocess.run([verify], cwd=root, capture_output=True, text=True, errors="replace", timeout=VERIFY_TIMEOUT)
     except subprocess.TimeoutExpired as timeout:

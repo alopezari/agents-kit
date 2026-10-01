@@ -315,7 +315,7 @@ def stamps_survive_merging_the_default_branch(base):
         assert write_stamp(repo, kind).returncode == 0
     open(os.path.join(repo, "app.cfg"), "w").write("a = 1  # two\n")
     assert not check("review"), "a diff text converter can't hide an edit"
-    for name, kind in [(n, k) for n in ("año.py", 'a"b.py', "tab\tname.py") for k in ("review", "validate", "verify")]:
+    for name, kind in [(n, k) for n in ("año.py", 'a"b.py', "tab\tname.py", "CHANGELOG.md\n") for k in ("review", "validate", "verify")]:
         open(os.path.join(repo, name), "w").write(f"{kind} = 1\n")
         if kind == "verify":
             subprocess.run(["python3", "-c", code], cwd=repo, check=True)

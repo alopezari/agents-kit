@@ -39,7 +39,7 @@ NOT_BEHAVIOR = re.compile(
     re.I,
 )
 # CI checks the changelog entry, and it is often written last: adding it re-runs nothing.
-NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?$|(^|/)changelog\.d/[^/]+\.md$", re.I)
+NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?\Z|(^|/)changelog\.d/[^/]+\.md\Z", re.I)
 VERIFY_KINDS = ("verify", "verify-empty")
 
 
@@ -51,7 +51,7 @@ def git_checked(*args, env=None):
     """git's output as bytes; a failure raises, since an empty answer would make every change look stamped."""
     result = subprocess.run(["git", *args], capture_output=True, env=env)
     if result.returncode != 0:
-        raise RuntimeError(f"git {args[0]} failed: {result.stderr.decode(errors='replace').strip()}")
+        raise RuntimeError(f"git {args[0]} failed: {' '.join(result.stderr.decode(errors='replace').split())}")
     return result.stdout
 
 
@@ -93,7 +93,7 @@ def fingerprint():
     base, paths = changed_paths()
     digest = hashlib.sha256(base.encode())
     for path in (p for p in paths if not NOT_STAMPED.search(p)):
-        digest.update(path.encode())
+        digest.update(os.fsencode(path))
         digest.update(git_checked("hash-object", "--", path).strip() if os.path.isfile(path) else b"<deleted>")
     return digest.hexdigest()
 
@@ -111,7 +111,7 @@ def change_fingerprint():
     fd, index = tempfile.mkstemp(prefix="agents-stamp-index-")
     os.close(fd)
     try:
-        real_index = git("rev-parse", "--path-format=absolute", "--git-path", "index")
+        real_index = os.fsdecode(git_checked("rev-parse", "--path-format=absolute", "--git-path", "index").rstrip(b"\n"))
         if os.path.exists(real_index):
             shutil.copyfile(real_index, index)
         else:
