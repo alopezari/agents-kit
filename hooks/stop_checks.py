@@ -16,6 +16,7 @@ picks it up for less (Claude Code only: it reads the transcript).
 the hook has seen, for the weekly health check. `stop_checks.py verify` runs verify on the current checkout now,
 saving its report and stamping a pass, which is the only way a verify stamp gets written.
 """
+import hashlib
 import json
 import os
 import re
@@ -180,7 +181,7 @@ def context_tokens(transcript):
     try:
         with open(transcript, "rb") as fh:
             fh.seek(max(0, os.path.getsize(transcript) - TRANSCRIPT_TAIL_BYTES))
-            lines = fh.read().decode(errors="ignore").splitlines()
+            lines = fh.read(TRANSCRIPT_TAIL_BYTES).decode(errors="ignore").splitlines()
     except OSError:
         return 0
     for line in reversed(lines):
@@ -195,7 +196,8 @@ def context_tokens(transcript):
 
 
 def fresh_session_notice(session, payload):
-    """Once per session and branch: the PR is open and the context is large, so a new session is cheaper."""
+    """Once per session and branch: the PR is open (or merged) and the context is large, so a new session is cheaper.
+    Advisory: any failure here returns None rather than stopping the checks that follow."""
     transcript = payload.get("transcript_path")
     if not transcript:
         return None
@@ -203,25 +205,25 @@ def fresh_session_notice(session, payload):
               payload.get("cwd") or os.getcwd()).splitlines()
     if len(out) != 2 or out[1] == "HEAD":
         return None
+    common_dir, branch = out
     try:  # the phase the status line last computed (bin/phase); asking GitHub here would slow every stop
-        label = json.load(open(os.path.join(out[0], "agents", "phase", review_stamp.branch_key(out[1]) + ".json")))["label"]
-    except (OSError, ValueError, KeyError):
+        label = json.load(open(os.path.join(common_dir, "agents", "phase", review_stamp.branch_key(branch) + ".json")))["label"]
+    except (OSError, ValueError, KeyError, TypeError):
         return None
     if not label.startswith(("PR open", "ship")):
         return None
     tokens = context_tokens(transcript)
-    noticed_path = os.path.join(MARKER_DIR, f"{session}.fresh-session")
-    try:
-        noticed = open(noticed_path).read().splitlines()
-    except OSError:
-        noticed = []
-    if tokens < CONTEXT_NUDGE_TOKENS or out[1] in noticed:
+    if tokens <= CONTEXT_NUDGE_TOKENS:
         return None
-    os.makedirs(MARKER_DIR, exist_ok=True)
-    with open(noticed_path, "a") as fh:
-        fh.write(out[1] + "\n")
-    log("stop_checks", "fresh-session", payload, f"{out[1]} {tokens // 1000}K")
-    return (f"This session's context is {tokens // 1000}K tokens, re-read on every turn, and {out[1]}'s PR is open. "
+    identity = hashlib.sha256(f"{common_dir}\0{branch}".encode()).hexdigest()[:16]
+    try:  # creating the marker is the claim, so two overlapping stops can't both tell
+        os.makedirs(MARKER_DIR, exist_ok=True)
+        os.close(os.open(os.path.join(MARKER_DIR, f"{session}.fresh-session-{identity}"), os.O_CREAT | os.O_EXCL))
+    except OSError:
+        return None
+    log("stop_checks", "fresh-session", payload, f"{branch} {tokens // 1000}K")
+    state = "is merged" if label.startswith("ship") else "is open"
+    return (f"This session's context is {tokens // 1000}K tokens, re-read on every turn, and {branch}'s PR {state}. "
             "Follow it up or start the next change in a new session: `~/.agents/bin/reports brief` there picks it up.")
 
 

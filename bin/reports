@@ -19,16 +19,24 @@ if [ "${1:-}" = "path" ]; then
 fi
 
 if [ "${1:-}" = "brief" ]; then
-  echo "phase: $("$HOME/.agents/bin/phase" --refresh 2>/dev/null)"
+  phase="$("$HOME/.agents/bin/phase" --refresh 2>&1)" || phase="unknown (bin/phase failed: ${phase##*$'\n'})"
+  echo "phase: $phase"
   for kind in spec verify review validation staging-guide follow-pr; do
     f="$dir/$kind-$suffix.md"
     [ -f "$f" ] || continue
     case $kind in
       spec) line="$(head -1 "$f" | sed 's/^# //')" ;;
-      review) line="$(head -1 "$f")$(grep -m1 '^Open:' "$f" | sed 's/^/ · /')" ;;
-      validation) line="$(for r in PASS FAIL 'NOT RUN'; do printf '%s %s, ' "$(grep -c "| $r |" "$f")" "$r"; done | sed 's/, $//')" ;;
+      review) line="$(head -1 "$f")$(grep -m1 -E '^(Open:|## Open)' "$f" | sed 's/^/ · /' || true)" ;;
+      validation) line="$(python3 - "$f" <<'PY'
+import collections, os, sys
+sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
+import review_stamp
+counts = collections.Counter(row[1] for row in review_stamp.result_rows(open(sys.argv[1]).read().splitlines(), None))
+print(", ".join(f"{counts[r]} {r}" for r in ("PASS", "FAIL", "NOT RUN")))
+PY
+)" ;;
       staging-guide) line="$(grep -q '^## Results' "$f" && echo 'results recorded' || echo 'no results yet')" ;;
-      follow-pr) line="$(grep '^Status:' "$f" | tail -1)" ;;
+      follow-pr) line="$(grep '^Status:' "$f" | tail -1 || true)"; line="${line:-no Status line yet}" ;;
       *) line="$(head -1 "$f")" ;;
     esac
     printf '%-14s %s\n               %s\n' "$kind" "$line" "$f"

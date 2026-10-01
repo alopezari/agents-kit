@@ -643,13 +643,17 @@ def reports_brief_gives_one_line_per_report(base):
     open(spec, "w").write("# Round prices once\n\nGoal: totals drift.\n" + "x\n" * 200)
     open(path("review"), "w").write("Self-review (risk: standard)\n" + "detail\n" * 200 + "Open:     the 0.005 case\n")
     open(path("validation"), "w").write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
-                                         "| A1 | a | + | PASS | e |\n| A2 | b | - | FAIL | e |\n| A3 | c | + | NOT RUN | - |\n")
+                                         "| A1 | a PASS | + | **PASS** | e |\n| A2 | b | - | FAIL | e |\n|A3|c|+|NOT RUN|-|\n")
     open(path("follow-pr"), "w").write("## Run 1\nStatus:  waiting on CI\n## Run 2\nStatus:  ready to merge\n")
     shown = subprocess.run([reports, "brief"], cwd=repo, capture_output=True, text=True).stdout
     for line in ("Round prices once", "Self-review (risk: standard)", "Open:     the 0.005 case", "1 PASS, 1 FAIL, 1 NOT RUN",
                  "Status:  ready to merge", path("review")):
         assert line in shown, (line, shown)
     assert "detail" not in shown and "waiting on CI" not in shown and len(shown.splitlines()) < 20, shown
+    open(path("review"), "w").write("Self-review\n")
+    open(path("follow-pr"), "w").write("## Run 1\n")
+    done = subprocess.run([reports, "brief"], cwd=repo, capture_output=True, text=True)
+    assert done.returncode == 0 and "no Status line yet" in done.stdout and "1 PASS, 1 FAIL, 1 NOT RUN" in done.stdout, done
 
 
 def stop_suggests_a_fresh_session_once_the_pr_is_open(base):
@@ -677,6 +681,9 @@ def stop_suggests_a_fresh_session_once_the_pr_is_open(base):
     assert stop_with("big", "PR open", 310_000) is None, "once per session and branch"
     assert stop_with("small", "PR open", 200_000) is None, "a small context needs no new session"
     assert stop_with("early", "self-review", 300_000) is None, "mid-change a new session would re-read everything"
+    assert stop_with("edge", "PR open", 250_000) is None, "over 250K, not at it"
+    merged = stop_with("merged", "ship", 300_000)
+    assert merged and "is merged" in merged["systemMessage"], merged
 
 
 def overlay_found_from_worktree_with_another_name(base):
