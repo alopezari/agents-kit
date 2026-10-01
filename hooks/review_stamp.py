@@ -262,7 +262,8 @@ def staging_phase(guide, evidence, stamped):
     except FileNotFoundError:
         return None
     rounds = re.split(r"^## Results(?! after the deploy)", text, flags=re.M)  # ship's table holds P steps only
-    latest = rounds[-1] if len(rounds) > 1 else ""
+    # The round ends at the next section: a later table must not overwrite its rows.
+    latest = re.split(r"^## ", rounds[-1], maxsplit=1, flags=re.M)[0] if len(rounds) > 1 else ""
     if re.search(r"^## (Before|After) the merge", text, re.M):
         before_merge = re.search(r"^## Before the merge\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
         steps = re.findall(r"^### (S\d+)\b", before_merge.group(1), re.M) if before_merge else []

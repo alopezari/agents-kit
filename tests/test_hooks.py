@@ -420,6 +420,10 @@ def pr_gate_waits_for_staging(base):
         with open(guide, "w") as fh:
             fh.write(steps + head + rows + "| S2 | PASS | [out](e/S2.txt) |\n")
         assert decision("gh pr ready") == expected, f"a step's last row decides: {rows!r}"
+    with open(guide, "w") as fh:
+        fh.write(steps + head + "| S1 | FAIL | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n"
+                 "\n## Notes\n\n| Step | Result | Evidence |\n|---|---|---|\n| S1 | PASS | [out](e/S1.txt) |\n")
+    assert "FAIL" in (reason("gh pr ready") or ""), "the round ends at the next section: a later table can't hide a FAIL"
     with open(guide, "wb") as fh:
         fh.write(b"# Guide\n## Before the merge\n### S1. \xff\xfe\n")
     assert "Couldn't read the staging results" in (reason("gh pr ready") or ""), "a check that crashes holds the PR"
