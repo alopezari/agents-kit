@@ -114,6 +114,10 @@ def sessions_join_by_repo_and_branch(base):
     with open(outcomes.QUALITY_LOG, "w") as fh:  # the spec ran on the session branch, renamed before the PR
         fh.write(json.dumps({"kind": "rename", "repo": "shop", "name": "session/x", "to": "feature/cart"}) + "\n")
     outcomes.attach_sessions(prs, sessions)
+    only_before = [{**prs[0]}]
+    outcomes.attach_sessions(only_before, [{**sessions[0], "branches": ["session/x"]}])
+    assert only_before[0]["sessions"] and only_before[0]["sessions"]["phases"]["build"]["out"] == 530, \
+        f"a session that ended before the rename still joins: {only_before[0]['sessions']}"
     assert prs[0]["sessions"] == {"count": 2, "tokens": 165, "cache_read_tokens": 9000, "minutes": 40,
                                   "models": ["opus", "sonnet"], "effort": ["high", "medium"],
                                   "hours_to_pr": 2.0, "hours_to_merge": 24.0,

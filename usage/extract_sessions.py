@@ -20,6 +20,7 @@ CORRECTION = re.compile(
 # The skills that start a phase of the flow; others (write-pr-description, clarity…) run inside one.
 FLOW_SKILLS = {"spec", "self-review", "validate", "create-pr", "follow-pr", "ship"}
 TYPED_SKILL = re.compile(r"<command-name>/?([\w:-]+)</command-name>")
+SPEC_FILE = re.compile(r"spec-.*\.md$")
 # A longer gap between transcript entries is the user away, not work.
 ACTIVE_GAP_MINUTES = 15
 
@@ -41,64 +42,78 @@ def is_real_prompt(t):
     return bool(t) and not t.startswith(("<command-", "<local-command", "<system-reminder", "Caveat:", "<task-notification", "[SYSTEM", "<environment_context", "<user_instructions", "# AGENTS.md", "<permissions", "<turn_aborted"))
 
 
-def flow_skills(entry):
-    """The flow skills an entry starts: a Skill call by the agent, or `/<skill>` typed by the user."""
+def phase_events(entry):
+    """In block order: ("skill", name) for each flow skill the entry starts (a Skill call by the agent, `/<skill>`
+    typed by the user), ("edit", None) for each Edit/Write of anything but a spec (spec-*.md, in .git/agents/ or a
+    temp dir)."""
     msg = entry.get("message") or {}
-    if entry.get("type") == "assistant":
-        names = [c.get("input", {}).get("skill") for c in msg.get("content") or [] if isinstance(c, dict) and c.get("name") == "Skill"]
-    else:
-        names = TYPED_SKILL.findall(text_of(msg.get("content")))
-    return [n for n in (str(name).split(":")[-1] for name in names) if n in FLOW_SKILLS]
-
-
-def edits_code(entry):
-    """An edit to anything but the spec, which spec writes as spec-<branch>.md (in .git/agents/ or a temp dir)."""
-    return any(c.get("name") in ("Edit", "Write", "NotebookEdit")
-               and not os.path.basename(str(c.get("input", {}).get("file_path"))).startswith("spec-")
-               for c in (entry.get("message") or {}).get("content") or [] if isinstance(c, dict))
+    if entry.get("type") == "user":
+        return [("skill", n) for n in (name.split(":")[-1] for name in TYPED_SKILL.findall(text_of(msg.get("content"))))
+                if n in FLOW_SKILLS]
+    events = []
+    for c in msg.get("content") or []:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("input", {}).get("skill")).split(":")[-1] if c.get("name") == "Skill" else None
+        if name in FLOW_SKILLS:
+            events.append(("skill", name))
+        elif c.get("name") in ("Edit", "Write", "NotebookEdit") and not SPEC_FILE.match(
+                os.path.basename(str(c.get("input", {}).get("file_path")))):
+            events.append(("edit", None))
+    return events
 
 
 def branch_renames():
-    """(old, new) branch names from the quality log's rename lines: a renamed branch is the same change."""
+    """(repo, old branch) -> new names, from the quality log's rename lines: a renamed branch is the same change."""
     try:
         lines = open(f"{HOME}/.agents/logs/quality.jsonl").read().splitlines()
     except OSError:
-        return set()
-    renames = set()
+        return {}
+    renames = {}
     for line in lines:
         try:
             e = json.loads(line)
         except ValueError:
             continue
         if e.get("kind") == "rename":
-            renames.add((e.get("name"), e.get("to")))
+            renames.setdefault((e.get("repo"), e.get("name")), set()).add(e.get("to"))
     return renames
 
 
-def split_into_phases(entries, renames):
+def renamed(renames, cwd, old, new):
+    """Whether `new` is `old` renamed, maybe several times, in a repo whose name is part of the session's directory."""
+    repos = {repo for repo, _ in renames if repo and repo in (cwd or "")}
+    names, pending = set(), [old]
+    while pending:
+        current = pending.pop()
+        if current not in names:
+            names.add(current)
+            pending += [n for repo in repos for n in renames.get((repo, current), ())]
+    return new in names
+
+
+def split_into_phases(entries, renames, cwd):
     """branch -> phase -> tokens and active minutes. A message belongs to the last flow skill started on its branch
     ("build" before any, and again after the spec once code is edited); a change of branch starts again at
-    "build" unless it is a logged rename."""
-    started = {}  # message id -> what any of its lines does: one line per content block, each repeating the usage
+    "build" unless it is a logged rename. An entry without a branch counts for the current one and changes nothing."""
+    events_of = {}  # message id -> its events across lines: one line per content block, each repeating the usage
     for e in entries:
         mid = (e.get("message") or {}).get("id")
         if e.get("type") == "assistant" and mid:
-            skills, edits = started.get(mid, ([], False))
-            started[mid] = (skills + flow_skills(e), edits or edits_code(e))
+            events_of[mid] = events_of.get(mid, []) + phase_events(e)
     phases, counted = {}, set()
     branch, phase, last = "", "build", None
     for e in entries:
         msg = e.get("message") or {}
         if e.get("gitBranch") and e["gitBranch"] != branch:
-            if branch and (branch, e["gitBranch"]) not in renames:
+            if branch and not renamed(renames, cwd, branch, e["gitBranch"]):
                 phase = "build"
             branch = e["gitBranch"]
         mid = msg.get("id") if e.get("type") == "assistant" else None
         first_line = bool(mid) and mid not in counted
-        skills, edits = started.get(mid, ([], False)) if first_line else (flow_skills(e) if e.get("type") == "user" else [], False)
-        if phase == "spec" and edits:
-            phase = "build"
-        phase = skills[-1] if skills else phase
+        if e.get("gitBranch"):
+            for kind, name in events_of.get(mid, []) if first_line else ([] if mid else phase_events(e)):
+                phase = name if kind == "skill" else ("build" if phase == "spec" else phase)
         spent = phases.setdefault(branch, {}).setdefault(phase, {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "minutes": 0})
         if e.get("timestamp"):
             now = ts(e["timestamp"])
@@ -164,7 +179,7 @@ def claude_sessions():
         if prompts and times and not (cwd or "").startswith(EXCLUDE_CWD):
             yield dict(harness="claude-code", id=sid, cwd=cwd, start=min(times), end=max(times), prompts=prompts,
                        models=models, effort=sorted(efforts), tokens=tokens, tool_calls=tools, advisor_calls=advisor,
-                       branches=sorted(branches), phases=split_into_phases(entries, renames))
+                       branches=sorted(branches), phases=split_into_phases(entries, renames, cwd))
 
 
 def codex_sessions():

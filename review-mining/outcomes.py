@@ -217,7 +217,8 @@ def attach_sessions(prs, sessions):
     renamed_from = renames(quality_log())
     for pr in prs:
         name = pr["repo"].split("/")[1]
-        on_branch = [s for s in sessions if pr["branch"] in s.get("branches", []) and name in (s.get("project") or "")]
+        names = branch_names(renamed_from, name, pr["branch"])
+        on_branch = [s for s in sessions if names & set(s.get("branches", [])) and name in (s.get("project") or "")]
         if not on_branch:
             pr["sessions"] = None
             continue
@@ -232,7 +233,7 @@ def attach_sessions(prs, sessions):
             "effort": sorted({e for s in on_branch for e in s.get("effort", [])}),
             "hours_to_pr": round((opened - first).total_seconds() / 3600, 1),
             "hours_to_merge": round((merged - opened).total_seconds() / 3600, 1),
-            "phases": phases_on_branches(on_branch, branch_names(renamed_from, name, pr["branch"])),
+            "phases": phases_on_branches(on_branch, names),
         }
 
 
@@ -271,6 +272,7 @@ def summarize(prs):
                             "minutes_per_pr": mean(p["sessions"]["minutes"] for p in with_sessions),
                             "hours_to_pr": mean(p["sessions"]["hours_to_pr"] for p in with_sessions),
                             "hours_to_merge": mean(p["sessions"]["hours_to_merge"] for p in with_sessions),
+                            "prs_with_phases": len(with_phases),
                             "per_phase": {phase: {key: mean(p["sessions"]["phases"].get(phase, {}).get(key, 0) for p in with_phases)
                                                   for key in ("out", "cache_read", "cache_write", "minutes")}
                                           for phase in sorted({ph for p in with_phases for ph in p["sessions"]["phases"]})}},

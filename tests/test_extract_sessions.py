@@ -42,7 +42,7 @@ def session(home, rows, renames=()):
         fh.writelines(json.dumps(r) + "\n" for r in rows)
     os.makedirs(os.path.join(home, ".agents", "logs"))
     with open(os.path.join(home, ".agents", "logs", "quality.jsonl"), "w") as fh:
-        fh.writelines(json.dumps({"kind": "rename", "name": old, "to": new}) + "\n" for old, new in renames)
+        fh.writelines(json.dumps({"kind": "rename", "repo": repo, "name": old, "to": new}) + "\n" for repo, old, new in renames)
     os.environ["HOME"] = home
     spec = importlib.util.spec_from_file_location("extract_sessions", os.path.join(KIT, "usage", "extract_sessions.py"))
     module = importlib.util.module_from_spec(spec)
@@ -78,9 +78,25 @@ def phases_per_branch_and_skill(home):
 
 
 def a_rename_keeps_the_phase(home):
-    rows = [user(0, "go", "session/x"), *assistant(1, "m0", "session/x", [skill("validate")]), *assistant(2, "m1", "feature/cart", [TEXT])]
-    found = session(home, rows, renames=[("session/x", "feature/cart")])
-    assert sorted(found["phases"]["feature/cart"]) == ["validate"], found["phases"]
+    rows = [user(0, "go", "session/x"), *assistant(1, "m0", "session/x", [skill("validate")]), *assistant(2, "m1", "feature/cart", [TEXT]),
+            *assistant(3, "m2", "other", [skill("validate")]), *assistant(4, "m3", "next", [TEXT])]
+    found = session(home, rows, renames=[("repo", "session/x", "session/y"), ("repo", "session/y", "feature/cart"),
+                                         ("elsewhere", "other", "next")])
+    assert sorted(found["phases"]["feature/cart"]) == ["validate"], f"a chain of renames is one change: {found['phases']}"
+    assert sorted(found["phases"]["next"]) == ["build"], f"another repo's rename doesn't apply here: {found['phases']}"
+
+
+def what_ends_a_phase(home):
+    rows = [user(0, "go", "a"),
+            *assistant(1, "m0", "a", [skill("spec"), edit("/repo/app.py")]),           # starts the spec and builds at once
+            *assistant(2, "m1", "a", [TEXT]),
+            *assistant(3, "m2", "a", [skill("spec")]),
+            *assistant(4, "m3", "a", [edit("/repo/spec-parser.py")]),                  # code, despite its name
+            *assistant(5, "m4", "a", [skill("validate")]),
+            {**user(6, "<command-name>/self-review</command-name>", "a"), "gitBranch": ""},  # no branch: no change
+            *assistant(7, "m5", "a", [TEXT])]
+    phases = session(home, rows)["phases"]["a"]
+    assert (phases["build"]["out"], phases["spec"]["out"], phases["validate"]["out"]) == (30, 10, 20), phases
 
 
 def short_gaps_add_up(home):
@@ -89,7 +105,7 @@ def short_gaps_add_up(home):
     assert found["phases"]["a"]["build"]["minutes"] == 1.0, found["phases"]["a"]
 
 
-for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, short_gaps_add_up):
+for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, short_gaps_add_up):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:
