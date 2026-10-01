@@ -13,7 +13,8 @@ Per merged PR, from GitHub (github.com plus any host a profile lists in review-m
                       judges each candidate before counting it as an escape.
   sessions            agent sessions on the PR's branch: count, input+output tokens, wall-clock minutes
                       (idle time included), and hours from the first session to opening the PR and from
-                      opening to merging; before the kit, only where transcripts still exist
+                      opening to merging; before the kit, only where transcripts still exist. "phases":
+                      tokens and active minutes per phase of the flow (Claude Code sessions only)
 Since the kit, also:
   escapes             follow-pr's logged CI failures and review comments (logs/quality.jsonl, kind "escape"),
                       each with whether the lens that should have caught it ran on that branch, under any of the
@@ -215,7 +216,19 @@ def attach_sessions(prs, sessions):
             "effort": sorted({e for s in on_branch for e in s.get("effort", [])}),
             "hours_to_pr": round((opened - first).total_seconds() / 3600, 1),
             "hours_to_merge": round((merged - opened).total_seconds() / 3600, 1),
+            "phases": phases_on_branch(on_branch, pr["branch"]),
         }
+
+
+def phases_on_branch(sessions, branch):
+    """Tokens and active minutes per phase of the flow, summed over the sessions' turns on this branch."""
+    total = {}
+    for session in sessions:
+        for phase, spent in (session.get("phases") or {}).get(branch, {}).items():
+            into = total.setdefault(phase, dict.fromkeys(spent, 0))
+            for key, value in spent.items():
+                into[key] = round(into.get(key, 0) + value, 1)
+    return total
 
 
 def summarize(prs):
@@ -225,6 +238,7 @@ def summarize(prs):
 
     settled = [p for p in prs if isinstance(p.get("follow_ups"), list)]
     with_sessions = [p for p in prs if p.get("sessions")]
+    with_phases = [p for p in with_sessions if p["sessions"].get("phases")]
     escapes = [e for p in prs for e in p.get("escapes", [])]
     return {
         "merged_prs": len(prs),
@@ -239,7 +253,10 @@ def summarize(prs):
                             "tokens_per_pr": mean(p["sessions"]["tokens"] for p in with_sessions),
                             "minutes_per_pr": mean(p["sessions"]["minutes"] for p in with_sessions),
                             "hours_to_pr": mean(p["sessions"]["hours_to_pr"] for p in with_sessions),
-                            "hours_to_merge": mean(p["sessions"]["hours_to_merge"] for p in with_sessions)},
+                            "hours_to_merge": mean(p["sessions"]["hours_to_merge"] for p in with_sessions),
+                            "per_phase": {phase: {key: mean(p["sessions"]["phases"].get(phase, {}).get(key, 0) for p in with_phases)
+                                                  for key in ("out", "cache_read", "cache_write", "minutes")}
+                                          for phase in sorted({ph for p in with_phases for ph in p["sessions"]["phases"]})}},
     }
 
 

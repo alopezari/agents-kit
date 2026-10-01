@@ -17,6 +17,11 @@ CORRECTION = re.compile(
     r"that's wrong|not what|still (fails|broken|not)|doesn't work|wrong)|\[Request interrupted",
     re.I,
 )
+# The skills that start a phase of the flow; others (write-pr-description, clarity…) run inside one.
+FLOW_SKILLS = {"spec", "self-review", "validate", "create-pr", "follow-pr", "ship"}
+TYPED_SKILL = re.compile(r"<command-name>/?([\w:-]+)</command-name>")
+# A longer gap between transcript entries is the user away, not work.
+ACTIVE_GAP_MINUTES = 15
 
 
 def ts(s):
@@ -43,6 +48,7 @@ def claude_sessions():
         tokens = {"in": 0, "out": 0, "cache_read": 0}
         cwd = None
         branches = set()
+        phases, phase_of, seen, last = {}, {}, set(), None
         for line in open(f, errors="ignore"):
             try:
                 e = json.loads(line)
@@ -56,11 +62,36 @@ def claude_sessions():
             if e.get("gitBranch"):
                 branches.add(e["gitBranch"])
             msg = e.get("message") or {}
+            branch = e.get("gitBranch") or ""
+            invoked = [c.get("input", {}).get("skill") for c in msg.get("content") or []
+                       if isinstance(c, dict) and c.get("name") == "Skill"] if e.get("type") == "assistant" else \
+                TYPED_SKILL.findall(text_of(msg.get("content")))
+            for name in invoked:
+                if str(name).split(":")[-1] in FLOW_SKILLS:
+                    phase_of[branch] = str(name).split(":")[-1]
+            if phase_of.get(branch) == "spec" and any(
+                    c.get("name") in ("Edit", "Write", "NotebookEdit") and "/.git/" not in str(c.get("input", {}).get("file_path"))
+                    for c in msg.get("content") or [] if isinstance(c, dict)):
+                phase_of[branch] = "build"  # the spec is written outside the tree; the first edit inside it is building
+            spent = phases.setdefault(branch, {}).setdefault(phase_of.get(branch, "build"),
+                                                             {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "minutes": 0})
+            if e.get("timestamp"):
+                now = ts(e["timestamp"])
+                gap = (now - last).total_seconds() / 60 if last else 0
+                if 0 < gap <= ACTIVE_GAP_MINUTES:
+                    spent["minutes"] = round(spent["minutes"] + gap, 1)
+                last = max(last, now) if last else now  # a resumed session replays older timestamps
             if e.get("type") == "user" and msg.get("role") == "user":
                 t = text_of(msg.get("content"))
                 if is_real_prompt(t):
                     prompts.append(t)
             elif e.get("type") == "assistant":
+                blocks = [c for c in msg.get("content") or [] if isinstance(c, dict)]
+                tools += sum(1 for c in blocks if c.get("type") == "tool_use")
+                advisor += sum(1 for c in blocks if "advisor" in str(c.get("type", "")) or c.get("name") == "advisor")
+                if msg.get("id") in seen:
+                    continue  # the same message again: one line per content block, each repeating its usage
+                seen.add(msg.get("id"))
                 m = msg.get("model")
                 if m and m != "<synthetic>":
                     models[m] = models.get(m, 0) + 1
@@ -70,13 +101,15 @@ def claude_sessions():
                 tokens["in"] += u.get("input_tokens", 0)
                 tokens["out"] += u.get("output_tokens", 0)
                 tokens["cache_read"] += u.get("cache_read_input_tokens", 0)
-                blocks = [c for c in msg.get("content") or [] if isinstance(c, dict)]
-                tools += sum(1 for c in blocks if c.get("type") == "tool_use")
-                advisor += sum(1 for c in blocks if "advisor" in str(c.get("type", "")) or c.get("name") == "advisor")
+                spent["in"] += u.get("input_tokens", 0)
+                spent["out"] += u.get("output_tokens", 0)
+                spent["cache_read"] += u.get("cache_read_input_tokens", 0)
+                spent["cache_write"] += u.get("cache_creation_input_tokens", 0)
         if prompts and times and not (cwd or "").startswith(EXCLUDE_CWD):
             yield dict(harness="claude-code", id=sid, cwd=cwd, start=min(times), end=max(times), prompts=prompts,
                        models=models, effort=sorted(efforts), tokens=tokens, tool_calls=tools, advisor_calls=advisor,
-                       branches=sorted(branches))
+                       branches=sorted(branches),
+                       phases={b: {p: v for p, v in ps.items() if any(v.values())} for b, ps in phases.items() if b})
 
 
 def codex_sessions():
@@ -158,16 +191,18 @@ def summarize(s):
         "models": s["models"], "effort": s["effort"], "tokens": s["tokens"], "tool_calls": s["tool_calls"],
         "user_turns": len(s["prompts"]), "advisor_calls": s.get("advisor_calls", 0), "first_prompt": s["prompts"][0][:1500],
         "later_prompts": [p[:300] for p in s["prompts"][1:8]], "correction_signals": corrections[:6],
+        "phases": s.get("phases", {}),
     }
 
 
-N = int(sys.argv[1]) if len(sys.argv) > 1 else 50
-OUT = sys.argv[2] if len(sys.argv) > 2 else "sessions.json"
-sessions = sorted(list(claude_sessions()) + list(codex_sessions()), key=lambda s: s["start"], reverse=True)
-last = [summarize(s) for s in sessions[:N]]
-json.dump(last, open(OUT, "w"), indent=1, ensure_ascii=False)
-print(f"total real sessions: {len(sessions)}; kept {len(last)}; from {last[-1]['start']} to {last[0]['start']}")
-from collections import Counter
-print(Counter(s["harness"] for s in last))
-print(Counter(m for s in last for m in s["models"]))
-print("effort:", Counter(e for s in last for e in s["effort"]), "advisor calls:", sum(s["advisor_calls"] for s in last))
+if __name__ == "__main__":
+    N = int(sys.argv[1]) if len(sys.argv) > 1 else 50
+    OUT = sys.argv[2] if len(sys.argv) > 2 else "sessions.json"
+    sessions = sorted(list(claude_sessions()) + list(codex_sessions()), key=lambda s: s["start"], reverse=True)
+    last = [summarize(s) for s in sessions[:N]]
+    json.dump(last, open(OUT, "w"), indent=1, ensure_ascii=False)
+    print(f"total real sessions: {len(sessions)}; kept {len(last)}; from {last[-1]['start']} to {last[0]['start']}")
+    from collections import Counter
+    print(Counter(s["harness"] for s in last))
+    print(Counter(m for s in last for m in s["models"]))
+    print("effort:", Counter(e for s in last for e in s["effort"]), "advisor calls:", sum(s["advisor_calls"] for s in last))
