@@ -36,7 +36,7 @@ def parse(argv):
             raise argparse.ArgumentTypeError(f"{value!r} isn't one lowercase word (letters, digits, -)")
         return value
 
-    def lens_name(value):  # follow-pr names lenses as the skills do: "Tests", "Correctness"
+    def lens_name(value):  # the skills name lenses by their headings: "Tests", "Correctness"
         return name(value.lower())
 
     def category(value):
@@ -52,7 +52,7 @@ def parse(argv):
         return int(value)
 
     lens = kinds.add_parser("lens", allow_abbrev=False)
-    lens.add_argument("name", type=name)
+    lens.add_argument("name", type=lens_name)
     lens.add_argument("--findings", type=count, required=True)
     lens.add_argument("--confirmed", type=count, required=True)
     lens.add_argument("--secs", type=count)
