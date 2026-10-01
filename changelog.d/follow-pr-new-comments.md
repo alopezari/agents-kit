@@ -1,0 +1,1 @@
+- `bin/pr-comments` prints the review comments on the branch's pull request that follow-pr hasn't handled yet, across inline, conversation and review comments; follow-pr reads them with it instead of three API calls and a manual filter.

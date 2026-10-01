@@ -27,6 +27,9 @@ else echo "FAIL rules differ from fixtures:"; diff <(sort fixtures/semgrep-expec
 section "flow phase"
 python3 test_phase.py || fail=1
 
+section "pull request comments not handled yet"
+python3 test_pr_comments.py || fail=1
+
 section "pull request validation section"
 python3 test_pr_validation.py || fail=1
 

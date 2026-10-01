@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Print the current branch's pull request comments that the follow-pr report doesn't list yet.
+
+  pr-comments    inline comments on the diff, conversation comments and review summaries, every page, each with its
+                 id, kind, author (bots marked), file and line, URL and text; skips the ids the follow-pr report
+                 already lists, the PR author's own comments and reviews without text
+
+Exit: 0 read (new comments or none, said either way), 4 GitHub couldn't be read: never "no comments".
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+
+GH_TIMEOUT = 30
+REPORTS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "reports")
+
+
+class Unreadable(Exception):
+    pass
+
+
+def gh(*args):
+    try:
+        result = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Unreadable(str(error))
+    if result.returncode != 0:
+        raise Unreadable(result.stderr.strip()[-300:])
+    return result.stdout
+
+
+def listed(endpoint):
+    return [json.loads(line) for line in gh("api", "--paginate", "--jq", ".[]", endpoint).splitlines() if line]
+
+
+def handled_ids():
+    """The ids at the start of the follow-pr report's lines: earlier runs dealt with those comments."""
+    result = subprocess.run([REPORTS, "path", "follow-pr"], capture_output=True, text=True)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise Unreadable(f"no follow-pr report path ({result.stderr.strip()[-300:]}), so handled comments can't be skipped")
+    try:
+        with open(result.stdout.strip()) as fh:
+            return {int(i) for i in re.findall(r"^(\d+) ", fh.read(), re.M)}
+    except FileNotFoundError:
+        return set()
+
+
+def comment(kind, raw):
+    """One comment as (id, kind, login, is a bot, review state, url, place, body). A deleted account comes back as a
+    null user."""
+    user = raw.get("user") or {}
+    place = f"{raw['path']}:{raw.get('line') or raw.get('original_line') or '?'}" if kind == "inline" else ""
+    return (int(raw["id"]), kind, user.get("login") or "ghost", user.get("type") == "Bot",
+            raw.get("state") or "" if kind == "review" else "", raw["html_url"], place, (raw.get("body") or "").strip())
+
+
+def main():
+    try:
+        pr = json.loads(gh("pr", "view", "--json", "number,author"))
+        number, author = pr["number"], pr["author"]["login"]
+        base = f"repos/{{owner}}/{{repo}}"
+        comments = [comment("inline", c) for c in listed(f"{base}/pulls/{number}/comments")]
+        comments += [comment("conversation", c) for c in listed(f"{base}/issues/{number}/comments")]
+        comments += [comment("review", c) for c in listed(f"{base}/pulls/{number}/reviews")]
+        handled = handled_ids()
+    except (Unreadable, ValueError, KeyError, TypeError, AttributeError) as error:
+        print(f"pr-comments: couldn't read the pull request's comments: {error}", file=sys.stderr)
+        return 4
+    skipped = {"already in the follow-pr report": 0, "by the author": 0, "review without text": 0}
+    new = []
+    for item in comments:
+        cid, kind, login, _, _, _, _, body = item
+        if cid in handled:
+            skipped["already in the follow-pr report"] += 1
+        elif login == author:
+            skipped["by the author"] += 1
+        elif kind == "review" and not body:
+            skipped["review without text"] += 1
+        else:
+            new.append(item)
+    for cid, kind, login, bot, state, url, place, body in new:
+        print(f"{cid} {kind} {login}{' (bot)' if bot else ''}{f' {state}' if state else ''} {url}")
+        if place:
+            print(f"  {place}")
+        print("\n".join(f"  {line}" for line in (body or "(no text)").splitlines()) + "\n")
+    why = ", ".join(f"{n} {reason}" for reason, n in skipped.items() if n)
+    summary = f"{len(new)} new comment{'s' * (len(new) != 1)}" if new else "No new comments"
+    print(f"{summary} on #{number}" + (f" ({why})." if why else "."))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
