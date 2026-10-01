@@ -47,6 +47,19 @@ def git(*args, cwd=None):
     return subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd).stdout.strip()
 
 
+def git_checked(*args, env=None):
+    """git's output as bytes; a failure raises, since an empty answer would make every change look stamped."""
+    result = subprocess.run(["git", *args], capture_output=True, env=env)
+    if result.returncode != 0:
+        raise RuntimeError(f"git {args[0]} failed: {result.stderr.decode(errors='replace').strip()}")
+    return result.stdout
+
+
+def git_paths(command, *args):
+    """The paths a git listing prints, NUL-separated so no name is quoted or split."""
+    return [os.fsdecode(p) for p in git_checked(command, "-z", *args).split(b"\0") if p]
+
+
 def base_ref(cwd=None):
     remote_head = git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD", cwd=cwd)
     candidates = [remote_head] if remote_head else []
@@ -71,10 +84,8 @@ def merge_base(cwd=None):
 
 def changed_paths():
     merge_base_sha = merge_base()
-    # Unquoted: git quotes a non-ASCII path, which then names no file and its edits went unstamped. No renames: a
-    # rename hides its source.
-    paths = set(git("-c", "core.quotePath=false", "diff", "--no-renames", "--name-only", merge_base_sha).splitlines())
-    paths |= set(git("-c", "core.quotePath=false", "ls-files", "--others", "--exclude-standard").splitlines())
+    paths = set(git_paths("diff", "--no-renames", "--name-only", merge_base_sha))  # a rename hides its source
+    paths |= set(git_paths("ls-files", "--others", "--exclude-standard"))
     return merge_base_sha, sorted(p for p in paths if p)
 
 
@@ -83,7 +94,7 @@ def fingerprint():
     digest = hashlib.sha256(base.encode())
     for path in (p for p in paths if not NOT_STAMPED.search(p)):
         digest.update(path.encode())
-        digest.update(git("hash-object", path).encode() if os.path.isfile(path) else b"<deleted>")
+        digest.update(git_checked("hash-object", "--", path).strip() if os.path.isfile(path) else b"<deleted>")
     return digest.hexdigest()
 
 
@@ -106,20 +117,17 @@ def change_fingerprint():
         else:
             os.remove(index)
         env = {**os.environ, "GIT_INDEX_FILE": index}
-        untracked = git("-c", "core.quotePath=false", "ls-files", "--others", "--exclude-standard", "--",
-                        *stamped).splitlines()
+        untracked = git_paths("ls-files", "--others", "--exclude-standard", "--", *stamped)
         commands = [["add", "--intent-to-add", "--", *(f":(literal){p}" for p in untracked)]] if untracked else []
         commands.append(["diff", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "-U3", base,
                          "--", *stamped])
         for args in commands:
-            # Bytes, and a failure stops: decoding or a partial patch could make two different changes hash alike.
-            result = subprocess.run(["git", *args], capture_output=True, env=env)
-            if result.returncode != 0:
-                raise RuntimeError(f"git {args[0]} failed: {result.stderr.decode(errors='replace').strip()}")
+            # Bytes: decoding could make two different changes hash alike.
+            patch = git_checked(*args, env=env)
     finally:
         if os.path.exists(index):
             os.remove(index)
-    for line in result.stdout.split(b"\n"):
+    for line in patch.split(b"\n"):
         if not line.startswith(b"index "):
             digest.update(re.sub(rb"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", b"@@", line) + b"\n")
     return digest.hexdigest()
@@ -421,4 +429,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except RuntimeError as error:  # a git query the stamp needs failed: no stamp can be written or matched
+        print(f"review_stamp: {error}", file=sys.stderr)
+        sys.exit(2)

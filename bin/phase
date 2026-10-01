@@ -124,7 +124,10 @@ def compute(previous):
 
 def refresh(files):
     cache, lock = files
-    label, extra = compute(read_cache(cache))
+    try:
+        label, extra = compute(read_cache(cache))
+    except RuntimeError as error:  # a git query the stamps need failed: say so instead of an old label
+        label, extra = f"stamps: {error}"[:80], {}
     os.makedirs(os.path.dirname(cache), exist_ok=True)
     tmp = cache + ".tmp"
     with open(tmp, "w") as fh:

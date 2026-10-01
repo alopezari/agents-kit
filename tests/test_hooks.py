@@ -315,14 +315,25 @@ def stamps_survive_merging_the_default_branch(base):
         assert write_stamp(repo, kind).returncode == 0
     open(os.path.join(repo, "app.cfg"), "w").write("a = 1  # two\n")
     assert not check("review"), "a diff text converter can't hide an edit"
-    for kind in ("review", "validate", "verify"):
-        open(os.path.join(repo, "año.py"), "w").write(f"{kind} = 1\n")
+    for name, kind in [(n, k) for n in ("año.py", 'a"b.py', "tab\tname.py") for k in ("review", "validate", "verify")]:
+        open(os.path.join(repo, name), "w").write(f"{kind} = 1\n")
         if kind == "verify":
             subprocess.run(["python3", "-c", code], cwd=repo, check=True)
         else:
             assert write_stamp(repo, kind).returncode == 0
-        open(os.path.join(repo, "año.py"), "w").write(f"{kind} = 2\n")
-        assert not check(kind), f"an edit to a file with a non-ASCII name invalidates the {kind} stamp"
+        open(os.path.join(repo, name), "w").write(f"{kind} = 2\n")
+        assert not check(kind), f"an edit to {name!r}, a name git quotes, invalidates the {kind} stamp"
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    index = os.path.join(repo, ".git", "index")
+    saved = open(index, "rb").read()
+    open(index, "wb").write(b"not an index")
+    assert not check("review") and not check("verify"), "a git failure isn't an empty change"
+    phase = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "--refresh"], cwd=repo, capture_output=True,
+                           text=True)
+    assert phase.stdout.startswith("stamps: git"), ("the status line says it failed", phase)
+    open(index, "wb").write(saved)
+    assert check("review")
 
 
 def validate_stamp_needs_evidence(base):
