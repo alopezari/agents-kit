@@ -314,7 +314,8 @@ def validate_stamp_needs_evidence(base):
     with open(report, "w") as fh:
         fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
                  "| A1 | exits 3 | − | PASS | `A1.txt` |\n| A3 | staging only | + | NOT RUN | needs staging |\n"
-                 "| B1 | page | + | FAIL | ![page](evidence-x/b1.png) |\n")
+                 "| B1 | page | + | FAIL | ![page](evidence-x/b1.png) |\n"
+                 f"| B2 | linked by absolute path, as validate writes it | + | PASS | [output]({evidence}/A1.txt) |\n")
     done = write_validate()
     assert done.returncode == 0 and stamped(), done.stderr
     listed = subprocess.run([reports], cwd=repo, capture_output=True, text=True).stdout
