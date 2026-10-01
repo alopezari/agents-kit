@@ -8,7 +8,9 @@ leftover, a conflict marker, a possible secret, a new option read near a cache, 
 temporary compose override left behind, or a changed code file the spec's Change map
 doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify
 when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even
-one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read.
+one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read. Once a
+branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, tells the user, once, that a new session
+picks it up for less (Claude Code only: it reads the transcript).
 
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
 the hook has seen, for the weekly health check. `stop_checks.py verify` runs verify on the current checkout now,
@@ -35,6 +37,9 @@ CI_WAIT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__
 # GRACE_SECS is the same wait.
 NO_CHECKS_GRACE_SECS = 300
 MAX_PROBLEMS = 20
+# Every turn re-reads the whole context; past this, a new session that starts from `reports brief` costs less.
+CONTEXT_NUDGE_TOKENS = 250_000
+TRANSCRIPT_TAIL_BYTES = 2_000_000
 SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "spec", "path.sh"))
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
 
@@ -145,10 +150,11 @@ def main():
     if payload.get("stop_hook_active"):
         return 0
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
+    notice = fresh_session_notice(session, payload)
     problems = ci_after_push(session, payload)
     marker = os.path.join(MARKER_DIR, f"{session}.edited")
     if not os.path.exists(marker):
-        return block(payload, problems, streak=0) if problems else 0
+        return block(payload, problems, streak=0, notice=notice)
     edited = [p for p in open(marker).read().splitlines() if p]
     os.remove(marker)
 
@@ -166,10 +172,62 @@ def main():
         problems += [f"[{review_stamp.repo_name(root)}] {p}" if len(roots) > 1 else p for p in found]
         any_verify_failed = any_verify_failed or failed_verify
     streak = record_verify_streak(session, any_verify_failed)
-    return block(payload, problems, streak) if problems else 0
+    return block(payload, problems, streak, notice)
 
 
-def block(payload, problems, streak):
+def context_tokens(transcript):
+    """The context the last main-thread turn read, from the end of a Claude Code transcript."""
+    try:
+        with open(transcript, "rb") as fh:
+            fh.seek(max(0, os.path.getsize(transcript) - TRANSCRIPT_TAIL_BYTES))
+            lines = fh.read().decode(errors="ignore").splitlines()
+    except OSError:
+        return 0
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue  # the first line of the tail is usually cut
+        usage = (entry.get("message") or {}).get("usage")
+        if entry.get("type") == "assistant" and usage and not entry.get("isSidechain"):
+            return sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    return 0
+
+
+def fresh_session_notice(session, payload):
+    """Once per session and branch: the PR is open and the context is large, so a new session is cheaper."""
+    transcript = payload.get("transcript_path")
+    if not transcript:
+        return None
+    out = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD"],
+              payload.get("cwd") or os.getcwd()).splitlines()
+    if len(out) != 2 or out[1] == "HEAD":
+        return None
+    try:  # the phase the status line last computed (bin/phase); asking GitHub here would slow every stop
+        label = json.load(open(os.path.join(out[0], "agents", "phase", review_stamp.branch_key(out[1]) + ".json")))["label"]
+    except (OSError, ValueError, KeyError):
+        return None
+    if not label.startswith(("PR open", "ship")):
+        return None
+    tokens = context_tokens(transcript)
+    noticed_path = os.path.join(MARKER_DIR, f"{session}.fresh-session")
+    try:
+        noticed = open(noticed_path).read().splitlines()
+    except OSError:
+        noticed = []
+    if tokens < CONTEXT_NUDGE_TOKENS or out[1] in noticed:
+        return None
+    os.makedirs(MARKER_DIR, exist_ok=True)
+    with open(noticed_path, "a") as fh:
+        fh.write(out[1] + "\n")
+    log("stop_checks", "fresh-session", payload, f"{out[1]} {tokens // 1000}K")
+    return (f"This session's context is {tokens // 1000}K tokens, re-read on every turn, and {out[1]}'s PR is open. "
+            "Follow it up or start the next change in a new session: `~/.agents/bin/reports brief` there picks it up.")
+
+
+def block(payload, problems, streak, notice=None):
+    if notice and not problems:
+        print(json.dumps({"systemMessage": notice}))
     if problems:
         reason = (
             "Before finishing, resolve these or explain to the user why they are intended. If you can't resolve one "
@@ -185,6 +243,8 @@ def block(payload, problems, streak):
             output["systemMessage"] = (f"Verification has failed {streak} times in a row in this session. "
                                        "Consider /effort high (or xhigh) for this task.")
             log("stop_checks", "effort-nudge", payload, f"verify failed {streak} times in a row")
+        if notice:
+            output["systemMessage"] = (output.get("systemMessage", "") + "\n" + notice).strip()
         print(json.dumps(output))
     return 0
 

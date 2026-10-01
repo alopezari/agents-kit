@@ -3,6 +3,7 @@
 #   reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
 #   reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 #   reports                                          print every report that exists, with its path, then list the evidence
+#   reports brief                                    the phase and one line per report, to pick a branch up in a new session
 set -euo pipefail
 spec="$("$HOME/.agents/skills/spec/path.sh")"
 dir="$(dirname "$spec")"
@@ -14,6 +15,25 @@ if [ "${1:-}" = "path" ]; then
     evidence) mkdir -p "$dir/evidence-$suffix"; echo "$dir/evidence-$suffix" ;;
     *) echo "usage: reports path <verify|review|validation|staging-guide|follow-pr|evidence>" >&2; exit 2 ;;
   esac
+  exit 0
+fi
+
+if [ "${1:-}" = "brief" ]; then
+  echo "phase: $("$HOME/.agents/bin/phase" --refresh 2>/dev/null)"
+  for kind in spec verify review validation staging-guide follow-pr; do
+    f="$dir/$kind-$suffix.md"
+    [ -f "$f" ] || continue
+    case $kind in
+      spec) line="$(head -1 "$f" | sed 's/^# //')" ;;
+      review) line="$(head -1 "$f")$(grep -m1 '^Open:' "$f" | sed 's/^/ · /')" ;;
+      validation) line="$(for r in PASS FAIL 'NOT RUN'; do printf '%s %s, ' "$(grep -c "| $r |" "$f")" "$r"; done | sed 's/, $//')" ;;
+      staging-guide) line="$(grep -q '^## Results' "$f" && echo 'results recorded' || echo 'no results yet')" ;;
+      follow-pr) line="$(grep '^Status:' "$f" | tail -1)" ;;
+      *) line="$(head -1 "$f")" ;;
+    esac
+    printf '%-14s %s\n               %s\n' "$kind" "$line" "$f"
+  done
+  echo "Read one in full with cat <path>, or all of them with: ~/.agents/bin/reports"
   exit 0
 fi
 

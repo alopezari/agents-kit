@@ -1,0 +1,1 @@
+- `bin/reports brief` prints the phase and one line per report, and the stop hook suggests a new session, once, when a branch's PR is open and the context is over 250K tokens.

@@ -15,7 +15,7 @@ cat "$(~/.agents/bin/reports path follow-pr)" 2>/dev/null   # what earlier runs 
 ```
 
 - **First run** (right after `create-pr`): wait for CI as in section 1, then read the comments. Bot reviewers usually post when their own check finishes, so reading earlier misses them.
-- **On-demand runs** (the user asks to follow up): read the current state, don't wait. If checks are still running, say which and handle the rest.
+- **On-demand runs** (the user asks to follow up): read the current state, don't wait. If checks are still running, say which and handle the rest. In a new session, start with `~/.agents/bin/reports brief`: the phase and one line per report, so you read in full only the reports you need.
 
 Fixes go on the branch wherever it is checked out. If that is the user's main checkout (after the staging hand-off), say what you're about to change before editing there: they may be in the middle of something.
 
