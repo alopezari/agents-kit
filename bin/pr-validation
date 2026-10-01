@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Print a pull request's "## Validation" section from the branch's reports, so it states what they record.
+
+  pr-validation    verify's verdict and what it ran, the self-review's findings, each validation check with its
+                   result and what wasn't run, and the latest staging results
+
+Links become their text and paths under your home start with ~: the reports are local, the pull request isn't.
+Exits 1, printing nothing, when the verify or self-review report is missing.
+"""
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
+import review_stamp  # noqa: E402
+
+RESULTS = ("PASS", "FAIL", "NOT RUN")
+
+
+def public(text):
+    # Inline links, whose target may hold balanced parentheses, and reference links.
+    text = re.sub(r"\[([^\]]*)\](?:\((?:[^()]|\([^()]*\))*\)|\[[^\]]*\])", r"\1", text).replace("\\|", "|")
+    return re.sub(re.escape(os.path.expanduser("~")) + r"(?=/)", "~", text)
+
+
+def read(path):
+    try:
+        with open(path) as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+def verify_line(text):
+    verdict = re.search(r"^# Verify: (.+)$", text, re.M)
+    checks, pythons = [], []
+    for ran in re.findall(r"^ran: (?!nothing to check)(.+)$", text, re.M):
+        check, _, python = ran.partition(" with Python ")
+        if python and python not in pythons:
+            pythons.append(python)
+        if check not in checks:
+            checks.append(check)
+    line = f"- Verify: {verdict.group(1).rstrip('.') if verdict else 'no verdict'}"
+    line += f", {len(checks)} check{'s' * (len(checks) != 1)}: {', '.join(checks)}" if checks else ""
+    line += f" (also under Python {', '.join(pythons)})" if pythons else ""
+    return [public(line) + "."]
+
+
+def review_lines(text):
+    header = next((line.strip() for line in text.splitlines() if line.startswith("Self-review")), "Self-review")
+    findings = [(kind, summary.split(" — ")[0].strip().rstrip(".") + ".")
+                for kind, summary in re.findall(r"^(Fixed|Rejected|Open):[ \t]*(\S.*)$", text, re.M)
+                if summary.strip().rstrip(".").lower() != "none"]
+    counts = ", ".join(f"{sum(k == kind for k, _ in findings)} {kind.lower()}" for kind in ("Fixed", "Rejected", "Open"))
+    return [public(f"- {header}: {counts}.")] + [public(f"  - {kind}: {summary}") for kind, summary in findings]
+
+
+def validation_lines(text):
+    rows, columns = [], None
+    for line in text.splitlines():
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", re.sub(r"^\s*\||(?<!\\)\|\s*$", "", line))] \
+            if re.search(r"(?<!\\)\|", line) else None
+        if not cells:
+            columns = None
+        elif {"Check", "Result"} <= {c.strip("*_") for c in cells}:
+            names = [c.strip("*_") for c in cells]
+            columns = (names.index("Check"), names.index("Result"))
+        elif columns and len(cells) > max(columns):
+            result = re.match(r"[*_]*(PASS|FAIL|NOT RUN)\b", cells[columns[1]])
+            if result:
+                rows.append((cells[0], result.group(1), cells[columns[0]]))
+    counts = ", ".join(f"{n} {result}" for result in RESULTS for n in [sum(r == result for _, r, _ in rows)] if n)
+    lines = [f"- Validation, {len(rows)} check{'s' * (len(rows) != 1)}: {counts or 'none'}."]
+    lines += [f"  - {first} {result}: {check}" for first, result, check in rows]
+    lines += [f"  - Not run: {rest}" for rest in re.findall(r"^Not run:[ \t]*(\S.*)$", text, re.M)]
+    return [public(line) for line in lines]
+
+
+def staging_lines(text, evidence):
+    # The latest round before the merge, up to the next section: ship appends the production results after it.
+    rounds = list(re.finditer(r"^## Results(?! after the deploy)([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S))
+    if not rounds:
+        return ["- Staging: no results yet."]
+    heading, latest = rounds[-1].group(1), rounds[-1].group(2)
+    when = re.search(r"\(([^)]*)\)", heading)
+    steps = ", ".join(f"{first} {result}" for first, result, _, _ in review_stamp.result_rows(latest.splitlines(), evidence))
+    return [public(f"- Staging{f' (results of {when.group(1)})' if when else ''}: {steps or 'no step results'}.")]
+
+
+def main():
+    verify, review, validation, guide, evidence = review_stamp.report_paths(
+        "verify", "review", "validation", "staging-guide", "evidence")
+    texts = {path: read(path) for path in (verify, review, validation, guide)}
+    missing = [path for path in (verify, review) if texts[path] is None]
+    if missing:
+        sys.exit("pr-validation: no report at " + " or ".join(missing)
+                 + ". Run verify and the self-review first; the section is built from their reports.")
+    lines = verify_line(texts[verify]) + review_lines(texts[review])
+    if texts[validation] is not None:
+        lines += validation_lines(texts[validation])
+    if texts[guide] is not None:
+        lines += staging_lines(texts[guide], evidence)
+    print("## Validation\n\n" + "\n".join(lines))
+
+
+if __name__ == "__main__":
+    main()
