@@ -301,8 +301,8 @@ def render():
       "running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no "
       "check (no `ran:` line) leaves a separate stamp, and the status line says \"verify checked nothing\".\n")
     w("When the change needs manual tests on staging, `validate` ends by handing you the branch: if the agent worked in "
-      "a git worktree, it removes it (only once everything is committed and pushed) so you can switch to the branch in "
-      "your main checkout. The spec, the reports, the staging guide and the review stamps live in the repository's "
+      "a git worktree, it detaches it from the branch (only once everything is committed and pushed) so you can switch "
+      "to the branch in your main checkout, and keeps the directory its session runs in. The spec, the reports, the staging guide and the review stamps live in the repository's "
       "shared `.git/agents/`, so they survive the hand-off: run `bin/reports` there. The PR is opened after you report "
       "the staging results, so its description carries them.\n")
 
