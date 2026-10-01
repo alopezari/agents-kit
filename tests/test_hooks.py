@@ -422,6 +422,31 @@ def pr_gate_waits_for_staging(base):
     assert decision("gh pr create --fill") == "allow", "no guide, no staging"
 
 
+def guard_fails_closed(base):
+    # Every harness lets a command through when its hook crashes or times out, so the guard must answer deny itself.
+    def reason(command, cwd, env=None):
+        d = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": cwd, "session_id": "test"}, env=env)
+        return d["hookSpecificOutput"]["permissionDecisionReason"] if d else None
+
+    gone = os.path.join(base, "gone")
+    assert "The guard failed (FileNotFoundError" in (reason("gh pr create --fill", gone) or ""), "a crash denies"
+    repo = new_repo(base)
+    fake = os.path.join(base, "fake-git")
+    os.makedirs(fake)
+    with open(os.path.join(fake, "git"), "w") as fh:
+        fh.write("#!/bin/sh\nsleep 30\n")
+    os.chmod(os.path.join(fake, "git"), 0o755)
+    started = time.time()
+    hung = reason("gh pr create --head feat/x --fill", repo, env={"PATH": fake + ":" + os.environ["PATH"]})
+    assert "The guard failed (TimeoutExpired" in (hung or "") and time.time() - started < 10, (hung, time.time() - started)
+    with open(os.path.join(fake, "git"), "w") as fh:
+        fh.write("#!/bin/sh\nsleep 5\n")  # each call within a per-call limit, together past the hook's 10 s
+    started = time.time()
+    slow = reason("gh pr create --head feat/x --fill", repo, env={"PATH": fake + ":" + os.environ["PATH"]})
+    assert "TimeoutExpired" in (slow or "") and time.time() - started < 10, (slow, time.time() - started)
+    assert reason("ls", gone) is None, "a command no check needs git for still runs"
+
+
 def pr_gate_follows_worktrees(base):
     main = new_repo(base, "main")
     wt = os.path.join(base, "wt")
@@ -868,7 +893,7 @@ def post_edit_syntax_feedback(base):
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
+          validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

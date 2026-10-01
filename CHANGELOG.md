@@ -23,6 +23,7 @@ Each pull request adds a line under Unreleased; CI checks it, unless the pull re
 - The shell guard holds `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence; `review_stamp.py staging` says what's missing (#36).
 - Evidence links in validation reports and staging results, and the report paths in the final message, are absolute, so a click opens them (#37).
 - Validate's staging hand-off detaches its worktree from the branch instead of removing it, so the session doesn't go on in a deleted directory where the repository's hooks fail on every command (#38).
+- The shell guard denies a command when one of its checks crashes, or when its git and stamp calls use up the time the harness gives the hook, instead of letting the command through (#39).
 
 ## [0.4.0] - 2026-09-28
 
