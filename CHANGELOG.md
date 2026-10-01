@@ -4,8 +4,9 @@ Each pull request adds its own file under `changelog.d/` (see its README); CI ch
 
 ## [Unreleased]
 
-- Asking for Linear, or another service a profile guards, in your message approves the agent's writes to it until your next message; a write you didn't ask for still needs your approval (#23).
+## [0.5.0] - 2026-10-01
 
+- Asking for Linear, or another service a profile guards, in your message approves the agent's writes to it until your next message; a write you didn't ask for still needs your approval (#23).
 - The status line shows "PR open" for a pull request opened without follow-pr, instead of an earlier step (#21).
 - On an open pull request, the status line lists the checks that no longer cover the change, as in "PR open · redo self-review" (#22).
 - The spec skill gets a second reading from the other model family and a lint for its shape; the self-review flags changes no criterion asks for, follow-pr logs misread requirements as spec escapes, lens runs logged before a branch rename still count for the PR, and a spec written in a sandbox moves out of `$TMPDIR` once `.git` is writable (#24).
@@ -26,6 +27,11 @@ Each pull request adds its own file under `changelog.d/` (see its README); CI ch
 - The shell guard denies a command when one of its checks crashes, or when its git and stamp calls use up the time the harness gives the hook, instead of letting the command through (#39).
 - Staging results expire when the change does: once they pass, `review_stamp.py write --kind staging` records them for the exact change, and after any later edit the guard holds `gh pr ready` and the status line shows "redo staging" until the affected steps pass again (#40).
 - Each pull request adds its changelog entry as its own file under `changelog.d/`, without a number, so pull requests merged in a batch no longer conflict on CHANGELOG.md and need no extra commit for their number; `bin/changelog release` assembles the entries and adds the numbers (#41).
+- `python3 ~/.agents/hooks/private_terms.py pr <title> <body file>` checks a pull request to the kit for private terms before `gh pr create`, naming each term and the line it is on; create-pr runs it, and the shell guard's denial points to it (#42).
+- `bin/pr-validation` prints a pull request's validation section from the branch's reports (verify, self-review, validation, staging), and create-pr starts the description from it instead of from memory (#43).
+- A staging step that FAILed in the latest results round now holds the pull request even when a later section of the guide has a PASS row for it (#44).
+- Merging the default branch into a pull request no longer invalidates its self-review, validate and staging stamps when the branch's own diff is unchanged; verify still runs again on the merged code. An edit to a file with a non-ASCII name now invalidates the stamps too. Stamps written before this change count as stale once (#45).
+- `bin/pr-comments` prints the review comments on the branch's pull request that follow-pr hasn't handled yet, across inline, conversation and review comments; follow-pr reads them with it instead of three API calls and a manual filter (#46).
 
 ## [0.4.0] - 2026-09-28
 

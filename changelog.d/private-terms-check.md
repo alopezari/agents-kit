@@ -1,1 +1,0 @@
-- `python3 ~/.agents/hooks/private_terms.py pr <title> <body file>` checks a pull request to the kit for private terms before `gh pr create`, naming each term and the line it is on; create-pr runs it, and the shell guard's denial points to it.
