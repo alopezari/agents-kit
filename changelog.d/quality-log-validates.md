@@ -1,0 +1,1 @@
+- `bin/quality-log` refuses a malformed entry (a flag without its value, a count that isn't a number, an unknown model, verdict or flag) instead of logging it, so the monthly analysis no longer reads values pasted into a lens name.
