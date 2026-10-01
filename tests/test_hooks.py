@@ -294,6 +294,35 @@ def stamps_survive_merging_the_default_branch(base):
         assert write_stamp(repo, kind).returncode == 0
     open(os.path.join(repo, "new.py"), "w").write("a = 2\n")
     assert not check("review"), "and so is its content"
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    git(repo, "add", "new.py")
+    git(repo, *commit, "add new.py")
+    assert check("review"), "committing a reviewed untracked file keeps the stamp"
+    for before, after, why in [("x = 2\n", "x = 2 \n", "trailing whitespace"), ("x = 2\n", "x = 2\r\n", "a line ending"),
+                               (b"s = '\xe9'\n", b"s = '\xe8'\n", "a byte that isn't UTF-8")]:
+        mode = "wb" if isinstance(before, bytes) else "w"
+        open(os.path.join(repo, "edge.py"), mode, **({} if mode == "wb" else {"newline": ""})).write(before)
+        for kind in ("review", "validate"):
+            assert write_stamp(repo, kind).returncode == 0, f"stamping {why}"
+        assert check("review"), why
+        open(os.path.join(repo, "edge.py"), mode, **({} if mode == "wb" else {"newline": ""})).write(after)
+        assert not check("review"), f"changing {why} is an edit"
+    open(os.path.join(repo, ".gitattributes"), "w").write("*.cfg diff=nocomments\n")
+    git(repo, "config", "diff.nocomments.textconv", "sed -e s/#.*//")
+    open(os.path.join(repo, "app.cfg"), "w").write("a = 1  # one\n")
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0
+    open(os.path.join(repo, "app.cfg"), "w").write("a = 1  # two\n")
+    assert not check("review"), "a diff text converter can't hide an edit"
+    for kind in ("review", "validate", "verify"):
+        open(os.path.join(repo, "año.py"), "w").write(f"{kind} = 1\n")
+        if kind == "verify":
+            subprocess.run(["python3", "-c", code], cwd=repo, check=True)
+        else:
+            assert write_stamp(repo, kind).returncode == 0
+        open(os.path.join(repo, "año.py"), "w").write(f"{kind} = 2\n")
+        assert not check(kind), f"an edit to a file with a non-ASCII name invalidates the {kind} stamp"
 
 
 def validate_stamp_needs_evidence(base):

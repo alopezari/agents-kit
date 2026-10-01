@@ -28,6 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 QUALITY_LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
@@ -70,8 +71,10 @@ def merge_base(cwd=None):
 
 def changed_paths():
     merge_base_sha = merge_base()
-    paths = set(git("diff", "--no-renames", "--name-only", merge_base_sha).splitlines())  # a rename hides its source
-    paths |= set(git("ls-files", "--others", "--exclude-standard").splitlines())
+    # Unquoted: git quotes a non-ASCII path, which then names no file and its edits went unstamped. No renames: a
+    # rename hides its source.
+    paths = set(git("-c", "core.quotePath=false", "diff", "--no-renames", "--name-only", merge_base_sha).splitlines())
+    paths |= set(git("-c", "core.quotePath=false", "ls-files", "--others", "--exclude-standard").splitlines())
     return merge_base_sha, sorted(p for p in paths if p)
 
 
@@ -85,20 +88,40 @@ def fingerprint():
 
 
 def change_fingerprint():
-    """The branch's own change: its diff against where it left the default branch, without the hunks' line numbers
-    or the base's blob ids, plus untracked files. Merging the default branch keeps it unless the merge moves the
+    """The branch's own change: its diff against where it left the default branch, untracked files included, without
+    the hunks' line numbers or the base's blob ids. Merging the default branch keeps it unless the merge moves the
     changed lines or their context."""
     base, paths = changed_paths()
-    stamped = [p for p in paths if not NOT_STAMPED.search(p)]
+    stamped = [f":(literal){p}" for p in paths if not NOT_STAMPED.search(p)]
     digest = hashlib.sha256()
-    if stamped:
-        diff = git("diff", "--no-renames", "--no-color", "--no-ext-diff", "--binary", "-U3", base, "--",
-                   *(f":(literal){p}" for p in stamped))
-        for line in diff.splitlines():
-            if not line.startswith("index "):
-                digest.update(re.sub(r"^@@ [^@]* @@", "@@", line).encode() + b"\n")
-    for path in git("ls-files", "--others", "--exclude-standard", "--", *(f":(literal){p}" for p in stamped)).splitlines() if stamped else []:
-        digest.update(path.encode() + git("hash-object", path).encode())
+    if not stamped:
+        return digest.hexdigest()
+    # Untracked files enter a copy of the index as intent-to-add, so they diff exactly as they will once added.
+    fd, index = tempfile.mkstemp(prefix="agents-stamp-index-")
+    os.close(fd)
+    try:
+        real_index = git("rev-parse", "--path-format=absolute", "--git-path", "index")
+        if os.path.exists(real_index):
+            shutil.copyfile(real_index, index)
+        else:
+            os.remove(index)
+        env = {**os.environ, "GIT_INDEX_FILE": index}
+        untracked = git("-c", "core.quotePath=false", "ls-files", "--others", "--exclude-standard", "--",
+                        *stamped).splitlines()
+        commands = [["add", "--intent-to-add", "--", *(f":(literal){p}" for p in untracked)]] if untracked else []
+        commands.append(["diff", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "-U3", base,
+                         "--", *stamped])
+        for args in commands:
+            # Bytes, and a failure stops: decoding or a partial patch could make two different changes hash alike.
+            result = subprocess.run(["git", *args], capture_output=True, env=env)
+            if result.returncode != 0:
+                raise RuntimeError(f"git {args[0]} failed: {result.stderr.decode(errors='replace').strip()}")
+    finally:
+        if os.path.exists(index):
+            os.remove(index)
+    for line in result.stdout.split(b"\n"):
+        if not line.startswith(b"index "):
+            digest.update(re.sub(rb"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", b"@@", line) + b"\n")
     return digest.hexdigest()
 
 
