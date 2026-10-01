@@ -110,6 +110,10 @@ def quoted_spans(command):
     return spans
 
 
+# Under the harnesses' 10 s hook timeout; Pi waits up to 660 s, so a hung git or stamp check would hold its session.
+SUBPROCESS_TIMEOUT = 8
+
+
 def pr_checkout(command, cwd):
     """The checkout `gh pr create` or `gh pr ready` acts on: a `cd <dir>` before it, else the worktree holding --head."""
     before = re.split(r"\b" + GH_PR + r"(?:create|ready)\b", command)[0]
@@ -122,7 +126,7 @@ def pr_checkout(command, cwd):
     head = re.search(r"--head(?:=|\s+)(\S+)", command)
     if head:
         branch = head.group(1).split(":")[-1].strip("\"'")
-        listing = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=cwd,
+        listing = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=cwd, timeout=SUBPROCESS_TIMEOUT,
                                  capture_output=True, text=True).stdout
         path = None
         for line in listing.splitlines():
@@ -270,7 +274,7 @@ def unreviewed_pr(command, cwd):
     stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
 
     def ok(*args):
-        return subprocess.run([sys.executable, stamp, *args], cwd=cwd).returncode == 0
+        return subprocess.run([sys.executable, stamp, *args], cwd=cwd, timeout=SUBPROCESS_TIMEOUT).returncode == 0
 
     if not ok("check", "--kind", "review"):
         return ("No self-review recorded for the current change. Run the self-review skill first "
@@ -286,7 +290,8 @@ def unreviewed_pr(command, cwd):
 def staging_reason(cwd):
     """Why `review_stamp.py staging` holds the PR in cwd, or None when it passes; a check that fails silently holds it too."""
     stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
-    result = subprocess.run([sys.executable, stamp, "staging"], cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run([sys.executable, stamp, "staging"], cwd=cwd, capture_output=True, text=True,
+                            timeout=SUBPROCESS_TIMEOUT)
     if result.returncode == 0:
         return None
     return result.stdout.strip() or f"Couldn't read the staging results: {result.stderr.strip()[-300:] or 'no output'}"
@@ -302,7 +307,8 @@ def unready_pr(command, cwd):
     cwd = pr_checkout(command, cwd)
     if not os.path.isdir(cwd):  # a hook that crashes lets the command through
         return f"`gh pr ready`: its checkout {cwd} doesn't exist, so its staging results can't be checked."
-    here = subprocess.run(["git", "branch", "--show-current"], cwd=cwd, capture_output=True, text=True).stdout.strip()
+    here = subprocess.run(["git", "branch", "--show-current"], cwd=cwd, capture_output=True, text=True,
+                          timeout=SUBPROCESS_TIMEOUT).stdout.strip()
     targets = set()
     for match in readies:
         if re.search(r"(?:^|\s)(?:-R|--repo)", match.group(1) + " " + match.group(2)):
@@ -364,14 +370,15 @@ def targets_kit(repo, host, cwd):
     """Whether a gh command acts on the kit's own repository: its --repo (on GH_HOST, if set), else the checkout it
     runs in."""
     if repo:
-        origin = subprocess.run(["git", "-C", KIT, "remote", "get-url", "origin"], capture_output=True, text=True).stdout
+        origin = subprocess.run(["git", "-C", KIT, "remote", "get-url", "origin"], capture_output=True, text=True,
+                                timeout=SUBPROCESS_TIMEOUT).stdout
         if not origin.strip():
             return False
         (kit_host, kit_slug), (host, slug) = repo_id(origin), repo_id(repo, host)
         return slug == kit_slug and host in (None, kit_host)
     def common_dir(path):
         return subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=path,
-                              capture_output=True, text=True).stdout.strip()
+                              capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT).stdout.strip()
     # KIT/.git is a file when ~/.agents is itself a worktree (a verify testing a branch): compare common dirs.
     # Only KIT's own repository: a ~/.agents that isn't one could sit inside another (a dotfiles repo in HOME).
     common, kit = common_dir(cwd), common_dir(KIT) if os.path.exists(os.path.join(KIT, ".git")) else ""
@@ -524,13 +531,17 @@ def main():
     cwd = os.path.realpath(payload.get("cwd") or os.getcwd())
     command = without_evidence_runner(command)
 
-    reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd) or private_terms_in_kit_pr(command, cwd)
-              or unreviewed_pr(command, cwd) or unready_pr(command, cwd))
-    if not reason:
-        for pattern, why in RULES:
-            if re.search(pattern, command):
-                reason = why
-                break
+    try:
+        reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
+                  or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd))
+        if not reason:
+            for pattern, why in RULES:
+                if re.search(pattern, command):
+                    reason = why
+                    break
+    except Exception as error:  # every harness lets a command through when its hook crashes or times out
+        reason = (f"The guard failed ({type(error).__name__}: {error}), so it can't tell whether this command is safe. "
+                  "Tell the user: the error is in ~/.agents/logs/hooks.jsonl.")
     if not reason:
         record_push(command, cwd, payload)
         return 0
