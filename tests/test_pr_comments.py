@@ -56,10 +56,16 @@ ANSWERS = {
 }
 
 
-def run(base, answers):
+def run(base, answers, in_repo=True):
     repo = os.path.join(base, "shop")
     os.makedirs(os.path.join(base, "bin"))
     os.makedirs(repo)
+    if not in_repo:
+        env = {**os.environ, "PATH": os.path.join(base, "bin") + ":" + os.environ["PATH"], "FAKE_GH_DIR": base}
+        open(os.path.join(base, "bin", "gh"), "w").write(FAKE_GH)
+        os.chmod(os.path.join(base, "bin", "gh"), 0o755)
+        json.dump(answers, open(os.path.join(base, "answers.json"), "w"))
+        return subprocess.run([PR_COMMENTS], cwd=repo, capture_output=True, text=True, env=env, timeout=60)
     subprocess.run(["git", "init", "-q", "-b", "feature/cart"], cwd=repo, check=True)
     open(os.path.join(base, "bin", "gh"), "w").write(FAKE_GH)
     os.chmod(os.path.join(base, "bin", "gh"), 0o755)
@@ -103,7 +109,20 @@ def github_unreadable_is_not_no_comments(base):
     assert out.returncode == 4 and "couldn't read" in out.stderr and out.stdout == "", out
 
 
-for test in (lists_only_new_comments_from_others, none_new_says_so, github_unreadable_is_not_no_comments):
+def a_deleted_account_and_an_empty_body_still_print(base):
+    ghost = {"id": 202, "user": None, "body": None, "html_url": "https://github.com/o/r/pull/7#issuecomment-202"}
+    out = run(base, {**ANSWERS, "inline": [], "conversation": [ghost], "review": []})
+    assert out.returncode == 0 and out.stdout.startswith(
+        "202 conversation ghost https://github.com/o/r/pull/7#issuecomment-202\n  (no text)\n"), out
+
+
+def no_follow_pr_report_path_is_not_a_first_run(base):
+    out = run(base, ANSWERS, in_repo=False)
+    assert out.returncode == 4 and "follow-pr report" in out.stderr and out.stdout == "", out
+
+
+for test in (lists_only_new_comments_from_others, none_new_says_so, github_unreadable_is_not_no_comments,
+             a_deleted_account_and_an_empty_body_still_print, no_follow_pr_report_path_is_not_a_first_run):
     base = tempfile.mkdtemp(prefix="agents-test-pr-comments-")
     try:
         test(base)

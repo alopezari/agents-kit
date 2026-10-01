@@ -37,12 +37,23 @@ def listed(endpoint):
 
 def handled_ids():
     """The ids at the start of the follow-pr report's lines: earlier runs dealt with those comments."""
-    path = subprocess.run([REPORTS, "path", "follow-pr"], capture_output=True, text=True).stdout.strip()
+    result = subprocess.run([REPORTS, "path", "follow-pr"], capture_output=True, text=True)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise Unreadable(f"no follow-pr report path ({result.stderr.strip()[-300:]}), so handled comments can't be skipped")
     try:
-        with open(path) as fh:
+        with open(result.stdout.strip()) as fh:
             return {int(i) for i in re.findall(r"^(\d+) ", fh.read(), re.M)}
     except FileNotFoundError:
         return set()
+
+
+def comment(kind, raw):
+    """One comment as (id, kind, login, is a bot, review state, url, place, body). A deleted account comes back as a
+    null user."""
+    user = raw.get("user") or {}
+    place = f"{raw['path']}:{raw.get('line') or raw.get('original_line') or '?'}" if kind == "inline" else ""
+    return (int(raw["id"]), kind, user.get("login") or "ghost", user.get("type") == "Bot",
+            raw.get("state") or "" if kind == "review" else "", raw["html_url"], place, (raw.get("body") or "").strip())
 
 
 def main():
@@ -50,31 +61,30 @@ def main():
         pr = json.loads(gh("pr", "view", "--json", "number,author"))
         number, author = pr["number"], pr["author"]["login"]
         base = f"repos/{{owner}}/{{repo}}"
-        comments = [("inline", c) for c in listed(f"{base}/pulls/{number}/comments")]
-        comments += [("conversation", c) for c in listed(f"{base}/issues/{number}/comments")]
-        comments += [("review", c) for c in listed(f"{base}/pulls/{number}/reviews")]
-    except (Unreadable, ValueError, KeyError, TypeError) as error:
+        comments = [comment("inline", c) for c in listed(f"{base}/pulls/{number}/comments")]
+        comments += [comment("conversation", c) for c in listed(f"{base}/issues/{number}/comments")]
+        comments += [comment("review", c) for c in listed(f"{base}/pulls/{number}/reviews")]
+        handled = handled_ids()
+    except (Unreadable, ValueError, KeyError, TypeError, AttributeError) as error:
         print(f"pr-comments: couldn't read the pull request's comments: {error}", file=sys.stderr)
         return 4
-    handled = handled_ids()
     skipped = {"already in the follow-pr report": 0, "by the author": 0, "review without text": 0}
     new = []
-    for kind, comment in comments:
-        if comment["id"] in handled:
+    for item in comments:
+        cid, kind, login, _, _, _, _, body = item
+        if cid in handled:
             skipped["already in the follow-pr report"] += 1
-        elif comment["user"]["login"] == author:
+        elif login == author:
             skipped["by the author"] += 1
-        elif kind == "review" and not (comment.get("body") or "").strip():
+        elif kind == "review" and not body:
             skipped["review without text"] += 1
         else:
-            new.append((kind, comment))
-    for kind, comment in new:
-        who = comment["user"]["login"] + (" (bot)" if comment["user"].get("type") == "Bot" else "")
-        state = f" {comment['state']}" if kind == "review" else ""
-        print(f"{comment['id']} {kind} {who}{state} {comment['html_url']}")
-        if kind == "inline":
-            print(f"  {comment['path']}:{comment.get('line') or comment.get('original_line') or '?'}")
-        print("\n".join(f"  {line}" for line in comment["body"].strip().splitlines()) + "\n")
+            new.append(item)
+    for cid, kind, login, bot, state, url, place, body in new:
+        print(f"{cid} {kind} {login}{' (bot)' if bot else ''}{f' {state}' if state else ''} {url}")
+        if place:
+            print(f"  {place}")
+        print("\n".join(f"  {line}" for line in (body or "(no text)").splitlines()) + "\n")
     why = ", ".join(f"{n} {reason}" for reason, n in skipped.items() if n)
     summary = f"{len(new)} new comment{'s' * (len(new) != 1)}" if new else "No new comments"
     print(f"{summary} on #{number}" + (f" ({why})." if why else "."))
