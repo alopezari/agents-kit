@@ -12,6 +12,7 @@ names them: it only checks the kit's own commits and pull requests against every
 
 Exits 1 and names the matches when any are found. guard_bash.py uses found() for `gh pr create|edit`.
 """
+import bisect
 import glob
 import os
 import re
@@ -48,10 +49,11 @@ def pr_text(title, body_file):
     """Each place in a pull request's title and description that names a private term, with the terms there. Matched
     on the whole text, like the guard, so a term split across lines is found at the line it starts on."""
     body, places = open(body_file).read(), {}
+    newlines = [i for i, char in enumerate(body) if char == "\n"]
     for pattern in patterns():
         for where, text in ((0, title), (1, body)):
             for match in pattern.finditer(text):
-                line = text.count("\n", 0, match.start()) + 1 if where else 0
+                line = bisect.bisect_left(newlines, match.start()) + 1 if where else 0
                 places.setdefault((where, line), set()).add(" ".join(match.group(0).split()))
     return [f"{f'description line {line}' if where else 'title'}: {', '.join(sorted(terms))}"
             for (where, line), terms in sorted(places.items())]
