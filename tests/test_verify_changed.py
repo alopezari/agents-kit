@@ -81,7 +81,11 @@ def phpstan_with_nothing_in_scope_is_not_a_failure(base):
     phpstan = executable(os.path.join(base, "phpstan"), FAKE_PHPSTAN_NOTHING_IN_SCOPE)
     proc = subprocess.run(["python3", SCRIPT, "--phpstan", phpstan], cwd=repo, capture_output=True, text=True)
     assert proc.returncode == 0 and "did not run" not in proc.stdout, proc.stdout
-    assert "phpstan: none of the 1 changed files is in its configured paths" in proc.stdout, proc.stdout
+    assert "phpstan: none of the 1 changed files is in its configured paths" in proc.stdout and "phpstan on" not in proc.stdout, \
+        proc.stdout
+    executable(phpstan, FAKE_PHPSTAN_NOTHING_IN_SCOPE + "echo 'PHP Fatal error: Allowed memory size exhausted' >&2\n" * 20 + "exit 255\n")
+    proc = subprocess.run(["python3", SCRIPT, "--phpstan", phpstan], cwd=repo, capture_output=True, text=True)
+    assert proc.returncode == 1 and "phpstan did not run" in proc.stdout, "a crash after the note is a failure:\n" + proc.stdout
 
 
 def red_check_keeps_export_ignored_tests(base):

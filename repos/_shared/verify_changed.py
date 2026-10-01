@@ -65,9 +65,13 @@ def execute(args, cwd=None, timeout=600):
         return subprocess.CompletedProcess(args, 124, "", f"{args[0]}: timed out after {timeout}s")
 
 
-def run_json(cmd, cwd, not_run):
+def run_json(cmd, cwd, not_run, nothing_in_scope=None):
+    """The tool's JSON report; {"nothing_in_scope": True} when every line it printed matches `nothing_in_scope`."""
     proc = execute(cmd, cwd)
     stdout = proc.stdout or ""
+    printed = [line.strip() for line in (stdout + (proc.stderr or "")).splitlines() if line.strip()]
+    if nothing_in_scope and printed and all(nothing_in_scope.search(line) for line in printed):
+        return {"nothing_in_scope": True}
     try:
         # PHP deprecation notices can surround the JSON on stdout; decode the first object only.
         data = json.JSONDecoder().raw_decode(stdout[stdout.index("{"):])[0]
@@ -106,8 +110,9 @@ def failing_tests(cmd, cwd, not_run, junit_host=None, test_filter=""):
 
 
 TEST_FILE = re.compile(r"Test\.php$")
-# PHPStan's message when its config excludes every file it is given (exit 0 before 2.0, non-zero after).
-PHPSTAN_NOTHING_IN_SCOPE = "No files found to analyse"
+# All PHPStan prints when its config excludes every file it is given (exit 0 before 2.0, non-zero after). Any other
+# line, a fatal error after the note for one, is a failure.
+PHPSTAN_NOTHING_IN_SCOPE = re.compile(r"No files found to analyse|^\[WARNING\] This will cause a non-zero exit code")
 
 
 def link_ignored_dirs(root, tmp):
@@ -269,16 +274,16 @@ def main():
             ran.append(f"phpcs on {len(rel)} files (changed lines only)")
 
     if args.phpstan and rel:
-        out = run_json(shlex.split(args.phpstan) + ["--error-format=json", "--no-progress", *rel], tool_cwd, not_run)
-        if not out and PHPSTAN_NOTHING_IN_SCOPE in not_run[-1]:
-            not_run.pop()
-            ran.append(f"phpstan: none of the {len(rel)} changed files is in its configured paths")
+        out = run_json(shlex.split(args.phpstan) + ["--error-format=json", "--no-progress", *rel], tool_cwd, not_run,
+                       PHPSTAN_NOTHING_IN_SCOPE)
         for fpath, data in (out.get("files") or {}).items():
             repo_path = os.path.relpath(os.path.realpath(fpath), os.path.realpath(root))
             for m in data.get("messages", []):
                 if on_changed_line(changes, repo_path, m.get("line") or 0):
                     errors.append(f"{repo_path}:{m.get('line')} [phpstan] {m['message']}")
-        if out:
+        if out.get("nothing_in_scope"):
+            ran.append(f"phpstan: none of the {len(rel)} changed files is in its configured paths")
+        elif out:
             ran.append(f"phpstan on {len(rel)} files (changed lines only)")
 
     if args.phpunit:
