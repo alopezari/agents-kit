@@ -486,7 +486,8 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
         terms = private_terms.found("\n".join(values))
         if terms:
             return (f"This pull request's title or description names {', '.join(terms)}, which a profile marks as "
-                    "private, and the kit is public. Rewrite it without them.")
+                    "private, and the kit is public. Rewrite it without them; `python3 ~/.agents/hooks/private_terms.py "
+                    "pr <title> <body file>` shows the line each one is on.")
     return None
 
 

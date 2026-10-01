@@ -6,9 +6,13 @@ names them: it only checks the kit's own commits and pull requests against every
 
   private_terms.py staged           the lines a commit adds (pre-commit)
   private_terms.py message <file>   a commit message (commit-msg)
+  private_terms.py pr <title> <body file>
+                                    a pull request's title and description, before `gh pr create|edit` on the kit:
+                                    names each term with where it is (the title, or the description's line)
 
 Exits 1 and names the matches when any are found. guard_bash.py uses found() for `gh pr create|edit`.
 """
+import bisect
 import glob
 import os
 import re
@@ -41,7 +45,32 @@ def staged_additions():
     return names + "\n".join(l[1:] for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++"))
 
 
+def pr_text(title, body_file):
+    """Each place in a pull request's title and description that names a private term, with the terms there. Matched
+    on the whole text, like the guard, so a term split across lines is found at the line it starts on."""
+    body, places = open(body_file).read(), {}
+    newlines = [i for i, char in enumerate(body) if char == "\n"]
+    for pattern in patterns():
+        for where, text in ((0, title), (1, body)):
+            for match in pattern.finditer(text):
+                line = bisect.bisect_left(newlines, match.start()) + 1 if where else 0
+                places.setdefault((where, line), set()).add(" ".join(match.group(0).split()))
+    return [f"{f'description line {line}' if where else 'title'}: {', '.join(sorted(terms))}"
+            for (where, line), terms in sorted(places.items())]
+
+
 def main(args):
+    if len(args) == 3 and args[0] == "pr":
+        try:
+            places = pr_text(args[1], args[2])
+        except (OSError, UnicodeDecodeError) as error:
+            print(f"Can't read the description file {args[2]}: {error}", file=sys.stderr)
+            return 2
+        if places:
+            print("Private terms from a profile in this pull request; the kit is public, so rewrite these:\n  "
+                  + "\n  ".join(places), file=sys.stderr)
+            return 1
+        return 0
     if args == ["staged"]:
         where, text = "the staged changes", staged_additions()
     elif len(args) == 2 and args[0] == "message":
