@@ -39,18 +39,13 @@ For each failing check:
 
 ## 2. Review comments
 
-Fetch all three kinds, with their ids:
+Print the comments no earlier run handled, from the branch's checkout:
 
 ```bash
-gh api 'repos/{owner}/{repo}/pulls/<n>/comments' --paginate \
-  --jq '.[] | {id, user: .user.login, path, line, body, url: .html_url}'          # inline, on the diff
-gh api 'repos/{owner}/{repo}/issues/<n>/comments' --paginate \
-  --jq '.[] | {id, user: .user.login, body, url: .html_url}'                      # conversation
-gh api 'repos/{owner}/{repo}/pulls/<n>/reviews' --paginate \
-  --jq '.[] | select(.body != "") | {id, user: .user.login, state, body, url: .html_url}'   # review summaries
+~/.agents/bin/pr-comments
 ```
 
-Skip the ids already in the report, and comments by the PR author (the user's own replies). For each new one:
+It reads all three kinds, every page: inline comments on the diff, the conversation, and review summaries. Each comes with its id, author (bots marked), file and line, URL and text. It skips the ids already in the report, the PR author's own replies and reviews without text, and says how many of each it skipped. Exit 4 means GitHub couldn't be read: say so, and don't report "no comments". For each new one:
 
 1. Verify it like a self-review finding: **Confirmed**, **Rejected** or **Uncertain**, each with evidence.
 2. Confirmed: fix it (section 3). Rejected: draft a reply with the evidence. Uncertain: put it in front of the user.

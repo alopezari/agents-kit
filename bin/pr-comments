@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Print the current branch's pull request comments that the follow-pr report doesn't list yet.
+
+  pr-comments    inline comments on the diff, conversation comments and review summaries, every page, each with its
+                 id, kind, author (bots marked), file and line, URL and text; skips the ids the follow-pr report
+                 already lists, the PR author's own comments and reviews without text
+
+Exit: 0 read (new comments or none, said either way), 4 GitHub couldn't be read: never "no comments".
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+
+GH_TIMEOUT = 30
+REPORTS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "reports")
+
+
+class Unreadable(Exception):
+    pass
+
+
+def gh(*args):
+    try:
+        result = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Unreadable(str(error))
+    if result.returncode != 0:
+        raise Unreadable(result.stderr.strip()[-300:])
+    return result.stdout
+
+
+def listed(endpoint):
+    return [json.loads(line) for line in gh("api", "--paginate", "--jq", ".[]", endpoint).splitlines() if line]
+
+
+def handled_ids():
+    """The ids at the start of the follow-pr report's lines: earlier runs dealt with those comments."""
+    path = subprocess.run([REPORTS, "path", "follow-pr"], capture_output=True, text=True).stdout.strip()
+    try:
+        with open(path) as fh:
+            return {int(i) for i in re.findall(r"^(\d+) ", fh.read(), re.M)}
+    except FileNotFoundError:
+        return set()
+
+
+def main():
+    try:
+        pr = json.loads(gh("pr", "view", "--json", "number,author"))
+        number, author = pr["number"], pr["author"]["login"]
+        base = f"repos/{{owner}}/{{repo}}"
+        comments = [("inline", c) for c in listed(f"{base}/pulls/{number}/comments")]
+        comments += [("conversation", c) for c in listed(f"{base}/issues/{number}/comments")]
+        comments += [("review", c) for c in listed(f"{base}/pulls/{number}/reviews")]
+    except (Unreadable, ValueError, KeyError, TypeError) as error:
+        print(f"pr-comments: couldn't read the pull request's comments: {error}", file=sys.stderr)
+        return 4
+    handled = handled_ids()
+    skipped = {"already in the follow-pr report": 0, "by the author": 0, "review without text": 0}
+    new = []
+    for kind, comment in comments:
+        if comment["id"] in handled:
+            skipped["already in the follow-pr report"] += 1
+        elif comment["user"]["login"] == author:
+            skipped["by the author"] += 1
+        elif kind == "review" and not (comment.get("body") or "").strip():
+            skipped["review without text"] += 1
+        else:
+            new.append((kind, comment))
+    for kind, comment in new:
+        who = comment["user"]["login"] + (" (bot)" if comment["user"].get("type") == "Bot" else "")
+        state = f" {comment['state']}" if kind == "review" else ""
+        print(f"{comment['id']} {kind} {who}{state} {comment['html_url']}")
+        if kind == "inline":
+            print(f"  {comment['path']}:{comment.get('line') or comment.get('original_line') or '?'}")
+        print("\n".join(f"  {line}" for line in comment["body"].strip().splitlines()) + "\n")
+    why = ", ".join(f"{n} {reason}" for reason, n in skipped.items() if n)
+    summary = f"{len(new)} new comment{'s' * (len(new) != 1)}" if new else "No new comments"
+    print(f"{summary} on #{number}" + (f" ({why})." if why else "."))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
