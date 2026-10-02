@@ -1,0 +1,1 @@
+- The monthly job counts a spec the agent writes without starting the spec skill again: writing the spec file before a branch's first code edit starts the spec phase, and the work on the branch before it joins the spec. The spec phase shows on 18 of the 76 PRs joined since the kit, where it showed on none.

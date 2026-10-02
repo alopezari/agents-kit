@@ -54,8 +54,8 @@ def is_real_prompt(t):
 
 def phase_events(entry):
     """In block order: ("skill", name) for each flow skill the entry starts (a Skill call by the agent, `/<skill>`
-    typed by the user), ("edit", None) for each Edit/Write of anything but a spec (spec-*.md, in .git/agents/ or a
-    temp dir)."""
+    typed by the user), ("spec", None) for each Edit/Write of a spec (spec-*.md, in .git/agents/ or a temp dir) and
+    ("edit", None) for each of anything else."""
     msg = entry.get("message") or {}
     if entry.get("type") == "user":
         return [("skill", n) for n in (name.split(":")[-1] for name in TYPED_SKILL.findall(text_of(msg.get("content"))))
@@ -67,9 +67,8 @@ def phase_events(entry):
         name = str(c.get("input", {}).get("skill")).split(":")[-1] if c.get("name") == "Skill" else None
         if name in FLOW_SKILLS:
             events.append(("skill", name))
-        elif c.get("name") in ("Edit", "Write", "NotebookEdit") and not SPEC_FILE.match(
-                os.path.basename(str(c.get("input", {}).get("file_path")))):
-            events.append(("edit", None))
+        elif c.get("name") in ("Edit", "Write", "NotebookEdit"):
+            events.append(("spec" if SPEC_FILE.match(os.path.basename(str(c.get("input", {}).get("file_path")))) else "edit", None))
     return events
 
 
@@ -153,11 +152,22 @@ def renamed(renames, repos, old, new):
     return new in names
 
 
+def empty():
+    return {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "minutes": 0}
+
+
+def add(into, spent):
+    for key, value in spent.items():
+        into[key] += value
+
+
 def split_into_phases(entries, renames, repos):
     """branch -> phase -> tokens and active minutes. A message belongs to the last flow skill started on its branch
     ("build" before any, and again after the spec once code is edited); a change of branch starts again at
     "build" unless it is a rename (`git branch -m`, or one logged). The branch changes when the session directory's
-    gitBranch does or a command starts one. An entry without a branch counts for the current one and changes nothing."""
+    gitBranch does or a command starts one. An entry without a branch counts for the current one and changes nothing.
+    Agents write most specs without starting the skill again, so writing the spec file before a branch's first code
+    edit or flow skill also starts the spec, and the branch's work before it (reading the issue and the code) joins it."""
     events_of, commands_of = {}, {}  # message id -> across its lines: one per content block, each repeating the usage
     for e in entries:
         mid = (e.get("message") or {}).get("id")
@@ -166,6 +176,7 @@ def split_into_phases(entries, renames, repos):
             commands_of[mid] = commands_of.get(mid, []) + branch_commands(e)
     phases, counted = {}, set()
     branch, directory_branch, phase, last = "", "", "build", None
+    started, before_code = set(), {}  # branches past their first code edit or flow skill; build spent before that
     for e in entries:
         msg = e.get("message") or {}
         mid = msg.get("id") if e.get("type") == "assistant" else None
@@ -178,18 +189,30 @@ def split_into_phases(entries, renames, repos):
             changes += commands_of[mid]
         for new, is_rename in changes:
             if new != branch:
-                if is_rename and branch in phases:  # `git branch -m` leaves no branch under the old name
-                    for name, spent in phases.pop(branch).items():
-                        into = phases.setdefault(new, {}).setdefault(name, dict.fromkeys(spent, 0))
-                        for key, value in spent.items():
-                            into[key] += value
+                if is_rename:  # `git branch -m` leaves no branch under the old name
+                    for name, spent in phases.pop(branch, {}).items():
+                        add(phases.setdefault(new, {}).setdefault(name, dict.fromkeys(spent, 0)), spent)
+                    add(before_code.setdefault(new, empty()), before_code.pop(branch, empty()))
+                    if branch in started:
+                        started.add(new)
                 elif branch and not is_rename and not renamed(renames, repos, branch, new):
                     phase = "build"
                 branch = new
         if e.get("gitBranch"):
             for kind, name in events_of.get(mid, []) if first_line else ([] if mid else phase_events(e)):
-                phase = name if kind == "skill" else ("build" if phase == "spec" else phase)
-        spent = phases.setdefault(branch, {}).setdefault(phase, {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "minutes": 0})
+                if (kind == "spec" or name == "spec") and branch not in started:
+                    spec, build = phases.setdefault(branch, {}).setdefault("spec", empty()), phases[branch].get("build", empty())
+                    moved = before_code.pop(branch, empty())
+                    add(spec, moved)
+                    add(build, {key: -value for key, value in moved.items()})
+                    phase = "spec"
+                elif kind == "skill":
+                    phase = name
+                elif kind == "edit":
+                    phase = "build" if phase == "spec" else phase
+                if kind == "edit" or kind == "skill" and name != "spec":
+                    started.add(branch)
+        spent = empty()
         if e.get("timestamp"):
             now = ts(e["timestamp"])
             gap = (now - last).total_seconds() / 60 if last else 0
@@ -203,8 +226,11 @@ def split_into_phases(entries, renames, repos):
             spent["out"] += u.get("output_tokens", 0)
             spent["cache_read"] += u.get("cache_read_input_tokens", 0)
             spent["cache_write"] += u.get("cache_creation_input_tokens", 0)
-    return {b: {p: {**v, "minutes": round(v["minutes"], 1)} for p, v in ps.items() if any(v.values())}
-            for b, ps in phases.items() if b}
+        add(phases.setdefault(branch, {}).setdefault(phase, empty()), spent)
+        if phase == "build" and branch not in started:
+            add(before_code.setdefault(branch, empty()), spent)
+    rounded = {b: {p: {**v, "minutes": round(v["minutes"], 1)} for p, v in ps.items()} for b, ps in phases.items() if b}
+    return {b: {p: v for p, v in ps.items() if any(v.values())} for b, ps in rounded.items()}
 
 
 def claude_sessions():

@@ -128,6 +128,25 @@ def branches_started_by_commands(home):
     assert found["repos"] == {"o/repo": "repo"}, f"a removed worktree's repo comes from its main checkout: {found['repos']}"
 
 
+def writing_the_spec_marks_the_work_before_it(home):
+    """Agents write most specs without invoking the skill again; the spec file is what every spec leaves behind."""
+    rows = [user(0, "go", "session/x"),
+            *assistant(1, "m0", "session/x", [TEXT]),                                   # reading the issue and the code
+            *assistant(2, "m1", "session/x", [TEXT]),
+            *assistant(3, "m2", "session/x", [edit("/g/agents/spec-repo-x.md")]),       # the spec, written with Write
+            *assistant(4, "m3", "session/x", [bash("git branch -m kit-change")]),
+            *assistant(5, "m4", "kit-change", [edit("/repo/app.py")]),                  # the first code edit ends it
+            *assistant(6, "m5", "kit-change", [TEXT]),
+            *assistant(7, "m6", "kit-change", [{**edit("/g/agents/spec-repo-kit-change.md"), "name": "Edit"}]),
+            *assistant(8, "m7", "kit-change", [edit("/repo/app.py")]),
+            *assistant(9, "m8", "other", [TEXT]),
+            *assistant(10, "m9", "other", [skill("self-review")])]
+    phases = session(home, rows)["phases"]
+    assert (phases["kit-change"]["spec"]["out"], phases["kit-change"]["build"]["out"]) == (40, 40), \
+        f"m0-m3 are the spec (m0 and m1 before the file existed), m4-m7 build: a spec edit mid-build is not a new spec: {phases}"
+    assert sorted(phases["other"]) == ["build", "self-review"], f"without a spec, the work before a skill stays build: {phases}"
+
+
 def short_gaps_add_up(home):
     rows = [user(1, "go", "a")] + [row for i in range(31) for row in assistant(1 + 2 * i // 60, f"m{i}", "a", [TEXT], second=2 * i % 60)]
     found = session(home, rows)
@@ -135,7 +154,7 @@ def short_gaps_add_up(home):
 
 
 for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, branches_started_by_commands,
-             short_gaps_add_up):
+             writing_the_spec_marks_the_work_before_it, short_gaps_add_up):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:
