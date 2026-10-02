@@ -11,11 +11,18 @@ tmp_root="$(python3 -c 'import os, tempfile; print(os.path.realpath(tempfile.get
 from_tests() { python3 - "$hook_log" "$tmp_root" <<'PY'
 import json, os, sys
 log, root = sys.argv[1:]
-lines = open(log, errors="ignore").read().splitlines() if os.path.exists(log) else []
-print(sum(os.path.realpath(str(json.loads(line).get("cwd") or "")).startswith(root) for line in lines if line.startswith("{")))
+lines = open(log, errors="replace").read().splitlines() if os.path.exists(log) else []
+count = 0
+for line in lines:
+    try:
+        cwd = os.path.realpath(str(json.loads(line).get("cwd") or ""))
+    except ValueError:
+        continue  # a line cut by a crash, or still being appended
+    count += os.path.commonpath([cwd, root]) == root
+print(count)
 PY
 }
-logged_before=$(from_tests)
+logged_before=$(from_tests) || { echo "FAIL couldn't read $hook_log"; exit 1; }
 
 section "hooks"
 python3 test_hooks.py || fail=1
@@ -113,8 +120,10 @@ else
 fi
 
 section "real hook log untouched"
-logged=$(( $(from_tests) - logged_before ))
-if [ $logged -gt 0 ]; then
+if ! logged_after=$(from_tests); then
+  echo "FAIL couldn't read $hook_log"; fail=1
+elif [ $(( logged_after - logged_before )) -gt 0 ]; then
+  logged=$(( logged_after - logged_before ))
   echo "FAIL $logged lines from tests landed in $hook_log: give the test its own HOME or AGENTS_LOG_DIR"; fail=1
 else echo "ok   no test logged into $hook_log"; fi
 

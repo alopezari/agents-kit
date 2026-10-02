@@ -16,6 +16,7 @@ import traceback
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-hooks-home-")
 os.environ.pop("EVIDENCE_DIR", None)  # set when a staging step runs this suite: the tests' evidence would land there
+os.environ.pop("AGENTS_LOG_DIR", None)  # the tests read the hook log in their own HOME
 os.makedirs(os.path.expanduser("~/.agents/repos"))
 for entry in set(os.listdir(KIT)) - {"logs", "repos", "approvals"}:
     os.symlink(os.path.join(KIT, entry), os.path.expanduser(f"~/.agents/{entry}"))
