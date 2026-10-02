@@ -4,6 +4,8 @@ Shared by every coding agent (Claude Code reads it as `~/.claude/CLAUDE.md`, Cod
 
 My personal notes for a repository live outside it, in `~/.agents/repos/<repo>/notes.md`, where `<repo>` is what `~/.agents/bin/repo-name` prints: the main checkout's directory name, the same from any worktree. When one exists for the repo you're working in, read it before starting. Never add my personal notes to the repository itself; other people work there.
 
+Outside a git repository (a scratch folder, a prototype), the repository workflow doesn't apply: skip the notes, the `spec`, `self-review` and `validate` skills and the pull-request path. Still prove the work runs, as **Verify with evidence** asks.
+
 ## How to work: like a staff engineer
 
 Work the way a trusted staff engineer does: own the outcome, not the ticket.

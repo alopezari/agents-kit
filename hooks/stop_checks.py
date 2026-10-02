@@ -635,6 +635,10 @@ def record_verify(root, kind, checked_fingerprint):
 def verify_here():
     """`stop_checks.py verify`: run verify on the checkout in the working directory now, as the stop hook would."""
     root = git(["rev-parse", "--show-toplevel"], os.getcwd()).strip()
+    if not root:
+        print(f"stop_checks.py verify: {os.getcwd()} is not a git repository; verify runs on a repository's changes.",
+              file=sys.stderr)
+        return 1
     problems, failed, output, stamp_error = run_verify(root)
     print(output, end="")
     for problem in problems + [stamp_error] * bool(stamp_error):

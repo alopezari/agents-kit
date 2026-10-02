@@ -1,0 +1,1 @@
+- Outside a git repository, agents skip the repository workflow (notes, spec, self-review, validate, pull requests) and only prove the work runs; `stop_checks.py verify` there says it isn't a repository instead of crashing.
