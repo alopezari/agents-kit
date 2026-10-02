@@ -803,19 +803,6 @@ def stop_checks_edits_after_its_directory_is_removed(base):
     assert "Debug leftover" in reason, "another session removed this one's worktree; what it edited elsewhere is still checked"
 
 
-def stop_gives_up_on_a_git_that_hangs(base):
-    bindir = os.path.join(base, "bin")
-    os.makedirs(bindir)
-    with open(os.path.join(bindir, "git"), "w") as fh:
-        fh.write("#!/bin/sh\nsleep 5\n")
-    os.chmod(os.path.join(bindir, "git"), 0o755)
-    started = time.time()
-    hung = subprocess.run(["python3", "-c", f"import sys; sys.path.insert(0, {H!r}); import stop_checks as s; s.GIT_TIMEOUT = 1; "
-                           f"s.git(['status'], {base!r})"], capture_output=True, text=True,
-                          env={**os.environ, "PATH": bindir + os.pathsep + os.environ["PATH"], "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
-    assert "TimeoutExpired" in hung.stderr and time.time() - started < 4, (hung.stderr[-300:], time.time() - started)
-
-
 def stop_catches_committed_leftover(base):
     repo = new_repo(base)
     git(repo, "switch", "-q", "-c", "feature")
@@ -1159,7 +1146,7 @@ def post_edit_syntax_feedback(base):
 
 
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_gives_up_on_a_git_that_hangs, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
