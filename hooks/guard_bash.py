@@ -282,12 +282,16 @@ def unreviewed_pr(command, cwd):
     def ok(*args):
         return subprocess.run([sys.executable, stamp, *args], cwd=cwd, timeout=time_left()).returncode == 0
 
+    # The stamps are read before anything in the command runs, so one written by the same command can't count yet.
+    order = (" This command writes a stamp itself, but the guard checks before anything in it runs: run "
+             "review_stamp.py write (and --kind validate) as a command of its own, then this one."
+             if re.search(r"review_stamp\.py\b[^;&|\n]*\bwrite\b", command) else "")
     if not ok("check", "--kind", "review"):
         return ("No self-review recorded for the current change. Run the self-review skill first "
-                "(it ends with review_stamp.py write); any edit after the review needs a new one.")
+                "(it ends with review_stamp.py write); any edit after the review needs a new one." + order)
     if ok("needs-validate") and not ok("check", "--kind", "validate"):
         return ("The change touches behavior but has no validation recorded for it. Run the validate skill "
-                "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run.")
+                "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run." + order)
     if any(not {"--draft", "-d"} & set(pr_args(command, match, 1)) for match in creates):
         return staging_reason(cwd)  # a draft may wait for staging; any create in the command that isn't one may not
     return None

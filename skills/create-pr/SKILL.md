@@ -46,6 +46,8 @@ python3 ~/.agents/hooks/private_terms.py pr "<title>" <pr-body.md>
 gh pr create --base <base> --head "$(git branch --show-current)" --title "<title>" --body-file <pr-body.md>
 ```
 
+Run it as a command of its own, after the stamps were written and the description file saved in earlier commands: the guard reads both before anything in the command runs.
+
 Add `--draft` only in the exception from step 1. Print the PR URL.
 
 ## 5. Hand over to follow-pr
