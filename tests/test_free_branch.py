@@ -51,11 +51,31 @@ def refuses_to_lose_work(base):
     main, worktree = setup(base)
     open(os.path.join(worktree, "notes.txt"), "w").write("x\n")
     untracked = sh(base, FREE, worktree)
-    assert untracked.returncode == 1 and "notes.txt" in untracked.stdout + untracked.stderr and os.path.exists(worktree), untracked
+    assert untracked.returncode == 1 and "notes.txt" in untracked.stderr and checked_out(main, "feat/cart"), untracked
     os.remove(os.path.join(worktree, "notes.txt"))
+    open(os.path.join(worktree, ".gitignore"), "w").write(".env\nnode_modules/\n")
+    sh(worktree, "git", "add", ".gitignore")
+    modified = sh(base, FREE, worktree)
+    assert modified.returncode == 1 and ".gitignore" in modified.stderr and checked_out(main, "feat/cart"), modified
+    sh(worktree, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "ignore")
+    sh(worktree, "git", "push", "-q")
+    os.makedirs(os.path.join(worktree, "node_modules", "pkg"))
+    open(os.path.join(worktree, "node_modules", "pkg", "index.js"), "w").write("x\n")
+    open(os.path.join(worktree, ".env"), "w").write("TOKEN=only-here\n")
+    secret = sh(base, FREE, worktree)
+    assert secret.returncode == 1 and ".env" in secret.stderr and "node_modules" not in secret.stderr \
+        and os.path.exists(os.path.join(worktree, ".env")), f"an ignored file that exists nowhere else: {secret}"
+    detached = sh(worktree, FREE, worktree)
+    assert detached.returncode == 0 and os.path.exists(os.path.join(worktree, ".env")), \
+        f"detaching deletes nothing, so ignored files don't stop it: {detached}"
+    sh(worktree, "git", "switch", "-q", "feat/cart")
+    os.remove(os.path.join(worktree, ".env"))
     sh(worktree, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "unpushed")
     ahead = sh(base, FREE, worktree)
-    assert ahead.returncode == 1 and "push" in ahead.stdout + ahead.stderr and checked_out(main, "feat/cart"), ahead
+    assert ahead.returncode == 1 and "push them" in ahead.stderr and checked_out(main, "feat/cart"), ahead
+    sh(worktree, "git", "switch", "-q", "-c", "feat/local")
+    local = sh(base, FREE, worktree)
+    assert local.returncode == 1 and "no upstream" in local.stderr and checked_out(main, "feat/local"), local
 
 
 def leaves_the_main_checkout_alone(base):

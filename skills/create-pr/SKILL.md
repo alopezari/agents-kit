@@ -56,13 +56,13 @@ Run the `follow-pr` skill in the same session (its first run): it waits for the 
 
 ## 6. Free the branch
 
-When the branch is checked out in a linked worktree (not the main checkout), free it once that first follow-pr run is over, so the user can switch to it without removing the worktree by hand. From the session's own directory, not after a `cd`:
+When the branch is checked out in a linked worktree (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir` there), free it once that first follow-pr run is over, so the user can switch to it without removing the worktree by hand. Run it with the session's own directory (the one it started in) as the working directory, since that decides what happens:
 
 ```bash
-~/.agents/bin/free-branch <worktree path>
+cd <the session's directory> && ~/.agents/bin/free-branch <worktree path>
 ```
 
-It removes a worktree you created and detaches the one the session runs in (the session's hooks need that directory), and refuses while anything there isn't committed and pushed. Give the user the switch command it prints.
+It removes a worktree you created and detaches the one the session runs in (the session's hooks need that directory). It refuses, changing nothing, while anything there isn't committed and pushed, or, to remove it, while it holds ignored files an install or build doesn't bring back (a `.env`, local notes): it lists them, and they're the user's call. Give the user the switch command it prints. From then on the branch's reports are read from a checkout of it: the main checkout once the user has switched, or a worktree added for a fix (follow-pr).
 
 ## Report
 

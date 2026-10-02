@@ -17,7 +17,7 @@ cat "$(~/.agents/bin/reports path follow-pr)" 2>/dev/null   # what earlier runs 
 - **First run** (right after `create-pr`): wait for CI as in section 1, then read the comments. Bot reviewers usually post when their own check finishes, so reading earlier misses them.
 - **On-demand runs** (the user asks to follow up): read the current state, don't wait. If checks are still running, say which and handle the rest. In a new session, start with `~/.agents/bin/reports brief`: the phase and one line per report, so you read in full only the reports you need.
 
-Fixes go on the branch wherever it is checked out. If that is the user's main checkout (after the staging hand-off), say what you're about to change before editing there: they may be in the middle of something. If no checkout has it (create-pr freed it), add a worktree for the fix, `git worktree add <path> <branch>`, and free it again with `~/.agents/bin/free-branch <path>` once the fix is pushed.
+Fixes go on the branch wherever it is checked out. If that is the user's main checkout (after the staging hand-off), say what you're about to change before editing there: they may be in the middle of something. If no checkout has it (create-pr freed it), add a worktree for the fix, `git worktree add <path> <branch>`, and free it again with `~/.agents/bin/free-branch <path>` once the fix is pushed. The reports (`reports path follow-pr` and the rest) are keyed by the branch checked out where they run: read them from a checkout of the branch, not from a session directory create-pr detached.
 
 ## 1. CI
 
