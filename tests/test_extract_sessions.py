@@ -125,13 +125,17 @@ def branches_started_by_commands(home):
             {"type": "user", "timestamp": at(9, 1), "gitBranch": "HEAD", "uuid": "r8b",
              "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t-m8b", "is_error": True,
                                                       "content": "fatal: a branch named 'taken' already exists"}]}},
-            *assistant(10, "m9", "HEAD", [TEXT])]
+            *assistant(10, "m9", "HEAD", [bash("git switch -q after-error >/dev/null && python3 broken.py", "m9")]),
+            {"type": "user", "timestamp": at(10, 1), "gitBranch": "HEAD", "uuid": "r9",
+             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t-m9", "is_error": True,
+                                                      "content": "Traceback: broken.py"}]}}]
     found = session(home, rows, cwd="repo-worktree-session-gone")
-    assert found["branches"] == ["HEAD", "existing", "guard", "guard-says-the-order", "new-elsewhere", "phase-cost",
+    assert found["branches"] == ["HEAD", "after-error", "existing", "guard", "guard-says-the-order", "new-elsewhere", "phase-cost",
                                  "short-outputs"], "a heredoc's body and a throwaway repo's branches aren't the session's: " + str(found["branches"])
     phases = found["phases"]
     assert sorted(phases["short-outputs"]) == ["build"] and phases["short-outputs"]["build"]["out"] == 20, phases
-    assert phases["existing"]["build"]["out"] == 20, f"m8 and m9 on the branch switched to: {phases}"
+    assert phases["existing"]["build"]["out"] == 10 and phases["after-error"]["build"]["out"] == 10, \
+        f"m8 on the branch switched to; a later step's error doesn't undo m9's switch: {phases}"
     assert "guard" not in phases and phases["guard-says-the-order"]["validate"]["out"] == 40, \
         f"a rename carries the branch's phase and its spending to the new name: {phases}"
     assert found["repos"] == {"o/repo": ["repo"]}, f"a removed worktree's repo comes from its main checkout: {found['repos']}"

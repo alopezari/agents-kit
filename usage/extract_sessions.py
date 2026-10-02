@@ -33,7 +33,7 @@ GIT_COMMAND = re.compile(r"(?:^|&&|\|\||[;|(])\s*git\s+([^;&|\n)]*)", re.M)
 HEREDOC_BODY = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?^\s*\2\s*$", re.S | re.M)
 BRANCH_NAME = re.compile(r"[\w][\w./+-]*$")
 # Files no repo holds: an edit there is neither the spec nor code.
-SCRATCH_PATH = re.compile(r"^(/private)?/tmp/|^/var/folders/|/\.claude/")
+SCRATCH_PATH = re.compile(r"^(/private)?/tmp/|^/var/folders/|^" + re.escape(HOME + "/.claude/"))
 # Xirp names a session's worktree <main checkout>-worktree-<session>; once it is removed, the main checkout says
 # which repo it was.
 REMOVED_WORKTREE = re.compile(r"(.*)-worktree-[^/]+")
@@ -61,7 +61,8 @@ def phase_events(entry, failed=frozenset()):
     """In block order: ("skill", name) for each flow skill the entry starts (a Skill call by the agent, `/<skill>`
     typed by the user), ("spec", None) for each Edit/Write of a spec (spec-*.md, in .git/agents/ or a temp dir),
     ("edit", None) for each of a file in a repo, and ("branch", (new, renamed)) for each branch a Bash command starts,
-    switches to or renames (see branch_change) in a call not in `failed` (tool-use ids whose result is an error)."""
+    switches to or renames (see branch_change), unless git refused it: `failed` holds the tool-use ids whose result is
+    a git error."""
     msg = entry.get("message") or {}
     if entry.get("type") == "user":
         return [("skill", n) for n in (name.split(":")[-1] for name in TYPED_SKILL.findall(text_of(msg.get("content"))))
@@ -92,6 +93,7 @@ def branch_change(args):
         words = shlex.split(args)
     except ValueError:  # an unclosed quote: the command continues past what GIT_COMMAND kept
         words = args.split()
+    words = [w for w in words if not re.match(r"\d*[<>]", w)]  # redirections
     if words[:1] == ["-C"]:
         words = words[2:]
     if words[:1] == ["worktree"]:
@@ -130,7 +132,10 @@ def checkout(cwd):
         if not os.path.isdir(directory):
             continue
         def git(*args):
-            return subprocess.run(["git", "-C", directory, *args], capture_output=True, text=True, timeout=30).stdout.strip()
+            try:
+                return subprocess.run(["git", "-C", directory, *args], capture_output=True, text=True, timeout=30).stdout.strip()
+            except (OSError, subprocess.TimeoutExpired):  # the session keeps no repo instead of the job stopping
+                return ""
         remote = REMOTE_REPO.search(git("config", "--get", "remote.origin.url"))
         common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
         if remote and common:
@@ -177,8 +182,11 @@ def add_spending(into, spent, sign=1):
 
 
 def failed_calls(entries):
+    """Tool calls whose result is an error git printed. A chain fails as a whole, so a later step's error alone
+    doesn't undo a switch that happened."""
     return {c.get("tool_use_id") for e in entries if e.get("type") == "user"
-            for c in (e.get("message") or {}).get("content") or [] if isinstance(c, dict) and c.get("is_error")}
+            for c in (e.get("message") or {}).get("content") or []
+            if isinstance(c, dict) and c.get("is_error") and "fatal:" in json.dumps(c.get("content"))}
 
 
 def split_into_phases(entries, renames, repos):
