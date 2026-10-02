@@ -20,7 +20,8 @@ os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-hooks-home-")
 os.environ.pop("EVIDENCE_DIR", None)  # set when a staging step runs this suite: the tests' evidence would land there
 os.environ.pop("AGENTS_LOG_DIR", None)  # the tests read the hook log in their own HOME
 os.makedirs(os.path.expanduser("~/.agents/repos"))
-for entry in set(os.listdir(KIT)) - {"logs", "repos", "approvals"}:
+# Not profiles either: the Stop hook would start the user's own after-turn scripts.
+for entry in set(os.listdir(KIT)) - {"logs", "repos", "approvals", "profiles"}:
     os.symlink(os.path.join(KIT, entry), os.path.expanduser(f"~/.agents/{entry}"))
 # Only the kit's shared verify code: a personal overlay linked in would be run, or overwritten, by a test's own.
 os.symlink(os.path.join(KIT, "repos", "_shared"), os.path.expanduser("~/.agents/repos/_shared"))
@@ -826,8 +827,9 @@ def stop_starts_each_profile_after_turn(base):
     subprocess.run(["python3", H + "stop_checks.py", "verify"], cwd=repo, capture_output=True,
                    env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, **env})
     assert not any(wait_for(path, 1) for path in got), "verify is not a turn"
-    run_hook("stop_checks.py", {"session_id": RUN + "at1", "cwd": repo}, env={**env, "AGENTS_AFTER_TURN": "1"})
-    assert not any(wait_for(path, 1) for path in got), "a session an after-turn started doesn't start another"
+    for flag in ("1", ""):
+        run_hook("stop_checks.py", {"session_id": RUN + "at1", "cwd": repo}, env={**env, "AGENTS_AFTER_TURN": flag})
+        assert not any(wait_for(path, 1) for path in got), f"a session an after-turn started doesn't start another ({flag!r})"
     assert not os.path.exists(env["AGENTS_LOG_DIR"]), "nothing logged when every after-turn starts"
 
 
@@ -862,6 +864,13 @@ def stop_logs_an_after_turn_that_cannot_start(base):
     logged = [json.loads(line) for line in open(os.path.join(env["AGENTS_LOG_DIR"], "hooks.jsonl"))]
     failed = sorted(entry["detail"].split(":")[0] for entry in logged if entry["decision"] == "profile-after-turn-failed")
     assert failed == ["bad-shebang", "not-executable"], logged
+    no_room = subprocess.run(["python3", "-c", f"import sys; sys.path.insert(0, {H!r}); import stop_checks as s\n"
+                              "def full(*args, **kwargs): raise OSError(28, 'No space left on device')\n"
+                              f"s.tempfile.TemporaryFile = full; s.start_profile_after_turns({{'session_id': '{RUN}at3b'}})"],
+                             capture_output=True, text=True, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, **env})
+    logged = [json.loads(line) for line in open(os.path.join(env["AGENTS_LOG_DIR"], "hooks.jsonl"))]
+    assert no_room.returncode == 0 and any(e["session"] == RUN + "at3b" and e["detail"].startswith("works:") for e in logged), \
+        f"no room for the payload file is a failed start, not a crashed hook: {no_room.stderr[-300:]}"
 
 
 def stop_checks_edits_after_its_directory_is_removed(base):

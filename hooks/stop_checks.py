@@ -216,18 +216,18 @@ def start_profile_after_turns(payload):
     """Start each profile's after-turn on its own copy of the payload and return at once: a pipe would block on a
     child that doesn't read it. A session an after-turn starts (codex exec, claude -p) runs these hooks too, so
     AGENTS_AFTER_TURN marks it and its stops start nothing."""
-    if os.environ.get("AGENTS_AFTER_TURN"):
+    if "AGENTS_AFTER_TURN" in os.environ:
         return
     for script in sorted(glob.glob(os.path.join(PROFILES, "*", "after-turn"))):
-        with tempfile.TemporaryFile() as stdin:
-            stdin.write(json.dumps(payload).encode())
-            stdin.seek(0)
-            try:
+        try:
+            with tempfile.TemporaryFile() as stdin:
+                stdin.write(json.dumps(payload).encode())
+                stdin.seek(0)
                 subprocess.Popen([script], stdin=stdin, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True, env={**os.environ, "AGENTS_AFTER_TURN": "1"})
-            except OSError as error:
-                profile = os.path.basename(os.path.dirname(script))
-                log("stop_checks", "profile-after-turn-failed", payload, f"{profile}: {error}")
+        except OSError as error:
+            profile = os.path.basename(os.path.dirname(script))
+            log("stop_checks", "profile-after-turn-failed", payload, f"{profile}: {error}")
 
 
 def fresh_session_notice(session, payload):
