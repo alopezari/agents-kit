@@ -77,8 +77,10 @@ def dangerous_rm(command, cwd):
         if tokens and tokens[0] in ("cd", "pushd"):
             args = [t for t in tokens[1:] if t == "-" or not t.startswith("-")]
             target = (args[0] if args else "~").replace("${HOME}", "~").replace("$HOME", "~")
-            unresolved = here is None or target == "-" or "$" in target or "`" in target
-            here = None if unresolved else cd_into(here, target)
+            if target == "-" or "$" in target or "`" in target:
+                here = None
+            elif here is not None or os.path.isabs(os.path.expanduser(target)):
+                here = cd_into(here or cwd, target)
         elif tokens and os.path.basename(tokens[0]) == "rm":
             flags = "".join(t.lstrip("-") for t in tokens[1:] if t.startswith("-") and not t.startswith("--"))
             if "r" in flags.lower() or "--recursive" in tokens:
@@ -91,18 +93,21 @@ def dangerous_rm(command, cwd):
 
 
 def dangerous_rm_targets(targets, here, cwd):
+    """Each target judged from the tracked directory and from cwd as well: a cd the tracking gets wrong (in a
+    pipeline, after `false &&`, undone by popd) can then only deny more than judging from cwd alone did."""
     home = os.path.realpath(os.path.expanduser("~"))
     for target in targets:
         target = os.path.expanduser(target)
         if "$" in target or "`" in target or "*" == target.strip("/") or (here is None and not os.path.isabs(target)):
             return f"Recursive delete of an unresolved or wildcard path: {target}"
-        path = os.path.realpath(os.path.join(here or cwd, target))
-        if path in ("/", home) or cwd.startswith(path + os.sep) or path == cwd:
-            return f"Recursive delete of {path}, which contains the working directory or home."
-        inside_cwd = path.startswith(cwd + os.sep)
-        inside_tmp = any(path == r or path.startswith(r + os.sep) for r in SAFE_RM_ROOTS)
-        if not (inside_cwd or inside_tmp):
-            return f"Recursive delete outside the working directory: {path}"
+        for place in {here or cwd, cwd}:
+            path = os.path.realpath(os.path.join(place, target))
+            if path in ("/", home) or cwd.startswith(path + os.sep) or path == cwd:
+                return f"Recursive delete of {path}, which contains the working directory or home."
+            inside_cwd = path.startswith(cwd + os.sep)
+            inside_tmp = any(path == r or path.startswith(r + os.sep) for r in SAFE_RM_ROOTS)
+            if not (inside_cwd or inside_tmp):
+                return f"Recursive delete outside the working directory: {path}"
     return None
 
 
