@@ -1,0 +1,1 @@
+- UI work builds code-first by default; Impeccable's visual (comp-first) mode runs only on request, through Codex in the background with the user answering on its boards.
