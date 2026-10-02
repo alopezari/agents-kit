@@ -1,0 +1,1 @@
+- The validate skill makes each check that needs setup a script that sets up, runs and cleans up, so a check can be re-run in one command after a fix.
