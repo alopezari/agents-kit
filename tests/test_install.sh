@@ -187,6 +187,56 @@ if [ -x "$semgrep_dir/semgrep" ]; then
     '[ $red_status = 1 ] && echo "$red" | grep -q "logger-not-error-log" && [ $green_status = 0 ]'
 else echo "skip sample profile verify: semgrep not installed"; fi
 
+# A pinned external skill, `<url>@<commit>#<folder>`: only that folder of that commit is linked in, a new pin moves
+# the checkout, --doctor reports a stale one without touching it, and a broken entry never leaves a bad link.
+upstream="$home/upstream-skills"
+mkdir -p "$upstream/skills/chosen" "$upstream/skills/other"
+printf -- '---\nname: chosen\ndescription: v1\n---\n' > "$upstream/skills/chosen/SKILL.md"
+printf -- '---\nname: other\ndescription: x\n---\n' > "$upstream/skills/other/SKILL.md"
+git -C "$upstream" init -q && git -C "$upstream" config uploadpack.allowAnySHA1InWant true
+git -C "$upstream" add -A && git -C "$upstream" -c user.name=t -c user.email=t@t commit -qm v1; v1=$(git -C "$upstream" rev-parse HEAD)
+sed -i '' 's/v1/v2/' "$upstream/skills/chosen/SKILL.md"
+git -C "$upstream" -c user.name=t -c user.email=t@t commit -qam v2; v2=$(git -C "$upstream" rev-parse HEAD)
+external_before=$(cat "$kit/skills.external")
+echo "chosen file://$upstream@$v1#skills/chosen A pinned fixture skill." >> "$kit/skills.external"
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" 2>&1)
+check "a pinned external skill links only its folder, at its commit, into every harness" \
+  '[ "$(readlink "$kit/skills/chosen")" = "$kit/vendor/chosen/skills/chosen" ] && [ "$(git -C "$kit/vendor/chosen" rev-parse HEAD)" = "$v1" ] \
+   && [ "$(readlink "$home/.claude/skills/chosen")" = "$kit/skills/chosen" ] && [ ! -e "$kit/skills/other" ] && [ ! -e "$home/.claude/skills/other" ] \
+   && grep -q "description: v1" "$home/.claude/skills/chosen/SKILL.md"'
+again=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" 2>&1)
+check "and a second install changes nothing" '! grep -q "  fix " <<<"$again" && grep -q "  ok    chosen at ${v1:0:12}" <<<"$again"'
+sed -i '' "s/@$v1#/@$v2#/" "$kit/skills.external"
+doctor=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor 2>&1)
+check "--doctor warns about a checkout behind its pin and leaves it as it is" \
+  'grep -q "  warn  chosen is at ${v1:0:12}, pinned to ${v2:0:12}" <<<"$doctor" && [ "$(git -C "$kit/vendor/chosen" rev-parse HEAD)" = "$v1" ] \
+   && [ -z "$(git -C "$kit/vendor/chosen" status --porcelain)" ]'
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" 2>&1)
+check "install moves the checkout to the new pin" \
+  '[ "$(git -C "$kit/vendor/chosen" rev-parse HEAD)" = "$v2" ] && grep -q "description: v2" "$home/.claude/skills/chosen/SKILL.md"'
+sed -i '' "s/@$v2#/@0123456789abcdef0123456789abcdef01234567#/" "$kit/skills.external"
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" 2>&1); status=$?
+check "a pin that can't be fetched keeps the previous checkout and link, and warns" \
+  '[ $status = 0 ] && grep -q "  warn  chosen: cannot fetch 0123456789ab from file://$upstream; keeping ${v2:0:12}" <<<"$out" \
+   && [ "$(git -C "$kit/vendor/chosen" rev-parse HEAD)" = "$v2" ] && [ "$(readlink "$kit/skills/chosen")" = "$kit/vendor/chosen/skills/chosen" ]'
+printf '%s\n' "$external_before" "wrongpath file://$upstream@$v1#skills/missing Points at a folder without a skill." \
+  "unreachable file://$home/no-such-repo@$v1#skills/chosen Its source is gone." > "$kit/skills.external"
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" 2>&1)
+check "a folder without a SKILL.md, or a source that can't be fetched, is reported and never linked" \
+  'grep -q "  warn  wrongpath: skills/missing has no SKILL.md at ${v1:0:12}; not linked" <<<"$out" \
+   && grep -q "  warn  unreachable: cannot fetch ${v1:0:12} from file://$home/no-such-repo; not installed" <<<"$out" \
+   && [ ! -e "$kit/skills/wrongpath" ] && [ ! -L "$kit/skills/wrongpath" ] && [ ! -L "$home/.claude/skills/wrongpath" ] \
+   && [ ! -L "$kit/skills/unreachable" ] && [ ! -L "$home/.claude/skills/unreachable" ]'
+printf '%s\n' "$external_before" "release-notes file://$upstream@$v1#skills/chosen Same name as the sample profile's skill." > "$kit/skills.external"
+profile_link=$(readlink "$kit/skills/release-notes")
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" 2>&1)$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor 2>&1)
+check "a profile's skill keeps its name over a pinned external one, on install and --doctor" \
+  '[ "$(grep -c "warn  release-notes is an external skill and a profile.s; using the profile.s" <<<"$out")" = 2 ] \
+   && [ "$(readlink "$kit/skills/release-notes")" = "$profile_link" ] && [ ! -e "$kit/vendor/release-notes" ]'
+# Back to the kit's own list: the uninstall checks below count links into the kit.
+echo "$external_before" > "$kit/skills.external"
+rm -f "$kit/skills/chosen" "$home/.claude/skills/chosen" "$home/.codex/skills/chosen"
+
 # uninstall.sh on the same HOME, with a fake launchctl so the real jobs (labels are per user) stay untouched.
 # `list` reports a job loaded only when its label is in $home/stuck, standing in for a bootout that failed.
 mkdir -p "$home/fakes/launchd"

@@ -1,0 +1,2 @@
+- `skills.external` can pin a skill to a commit and a folder of its repository (`<url>@<commit>#<folder>`): install.sh checks it out in `vendor/` and links only that folder, and `--doctor` warns when a checkout is behind its pin.
+- Impeccable is installed as a pinned external skill, and AGENTS.md has a Design section: use it for UI work, finish with its audit and polish, and ask before creating its PRODUCT.md, DESIGN.md or `.impeccable/` in a repository other people work in.

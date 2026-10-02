@@ -24,7 +24,7 @@ The kit must live at `~/.agents`. The installer:
 - offers to install missing required and recommended programs from `deps.txt` through Homebrew, asking once (`--yes` skips the question; without a terminal it only reports them);
 - links `AGENTS.md` as each harness's global instructions and the skills into each harness;
 - registers the hooks next to any hooks already there;
-- clones the third-party skills in `skills.external` and installs the Node dependencies of `tools/` and `site/`;
+- fetches the third-party skills in `skills.external`, a pinned one at its commit into `vendor/`, and installs the Node dependencies of `tools/` and `site/`;
 - sets the Claude Code status line and enables the kit's git hooks (they keep `docs/framework.md` current);
 - installs the scheduled jobs;
 - when git uses a per-host proxy, offers to link `bin/gh` into `/usr/local/bin` (asks for your password).

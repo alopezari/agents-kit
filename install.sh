@@ -121,13 +121,35 @@ for path in sorted(glob.glob(os.path.join(kit, "profiles", "*", "mcp-writes.json
 PY
 
 echo "External skills"
-# Third-party skills are fetched from their source instead of being copied into the kit.
-while read -r name url _; do
+# Third-party skills are fetched from their source instead of being copied into the kit. A pinned one,
+# <url>@<commit>#<folder>, is checked out in vendor/ at exactly that commit and only its folder is linked in.
+pinned_skill() {  # <name> <url> <commit> <folder>
+  local name=$1 url=$2 pin=$3 folder=$4 checkout="$KIT/vendor/$1" at=""
+  at=$(git -C "$checkout" rev-parse HEAD 2>/dev/null) || at=""
+  if [ "$at" != "$pin" ] && [ $DOCTOR = 1 ]; then
+    if [ -n "$at" ]; then warn "$name is at ${at:0:12}, pinned to ${pin:0:12}"; else warn "$name is missing (from $url)"; fi
+  elif [ "$at" != "$pin" ]; then
+    [ -d "$checkout/.git" ] || git init -q "$checkout"
+    git -C "$checkout" config remote.origin.url "$url"
+    if git -C "$checkout" fetch -q --depth 1 origin "$pin" 2>/dev/null && git -C "$checkout" checkout -q --detach "$pin"; then
+      fix "$name checked out at ${pin:0:12} from $url"; at=$pin
+    elif [ -n "$at" ]; then warn "$name: cannot fetch ${pin:0:12} from $url; keeping ${at:0:12}"
+    else warn "$name: cannot fetch ${pin:0:12} from $url; not installed"; fi
+  else ok "$name at ${pin:0:12}"; fi
+  [ -n "$at" ] || return 0
+  if [ ! -f "$checkout/$folder/SKILL.md" ]; then warn "$name: $folder has no SKILL.md at ${at:0:12}; not linked"; return; fi
+  link "$checkout/$folder" "$KIT/skills/$name"
+}
+while read -r name source _; do
   case "$name" in ''|'#'*) continue ;; esac
-  if [ -L "$KIT/skills/$name" ]; then warn "$name is an external skill and a profile's; using the profile's"
+  url=${source%@*} pin=${source##*@} folder=${pin#*#} pin=${pin%%#*}
+  # A copied or moved kit keeps links to the old vendor/ path: those are still the kit's, not a profile's.
+  if [ -L "$KIT/skills/$name" ] && [[ "$(readlink "$KIT/skills/$name")" != */vendor/"$name"/* ]]; then
+    warn "$name is an external skill and a profile's; using the profile's"
+  elif [[ "$source" == *@*#* ]]; then pinned_skill "$name" "$url" "$pin" "$folder"
   elif [ -d "$KIT/skills/$name" ]; then ok "$name"
-  elif [ $DOCTOR = 1 ]; then warn "$name is missing (from $url)"
-  else git clone -q --depth 1 "$url" "$KIT/skills/$name" && fix "$name cloned from $url"; fi
+  elif [ $DOCTOR = 1 ]; then warn "$name is missing (from $source)"
+  else git clone -q --depth 1 "$source" "$KIT/skills/$name" && fix "$name cloned from $source"; fi
 done < "$KIT/skills.external"
 
 echo "Kit repository"

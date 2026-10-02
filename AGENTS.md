@@ -112,6 +112,12 @@ Match the file's neighbours. Before adding comments to a file, check the comment
 
 My instructions override skill guidance. Skills are adaptable procedures: apply heavyweight processes (brainstorming, design sign-off, committed plans, strict TDD) when I ask for them or the complexity warrants it, not for routine authorized changes. Never skip a repository's mandatory checks.
 
+## Design
+
+- For any UI work (a page, screen, component or visual change), use the `impeccable` skill, even when I don't name it: it keeps an existing brand and gives new work a visual direction of its own.
+- Before calling UI work done, run its `audit` command on what you changed, then its `polish` command to fix what the audit found.
+- In a repository other people work in, ask me before creating `PRODUCT.md`, `DESIGN.md` or `.impeccable/`, and before adding them to `.gitignore`. If I say no, carry on without them.
+
 ## Communication
 
 - Write every deliverable in English (files, docs, code comments, commit messages, PRs, issues, gists) unless I ask otherwise. Chat replies go in my language.
