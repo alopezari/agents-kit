@@ -698,6 +698,36 @@ def stop_suggests_a_fresh_session_once_the_pr_is_open(base):
     assert merged and "is merged" in merged["systemMessage"], merged
 
 
+def stop_suggests_a_fresh_session_for_the_next_change(base):
+    repo = new_repo(base)
+
+    def stop_with(session, context, edited=()):
+        path = os.path.join(base, session + ".jsonl")
+        usage = {"input_tokens": 10, "cache_read_input_tokens": context - 10, "cache_creation_input_tokens": 0, "output_tokens": 5}
+        open(path, "w").write(json.dumps({"type": "assistant", "message": {"usage": usage}}) + "\n")
+        for f in edited:
+            run_hook("post_edit.py", {"session_id": RUN + session, "cwd": repo, "tool_input": {"file_path": f}})
+        return run_hook("stop_checks.py", {"session_id": RUN + session, "cwd": repo, "transcript_path": path}) or {}
+    assert not stop_with("nc", 200_000), "the default branch is no change"
+    git(repo, "switch", "-q", "-c", "feat/a")
+    assert not stop_with("nc", 200_000), "the session's first change carries no earlier one"
+    git(repo, "branch", "-m", "feat/a", "feat/a2")
+    assert not stop_with("nc", 200_000), "a renamed branch is the same change"
+    git(repo, "switch", "-q", "-c", "feat/b")
+    moved = stop_with("nc", 200_000).get("systemMessage", "")
+    assert "200K" in moved and "feat/b" in moved and "bin/reports brief" in moved, moved
+    assert not stop_with("nc", 300_000), "once per session and branch"
+    wt = os.path.join(base, "wt")
+    git(repo, "worktree", "add", "-q", "-b", "feat/c", wt, "trunk")
+    open(os.path.join(wt, "notes.txt"), "w").write("x\n")
+    in_worktree = stop_with("nc", 200_000, [os.path.join(wt, "notes.txt")]).get("systemMessage", "")
+    assert "feat/c" in in_worktree, f"a change started in a worktree of its own counts too: {in_worktree}"
+    git(repo, "switch", "-q", "feat/a2")
+    assert not stop_with("nc-small", 200_000)
+    git(repo, "switch", "-q", "feat/b")
+    assert not stop_with("nc-small", 150_000), "over 150K, not at it"
+
+
 def overlay_found_from_worktree_with_another_name(base):
     main = new_repo(base, "zz-agents-overlay-repo")
     wt = os.path.join(base, "zz-agents-overlay-repo-worktree-session-xyz")
@@ -1076,7 +1106,7 @@ TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, aski
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
-          stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, guard_records_the_pushed_checkout,
+          stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, stop_suggests_a_fresh_session_for_the_next_change, guard_records_the_pushed_checkout,
           post_edit_syntax_feedback]
 
 if sys.argv[1:]:

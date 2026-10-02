@@ -9,8 +9,9 @@ temporary compose override left behind, or a changed code file the spec's Change
 doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify
 when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even
 one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read. Once a
-branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, tells the user, once, that a new session
-picks it up for less (Claude Code only: it reads the transcript).
+branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change
+with its context over NEW_CHANGE_NUDGE_TOKENS, tells the user, once, that a new session picks it up for less (Claude
+Code only: it reads the transcript).
 
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
 the hook has seen, for the weekly health check. `stop_checks.py verify` runs verify on the current checkout now,
@@ -40,6 +41,11 @@ NO_CHECKS_GRACE_SECS = 300
 MAX_PROBLEMS = 20
 # Every turn re-reads the whole context; past this, a new session that starts from `reports brief` costs less.
 CONTEXT_NUDGE_TOKENS = 250_000
+# A session that moves on to another change carries the earlier one's history into every turn of the new one; it was
+# 44% of a build turn's history when measured (2026-10-02). Lower than the threshold above: the new change has all its
+# turns ahead of it.
+NEW_CHANGE_NUDGE_TOKENS = 150_000
+DEFAULT_BRANCHES = ("main", "master", "trunk", "develop")
 TRANSCRIPT_TAIL_BYTES = 2_000_000
 SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "spec", "path.sh"))
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
@@ -151,12 +157,14 @@ def main():
     if payload.get("stop_hook_active"):
         return 0
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
-    notice = fresh_session_notice(session, payload)
-    problems = ci_after_push(session, payload)
     marker = os.path.join(MARKER_DIR, f"{session}.edited")
-    if not os.path.exists(marker):
+    edited = [p for p in open(marker).read().splitlines() if p] if os.path.exists(marker) else None
+    # Both run on every stop: the second records the branches the session works on even when the first speaks.
+    notices = [fresh_session_notice(session, payload), new_change_notice(session, payload, edited or [])]
+    notice = next((n for n in notices if n), None)
+    problems = ci_after_push(session, payload)
+    if edited is None:
         return block(payload, problems, streak=0, notice=notice)
-    edited = [p for p in open(marker).read().splitlines() if p]
     os.remove(marker)
 
     # Check every checkout the session touched (worktrees included), not only the session's cwd.
@@ -225,6 +233,59 @@ def fresh_session_notice(session, payload):
     state = "is merged" if label.startswith("ship") else "is open"
     return (f"This session's context is {tokens // 1000}K tokens, re-read on every turn, and {branch}'s PR {state}. "
             "Follow it up or start the next change in a new session: `~/.agents/bin/reports brief` there picks it up.")
+
+
+def change_branch(directory):
+    """(common git dir, branch) of the checkout at `directory` when it is on a branch other than the default one."""
+    out = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD"], directory).splitlines()
+    if len(out) != 2 or out[1] == "HEAD":
+        return None
+    default = git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], directory).strip().split("/", 1)[-1]
+    return None if out[1] in (default, *DEFAULT_BRANCHES) else (out[0], out[1])
+
+
+def new_change_notice(session, payload, edited):
+    """Once per session and branch: the session works on a branch, in its directory or a worktree it edited, after
+    another one, with a large context. Advisory: any failure here returns None rather than stopping the checks."""
+    transcript = payload.get("transcript_path")
+    if not transcript:
+        return None
+    directories = dict.fromkeys([payload.get("cwd") or os.getcwd()] + [p if os.path.isdir(p) else os.path.dirname(p) for p in edited])
+    current = {}
+    for directory in directories:
+        found = change_branch(directory) if os.path.isdir(directory) else None
+        if found:
+            current[found] = directory
+    seen_file = os.path.join(MARKER_DIR, f"{session}.branches")
+    try:
+        seen = {tuple(line.split("\t")) for line in open(seen_file).read().splitlines() if line}
+    except OSError:
+        seen = set()
+    new = []
+    for (common_dir, branch), directory in current.items():
+        if (common_dir, branch) in seen:
+            continue
+        earlier = re.findall(r"^Branch: renamed refs/heads/(.+) to refs/heads/",
+                             git(["reflog", "show", "--format=%gs", f"refs/heads/{branch}"], directory), re.M)
+        if not any((common_dir, name) in seen for name in earlier):
+            new.append(branch)
+        seen.add((common_dir, branch))
+    if len(seen) == len(new):  # nothing recorded before: the session's first change carries no earlier one
+        new = []
+    try:
+        os.makedirs(MARKER_DIR, exist_ok=True)
+        with open(seen_file, "w") as fh:
+            fh.write("".join(f"{c}\t{b}\n" for c, b in sorted(seen)))
+    except OSError:
+        return None
+    if not new:
+        return None
+    tokens = context_tokens(transcript)
+    if tokens <= NEW_CHANGE_NUDGE_TOKENS:
+        return None
+    log("stop_checks", "new-change", payload, f"{new[0]} {tokens // 1000}K")
+    return (f"This session's context is {tokens // 1000}K tokens, re-read on every turn, and it has moved on to "
+            f"{new[0]}. A new session for it starts lighter: `~/.agents/bin/reports brief` there picks up its spec and reports.")
 
 
 def block(payload, problems, streak, notice=None):
