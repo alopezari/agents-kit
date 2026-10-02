@@ -701,10 +701,11 @@ def stop_suggests_a_fresh_session_once_the_pr_is_open(base):
 def stop_suggests_a_fresh_session_for_the_next_change(base):
     repo = new_repo(base)
 
-    def stop_with(session, context, edited=()):
-        path = os.path.join(base, session + ".jsonl")
+    def stop_with(session, context, edited=(), transcript=True):
+        path = os.path.join(base, session + ".jsonl") if transcript else None
         usage = {"input_tokens": 10, "cache_read_input_tokens": context - 10, "cache_creation_input_tokens": 0, "output_tokens": 5}
-        open(path, "w").write(json.dumps({"type": "assistant", "message": {"usage": usage}}) + "\n")
+        if path:
+            open(path, "w").write(json.dumps({"type": "assistant", "message": {"usage": usage}}) + "\n")
         for f in edited:
             run_hook("post_edit.py", {"session_id": RUN + session, "cwd": repo, "tool_input": {"file_path": f}})
         return run_hook("stop_checks.py", {"session_id": RUN + session, "cwd": repo, "transcript_path": path}) or {}
@@ -713,9 +714,16 @@ def stop_suggests_a_fresh_session_for_the_next_change(base):
     assert not stop_with("nc", 200_000), "the session's first change carries no earlier one"
     git(repo, "branch", "-m", "feat/a", "feat/a2")
     assert not stop_with("nc", 200_000), "a renamed branch is the same change"
+    git(repo, "branch", "-c", "feat/a2", "feat/copy")
+    git(repo, "switch", "-q", "feat/copy")
+    assert "feat/copy" in stop_with("nc", 200_000).get("systemMessage", ""), "a copy carries the reflog, not the change"
+    git(repo, "switch", "-q", "feat/a2")
     git(repo, "switch", "-q", "-c", "feat/b")
     moved = stop_with("nc", 200_000).get("systemMessage", "")
     assert "200K" in moved and "feat/b" in moved and "bin/reports brief" in moved, moved
+    logged = [json.loads(l)["detail"] for l in open(os.path.expanduser("~/.agents/logs/hooks.jsonl"))
+              if '"new-change"' in l and RUN + "nc" in l]
+    assert logged == ["feat/copy 200K", "feat/b 200K"], logged
     assert not stop_with("nc", 300_000), "once per session and branch"
     wt = os.path.join(base, "wt")
     git(repo, "worktree", "add", "-q", "-b", "feat/c", wt, "trunk")
@@ -726,6 +734,15 @@ def stop_suggests_a_fresh_session_for_the_next_change(base):
     assert not stop_with("nc-small", 200_000)
     git(repo, "switch", "-q", "feat/b")
     assert not stop_with("nc-small", 150_000), "over 150K, not at it"
+    git(repo, "switch", "-q", "feat/a2")
+    assert not stop_with("nc-codex", 200_000, transcript=False)
+    git(repo, "switch", "-q", "feat/b")
+    assert not stop_with("nc-codex", 200_000, transcript=False), "no transcript (Codex, Pi): no context to measure"
+    state = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", RUN + "nc-broken.branches")
+    open(state, "w").write("torn line\n")
+    git(repo, "switch", "-q", "feat/a2")
+    stop_with("nc-broken", 200_000)
+    assert "feat/a2" in open(state).read(), "a torn state file is history lost, not a crash"
 
 
 def overlay_found_from_worktree_with_another_name(base):
