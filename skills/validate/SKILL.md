@@ -24,7 +24,7 @@ Start from the spec (`~/.agents/skills/spec/path.sh`) or, without one, from the 
 
 A simple criterion may need two checks; a risky one may need fifteen. Say what you deliberately left uncovered and why; that residual risk is part of the report.
 
-Run `~/.agents/bin/triage` too: its **Tests** list says which test types this change needs beyond e2e (query budget, accessibility, property-based, mutation, migration round-trip, visual check for style-only changes), each with the signal behind it. Stay within its time budget.
+Run `~/.agents/bin/triage` too: its **Tests** list says which test types this change needs beyond e2e (query budget, accessibility, property-based, mutation, migration round-trip, visual check for style-only changes, design check for UI changes), each with the signal behind it. Stay within its time budget.
 
 Place each check where it can really run:
 
@@ -72,6 +72,17 @@ Make every check repeatable in one command, because a fix sends you back to re-r
 **Advanced tests, only when triage selects them:**
 - **Query budget:** `~/.agents/bin/wp-query-profile` runs a REST route or PHP snippet inside the local WordPress and reports the query count and repeated query patterns (N+1). Run it on the affected endpoint or code path with a realistic number of items. Repeated patterns that grow with the item count are findings.
 - **Accessibility:** `~/.agents/bin/a11y-check <url>...` runs axe on the pages the change touches and lists serious and critical violations. Compare with the same pages before the change when a violation looks pre-existing.
+- **Design:** for each page the change touches, in the state it touches (logged in, after the interaction):
+  1. Screenshot it at 1280×800 and 390×844 (`$EV/D1-desktop.png`, `$EV/D1-phone.png`).
+  2. Scan its URL with Impeccable's detector at both sizes. It writes nothing in the repository; read every finding whatever the exit code (0 can still list advisories), and any code other than 0 or 2 means the page wasn't scanned, a NOT RUN:
+     ```bash
+     ~/.agents/bin/evidence D1a ~/.agents/skills/impeccable/scripts/impeccable detect --json --viewport 1280x800 <url>
+     ~/.agents/bin/evidence D1b ~/.agents/skills/impeccable/scripts/impeccable detect --json --viewport 390x844 <url>
+     ```
+     The scan opens the URL fresh, so it sees a login page or the state before an interaction: say which states it couldn't reach, and judge those from the screenshots.
+  3. Run the `impeccable` skill's `audit` on what changed (a workflow the skill describes, not a CLI command), with both screenshots and both scans as input, and save its report as `$EV/D1-audit.md`.
+
+  Confirmed findings get fixed in this change or listed in the report with why they stay.
 - **Property-based:** for the parser, calculation or comparison functions triage names, write a few properties (round-trip, ordering, idempotence, bounds) and check them over generated inputs with a loop in a throwaway script or the repo's PBT library. Keep a property as a real test only if it found something or pins an important invariant.
 - **Mutation (high risk only):** mutate the changed lines (flip conditions, off-by-one bounds, remove calls) and check the tests catch each one: with Infection `--git-diff-lines` when the repo has a coverage driver, otherwise by hand for the 5–10 riskiest lines. Treat surviving mutants as missing tests, not as noise. Time-box it to 10 minutes.
 - **Regex worst-case timing:** for each line triage names, time the whole regex through the call that uses it (anchors, flags and the rest of the pattern included; a fragment can be fast where the whole is exponential) on a long input that almost matches (many repetitions of the repeated part, then a character that fails the match), growing the input until the time is clear: linear is fine, doubling per few characters is a finding. Run each attempt in a subprocess with a timeout, since a match can't be interrupted from inside; hitting the timeout is a finding. Keep the timing as a test with a bound well under the caller's timeout.
@@ -95,7 +106,7 @@ Report a table per block, `# | Check | Case (+/−) | Result | Evidence`. Result
 
 Save the report to `$(~/.agents/bin/reports path validation)`.
 
-Log every test type that ran, so the monthly job can drop the ones that never find anything. `<type>` is one lowercase word: `unit`, `e2e`, `integration`, `browser`, `query-budget`, `accessibility`, `property-based`, `mutation`, `migration-round-trip` or `visual`, not triage's longer label:
+Log every test type that ran, so the monthly job can drop the ones that never find anything. `<type>` is one lowercase word: `unit`, `e2e`, `integration`, `browser`, `query-budget`, `accessibility`, `property-based`, `mutation`, `migration-round-trip`, `visual` or `design`, not triage's longer label:
 
 ```bash
 ~/.agents/bin/quality-log test <type> --issues <N> --secs <S> --notes "<what it found>"

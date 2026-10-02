@@ -49,6 +49,15 @@ done
 if echo "$out" | grep -q "  info  playwright-cli not installed" && [ ! -e "$bin/playwright-cli" ]; then
   echo "ok   install.sh reports a missing optional program without installing it"
 else echo "FAIL optional playwright-cli: $(echo "$out" | grep playwright-cli)"; fail=1; fi
+# Impeccable's engine isn't on PATH: the doctor finds it in the launcher's version cache, and never downloads it.
+engine="$home/.impeccable/bin/$(cat "$home/.agents/skills/impeccable/scripts/VERSION" 2>/dev/null)"
+before=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
+mkdir -p "$engine" && printf '#!/bin/sh\n' > "$engine/impeccable" && chmod +x "$engine/impeccable"
+after=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
+if echo "$before" | grep -q "  info  impeccable not installed" && echo "$after" | grep -qxE "  ok    impeccable( [0-9.]+)?" \
+  && [ "$(ls "$home/.impeccable/bin")" = "$(basename "$engine")" ]; then
+  echo "ok   --doctor reports Impeccable's engine from its cache, without fetching it"
+else echo "FAIL Impeccable engine: before: $(echo "$before" | grep impeccable) after: $(echo "$after" | grep impeccable)"; fail=1; fi
 # Trusting Codex hooks is done in Codex itself, so a new machine legitimately warns about it.
 warnings=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1 | grep "  warn " | grep -v "codex hook not trusted")
 if [ -z "$warnings" ]; then echo "ok   --doctor is clean after installing"

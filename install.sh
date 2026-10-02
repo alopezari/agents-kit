@@ -176,7 +176,15 @@ echo "Requirements"
 # deps.txt lists every program the kit runs, and profiles add theirs. Missing required and recommended
 # programs are installed through Homebrew once the person running this agrees (or passed --yes); optional
 # ones serve a single feature, so they are only reported.
-installed() { if [ "$1" = chrome ]; then [ -d "/Applications/Google Chrome.app" ]; else command -v "$1" >/dev/null; fi; }
+installed() {
+  case "$1" in
+    chrome) [ -d "/Applications/Google Chrome.app" ] ;;
+    # The skill's launcher fetches this engine on first use: only look for it, a doctor run must not download.
+    impeccable) [ -x "$HOME/.impeccable/bin/$(cat "$KIT/skills/impeccable/scripts/VERSION" 2>/dev/null)/impeccable" ] ||
+      command -v impeccable >/dev/null ;;
+    *) command -v "$1" >/dev/null ;;
+  esac
+}
 install_hint() { case "$1" in brew:*) echo "brew install ${1#brew:}" ;; npm:*) echo "npm install -g ${1#npm:}" ;; *) echo "$1" ;; esac; }
 missing=()
 older_than() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" != "$2" ]; }

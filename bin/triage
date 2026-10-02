@@ -17,7 +17,7 @@ import sys
 TEST_OR_DOC = re.compile(r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$"
                          r"|(^|/)(CHANGELOG|README|LICENSE)", re.I)
 STYLE_FILE = re.compile(r"\.(css|scss|sass|less)$", re.I)
-UI_FILE = re.compile(r"\.(jsx?|tsx?|vue|css|scss|sass|less|html|twig|mustache)$|(^|/)(templates?|views?|blocks?|components?)/", re.I)
+UI_FILE = re.compile(r"\.(jsx?|tsx?|vue|svelte|astro|css|scss|sass|less|html|twig|mustache)$|(^|/)(templates?|views?|blocks?|components?)/", re.I)
 
 # (name, regex over added lines) — each hit is recorded as a reason.
 LENS_SIGNALS = {
@@ -282,6 +282,10 @@ def triage(rng=None):
     else:
         tier = "standard"
 
+    ui = [p for p in behavior if UI_FILE.search(p)]
+    if ui:  # at every tier: a one-line style change can still be a design regression
+        lenses["design"] = ui  # every file: the lens passes them all to the detector
+        tests["design (impeccable detect)"] = ui
     if style_only:
         lenses["ux-a11y-i18n"] = behavior[:3]
     if tier != "low":
@@ -292,7 +296,6 @@ def triage(rng=None):
             h = hits(rx)
             if h:
                 lenses[lens] = h
-        ui = [p for p in behavior if UI_FILE.search(p)]
         if ui:
             lenses["ux-a11y-i18n"] = ui[:3]
     dependencies = new_dependencies(files, rng)

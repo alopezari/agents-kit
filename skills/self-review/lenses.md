@@ -105,3 +105,15 @@ Use only when the diff changes user-facing UI or copy.
 - Keyboard access, focus management, labels and roles, colour contrast, screen-reader text.
 - Loading, empty and error states handled and visible.
 - Copy is clear and consistent with the rest of the product; design-system components used instead of raw elements.
+
+## Design
+
+You are reviewing whether the changed UI is designed, not just built: a distinctive, coherent result that fits the product, without the generic patterns models default to.
+- First run Impeccable's detector on the UI files triage named that still exist (it writes nothing in the repository):
+  ```bash
+  ~/.agents/skills/impeccable/scripts/impeccable detect --json <changed UI files>
+  ```
+  Read every finding it prints, whatever the exit code: 2 means primary findings, and 0 can still list advisory ones. Any other code means a file wasn't scanned (127: the engine couldn't be fetched): the scanned files' findings still count, and the rest is not run, with the error, never clean.
+- Each detector finding is a finding like any other: confirm it in context (a gradient on a data chart isn't decorative). An `impeccable-disable` comment the change adds needs a reason that holds; check it like a finding. The project's own detector config (`.impeccable/config.json`) is the team's call: say when it may hide findings, don't override it.
+- When the repository has PRODUCT.md or DESIGN.md, judge the change against them: its colours, type, spacing and voice come from there, not from defaults.
+- Beyond the detector: hierarchy that tells the reader where to look first, spacing and type on a consistent scale, states (hover, focus, empty, loading, error) designed rather than left to the browser, and nothing that would look the same in an unrelated product.
