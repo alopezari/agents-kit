@@ -204,12 +204,24 @@ def local_names(sessions):
     names = {}
     for session in sessions:
         for repo, local in (session.get("repos") or {}).items():
-            names.setdefault(repo.lower(), set()).add(local)
+            names.setdefault(repo.lower(), set()).update(local)
     return names
 
 
 def repo_names(pr, local):
-    return {pr["repo"].split("/")[1], *local.get(pr["repo"].lower(), ())}
+    """The quality log's names for the PR's repo: its checkouts' names, or the GitHub name when no session saw one (a
+    fork's checkout named like the repo would otherwise lend it its renames)."""
+    return set(local.get(pr["repo"].lower(), ())) or {pr["repo"].split("/")[1]}
+
+
+def pr_branch_names(pr, local, renamed_from):
+    """The PR's branch and its earlier names, following renames logged under any name of its repo."""
+    repos = repo_names(pr, local)
+    earlier = {}
+    for (repo, new), old in renamed_from.items():
+        if repo in repos:
+            earlier.setdefault(new, set()).update(old)
+    return branch_names({("", new): old for new, old in earlier.items()}, "", pr["branch"])
 
 
 def attach_escapes(prs, local):
@@ -219,7 +231,7 @@ def attach_escapes(prs, local):
     renamed_from = renames(entries)
     for pr in prs:
         repos = repo_names(pr, local)
-        names = {n for repo in repos for n in branch_names(renamed_from, repo, pr["branch"])}
+        names = pr_branch_names(pr, local, renamed_from)
         mine = [e for e in entries if e.get("repo") in repos and e.get("branch") in names]
         lenses_run = {e["name"] for e in mine if e.get("kind") == "lens"}
         pr["escapes"] = [{"source": e["name"], "category": e.get("category"), "verdict": e.get("verdict"),
@@ -231,7 +243,7 @@ def attach_sessions(prs, sessions):
     renamed_from = renames(quality_log())
     local = local_names(sessions)
     for pr in prs:
-        names = {n for repo in repo_names(pr, local) for n in branch_names(renamed_from, repo, pr["branch"])}
+        names = pr_branch_names(pr, local, renamed_from)
         on_branch = [s for s in sessions if names & set(s.get("branches", []))
                      and pr["repo"].lower() in {r.lower() for r in s.get("repos") or {}}]
         if not on_branch:

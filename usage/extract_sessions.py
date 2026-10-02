@@ -8,6 +8,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime
@@ -28,10 +29,14 @@ ACTIVE_GAP_MINUTES = 15
 # A git command where a shell command begins, so a script that merely mentions one doesn't count. A session's
 # gitBranch is only its own directory's branch, while its agent often starts each change in a worktree of its own.
 GIT_COMMAND = re.compile(r"(?:^|&&|\|\||[;|(])\s*git\s+([^;&|\n)]*)", re.M)
-BRANCH_NAME = re.compile(r"[\w][\w./-]*$")
+# A heredoc's body is a script's or a PR body's text, not commands this shell runs.
+HEREDOC_BODY = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?^\s*\2\s*$", re.S | re.M)
+BRANCH_NAME = re.compile(r"[\w][\w./+-]*$")
+# Files no repo holds: an edit there is neither the spec nor code.
+SCRATCH_PATH = re.compile(r"^(/private)?/tmp/|^/var/folders/|/\.claude/")
 # Xirp names a session's worktree <main checkout>-worktree-<session>; once it is removed, the main checkout says
 # which repo it was.
-WORKTREE_SUFFIX = re.compile(r"-worktree-[^/]+")
+REMOVED_WORKTREE = re.compile(r"(.*)-worktree-[^/]+")
 REMOTE_REPO = re.compile(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$")
 
 
@@ -52,10 +57,11 @@ def is_real_prompt(t):
     return bool(t) and not t.startswith(("<command-", "<local-command", "<system-reminder", "Caveat:", "<task-notification", "[SYSTEM", "<environment_context", "<user_instructions", "# AGENTS.md", "<permissions", "<turn_aborted"))
 
 
-def phase_events(entry):
+def phase_events(entry, failed=frozenset()):
     """In block order: ("skill", name) for each flow skill the entry starts (a Skill call by the agent, `/<skill>`
-    typed by the user), ("spec", None) for each Edit/Write of a spec (spec-*.md, in .git/agents/ or a temp dir) and
-    ("edit", None) for each of anything else."""
+    typed by the user), ("spec", None) for each Edit/Write of a spec (spec-*.md, in .git/agents/ or a temp dir),
+    ("edit", None) for each of a file in a repo, and ("branch", (new, renamed)) for each branch a Bash command starts,
+    switches to or renames (see branch_change) in a call not in `failed` (tool-use ids whose result is an error)."""
     msg = entry.get("message") or {}
     if entry.get("type") == "user":
         return [("skill", n) for n in (name.split(":")[-1] for name in TYPED_SKILL.findall(text_of(msg.get("content"))))
@@ -64,18 +70,28 @@ def phase_events(entry):
     for c in msg.get("content") or []:
         if not isinstance(c, dict):
             continue
-        name = str(c.get("input", {}).get("skill")).split(":")[-1] if c.get("name") == "Skill" else None
+        tool, args = c.get("name"), c.get("input") or {}
+        name = str(args.get("skill")).split(":")[-1] if tool == "Skill" else None
+        path = str(args.get("file_path"))
         if name in FLOW_SKILLS:
             events.append(("skill", name))
-        elif c.get("name") in ("Edit", "Write", "NotebookEdit"):
-            events.append(("spec" if SPEC_FILE.match(os.path.basename(str(c.get("input", {}).get("file_path")))) else "edit", None))
+        elif tool in ("Edit", "Write", "NotebookEdit") and SPEC_FILE.match(os.path.basename(path)):
+            events.append(("spec", None))
+        elif tool in ("Edit", "Write", "NotebookEdit") and not SCRATCH_PATH.search(path):
+            events.append(("edit", None))
+        elif tool == "Bash" and c.get("id") not in failed:
+            events += [("branch", change) for change in branch_changes(str(args.get("command")))]
     return events
 
 
 def branch_change(args):
-    """(branch, is_rename) a git command's arguments move to: `switch [-c] name`, `checkout -b name`,
-    `worktree add -b name path`, `branch -m [old] new`; None for anything else."""
-    words = args.split()
+    """(new branch, renamed) a git command's arguments move to: `switch [-c] name`, `checkout -b name`,
+    `worktree add -b name path` (renamed None), `branch -m [old] new` (renamed: old, "" for the current branch);
+    None for anything else."""
+    try:
+        words = shlex.split(args)
+    except ValueError:  # an unclosed quote: the command continues past what GIT_COMMAND kept
+        words = args.split()
     if words[:1] == ["-C"]:
         words = words[2:]
     if words[:1] == ["worktree"]:
@@ -85,41 +101,40 @@ def branch_change(args):
     flags = [w for w in words if w.startswith("-")]
     plain = [w for w in words if not w.startswith("-")]
     creating = {"switch": "cC", "checkout": "bB", "worktree add": "bB"}.get(command)
-    name = None
-    if command == "branch" and any(f[:2] in ("-m", "-M") for f in flags):
-        name = plain[1] if len(plain) > 1 else plain[0] if plain else None
+    name, renamed = None, None
+    if command == "branch" and any(f[:2] in ("-m", "-M") for f in flags) and plain:
+        name, renamed = (plain[1], plain[0]) if len(plain) > 1 else (plain[0], "")
     elif creating:
         for i, word in enumerate(words[:-1]):
             if word.startswith("-") and not word.startswith("--") and word[-1] in creating:
                 name = words[i + 1]
         if not name and command == "switch" and plain and not {"-d", "--detach"} & set(flags):
             name = plain[0]
-    return (name, command == "branch") if name and BRANCH_NAME.match(name) else None
+    return (name, renamed) if name and BRANCH_NAME.match(name) else None
 
 
-def branch_commands(entry):
-    """(branch, is_rename) for each branch the entry's Bash commands start, switch to or rename, in order."""
-    found = []
-    for c in (entry.get("message") or {}).get("content") or []:
-        if isinstance(c, dict) and c.get("name") == "Bash":
-            found += [change for args in GIT_COMMAND.findall(str(c.get("input", {}).get("command")))
-                      if (change := branch_change(args))]
-    return found
+def branch_changes(command):
+    """The branch changes a Bash command makes, in order; none for one that sets up a throwaway repo (`git init`)."""
+    command = HEREDOC_BODY.sub("", command)
+    if re.search(r"\bgit\s+init\b", command):
+        return []
+    return [change for args in GIT_COMMAND.findall(command) if (change := branch_change(args))]
 
 
 @functools.lru_cache(maxsize=None)
 def checkout(cwd):
     """(GitHub owner/name, the kit's repo name: the main checkout's directory) for a session directory, from its
     main checkout once the worktree is gone; None outside a repo with an origin remote."""
-    for directory in dict.fromkeys([cwd, WORKTREE_SUFFIX.sub("", cwd, count=1)]):
+    removed = REMOVED_WORKTREE.match(cwd)
+    for directory in dict.fromkeys([cwd, removed.group(1) if removed else cwd]):
         if not os.path.isdir(directory):
             continue
         def git(*args):
-            return subprocess.run(["git", "-C", directory, *args], capture_output=True, text=True).stdout.strip()
+            return subprocess.run(["git", "-C", directory, *args], capture_output=True, text=True, timeout=30).stdout.strip()
         remote = REMOTE_REPO.search(git("config", "--get", "remote.origin.url"))
         common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
         if remote and common:
-            name = os.path.basename(os.path.dirname(common)) if os.path.basename(common) == ".git" else os.path.basename(common)[:-4]
+            name = os.path.basename(os.path.dirname(common)) if os.path.basename(common) == ".git" else os.path.basename(common).removesuffix(".git")
             return remote.group(1), name
     return None
 
@@ -152,67 +167,78 @@ def renamed(renames, repos, old, new):
     return new in names
 
 
-def empty():
+def no_spending():
     return {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "minutes": 0}
 
 
-def add(into, spent):
+def add_spending(into, spent, sign=1):
     for key, value in spent.items():
-        into[key] += value
+        into[key] += sign * value
+
+
+def failed_calls(entries):
+    return {c.get("tool_use_id") for e in entries if e.get("type") == "user"
+            for c in (e.get("message") or {}).get("content") or [] if isinstance(c, dict) and c.get("is_error")}
 
 
 def split_into_phases(entries, renames, repos):
     """branch -> phase -> tokens and active minutes. A message belongs to the last flow skill started on its branch
     ("build" before any, and again after the spec once code is edited); a change of branch starts again at
-    "build" unless it is a rename (`git branch -m`, or one logged). The branch changes when the session directory's
-    gitBranch does or a command starts one. An entry without a branch counts for the current one and changes nothing.
-    Agents write most specs without starting the skill again, so writing the spec file before a branch's first code
-    edit or flow skill also starts the spec, and the branch's work before it (reading the issue and the code) joins it."""
-    events_of, commands_of = {}, {}  # message id -> across its lines: one per content block, each repeating the usage
+    "build" unless it is a rename (`git branch -m`, or one logged), which carries the branch's spending to the new
+    name. The branch changes when the session directory's gitBranch does or a command starts one. An entry without a
+    branch counts for the current one and changes nothing.
+    Agents write most specs without starting the skill again, so writing the spec file also starts the spec. Either
+    way, before the branch's first code edit or other flow skill, the branch's work so far (reading the issue and
+    the code) joins the spec."""
+    events_of, failed = {}, failed_calls(entries)  # message id -> its events across lines: one line per content block
     for e in entries:
         mid = (e.get("message") or {}).get("id")
         if e.get("type") == "assistant" and mid:
-            events_of[mid] = events_of.get(mid, []) + phase_events(e)
-            commands_of[mid] = commands_of.get(mid, []) + branch_commands(e)
+            events_of[mid] = events_of.get(mid, []) + phase_events(e, failed)
     phases, counted = {}, set()
-    branch, directory_branch, phase, last = "", "", "build", None
     started, before_code = set(), {}  # branches past their first code edit or flow skill; build spent before that
+
+    def carry(old, new):
+        for name, spent in phases.pop(old, {}).items():
+            add_spending(phases.setdefault(new, {}).setdefault(name, no_spending()), spent)
+        add_spending(before_code.setdefault(new, no_spending()), before_code.pop(old, no_spending()))
+        if old in started:
+            started.discard(old)
+            started.add(new)
+
+    branch, directory_branch, phase, last = "", "", "build", None
     for e in entries:
         msg = e.get("message") or {}
         mid = msg.get("id") if e.get("type") == "assistant" else None
         first_line = bool(mid) and mid not in counted
-        changes = []
+        events = events_of.get(mid, []) if first_line else ([] if mid else phase_events(e, failed))
         if e.get("gitBranch") and e["gitBranch"] != directory_branch:
             directory_branch = e["gitBranch"]
-            changes.append((directory_branch, False))
-        if first_line:
-            changes += commands_of[mid]
-        for new, is_rename in changes:
-            if new != branch:
-                if is_rename:  # `git branch -m` leaves no branch under the old name
-                    for name, spent in phases.pop(branch, {}).items():
-                        add(phases.setdefault(new, {}).setdefault(name, dict.fromkeys(spent, 0)), spent)
-                    add(before_code.setdefault(new, empty()), before_code.pop(branch, empty()))
-                    if branch in started:
-                        started.add(new)
-                elif branch and not is_rename and not renamed(renames, repos, branch, new):
-                    phase = "build"
-                branch = new
-        if e.get("gitBranch"):
-            for kind, name in events_of.get(mid, []) if first_line else ([] if mid else phase_events(e)):
-                if (kind == "spec" or name == "spec") and branch not in started:
-                    spec, build = phases.setdefault(branch, {}).setdefault("spec", empty()), phases[branch].get("build", empty())
-                    moved = before_code.pop(branch, empty())
-                    add(spec, moved)
-                    add(build, {key: -value for key, value in moved.items()})
-                    phase = "spec"
-                elif kind == "skill":
-                    phase = name
-                elif kind == "edit":
-                    phase = "build" if phase == "spec" else phase
-                if kind == "edit" or kind == "skill" and name != "spec":
+            events = [("branch", (directory_branch, None))] + events
+        for kind, value in events if e.get("gitBranch") or mid else []:
+            if kind == "branch":
+                new, renamed_from = value
+                if renamed_from not in (None, "", branch):  # another branch renamed; the current one stays
+                    carry(renamed_from, new)
+                elif new != branch:
+                    if renamed_from is not None or renamed(renames, repos, branch, new):
+                        carry(branch, new)
+                    elif branch:
+                        phase = "build"
+                    branch = new
+            elif (kind == "spec" or value == "spec") and branch not in started:
+                moved = before_code.pop(branch, no_spending())
+                add_spending(phases.setdefault(branch, {}).setdefault("spec", no_spending()), moved)
+                add_spending(phases[branch].setdefault("build", no_spending()), moved, sign=-1)
+                phase = "spec"
+            elif kind == "skill":
+                phase = value
+                if value != "spec":
                     started.add(branch)
-        spent = empty()
+            elif kind == "edit":
+                phase = "build" if phase == "spec" else phase
+                started.add(branch)
+        spent = no_spending()
         if e.get("timestamp"):
             now = ts(e["timestamp"])
             gap = (now - last).total_seconds() / 60 if last else 0
@@ -226,11 +252,12 @@ def split_into_phases(entries, renames, repos):
             spent["out"] += u.get("output_tokens", 0)
             spent["cache_read"] += u.get("cache_read_input_tokens", 0)
             spent["cache_write"] += u.get("cache_creation_input_tokens", 0)
-        add(phases.setdefault(branch, {}).setdefault(phase, empty()), spent)
+        add_spending(phases.setdefault(branch, {}).setdefault(phase, no_spending()), spent)
         if phase == "build" and branch not in started:
-            add(before_code.setdefault(branch, empty()), spent)
+            add_spending(before_code.setdefault(branch, no_spending()), spent)
     rounded = {b: {p: {**v, "minutes": round(v["minutes"], 1)} for p, v in ps.items()} for b, ps in phases.items() if b}
-    return {b: {p: v for p, v in ps.items() if any(v.values())} for b, ps in rounded.items()}
+    kept = {b: {p: v for p, v in ps.items() if any(v.values())} for b, ps in rounded.items()}
+    return {b: ps for b, ps in kept.items() if ps}
 
 
 def claude_sessions():
@@ -255,10 +282,10 @@ def claude_sessions():
                 times.append(e["timestamp"])
             cwd = cwd or e.get("cwd")
             if e.get("cwd") and checkout(e["cwd"]):
-                repos.setdefault(*checkout(e["cwd"]))
+                remote, local = checkout(e["cwd"])
+                repos.setdefault(remote, set()).add(local)
             if e.get("gitBranch"):
                 branches.add(e["gitBranch"])
-            branches.update(name for name, _ in branch_commands(e))
             msg = e.get("message") or {}
             if e.get("type") == "user" and msg.get("role") == "user":
                 t = text_of(msg.get("content"))
@@ -280,10 +307,13 @@ def claude_sessions():
                 tokens["in"] += u.get("input_tokens", 0)
                 tokens["out"] += u.get("output_tokens", 0)
                 tokens["cache_read"] += u.get("cache_read_input_tokens", 0)
+        failed = failed_calls(entries)
+        branches.update(change[0] for e in entries for kind, change in phase_events(e, failed) if kind == "branch")
         if prompts and times and not (cwd or "").startswith(EXCLUDE_CWD):
             yield dict(harness="claude-code", id=sid, cwd=cwd, start=min(times), end=max(times), prompts=prompts,
                        models=models, effort=sorted(efforts), tokens=tokens, tool_calls=tools, advisor_calls=advisor,
-                       branches=sorted(branches), repos=repos, phases=split_into_phases(entries, renames, set(repos.values())))
+                       branches=sorted(branches), repos={r: sorted(names) for r, names in repos.items()},
+                       phases=split_into_phases(entries, renames, {n for names in repos.values() for n in names}))
 
 
 def codex_sessions():
@@ -355,7 +385,7 @@ def _codex_rollout(f):
             yield dict(harness="codex", id=os.path.basename(f)[:-6], cwd=cwd, start=min(times), end=max(times),
                        prompts=prompts, models=models, effort=sorted(efforts), tokens=tokens, tool_calls=tools,
                        originator=meta.get("originator"), branches=[b for b in [(meta.get("git") or {}).get("branch")] if b],
-                       repos=dict([checkout(cwd)]) if cwd and checkout(cwd) else {})
+                       repos={checkout(cwd)[0]: [checkout(cwd)[1]]} if cwd and checkout(cwd) else {})
 
 
 def summarize(s):
