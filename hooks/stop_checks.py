@@ -186,7 +186,14 @@ def main():
             roots.append(root)
     any_verify_failed = False
     for root in roots:
-        found, failed_verify = check_checkout(root, session, payload)
+        try:
+            found, failed_verify = check_checkout(root, session, payload)
+        except FileNotFoundError:
+            if os.path.isdir(root):
+                raise
+        if not os.path.isdir(root):  # removed while checked, e.g. a worktree freed as the session ends
+            log("stop_checks", "checkout-removed", payload, root)
+            continue
         problems += [f"[{review_stamp.repo_name(root)}] {p}" if len(roots) > 1 else p for p in found]
         any_verify_failed = any_verify_failed or failed_verify
     streak = record_verify_streak(session, any_verify_failed)

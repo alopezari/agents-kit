@@ -1,0 +1,1 @@
+- The stop hook skips a checkout that disappears while it's being checked, such as a worktree removed as a session ends, instead of crashing with `FileNotFoundError` or reporting its verify as failed.
