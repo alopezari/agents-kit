@@ -32,7 +32,12 @@ RULES = [
      "`git push` to main/master/trunk/develop/production/release: bypasses review."),
     (GIT + r"reset\s+--hard\b", "`git reset --hard`: discards uncommitted work."),
     (GIT + r"clean\s+-\w*f", "`git clean -f`: deletes untracked files."),
-    (GIT + r"(checkout|restore)\s+(--\s+)?\.(\s|$)", "`git checkout .` / `git restore .`: discards all uncommitted changes."),
+    (GIT + r"checkout(\s+-[\w-]+)*\s+(--\s+)?\.(\s|$)",
+     "`git checkout .`: discards all uncommitted changes."),
+    # --staged alone only unstages; with --worktree it discards like the rest
+    (GIT + r"restore(?=[^;&|\n]*\s(--worktree|-W)(\s|$)|(?![^;&|\n]*\s(--staged|-S)(\s|$)))(\s+-[\w=~^./@{}-]+)*"
+     r"\s+(--\s+)?\.(\s|$)",
+     "`git restore .`: discards all uncommitted changes."),
     (GIT + r"branch\s+-D\b", "`git branch -D`: force-deletes a branch."),
     (GIT + r"stash\s+(drop|clear)\b", "`git stash drop|clear`: deletes stashed work."),
     (r"\bgh\s+pr\s+merge\b", "`gh pr merge`: merging is a human decision."),
@@ -55,11 +60,16 @@ SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 
 
 def dangerous_rm(command, cwd):
-    """Recursive deletes outside the working directory or temp dirs."""
+    """Recursive deletes outside the working directory or temp dirs, judged from every directory an earlier `cd`
+    may have left the shell in: a subshell's cd may or may not still apply, so a target must be safe from all."""
+    places = {cwd}
     for segment in re.split(r"[;&|]+", command):
         try:
-            tokens = shlex.split(segment)
+            tokens = [token.strip("()") for token in shlex.split(segment)]
         except ValueError:
+            continue
+        if tokens and tokens[0] == "cd":
+            places |= {cd_into(place, tokens[1] if len(tokens) > 1 else "~") for place in places}
             continue
         if not tokens or os.path.basename(tokens[0]) != "rm":
             continue
@@ -67,16 +77,17 @@ def dangerous_rm(command, cwd):
         if "r" not in flags.lower() and "--recursive" not in tokens:
             continue
         home = os.path.realpath(os.path.expanduser("~"))
-        for target in (t for t in tokens[1:] if not t.startswith("-")):
+        for target in (t for t in tokens[1:] if t and not t.startswith("-")):
             if "$" in target or "`" in target or "*" == target.strip("/"):
                 return f"Recursive delete of an unresolved or wildcard path: {target}"
-            path = os.path.realpath(os.path.join(cwd, os.path.expanduser(target)))
-            if path in ("/", home) or cwd.startswith(path + os.sep) or path == cwd:
-                return f"Recursive delete of {path}, which contains the working directory or home."
-            inside_cwd = path.startswith(cwd + os.sep)
-            inside_tmp = any(path == r or path.startswith(r + os.sep) for r in SAFE_RM_ROOTS)
-            if not (inside_cwd or inside_tmp):
-                return f"Recursive delete outside the working directory: {path}"
+            for place in sorted(places):
+                path = os.path.realpath(os.path.join(place, os.path.expanduser(target)))
+                if path in ("/", home) or cwd.startswith(path + os.sep) or path == cwd:
+                    return f"Recursive delete of {path}, which contains the working directory or home."
+                inside_cwd = path.startswith(cwd + os.sep)
+                inside_tmp = any(path == r or path.startswith(r + os.sep) for r in SAFE_RM_ROOTS)
+                if not (inside_cwd or inside_tmp):
+                    return f"Recursive delete outside the working directory: {path}"
     return None
 
 

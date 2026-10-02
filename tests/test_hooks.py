@@ -102,6 +102,14 @@ def guard_blocks_irreversible(base):
     for wrapped in ["  evidence A1 rm -rf /opt/projects", 'evidence "A1" rm -rf /opt/projects']:
         assert guard(wrapped) == "deny", wrapped
     assert guard("~/.agents/bin/evidence A1 git status") == "allow"
+    # `git checkout -q -- .` slipped past and took uncommitted fixes with it.
+    for cmd in ["git checkout -q -- .", "git checkout -f .", "git restore --worktree .", "git restore --source=HEAD~1 ."]:
+        assert guard(cmd) == "deny", f"should deny: {cmd}"
+    work = os.path.join(base, "work")
+    os.makedirs(os.path.join(work, "opt"))  # rm -rf opt/projects from here would stay inside the working directory
+    for cmd in ["cd / && rm -rf opt/projects", "cd /; rm -r opt/projects", "(cd /tmp && true); cd / && rm -rf opt/x",
+                "(cd / && rm -rf opt/projects)"]:
+        assert guard(cmd, cwd=work) == "deny", f"a relative rm runs where the cd left it: {cmd}"
     started = time.time()
     assert guard(";" * 60000 + "x/" * 30000) == "allow" and time.time() - started < 3, "a long line must not stall the guard"
     # An edit chained before a blocked step was lost without a word: the agent took it as done.
@@ -115,6 +123,10 @@ def guard_allows_routine(base):
                 "git branch -d old", "rm -rf /tmp/foo", "gh pr create --help", "make phpunit", "npm run build",
                 "echo 'it would truncate the list'"]:
         assert guard(cmd) == "allow", f"should allow: {cmd}"
+    assert guard("git restore --staged .") == "allow", "unstaging keeps the work"
+    work = os.path.join(base, "work")
+    os.makedirs(os.path.join(work, "sub", "build"))
+    assert guard("cd sub && rm -rf build", cwd=work) == "allow"
 
 
 def guard_mcp_linear(base):

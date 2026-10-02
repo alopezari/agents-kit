@@ -5,7 +5,8 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 request=$(cat)
-[ -n "${request//[[:space:]]/}" ] || { echo "review-prompt.sh: pass the request (issue and comments) on stdin" >&2; exit 2; }
+# Not ${request//[[:space:]]/}: bash 3.2 took minutes on a 20 KB request.
+grep -q '[^[:space:]]' <<<"$request" || { echo "review-prompt.sh: pass the request (issue and comments) on stdin" >&2; exit 2; }
 spec="$("$here/path.sh")"
 [ -f "$spec" ] || { echo "review-prompt.sh: no spec for this branch at $spec; write it first" >&2; exit 2; }
 

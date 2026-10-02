@@ -7,7 +7,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 ## At a glance
 
 - **3 harnesses** share one `AGENTS.md`, 9 skills and 6 hook scripts (Pi has no MCP, so it runs all but `guard_mcp.py`).
-- **21 guard rules** block irreversible or outward-facing shell commands before they run.
+- **22 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
@@ -123,7 +123,8 @@ Every block, and every approved or browser MCP call, is appended to `~/.agents/l
 - `git push` to main/master/trunk/develop/production/release: bypasses review.
 - `git reset --hard`: discards uncommitted work.
 - `git clean -f`: deletes untracked files.
-- `git checkout .` / `git restore .`: discards all uncommitted changes.
+- `git checkout .`: discards all uncommitted changes.
+- `git restore .`: discards all uncommitted changes.
 - `git branch -D`: force-deletes a branch.
 - `git stash drop|clear`: deletes stashed work.
 - `gh pr merge`: merging is a human decision.
