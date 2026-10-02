@@ -262,7 +262,7 @@ pr-validation    verify's verdict and what it ran, the self-review's findings, e
 **`bin/quality-log`**: Record what a review lens or test type produced, and what got past them, so the monthly job can keep only perspectives that pay off.
 
 ```
-quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex]
+quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--criteria N] [--map-items N]
 quality-log test <type> --issues N [--secs S] [--notes "..."]
 quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 ```

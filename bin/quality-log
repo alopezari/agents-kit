@@ -2,40 +2,80 @@
 """Record what a review lens or test type produced, and what got past them, so the monthly job can keep
 only perspectives that pay off.
 
-  quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex]
+  quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--criteria N] [--map-items N]
   quality-log test <type> --issues N [--secs S] [--notes "..."]
   quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 
+Refuses malformed input (exit 2) without writing: a flag left without its value once took the next flag as one.
 Appends to ~/.agents/logs/quality.jsonl with the repo, branch and the triage tier. hooks/review_stamp.py appends
 "rename" lines there too, so review-mining/outcomes.py can join lens runs to a branch renamed after them.
 """
+import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 
 LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
+TAXONOMY = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "review-mining", "taxonomy.md")
 
 
 def git(*args):
     return subprocess.run(["git", *args], capture_output=True, text=True).stdout.strip()
 
 
+def parse(argv):
+    parser = argparse.ArgumentParser(prog="quality-log", allow_abbrev=False, description=__doc__.split("\n\n")[0])
+    kinds = parser.add_subparsers(dest="kind", required=True)
+    word = r"[a-z][a-z0-9-]*"
+
+    def name(value):
+        if not re.fullmatch(word, value):
+            raise argparse.ArgumentTypeError(f"{value!r} isn't one lowercase word (letters, digits, -)")
+        return value
+
+    def lens_name(value):  # the skills name lenses by their headings: "Tests", "Correctness"
+        return name(value.lower())
+
+    def category(value):
+        with open(TAXONOMY) as fh:
+            codes = re.findall(r"^- ([A-Z]\d?\.[0-9a-z-]+) ", fh.read(), re.M)
+        if value not in codes:
+            raise argparse.ArgumentTypeError(f"{value!r} isn't a code in review-mining/taxonomy.md")
+        return value
+
+    def count(value):
+        if not re.fullmatch(r"\d+", value):
+            raise argparse.ArgumentTypeError(f"{value!r} isn't a whole number")
+        return int(value)
+
+    lens = kinds.add_parser("lens", allow_abbrev=False)
+    lens.add_argument("name", type=lens_name)
+    lens.add_argument("--findings", type=count, required=True)
+    lens.add_argument("--confirmed", type=count, required=True)
+    lens.add_argument("--secs", type=count)
+    lens.add_argument("--model", choices=("claude", "codex"))
+    lens.add_argument("--criteria", type=count)
+    lens.add_argument("--map-items", type=count)
+    test = kinds.add_parser("test", allow_abbrev=False)
+    test.add_argument("name", type=name)
+    test.add_argument("--issues", type=count, required=True)
+    test.add_argument("--secs", type=count)
+    test.add_argument("--notes")
+    escape = kinds.add_parser("escape", allow_abbrev=False)
+    escape.add_argument("name", choices=("ci", "review", "bot"))
+    escape.add_argument("--verdict", choices=("confirmed", "rejected", "uncertain"), required=True)
+    escape.add_argument("--category", type=category, required=True)
+    escape.add_argument("--lens", type=lens_name, required=True)
+    escape.add_argument("--pr", type=count, required=True)
+    args = vars(parser.parse_args(argv))  # exits 2 on anything malformed, before the log is opened
+    return args.pop("kind"), args.pop("name"), {k: v for k, v in args.items() if v is not None}
+
+
 def main():
-    argv = sys.argv[1:]
-    if len(argv) < 2 or argv[0] not in ("lens", "test", "escape"):
-        print(__doc__)
-        return 1
-    kind, name, rest = argv[0], argv[1], argv[2:]
-    fields = {}
-    i = 0
-    while i < len(rest):
-        key = rest[i].lstrip("-").replace("-", "_")
-        if i + 1 < len(rest):
-            value = rest[i + 1]
-            fields[key] = int(value) if value.isdigit() else value
-        i += 2
+    kind, name, fields = parse(sys.argv[1:])
     try:
         tier = json.loads(subprocess.run([os.path.expanduser("~/.agents/bin/triage"), "--json"],
                                          capture_output=True, text=True, timeout=60).stdout)["tier"]
