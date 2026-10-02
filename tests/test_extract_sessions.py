@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
@@ -36,10 +37,19 @@ def edit(path):
     return {"type": "tool_use", "id": f"t-{path}", "name": "Write" if "spec-" in path else "Edit", "input": {"file_path": path}}
 
 
-def session(home, rows, renames=()):
+def bash(command, msg_id="b"):
+    return {"type": "tool_use", "id": f"t-{msg_id}", "name": "Bash", "input": {"command": command}}
+
+
+def session(home, rows, renames=(), cwd="repo"):
+    """Rows' "/repo" is a checkout of o/repo at HOME/repo; with `cwd`, the session ran in HOME/<cwd> instead."""
+    checkout = os.path.join(home, "repo")
+    os.makedirs(checkout)
+    subprocess.run(["git", "init", "-q", checkout], check=True)
+    subprocess.run(["git", "-C", checkout, "remote", "add", "origin", "git@github.com:o/repo.git"], check=True)
     os.makedirs(os.path.join(home, ".claude", "projects", "p"))
     with open(os.path.join(home, ".claude", "projects", "p", "s1.jsonl"), "w") as fh:
-        fh.writelines(json.dumps(r) + "\n" for r in rows)
+        fh.writelines(json.dumps({**r, "cwd": os.path.join(home, cwd)} if r.get("cwd") else r) + "\n" for r in rows)
     os.makedirs(os.path.join(home, ".agents", "logs"))
     with open(os.path.join(home, ".agents", "logs", "quality.jsonl"), "w") as fh:
         fh.writelines(json.dumps({"kind": "rename", "repo": repo, "name": old, "to": new}) + "\n" for repo, old, new in renames)
@@ -99,13 +109,33 @@ def what_ends_a_phase(home):
     assert (phases["build"]["out"], phases["spec"]["out"], phases["validate"]["out"]) == (30, 10, 20), phases
 
 
+def branches_started_by_commands(home):
+    """The session directory stays on one branch (or detached) while the agent starts each change in a worktree."""
+    rows = [user(0, "go", "phase-cost"),
+            *assistant(1, "m0", "phase-cost", [skill("self-review")]),
+            *assistant(2, "m1", "phase-cost", [bash("cd ~/kit && git worktree add -q -b short-outputs $SP/kit-so origin/main")]),
+            *assistant(3, "m2", "phase-cost", [TEXT]),                      # its gitBranch hasn't changed: still short-outputs
+            *assistant(4, "m3", "HEAD", [TEXT]),                            # the session directory detached
+            *assistant(5, "m4", "HEAD", [bash("git fetch -q; git switch -qc guard origin/main"), skill("validate")]),
+            *assistant(6, "m5", "HEAD", [bash("git branch -m guard guard-says-the-order")]),
+            *assistant(7, "m6", "HEAD", [bash("python3 - <<'EOF'\nprint('git switch -c bogus')\nEOF", "m6")])]
+    found = session(home, rows, cwd="repo-worktree-session-gone")
+    assert found["branches"] == ["HEAD", "guard", "guard-says-the-order", "phase-cost", "short-outputs"], found["branches"]
+    phases = found["phases"]
+    assert sorted(phases["short-outputs"]) == ["build"] and phases["short-outputs"]["build"]["out"] == 20, phases
+    assert "guard" not in phases and phases["guard-says-the-order"]["validate"]["out"] == 30, \
+        f"a rename carries the branch's phase and its spending to the new name: {phases}"
+    assert found["repos"] == {"o/repo": "repo"}, f"a removed worktree's repo comes from its main checkout: {found['repos']}"
+
+
 def short_gaps_add_up(home):
     rows = [user(1, "go", "a")] + [row for i in range(31) for row in assistant(1 + 2 * i // 60, f"m{i}", "a", [TEXT], second=2 * i % 60)]
     found = session(home, rows)
     assert found["phases"]["a"]["build"]["minutes"] == 1.0, found["phases"]["a"]
 
 
-for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, short_gaps_add_up):
+for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, branches_started_by_commands,
+             short_gaps_add_up):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:
