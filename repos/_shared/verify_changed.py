@@ -65,9 +65,13 @@ def execute(args, cwd=None, timeout=600):
         return subprocess.CompletedProcess(args, 124, "", f"{args[0]}: timed out after {timeout}s")
 
 
-def run_json(cmd, cwd, not_run):
+def run_json(cmd, cwd, not_run, nothing_in_scope=None):
+    """The tool's JSON report; {"nothing_in_scope": True} when every line it printed matches `nothing_in_scope`."""
     proc = execute(cmd, cwd)
     stdout = proc.stdout or ""
+    printed = [line.strip() for line in (stdout + (proc.stderr or "")).splitlines() if line.strip()]
+    if nothing_in_scope and printed and all(nothing_in_scope.search(line) for line in printed):
+        return {"nothing_in_scope": True}
     try:
         # PHP deprecation notices can surround the JSON on stdout; decode the first object only.
         data = json.JSONDecoder().raw_decode(stdout[stdout.index("{"):])[0]
@@ -106,6 +110,9 @@ def failing_tests(cmd, cwd, not_run, junit_host=None, test_filter=""):
 
 
 TEST_FILE = re.compile(r"Test\.php$")
+# All PHPStan prints when its config excludes every file it is given (exit 0 before 2.0, non-zero after). Any other
+# line, a fatal error after the note for one, is a failure.
+PHPSTAN_NOTHING_IN_SCOPE = re.compile(r"No files found to analyse|^\[WARNING\] This will cause a non-zero exit code")
 
 
 def link_ignored_dirs(root, tmp):
@@ -136,15 +143,16 @@ def link_ignored_dirs(root, tmp):
 def red_check(root, cwd_rel, cmd, changed_tests, not_run):
     """Run the changed tests against HEAD without the change: at least one must fail.
 
-    Builds a pristine copy of the merge-base with `git archive`, symlinks untracked dependency dirs
+    Builds a pristine copy of the merge-base with `git checkout-index`, symlinks untracked dependency dirs
     (vendor/...) from the working tree, copies in the changed test files, and runs only those
     test classes. Returns an error message when every test passes without the change.
     """
     tmp = tempfile.mkdtemp(prefix="agents-red-")
     try:
-        archive = subprocess.Popen(["git", "archive", review_stamp.merge_base(root)], cwd=root, stdout=subprocess.PIPE)
-        subprocess.run(["tar", "-x", "-C", tmp], stdin=archive.stdout, check=True)
-        archive.wait()
+        # Not `git archive`: it drops export-ignore paths, and repos often export-ignore their tests/.
+        index = {**os.environ, "GIT_INDEX_FILE": os.path.join(tmp, ".agents-red-index")}
+        subprocess.run(["git", "read-tree", review_stamp.merge_base(root)], cwd=root, env=index, check=True)
+        subprocess.run(["git", "checkout-index", "--all", f"--prefix={tmp}/"], cwd=root, env=index, check=True)
         link_ignored_dirs(root, tmp)
         for test in changed_tests:
             os.makedirs(os.path.dirname(os.path.join(tmp, test)), exist_ok=True)
@@ -266,13 +274,16 @@ def main():
             ran.append(f"phpcs on {len(rel)} files (changed lines only)")
 
     if args.phpstan and rel:
-        out = run_json(shlex.split(args.phpstan) + ["--error-format=json", "--no-progress", *rel], tool_cwd, not_run)
+        out = run_json(shlex.split(args.phpstan) + ["--error-format=json", "--no-progress", *rel], tool_cwd, not_run,
+                       PHPSTAN_NOTHING_IN_SCOPE)
         for fpath, data in (out.get("files") or {}).items():
             repo_path = os.path.relpath(os.path.realpath(fpath), os.path.realpath(root))
             for m in data.get("messages", []):
                 if on_changed_line(changes, repo_path, m.get("line") or 0):
                     errors.append(f"{repo_path}:{m.get('line')} [phpstan] {m['message']}")
-        if out:
+        if out.get("nothing_in_scope"):
+            ran.append(f"phpstan: none of the {len(rel)} changed files is in its configured paths")
+        elif out:
             ran.append(f"phpstan on {len(rel)} files (changed lines only)")
 
     if args.phpunit:

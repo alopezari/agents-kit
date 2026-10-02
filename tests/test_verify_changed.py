@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""repos/_shared/verify_changed.py: linters configured for --cwd only judge files inside it.
+"""repos/_shared/verify_changed.py: linters configured for --cwd only judge files inside it, a linter whose
+config excludes every changed file isn't a failure, and the red check's copy keeps export-ignored test files.
 
-Runs against a throwaway repo and a fake phpcs that flags line 1 of every file it is given.
+Runs against throwaway repos with fake phpcs, phpstan and phpunit.
 """
 import os
 import shutil
@@ -16,6 +17,27 @@ files = [a for a in sys.argv[1:] if not a.startswith("-")]
 print(json.dumps({"files": {f: {"messages": [{"line": 1, "type": "ERROR", "source": "Fake.Rule", "message": "flagged"}]}
                             for f in files}}))
 """
+
+# PHPStan 1.x when its config excludes every path it is given: exit 0, nothing on stdout.
+FAKE_PHPSTAN_NOTHING_IN_SCOPE = """#!/bin/sh
+echo ' ! [NOTE] No files found to analyse.' >&2
+"""
+# A test that needs a helper from tests/ (like a base TestCase) and fails while src/Price.php lacks the fix.
+FAKE_PHPUNIT = """#!/usr/bin/env python3
+import os, sys
+junit = sys.argv[sys.argv.index("--log-junit") + 1]
+if not os.path.exists("tests/Helper.php"):
+    sys.exit("Class Helper not found")
+fixed = "fixed" in open("src/Price.php").read()
+failure = "" if fixed else "<failure>rounds wrong</failure>"
+open(junit, "w").write(f'<testsuites><testcase class="PriceTest" name="test_rounds">{failure}</testcase></testsuites>')
+"""
+
+
+def executable(path, text):
+    open(path, "w").write(text)
+    os.chmod(path, 0o755)
+    return path
 
 
 def git(cwd, *args):
@@ -50,8 +72,44 @@ def repo_root_cwd_lints_everything(base):
     assert "plugin/src/Builder.php:1 [phpcs" in out and "ci/fixture.php:1 [phpcs" in out, out
 
 
+def phpstan_with_nothing_in_scope_is_not_a_failure(base):
+    repo = os.path.join(base, "repo")
+    os.makedirs(os.path.join(repo, "tests"))
+    git(repo, "init", "-q", "-b", "trunk")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    open(os.path.join(repo, "tests", "PriceTest.php"), "w").write("<?php\n")
+    phpstan = executable(os.path.join(base, "phpstan"), FAKE_PHPSTAN_NOTHING_IN_SCOPE)
+    proc = subprocess.run(["python3", SCRIPT, "--phpstan", phpstan], cwd=repo, capture_output=True, text=True)
+    assert proc.returncode == 0 and "did not run" not in proc.stdout, proc.stdout
+    assert "phpstan: none of the 1 changed files is in its configured paths" in proc.stdout and "phpstan on" not in proc.stdout, \
+        proc.stdout
+    executable(phpstan, FAKE_PHPSTAN_NOTHING_IN_SCOPE + "echo 'PHP Fatal error: Allowed memory size exhausted' >&2\n" * 20 + "exit 255\n")
+    proc = subprocess.run(["python3", SCRIPT, "--phpstan", phpstan], cwd=repo, capture_output=True, text=True)
+    assert proc.returncode == 1 and "phpstan did not run" in proc.stdout, "a crash after the note is a failure:\n" + proc.stdout
+
+
+def red_check_keeps_export_ignored_tests(base):
+    repo = os.path.join(base, "repo")
+    os.makedirs(os.path.join(repo, "src"))
+    os.makedirs(os.path.join(repo, "tests"))
+    open(os.path.join(repo, ".gitattributes"), "w").write("/tests export-ignore\n")
+    open(os.path.join(repo, "src", "Price.php"), "w").write("<?php\n")
+    open(os.path.join(repo, "tests", "Helper.php"), "w").write("<?php\n")
+    git(repo, "init", "-q", "-b", "trunk")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "init")
+    git(repo, "checkout", "-q", "-b", "feature")
+    open(os.path.join(repo, "src", "Price.php"), "w").write("<?php // fixed\n")
+    open(os.path.join(repo, "tests", "PriceTest.php"), "w").write("<?php\n")
+    phpunit = executable(os.path.join(base, "phpunit"), FAKE_PHPUNIT)
+    proc = subprocess.run(["python3", SCRIPT, "--phpunit", phpunit, "--red-check"], cwd=repo, capture_output=True, text=True)
+    assert "red check did not run" not in proc.stdout, "the pristine copy lost tests/Helper.php:\n" + proc.stdout
+    assert "ran: red check: 1 changed test files fail before the change" in proc.stdout, proc.stdout
+
+
 RESULTS = []
-for test in (files_outside_cwd_are_not_linted, repo_root_cwd_lints_everything):
+for test in (files_outside_cwd_are_not_linted, repo_root_cwd_lints_everything, phpstan_with_nothing_in_scope_is_not_a_failure,
+             red_check_keeps_export_ignored_tests):
     base = tempfile.mkdtemp(prefix="agents-test-verify-changed-")
     try:
         test(base)

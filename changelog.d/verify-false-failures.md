@@ -1,0 +1,1 @@
+- Verify's red check copies the merge-base with `git checkout-index`, so test files a repo marks export-ignore are there; and PHPStan reports "none of the changed files is in its configured paths" instead of failing when its config excludes them all.
