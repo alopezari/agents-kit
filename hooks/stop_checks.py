@@ -594,8 +594,11 @@ def in_checkout(root, action, *args):
     try:
         return action(*args)
     finally:
-        if previous:
-            os.chdir(previous)
+        try:
+            if previous:
+                os.chdir(previous)
+        except FileNotFoundError:  # removed while we were away
+            pass
 
 
 def record_verify(root, kind, checked_fingerprint):

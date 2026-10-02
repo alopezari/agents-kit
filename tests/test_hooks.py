@@ -801,6 +801,11 @@ def stop_checks_edits_after_its_directory_is_removed(base):
                          env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE}).stdout
     reason = (json.loads(out) if out.strip() else {}).get("reason", "")
     assert "Debug leftover" in reason, "another session removed this one's worktree; what it edited elsewhere is still checked"
+    os.makedirs(session_dir)
+    midway = subprocess.run(["python3", "-c", f"import os, sys; sys.path.insert(0, {H!r}); import stop_checks as s; os.chdir({session_dir!r}); "
+                             f"print(s.in_checkout({repo!r}, lambda: os.rmdir({session_dir!r}) or 'checked'))"],
+                            capture_output=True, text=True, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+    assert midway.stdout.strip() == "checked", f"removed while the hook was in another checkout: {midway.stderr[-300:]}"
 
 
 def stop_catches_committed_leftover(base):
