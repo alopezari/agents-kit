@@ -19,6 +19,8 @@ KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-hooks-home-")
 os.environ.pop("EVIDENCE_DIR", None)  # set when a staging step runs this suite: the tests' evidence would land there
 os.environ.pop("AGENTS_LOG_DIR", None)  # the tests read the hook log in their own HOME
+os.environ.pop("AGENTS_PROFILES_DIR", None)  # set by a caller, the user's after-turn scripts would run on every stop
+os.environ.pop("AGENTS_AFTER_TURN", None)  # inherited from an after-turn's session, no after-turn test could start one
 os.makedirs(os.path.expanduser("~/.agents/repos"))
 # Not profiles either: the Stop hook would start the user's own after-turn scripts.
 for entry in set(os.listdir(KIT)) - {"logs", "repos", "approvals", "profiles"}:
