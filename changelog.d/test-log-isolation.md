@@ -1,0 +1,1 @@
+- Tests that run hooks log their decisions in their own place (`AGENTS_LOG_DIR`), not in the real `~/.agents/logs/hooks.jsonl` the monthly job reads, and `tests/run.sh` fails when one lands there.
