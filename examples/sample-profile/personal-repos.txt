@@ -1,0 +1,3 @@
+# Repositories that are yours alone: one host/owner per line. Every other repository with a remote counts as
+# shared, and Impeccable's PRODUCT.md, DESIGN.md and .impeccable/ wait for your say-so there (hooks/design_files.py).
+github.com/your-github-user

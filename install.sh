@@ -242,6 +242,7 @@ if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
   baseline "$S" "$KIT/adapters/claude/settings.baseline.json"
   hook "$S" PreToolUse  "Bash" guard_bash.py 10
   hook "$S" PreToolUse  "mcp__.*" guard_mcp.py 10
+  hook "$S" PreToolUse  "Edit|Write|MultiEdit|NotebookEdit" guard_files.py 10
   hook "$S" UserPromptSubmit "" prompt_approvals.py 10
   hook "$S" PostToolUse "Edit|Write|MultiEdit|NotebookEdit" post_edit.py 30
   hook "$S" Stop        "" stop_checks.py 660
@@ -273,6 +274,7 @@ if command -v codex >/dev/null || [ -d "$HOME/.codex" ]; then
   baseline "$HOME/.codex/config.toml" "$KIT/adapters/codex/config.baseline.toml"
   hook "$H" PreToolUse  "Bash|shell|exec_command|local_shell" guard_bash.py 10
   hook "$H" PreToolUse  "mcp__.*" guard_mcp.py 10
+  hook "$H" PreToolUse  "apply_patch|Edit|Write" guard_files.py 10
   hook "$H" UserPromptSubmit "" prompt_approvals.py 10
   hook "$H" PostToolUse "apply_patch|Edit|Write" post_edit.py 30
   hook "$H" Stop        "" stop_checks.py 660

@@ -24,6 +24,17 @@ check("guard blocks force push", blocked?.block === true);
 const allowed = await handlers.tool_call({ toolName: "bash", input: { command: "git status" } }, ctx);
 check("guard allows git status", allowed === undefined);
 
+execSync("git remote add origin git@github.com:someone/app.git", { cwd: repo });
+const product = { toolName: "write", input: { path: join(repo, "PRODUCT.md"), content: "x" } };
+await handlers.input({ source: "interactive", text: "rediseña la home" }, ctx);
+check("file guard blocks PRODUCT.md in a shared repo", (await handlers.tool_call(product, ctx))?.block === true);
+await handlers.input({ source: "interactive", text: "sí, crea PRODUCT.md" }, ctx);
+check("the user's message naming it allows it", (await handlers.tool_call(product, ctx)) === undefined);
+await handlers.input({ source: "extension", text: "crea DESIGN.md" }, ctx);
+check("an extension's input approves nothing",
+  (await handlers.tool_call({ toolName: "edit", input: { path: join(repo, "DESIGN.md"), edits: [{ oldText: "", newText: "x" }] } }, ctx))?.block === true);
+execSync("git remote remove origin", { cwd: repo });
+
 writeFileSync(join(repo, "b.py"), "def f(:\n");
 const edited = await handlers.tool_result({ toolName: "write", input: { path: join(repo, "b.py") }, content: [] }, ctx);
 check("syntax error fed back", JSON.stringify(edited?.content ?? []).includes("syntax check failed"));

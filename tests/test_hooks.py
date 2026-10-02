@@ -1245,7 +1245,91 @@ def post_edit_syntax_feedback(base):
     assert not written, f"the syntax check must not write bytecode: {written}"
 
 
-TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
+def impeccable_files_in_a_shared_repo_need_the_user_first(base):
+    profiles = os.path.join(base, "profiles")
+    os.makedirs(os.path.join(profiles, "me"))
+    env = {"HOME": base, "AGENTS_PROFILES_DIR": profiles}
+    shared, personal, local = new_repo(base, "shared"), new_repo(base, "personal"), new_repo(base, "local")
+    git(shared, "remote", "add", "origin", "git@github.com:someone/app.git")
+    git(personal, "remote", "add", "origin", "https://github.com/Me/site.git")
+    open(os.path.join(profiles, "me", "personal-repos.txt"), "w").write("# mine\ngithub.com/me\n")
+    outside = tempfile.mkdtemp(dir=base)
+
+    def prompt(text, session="d1"):
+        run_hook("prompt_approvals.py", {"prompt": text, "session_id": session, "cwd": shared}, env=env)
+
+    def tool(name, inp, cwd=shared, session="d1"):
+        got = run_hook("guard_files.py", {"tool_name": name, "tool_input": inp, "cwd": cwd, "session_id": session}, env=env)
+        return "deny" if got else "allow"
+
+    def shell(command, cwd=shared, session="d1"):
+        got = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": cwd, "session_id": session}, env=env)
+        return "deny" if got else "allow"
+
+    prompt("rediseña la home")
+    product = os.path.join(shared, "PRODUCT.md")
+    for name, inp in [("Write", {"file_path": product, "content": "x"}),
+                      ("Write", {"file_path": os.path.join(shared, "DESIGN.md"), "content": "x"}),
+                      ("Edit", {"file_path": os.path.join(shared, ".impeccable", "config.json"), "new_string": "{}"}),
+                      ("MultiEdit", {"file_path": product, "edits": [{"new_string": "x"}]}),
+                      ("apply_patch", {"input": "*** Begin Patch\n*** Add File: DESIGN.md\n+x\n*** End Patch"}),
+                      ("Write", {"file_path": os.path.join(shared, ".gitignore"), "content": "node_modules\n.impeccable/\n"}),
+                      ("apply_patch", {"input": "*** Begin Patch\n*** Update File: .gitignore\n@@\n+DESIGN.md\n*** End Patch"})]:
+        assert tool(name, inp) == "deny", f"{name} {inp} in a shared repository"
+    for command in ["cat > PRODUCT.md <<'EOF'\n# x\nEOF", "echo x >> DESIGN.md", "mkdir -p .impeccable/mocks",
+                    "tee PRODUCT.md < /tmp/x", "cp /tmp/x DESIGN.md", "touch .impeccable/config.json",
+                    "python3 -c \"open('PRODUCT.md','w').write('x')\"", "echo .impeccable >> .gitignore",
+                    "~/.agents/skills/impeccable/scripts/impeccable serve-question --start --payload p.json",
+                    "npx impeccable live", "impeccable hooks on"]:
+        assert shell(command) == "deny", command
+    for command in ["impeccable context", "impeccable detect --json index.html", "impeccable doctor", "cat PRODUCT.md",
+                    "grep DESIGN.md README.md", "echo hi > notes.txt"]:
+        assert shell(command) == "allow", f"read-only or unrelated: {command}"
+    reason = run_hook("guard_files.py", {"tool_name": "Write", "tool_input": {"file_path": product, "content": "x"},
+                                        "cwd": shared, "session_id": "d1"}, env=env)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "`PRODUCT.md`" in reason and "carry on without it" in reason, reason
+
+    for cwd in (personal, local, outside):
+        assert tool("Write", {"file_path": os.path.join(cwd, "PRODUCT.md"), "content": "x"}, cwd) == "allow", cwd
+        assert shell("mkdir -p .impeccable && impeccable live", cwd) == "allow", cwd
+
+    prompt("vale, crea PRODUCT.md y DESIGN.md")
+    assert tool("Write", {"file_path": product, "content": "x"}) == "allow", "the user named it this turn"
+    assert tool("Write", {"file_path": product, "content": "x"}, session="other") == "deny", "only in that session"
+    assert shell("mkdir -p .impeccable") == "deny", "and only what was named"
+    prompt("sí, usa .impeccable y añádelo al .gitignore")
+    assert shell("mkdir -p .impeccable && echo .impeccable/ >> .gitignore") == "allow"
+    os.makedirs(os.path.join(shared, ".impeccable"))
+    open(os.path.join(shared, ".gitignore"), "w").write(".impeccable/\n")
+    prompt("sigue")
+    assert shell("impeccable serve-question --start --payload p.json") == "allow", "once .impeccable/ exists"
+    assert tool("Write", {"file_path": os.path.join(shared, ".impeccable", "a.json"), "content": "{}"}) == "allow"
+    assert tool("Write", {"file_path": os.path.join(shared, ".gitignore"), "content": ".impeccable/\ndist\n"}) == "allow", \
+        "a .gitignore that already lists it"
+    assert shell("impeccable live") == "deny" and shell("impeccable hooks reset") == "deny", \
+        "live and hooks edit project files even when .impeccable/ exists"
+    prompt("arranca impeccable live")
+    assert shell("impeccable live") == "allow" and shell("impeccable hooks on") == "deny"
+    own_approval = os.path.join(base, ".agents", "approvals", "turn", "d1", "design.design-md")
+    assert tool("Write", {"file_path": own_approval, "content": ""}) == "deny", "the agent can't write its own approval"
+    prompt("no crees DESIGN.md todavía")
+    assert tool("Write", {"file_path": os.path.join(shared, "DESIGN.md"), "content": "x"}) == "deny", "a refusal grants nothing"
+    prompt("sí, crea PRODUCT.md")
+    os.remove(os.path.join(shared, ".gitignore"))
+    assert shell("echo PRODUCT.md >> .gitignore") == "deny", "creating it doesn't allow gitignoring it"
+    assert shell("impeccable doctor --fix", local) == "allow" and shell("impeccable hooks status") == "allow"
+    shutil.rmtree(os.path.join(shared, ".impeccable"))
+    assert shell("impeccable doctor --fix") == "deny", "doctor --fix writes project files"
+    assert shell(f"cd {shared} && mkdir .impeccable", outside) == "deny", "a cd earlier in the chain"
+    git(personal, "remote", "add", "upstream", "git@github.com:work/site.git")
+    assert tool("Write", {"file_path": os.path.join(personal, "DESIGN.md"), "content": "x"}, personal) == "deny", \
+        "a fork of someone else's repository is shared"
+    prompt("this product is great; the design matters")
+    assert tool("Write", {"file_path": os.path.join(shared, "DESIGN.md"), "content": "x"}) == "deny", \
+        "only the file's own name counts"
+
+
+TESTS = [guard_blocks_irreversible, impeccable_files_in_a_shared_repo_need_the_user_first, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,

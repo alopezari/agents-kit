@@ -140,11 +140,12 @@ def harness_hooks():
     adapter = read("adapters/pi/agents-kit.ts")
     for chunk in adapter.split("pi.on(")[1:]:
         event = re.match(r'"(\w+)"', chunk).group(1)
-        tools = re.findall(r'toolName !== "(\w+)"', chunk)
-        for script in re.findall(r'runHook\("([\w.]+)"', chunk):
-            timeout = re.search(r"timeout: ([\d_]+)", adapter).group(1).replace("_", "")
-            rows.append(("Pi", event, "|".join(tools) or "(every settle)", require(f"hooks/{script}")[6:],
-                         str(int(timeout) // 1000)))
+        timeout = re.search(r"timeout: ([\d_]+)", adapter).group(1).replace("_", "")
+        # Each runHook takes the tool names tested since the previous one: `toolName !== "x"` guards, `=== "x"` branches.
+        for before, script in re.findall(r'(.*?)runHook\("([\w.]+)"', chunk, re.S):
+            tools = re.findall(r'toolName [!=]== "(\w+)"', before)
+            every = "(every message)" if event == "input" else "(every settle)"
+            rows.append(("Pi", event, "|".join(tools) or every, require(f"hooks/{script}")[6:], str(int(timeout) // 1000)))
     return rows
 
 
@@ -337,7 +338,11 @@ def render():
     w("It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your "
       "approval: naming the service in your message approves it until your next one, and otherwise you create a "
       "short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare "
-      "other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded.\n")
+      "other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. "
+      "In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding "
+      "them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them "
+      "(`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in "
+      "`personal-repos.txt`.\n")
 
     w("## Verify: checking the change at the end of every turn\n")
     w("\"The change\" is everything the branch adds since it left the default branch, committed or not, plus untracked files: "
@@ -410,6 +415,7 @@ def render():
     w("| `skills/<name>/` | `~/.agents/skills/<name>` |")
     w("| `research/*` | `~/.agents/research/*` |")
     w("| `mcp-writes.json` | read by `hooks/guard_mcp.py` |")
+    w("| `personal-repos.txt` | `host/owner` lines `hooks/design_files.py` treats as yours, not shared |")
     w("| `review-mining/repos.txt` | repositories the monthly review mining reads |")
     w("| `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |")
     w("| `PROFILE.md` | work context for the trends scan |")

@@ -16,6 +16,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import harness, log  # noqa: E402
+import design_files  # noqa: E402
 import private_terms  # noqa: E402
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
@@ -547,7 +548,8 @@ def main():
     try:
         cwd = os.path.realpath(cwd or os.getcwd())  # getcwd raises when the directory was deleted
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
-                  or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd))
+                  or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd)
+                  or design_files.blocked_command(command, cwd, payload.get("session_id")))
         if not reason:
             for pattern, why in RULES:
                 if re.search(pattern, command):
