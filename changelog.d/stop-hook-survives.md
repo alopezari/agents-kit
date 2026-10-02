@@ -1,0 +1,1 @@
+- The stop hook keeps checking a session's edits after the session's directory is removed (another session removed its worktree), instead of failing on every turn.

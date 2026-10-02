@@ -213,8 +213,11 @@ def fresh_session_notice(session, payload):
     transcript = payload.get("transcript_path")
     if not transcript:
         return None
-    out = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD"],
-              payload.get("cwd") or os.getcwd()).splitlines()
+    try:  # the session's directory may be gone: another session removed its worktree
+        out = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD"],
+                  payload.get("cwd") or os.getcwd()).splitlines()
+    except (OSError, ValueError):
+        return None
     if len(out) != 2 or out[1] == "HEAD":
         return None
     common_dir, branch = out
@@ -583,12 +586,19 @@ def run_verify(root):
 
 def in_checkout(root, action, *args):
     """review_stamp works on the checkout in the working directory; the stop hook visits several."""
-    previous = os.getcwd()
+    try:
+        previous = os.getcwd()
+    except FileNotFoundError:  # the session's directory was removed (another session freed its worktree)
+        previous = None
     os.chdir(root)
     try:
         return action(*args)
     finally:
-        os.chdir(previous)
+        try:
+            if previous:
+                os.chdir(previous)
+        except FileNotFoundError:  # removed while we were away
+            pass
 
 
 def record_verify(root, kind, checked_fingerprint):
