@@ -1,0 +1,3 @@
+- The shell guard denies `git checkout` and `git restore` of the whole tree when options come before the path (`git checkout -q -- .`, `git restore --worktree .`); `git restore --staged .`, which only unstages, stays allowed.
+- The shell guard judges a recursive `rm` after a `cd` from where it runs: `cd / && rm -rf opt/x` was allowed whenever `opt/x` would have been inside the working directory.
+- The spec skill's second reading no longer hangs on a long request under macOS's bash 3.2.

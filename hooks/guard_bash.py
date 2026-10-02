@@ -32,7 +32,13 @@ RULES = [
      "`git push` to main/master/trunk/develop/production/release: bypasses review."),
     (GIT + r"reset\s+--hard\b", "`git reset --hard`: discards uncommitted work."),
     (GIT + r"clean\s+-\w*f", "`git clean -f`: deletes untracked files."),
-    (GIT + r"(checkout|restore)\s+(--\s+)?\.(\s|$)", "`git checkout .` / `git restore .`: discards all uncommitted changes."),
+    (GIT + r"checkout(\s+-[\w=-]+)*\s+(--\s+)?\./?(\s|$)",
+     "`git checkout .`: discards all uncommitted changes."),
+    # --staged alone only unstages; with --worktree it discards like the rest
+    (GIT + r"restore(?=[^;&|\n]*\s(--worktree|-[a-zA-Z]*W[a-zA-Z]*)(\s|$)"
+     r"|(?![^;&|\n]*\s(--staged|-[a-zA-Z]*S[a-zA-Z]*)(\s|$)))"
+     r"(\s+(-s|--source)\s+[^\s;&|]+|\s+-[\w=~^./@{}-]+)*\s+(--\s+)?\./?(\s|$)",
+     "`git restore .`: discards all uncommitted changes."),
     (GIT + r"branch\s+-D\b", "`git branch -D`: force-deletes a branch."),
     (GIT + r"stash\s+(drop|clear)\b", "`git stash drop|clear`: deletes stashed work."),
     (r"\bgh\s+pr\s+merge\b", "`gh pr merge`: merging is a human decision."),
@@ -55,22 +61,47 @@ SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 
 
 def dangerous_rm(command, cwd):
-    """Recursive deletes outside the working directory or temp dirs."""
-    for segment in re.split(r"[;&|]+", command):
-        try:
-            tokens = shlex.split(segment)
+    """Recursive deletes outside the working directory or temp dirs, each judged from where the `cd`s before it
+    leave the shell (a subshell's cd ends with it). After a cd the guard can't resolve, a relative target is
+    unresolved too."""
+    here, outer = cwd, []  # here is None after an unresolvable cd
+    for segment in re.split(r"[;&|\n]+", command):
+        stripped = segment.strip()
+        outer += [here] * (len(stripped) - len(stripped.lstrip("(")))
+        try:  # the subshell's parentheses only: a quoted "(old)" in a name stays
+            tokens = shlex.split(stripped.lstrip("(").rstrip(")"))
         except ValueError:
-            continue
-        if not tokens or os.path.basename(tokens[0]) != "rm":
-            continue
-        flags = "".join(t.lstrip("-") for t in tokens[1:] if t.startswith("-") and not t.startswith("--"))
-        if "r" not in flags.lower() and "--recursive" not in tokens:
-            continue
-        home = os.path.realpath(os.path.expanduser("~"))
-        for target in (t for t in tokens[1:] if not t.startswith("-")):
-            if "$" in target or "`" in target or "*" == target.strip("/"):
-                return f"Recursive delete of an unresolved or wildcard path: {target}"
-            path = os.path.realpath(os.path.join(cwd, os.path.expanduser(target)))
+            tokens = []
+        while tokens and tokens[0] in ("builtin", "command", "{", "then", "do", "else", "!", "time"):
+            tokens = tokens[1:]
+        if tokens and tokens[0] in ("cd", "pushd"):
+            args = [t for t in tokens[1:] if t == "-" or not t.startswith("-")]
+            target = (args[0] if args else "~").replace("${HOME}", "~").replace("$HOME", "~")
+            if target == "-" or "$" in target or "`" in target:
+                here = None
+            elif here is not None or os.path.isabs(os.path.expanduser(target)):
+                here = cd_into(here or cwd, target)
+        elif tokens and os.path.basename(tokens[0]) == "rm":
+            flags = "".join(t.lstrip("-") for t in tokens[1:] if t.startswith("-") and not t.startswith("--"))
+            if "r" in flags.lower() or "--recursive" in tokens:
+                denied = dangerous_rm_targets([t for t in tokens[1:] if t and not t.startswith("-")], here, cwd)
+                if denied:
+                    return denied
+        for _ in range(len(stripped) - len(stripped.rstrip(")"))):
+            here = outer.pop() if outer else here
+    return None
+
+
+def dangerous_rm_targets(targets, here, cwd):
+    """Each target judged from the tracked directory and from cwd as well: a cd the tracking gets wrong (in a
+    pipeline, after `false &&`, undone by popd) can then only deny more than judging from cwd alone did."""
+    home = os.path.realpath(os.path.expanduser("~"))
+    for target in targets:
+        target = os.path.expanduser(target)
+        if "$" in target or "`" in target or "*" == target.strip("/") or (here is None and not os.path.isabs(target)):
+            return f"Recursive delete of an unresolved or wildcard path: {target}"
+        for place in {here or cwd, cwd}:
+            path = os.path.realpath(os.path.join(place, target))
             if path in ("/", home) or cwd.startswith(path + os.sep) or path == cwd:
                 return f"Recursive delete of {path}, which contains the working directory or home."
             inside_cwd = path.startswith(cwd + os.sep)

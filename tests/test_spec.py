@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 KIT = os.path.expanduser("~/.agents")
 os.environ["TMPDIR"] = tempfile.mkdtemp(prefix="agents-test-spec-tmp-")  # path.sh moves specs out of $TMPDIR
@@ -120,6 +121,9 @@ def review_prompt_bundles_the_request_and_the_spec(base):
     open(spec, "w").write(GOOD)
     empty = prompt(" \n")
     assert empty.returncode == 2 and "pass the request" in empty.stderr, empty.stderr
+    started = time.time()
+    long = prompt("Support Compose v2 (#12)\n" + "Comment: v1 is end of life, and the docs say so. " * 400)
+    assert long.returncode == 0 and time.time() - started < 3, "bash 3.2 took minutes on a 20 KB request"
     full = prompt("Support Compose v2 (#12)\nComment: v1 is end of life.")
     assert full.returncode == 0, full.stderr
     request_at, spec_at = full.stdout.index("v1 is end of life"), full.stdout.index("Goal: The installer")
