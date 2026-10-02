@@ -50,7 +50,8 @@ export default function (pi) {
         tool_input: {
           file_path: event.input.path,
           content: event.input.content,
-          edits: (event.input.edits ?? []).map((e) => ({ new_string: e.newText })),
+          edits: (Array.isArray(event.input.edits) ? event.input.edits : []).map((e) => ({ new_string: e?.newText })),
+          new_string: event.input.newText,
         },
       });
     } else return;

@@ -70,6 +70,14 @@ def base_ref(cwd=None):
     return "HEAD"
 
 
+def repo_id(repo, default_host=None):
+    """(host, owner/repo) from OWNER/REPO, HOST/OWNER/REPO, a URL (a PR's too) or a git remote URL."""
+    path = re.sub(r"^(?:\w+://)?(?:[^@/]+@)?", "", repo.strip()).replace(":", "/")
+    path = re.sub(r"/pull/\d+.*$", "", path).rstrip("/")
+    parts = re.sub(r"\.git$", "", path).lower().split("/")
+    return (parts[-3] if len(parts) > 2 else default_host), "/".join(parts[-2:])
+
+
 def repo_name(cwd=None):
     """The main checkout's directory name, the same from any worktree: the key of ~/.agents/repos/<name>."""
     common = git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=cwd)

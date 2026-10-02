@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import harness, log  # noqa: E402
 import design_files  # noqa: E402
 import private_terms  # noqa: E402
+from review_stamp import repo_id  # noqa: E402
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
@@ -369,14 +370,6 @@ def pr_checkout_unknown(command, payload):
             "literal path; no other cd, no `&`), and don't set a workdir.")
 
 
-def repo_id(repo, default_host=None):
-    """(host, owner/repo) from OWNER/REPO, HOST/OWNER/REPO, a URL (a PR's too) or a git remote URL."""
-    path = re.sub(r"^(?:\w+://)?(?:[^@/]+@)?", "", repo.strip()).replace(":", "/")
-    path = re.sub(r"/pull/\d+.*$", "", path).rstrip("/")
-    parts = re.sub(r"\.git$", "", path).lower().split("/")
-    return (parts[-3] if len(parts) > 2 else default_host), "/".join(parts[-2:])
-
-
 def targets_kit(repo, host, cwd):
     """Whether a gh command acts on the kit's own repository: its --repo (on GH_HOST, if set), else the checkout it
     runs in."""
@@ -395,6 +388,81 @@ def targets_kit(repo, host, cwd):
     common, kit = common_dir(cwd), common_dir(KIT) if os.path.exists(os.path.join(KIT, ".git")) else ""
     return bool(common and kit) and os.path.realpath(common) == os.path.realpath(kit)
 
+
+WRITE_TARGET_LAST = {"cp", "mv", "install", "ln"}
+WRITE_TARGET_ALL = {"mkdir", "touch", "tee"}
+READ_ONLY_IMPECCABLE = {"context", "detect", "doctor", "help", "version", "live-status"}
+REDIRECT_TARGET = re.compile(r"(?<![<\d&])\d?>[>|]?\s*(\"[^\"]*\"|'[^']*'|[^\s;&|<>()]+)")
+
+
+def impeccable_files(command, cwd, session):
+    """Why a command needs the user first under design_files.py: it writes PRODUCT.md, DESIGN.md or `.impeccable/`,
+    adds them to .gitignore, starts `impeccable live` or runs `impeccable hooks on`/`reset`, or runs another
+    Impeccable command that would create `.impeccable/`. None otherwise."""
+    code = shell_code(command)
+    # A patch run through the shell (Codex's apply_patch) names the files it adds.
+    patched = re.findall(r"^\*\*\* (?:Add File|Move to): (.+)$", command, re.M)
+    why = design_files.blocked(patched, cwd, session, command)
+    if why:
+        return why
+    # A newline inside quotes is part of an argument (sed's a\ text), not the end of a command.
+    joined = re.sub(r"'[x\n]*'|\"[x\n]*\"", lambda m: m.group().replace("\n", "x"), code)
+    cuts = [(0, 0)] + [m.span() for m in re.finditer(r"&&|\|\||(?<![<>&])&(?![>&])|(?<!>)\||[;\n()]", joined)]
+    for (_, start), (boundary, _) in zip(cuts, cuts[1:] + [(len(code), len(code))]):
+        segment, blanked = command[start:boundary], code[start:boundary]
+        if re.fullmatch(r"\s*x*\s*", blanked):  # a heredoc body line, not a command
+            continue
+        words = [w.strip("\"'") for w in re.findall(r"\"[^\"]*\"|'[^']*'|\S+", segment)]
+        while words and (re.fullmatch(r"\w+=\S*", words[0]) or words[0] in ("env", "command", "exec", "sudo")):
+            words = words[1:]  # FOO=1 cmd, env FOO=1 cmd
+        if not words:
+            continue
+        program = os.path.basename(words[0])
+        if program == "cd" and len(words) > 1:  # later segments run there
+            cwd = cd_into(cwd, words[1])
+            continue
+        if program in ("sh", "bash", "zsh") and "-c" in words[1:-1]:
+            why = impeccable_files(words[words.index("-c") + 1], cwd, session)
+            if why:
+                return why
+            continue
+        targets = [m.group(1).strip("\"'") for m in REDIRECT_TARGET.finditer(segment)]
+        args = [w for w in words[1:] if not w.startswith("-")]
+        if program in WRITE_TARGET_ALL:
+            targets += args
+        elif program in WRITE_TARGET_LAST and len(args) > 1:
+            dest = os.path.join(cwd, os.path.expanduser(args[-1]))
+            # Into a folder, each source keeps its name there.
+            targets += ([os.path.join(dest, os.path.basename(a.rstrip("/"))) for a in args[:-1]] if os.path.isdir(dest)
+                        else [args[-1]])
+        elif program == "sed" and any(w.startswith("-i") for w in words) and args:
+            targets.append(args[-1])
+        if re.search(r"write_text|open\([^)]*['\"][wa]", segment):
+            targets += re.findall(r"[\w./~-]*(?:PRODUCT\.md|DESIGN\.md|\.impeccable[\w./-]*)", segment, re.I)
+        # A pipe or heredoc carries what goes into the .gitignore: judge it by the whole command.
+        why = design_files.blocked(targets, cwd, session, command)
+        if why:
+            return why
+        if program == "npx":
+            words = [w for w in words[1:] if not w.startswith("-")]
+            program = words[0].split("@")[0] if words else ""
+        if program != "impeccable":
+            continue
+        sub, action = (words[1:] + ["help"])[0], (words[2:] + [""])[0]
+        if sub == "live":
+            name, what = "impeccable live", "Starting `impeccable live`, which injects a script into project files,"
+        elif sub in ("hooks", "hook-admin") and action in ("on", "reset"):
+            name, what = f"hooks {action}", f"Running `impeccable {sub} {action}`, which writes hook settings into the project,"
+        elif ((sub in READ_ONLY_IMPECCABLE and "--fix" not in words) or (sub in ("hooks", "hook-admin") and action in ("", "status"))
+              or {"--help", "-h", "--schema", "--version"} & set(words)):
+            continue
+        elif os.path.isdir(os.path.join(cwd, ".impeccable")):  # Impeccable writes .impeccable/ where it runs
+            continue
+        else:
+            name, what = ".impeccable", f"Running `impeccable {sub}`, which creates .impeccable/,"
+        if not design_files.approved(design_files.APPROVALS[name], session) and design_files.shared_root(cwd):
+            return design_files.reason(what, name)
+    return None
 
 def pr_command_args(command, start):
     """The arguments of the gh command starting at `start`, up to the next shell operator."""
@@ -549,7 +617,7 @@ def main():
         cwd = os.path.realpath(cwd or os.getcwd())  # getcwd raises when the directory was deleted
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
                   or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd)
-                  or design_files.blocked_command(command, cwd, payload.get("session_id")))
+                  or impeccable_files(command, cwd, payload.get("session_id")))
         if not reason:
             for pattern, why in RULES:
                 if re.search(pattern, command):

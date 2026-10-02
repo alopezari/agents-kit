@@ -34,6 +34,7 @@ await handlers.input({ source: "extension", text: "crea DESIGN.md" }, ctx);
 check("an extension's input approves nothing",
   (await handlers.tool_call({ toolName: "edit", input: { path: join(repo, "DESIGN.md"), edits: [{ oldText: "", newText: "x" }] } }, ctx))?.block === true);
 execSync("git remote remove origin", { cwd: repo });
+await handlers.input({ source: "interactive", text: "" }, ctx); // a new turn drops the approvals this one left in the kit
 
 writeFileSync(join(repo, "b.py"), "def f(:\n");
 const edited = await handlers.tool_result({ toolName: "write", input: { path: join(repo, "b.py") }, content: [] }, ctx);
