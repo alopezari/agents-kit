@@ -52,6 +52,9 @@ python3 test_quality_log.py || fail=1
 section "pull request comments not handled yet"
 python3 test_pr_comments.py || fail=1
 
+section "free a branch from its worktree"
+python3 test_free_branch.py || fail=1
+
 section "pull request validation section"
 python3 test_pr_validation.py || fail=1
 

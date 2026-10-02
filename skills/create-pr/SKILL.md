@@ -54,9 +54,20 @@ Add `--draft` only in the exception from step 1. Print the PR URL.
 
 Run the `follow-pr` skill in the same session (its first run): it waits for the pushed commit's CI with `~/.agents/bin/ci-wait` and reads the bot reviews that come with it. After that, the user runs it on demand.
 
+## 6. Free the branch
+
+When the branch is checked out in a linked worktree (not the main checkout), free it once that first follow-pr run is over, so the user can switch to it without removing the worktree by hand. From the session's own directory, not after a `cd`:
+
+```bash
+~/.agents/bin/free-branch <worktree path>
+```
+
+It removes a worktree you created and detaches the one the session runs in (the session's hooks need that directory), and refuses while anything there isn't committed and pushed. Give the user the switch command it prints.
+
 ## Report
 
 ```
 PR:        <url> (ready | draft: <why>)
+Branch:    free (<worktree removed | detached>; `cd <main checkout> && git switch <branch>`) | in the main checkout
 Evidence:  verify <PASS | FAIL | checked nothing: <tests run instead>> · self-review <stamp ok> · validate <stamp ok | not needed: tests/docs only> · staging <all PASS | none needed | pending: draft>
 ```

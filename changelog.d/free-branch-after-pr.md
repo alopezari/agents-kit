@@ -1,0 +1,1 @@
+- After opening the PR, create-pr frees the branch with the new `bin/free-branch`: it removes a worktree the agent created, or detaches the one the session runs in, once everything there is committed and pushed, so the user can switch to the branch in the main checkout. The staging hand-off uses it too.
