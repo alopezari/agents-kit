@@ -17,6 +17,12 @@ CORRECTION = re.compile(
     r"that's wrong|not what|still (fails|broken|not)|doesn't work|wrong)|\[Request interrupted",
     re.I,
 )
+# The skills that start a phase of the flow; others (write-pr-description, clarity…) run inside one.
+FLOW_SKILLS = {"spec", "self-review", "validate", "create-pr", "follow-pr", "ship"}
+TYPED_SKILL = re.compile(r"<command-name>/?([\w:-]+)</command-name>")
+SPEC_FILE = re.compile(r"spec-.*\.md$")
+# A longer gap between transcript entries is the user away, not work.
+ACTIVE_GAP_MINUTES = 15
 
 
 def ts(s):
@@ -36,20 +42,114 @@ def is_real_prompt(t):
     return bool(t) and not t.startswith(("<command-", "<local-command", "<system-reminder", "Caveat:", "<task-notification", "[SYSTEM", "<environment_context", "<user_instructions", "# AGENTS.md", "<permissions", "<turn_aborted"))
 
 
+def phase_events(entry):
+    """In block order: ("skill", name) for each flow skill the entry starts (a Skill call by the agent, `/<skill>`
+    typed by the user), ("edit", None) for each Edit/Write of anything but a spec (spec-*.md, in .git/agents/ or a
+    temp dir)."""
+    msg = entry.get("message") or {}
+    if entry.get("type") == "user":
+        return [("skill", n) for n in (name.split(":")[-1] for name in TYPED_SKILL.findall(text_of(msg.get("content"))))
+                if n in FLOW_SKILLS]
+    events = []
+    for c in msg.get("content") or []:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("input", {}).get("skill")).split(":")[-1] if c.get("name") == "Skill" else None
+        if name in FLOW_SKILLS:
+            events.append(("skill", name))
+        elif c.get("name") in ("Edit", "Write", "NotebookEdit") and not SPEC_FILE.match(
+                os.path.basename(str(c.get("input", {}).get("file_path")))):
+            events.append(("edit", None))
+    return events
+
+
+def branch_renames():
+    """(repo, old branch) -> new names, from the quality log's rename lines: a renamed branch is the same change."""
+    try:
+        lines = open(f"{HOME}/.agents/logs/quality.jsonl").read().splitlines()
+    except OSError:
+        return {}
+    renames = {}
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("kind") == "rename":
+            renames.setdefault((e.get("repo"), e.get("name")), set()).add(e.get("to"))
+    return renames
+
+
+def renamed(renames, cwd, old, new):
+    """Whether `new` is `old` renamed, maybe several times, in a repo whose name is part of the session's directory."""
+    repos = {repo for repo, _ in renames if repo and repo in (cwd or "")}
+    names, pending = set(), [old]
+    while pending:
+        current = pending.pop()
+        if current not in names:
+            names.add(current)
+            pending += [n for repo in repos for n in renames.get((repo, current), ())]
+    return new in names
+
+
+def split_into_phases(entries, renames, cwd):
+    """branch -> phase -> tokens and active minutes. A message belongs to the last flow skill started on its branch
+    ("build" before any, and again after the spec once code is edited); a change of branch starts again at
+    "build" unless it is a logged rename. An entry without a branch counts for the current one and changes nothing."""
+    events_of = {}  # message id -> its events across lines: one line per content block, each repeating the usage
+    for e in entries:
+        mid = (e.get("message") or {}).get("id")
+        if e.get("type") == "assistant" and mid:
+            events_of[mid] = events_of.get(mid, []) + phase_events(e)
+    phases, counted = {}, set()
+    branch, phase, last = "", "build", None
+    for e in entries:
+        msg = e.get("message") or {}
+        if e.get("gitBranch") and e["gitBranch"] != branch:
+            if branch and not renamed(renames, cwd, branch, e["gitBranch"]):
+                phase = "build"
+            branch = e["gitBranch"]
+        mid = msg.get("id") if e.get("type") == "assistant" else None
+        first_line = bool(mid) and mid not in counted
+        if e.get("gitBranch"):
+            for kind, name in events_of.get(mid, []) if first_line else ([] if mid else phase_events(e)):
+                phase = name if kind == "skill" else ("build" if phase == "spec" else phase)
+        spent = phases.setdefault(branch, {}).setdefault(phase, {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "minutes": 0})
+        if e.get("timestamp"):
+            now = ts(e["timestamp"])
+            gap = (now - last).total_seconds() / 60 if last else 0
+            if 0 < gap <= ACTIVE_GAP_MINUTES:
+                spent["minutes"] += gap
+            last = max(last, now) if last else now  # a resumed session replays older timestamps
+        if first_line:
+            counted.add(mid)
+            u = msg.get("usage") or {}
+            spent["in"] += u.get("input_tokens", 0)
+            spent["out"] += u.get("output_tokens", 0)
+            spent["cache_read"] += u.get("cache_read_input_tokens", 0)
+            spent["cache_write"] += u.get("cache_creation_input_tokens", 0)
+    return {b: {p: {**v, "minutes": round(v["minutes"], 1)} for p, v in ps.items() if any(v.values())}
+            for b, ps in phases.items() if b}
+
+
 def claude_sessions():
+    renames = branch_renames()
     for f in glob.glob(f"{HOME}/.claude/projects/*/*.jsonl"):
         sid = os.path.basename(f)[:-6]
         prompts, models, efforts, times, tools, advisor = [], {}, set(), [], 0, 0
         tokens = {"in": 0, "out": 0, "cache_read": 0}
         cwd = None
         branches = set()
+        entries, lines_seen, messages_seen = [], set(), set()
         for line in open(f, errors="ignore"):
             try:
                 e = json.loads(line)
             except ValueError:
                 continue
-            if e.get("isSidechain"):
-                continue
+            if e.get("isSidechain") or e.get("uuid") in lines_seen and e.get("uuid"):
+                continue  # a subagent's line, or one a resumed session replays
+            lines_seen.add(e.get("uuid"))
+            entries.append(e)
             if e.get("timestamp"):
                 times.append(e["timestamp"])
             cwd = cwd or e.get("cwd")
@@ -61,6 +161,12 @@ def claude_sessions():
                 if is_real_prompt(t):
                     prompts.append(t)
             elif e.get("type") == "assistant":
+                blocks = [c for c in msg.get("content") or [] if isinstance(c, dict)]
+                tools += sum(1 for c in blocks if c.get("type") == "tool_use")
+                advisor += sum(1 for c in blocks if "advisor" in str(c.get("type", "")) or c.get("name") == "advisor")
+                if msg.get("id") in messages_seen:
+                    continue  # the same message again: one line per content block, each repeating its usage
+                messages_seen.add(msg.get("id"))
                 m = msg.get("model")
                 if m and m != "<synthetic>":
                     models[m] = models.get(m, 0) + 1
@@ -70,13 +176,10 @@ def claude_sessions():
                 tokens["in"] += u.get("input_tokens", 0)
                 tokens["out"] += u.get("output_tokens", 0)
                 tokens["cache_read"] += u.get("cache_read_input_tokens", 0)
-                blocks = [c for c in msg.get("content") or [] if isinstance(c, dict)]
-                tools += sum(1 for c in blocks if c.get("type") == "tool_use")
-                advisor += sum(1 for c in blocks if "advisor" in str(c.get("type", "")) or c.get("name") == "advisor")
         if prompts and times and not (cwd or "").startswith(EXCLUDE_CWD):
             yield dict(harness="claude-code", id=sid, cwd=cwd, start=min(times), end=max(times), prompts=prompts,
                        models=models, effort=sorted(efforts), tokens=tokens, tool_calls=tools, advisor_calls=advisor,
-                       branches=sorted(branches))
+                       branches=sorted(branches), phases=split_into_phases(entries, renames, cwd))
 
 
 def codex_sessions():
@@ -158,16 +261,18 @@ def summarize(s):
         "models": s["models"], "effort": s["effort"], "tokens": s["tokens"], "tool_calls": s["tool_calls"],
         "user_turns": len(s["prompts"]), "advisor_calls": s.get("advisor_calls", 0), "first_prompt": s["prompts"][0][:1500],
         "later_prompts": [p[:300] for p in s["prompts"][1:8]], "correction_signals": corrections[:6],
+        "phases": s.get("phases", {}),
     }
 
 
-N = int(sys.argv[1]) if len(sys.argv) > 1 else 50
-OUT = sys.argv[2] if len(sys.argv) > 2 else "sessions.json"
-sessions = sorted(list(claude_sessions()) + list(codex_sessions()), key=lambda s: s["start"], reverse=True)
-last = [summarize(s) for s in sessions[:N]]
-json.dump(last, open(OUT, "w"), indent=1, ensure_ascii=False)
-print(f"total real sessions: {len(sessions)}; kept {len(last)}; from {last[-1]['start']} to {last[0]['start']}")
-from collections import Counter
-print(Counter(s["harness"] for s in last))
-print(Counter(m for s in last for m in s["models"]))
-print("effort:", Counter(e for s in last for e in s["effort"]), "advisor calls:", sum(s["advisor_calls"] for s in last))
+if __name__ == "__main__":
+    N = int(sys.argv[1]) if len(sys.argv) > 1 else 50
+    OUT = sys.argv[2] if len(sys.argv) > 2 else "sessions.json"
+    sessions = sorted(list(claude_sessions()) + list(codex_sessions()), key=lambda s: s["start"], reverse=True)
+    last = [summarize(s) for s in sessions[:N]]
+    json.dump(last, open(OUT, "w"), indent=1, ensure_ascii=False)
+    print(f"total real sessions: {len(sessions)}; kept {len(last)}; from {last[-1]['start']} to {last[0]['start']}")
+    from collections import Counter
+    print(Counter(s["harness"] for s in last))
+    print(Counter(m for s in last for m in s["models"]))
+    print("effort:", Counter(e for s in last for e in s["effort"]), "advisor calls:", sum(s["advisor_calls"] for s in last))

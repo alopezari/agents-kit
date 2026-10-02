@@ -103,6 +103,10 @@ Steps:
    Add a "Cost per merged PR" section from the sessions joined to PRs: tokens (input+output; cache reads separately),
    wall-clock minutes (idle included), hours from the first session to the PR and from the PR to the merge, per
    period and per model and effort where sessions.json has them. Compare cost per merged PR, never per session.
+   Add a "Cost per phase" section from sessions_joined.per_phase and each PR's sessions.phases: per phase of the flow
+   (build, spec, self-review, validate, create-pr, follow-pr, ship), output tokens, cache reads and writes, and active
+   minutes (gaps over 15 minutes left out) per merged PR, next to the escapes that phase let through. Point at the
+   phase that costs most for what it catches. Phases come from Claude Code transcripts only; say how many PRs had them.
    Add a "Framework friction" section: where the kit itself slowed work down or was bypassed. Count, with example sessions:
    blocks the agent worked around or the user overrode (a deny followed by the same intent in another form), verify or
    self-review steps reported as NOT RUN and why, time per tier against the triage budgets (low <5 min, standard <=20,

@@ -51,6 +51,9 @@ python3 test_deps.py || fail=1
 section "outcomes and escapes"
 python3 test_outcomes.py || fail=1
 
+section "sessions and phases"
+python3 test_extract_sessions.py || fail=1
+
 section "skill frontmatter"
 node test_skill_frontmatter.mjs || fail=1
 

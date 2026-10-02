@@ -1,0 +1,1 @@
+- The monthly job reports tokens and active minutes per phase of the flow (build, spec, self-review, validate, create-pr, follow-pr), read from Claude Code transcripts, and session token totals no longer count a message once per content block.
