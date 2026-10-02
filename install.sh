@@ -191,7 +191,8 @@ older_than() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" != "$2" ];
 while read -r tier spec how purpose; do
   program=${spec%%>=*}; minimum=${spec#"$program"}; minimum=${minimum#>=}
   if installed "$program"; then
-    version=$("$program" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1) || true  # chrome is an app
+    version=""  # chrome is an app; an impeccable on PATH may be a launcher that downloads, and its cache is pinned
+    [ "$program" = impeccable ] || version=$("$program" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1) || true
     if [ -z "$minimum" ] || [ -z "$version" ] || ! older_than "$version" "$minimum"; then ok "$program${version:+ $version}"; continue; fi
     msg="$program $version is older than $minimum, needed for $purpose: $(install_hint "$how")"
     if [ "$tier" = optional ]; then info "$msg"; else warn "$msg"; fi

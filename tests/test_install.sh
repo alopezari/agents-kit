@@ -56,7 +56,7 @@ mkdir -p "$home/fakes/launcher"
 printf '#!/bin/sh\ntouch "%s/downloaded"\n' "$home" > "$home/fakes/launcher/impeccable"; chmod +x "$home/fakes/launcher/impeccable"
 before=$(PATH="$home/fakes/launcher:$PATH" HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
 mkdir -p "$engine" && printf '#!/bin/sh\n' > "$engine/impeccable" && chmod +x "$engine/impeccable"
-after=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
+after=$(PATH="$home/fakes/launcher:$PATH" HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
 if echo "$before" | grep -q "  info  impeccable not installed" && echo "$after" | grep -qxE "  ok    impeccable( [0-9.]+)?" \
   && [ "$(ls "$home/.impeccable/bin")" = "$(basename "$engine")" ] && [ ! -e "$home/downloaded" ]; then
   echo "ok   --doctor reports Impeccable's engine from its cache, without fetching it"
