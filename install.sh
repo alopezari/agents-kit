@@ -31,7 +31,8 @@ link() {
   if [ "$(readlink "$path" 2>/dev/null)" = "$target" ]; then ok "$path"; return; fi
   if [ $DOCTOR = 1 ]; then warn "$path should link to $target"; return; fi
   mkdir -p "$(dirname "$path")"
-  if [ -d "$path" ] && [ ! -L "$path" ]; then mkdir -p "$BACKUP"; mv "$path" "$BACKUP/"; else backup "$path"; rm -f "$path"; fi
+  # A folder keeps its full path under the backups: two harnesses can hold one with the same name.
+  if [ -d "$path" ] && [ ! -L "$path" ]; then mkdir -p "$BACKUP$(dirname "$path")"; mv "$path" "$BACKUP$path"; else backup "$path"; rm -f "$path"; fi
   ln -s "$target" "$path"; fix "$path -> $target"
 }
 
@@ -128,7 +129,7 @@ echo "External skills"
 pinned_skill() {  # <name> <url> <commit> <folder>
   local name=$1 url=$2 pin=$3 folder=$4 checkout="$KIT/vendor/$1" at="" kept="not installed"
   # Without its own .git, git -C would find the kit's repository and report the kit's HEAD.
-  [ -e "$checkout/.git" ] && at=$(git -C "$checkout" rev-parse HEAD 2>/dev/null) && kept="keeping ${at:0:12}"
+  [ -e "$checkout/.git" ] && at=$(git -C "$checkout" rev-parse -q --verify HEAD) && kept="keeping ${at:0:12}"
   if [ $DOCTOR = 1 ]; then
     if [ -z "$at" ]; then warn "$name is missing (from $url)"; return
     elif [ "$at" != "$pin" ]; then warn "$name is at ${at:0:12}, pinned to ${pin:0:12}"
@@ -141,7 +142,7 @@ pinned_skill() {  # <name> <url> <commit> <folder>
     git -C "$checkout" config remote.origin.url "$url"
     if ! git -C "$checkout" fetch -q --depth 1 origin "$pin" 2>/dev/null; then
       warn "$name: cannot fetch ${pin:0:12} from $url; $kept"; return
-    elif ! git -C "$checkout" cat-file -e "$pin:$folder/SKILL.md" 2>/dev/null; then
+    elif [ "$(git -C "$checkout" cat-file -t "$pin:$folder/SKILL.md" 2>/dev/null)" != blob ]; then
       warn "$name: $folder has no SKILL.md at ${pin:0:12}; $kept"; return
     elif ! git -C "$checkout" checkout -q --detach "$pin"; then
       warn "$name: cannot check out ${pin:0:12} in vendor/$name (local changes?); $kept"; return

@@ -202,8 +202,12 @@ unknown=0123456789abcdef0123456789abcdef01234567
 external_before=$(cat "$kit/skills.external")
 pin() { printf '%s\n' "$external_before" "$@" > "$kit/skills.external"; }
 run_install() { HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" "$@" 2>&1; }
-# A copy installed by hand before the kit managed it: a plain folder where the link goes.
-mkdir -p "$home/.claude/skills/chosen" && echo "hand-installed" > "$home/.claude/skills/chosen/SKILL.md"
+# A copy installed by hand in each harness before the kit managed it: plain folders where the links go.
+hand_installed=0
+for harness in .claude .codex; do
+  [ -d "$home/$harness" ] || continue
+  mkdir -p "$home/$harness/skills/chosen" && echo "hand-installed" > "$home/$harness/skills/chosen/SKILL.md"; hand_installed=$((hand_installed + 1))
+done
 pin "chosen file://$upstream@$v1#skills/chosen A pinned fixture skill."
 out=$(run_install); status=$?
 check "a pinned external skill links only its folder, at its commit, into every harness" \
@@ -212,8 +216,8 @@ check "a pinned external skill links only its folder, at its commit, into every 
    && [ "$(readlink "$home/.claude/skills/chosen")" = "$kit/skills/chosen" ] && [ ! -e "$home/.claude/skills/other" ] \
    && { [ ! -d "$home/.codex" ] || [ "$(readlink "$home/.codex/skills/chosen")" = "$kit/skills/chosen" ]; } \
    && grep -q "description: v1" "$home/.claude/skills/chosen/SKILL.md"'
-check "replacing a folder installed by hand, kept in the backups" \
-  'grep -rqx "hand-installed" "$kit"/backups/*/chosen/SKILL.md'
+check "replacing the folders installed by hand, each kept in the backups" \
+  '[ "$(cat "$kit"/backups/*"$home"/.*/skills/chosen/SKILL.md | grep -cx hand-installed)" = "$hand_installed" ]'
 again=$(run_install)
 check "and a second install changes nothing" '! grep -q "  fix " <<<"$again" && grep -q "  ok    chosen at ${v1:0:12}" <<<"$again"'
 pin "chosen file://$upstream@$v2#skills/chosen A pinned fixture skill."
@@ -252,10 +256,11 @@ check "a folder without a SKILL.md, or a source that can't be fetched, is report
    && grep -q "  warn  unreachable: cannot fetch ${v1:0:12} from file://$home/no-such-repo; not installed" <<<"$out" \
    && [ ! -L "$kit/skills/wrongpath" ] && [ ! -L "$home/.claude/skills/wrongpath" ] \
    && [ ! -L "$kit/skills/unreachable" ] && [ ! -L "$home/.claude/skills/unreachable" ]'
-pin "absent file://$upstream@$v1#skills/chosen Not installed yet."
+pin "absent file://$upstream@$v1#skills/chosen Not installed yet." "unreachable file://$home/no-such-repo@$v1#skills/chosen Its source is gone."
 doctor=$(run_install --doctor)
-check "--doctor reports a pinned skill not installed yet, and installs nothing" \
-  'grep -q "  warn  absent is missing (from file://$upstream)" <<<"$doctor" && [ ! -e "$kit/vendor/absent" ] && [ ! -L "$kit/skills/absent" ]'
+check "--doctor reports a pinned skill not installed yet, or whose first fetch failed, and installs nothing" \
+  'grep -q "  warn  absent is missing (from file://$upstream)" <<<"$doctor" && grep -q "  warn  unreachable is missing (from file://$home/no-such-repo)" <<<"$doctor" \
+   && [ ! -e "$kit/vendor/absent" ] && [ ! -L "$kit/skills/absent" ]'
 pin "release-notes file://$upstream@$v1#skills/chosen Same name as the sample profile's skill."
 profile_link=$(readlink "$kit/skills/release-notes")
 out=$(run_install)$(run_install --doctor)
