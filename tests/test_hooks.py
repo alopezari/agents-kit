@@ -188,6 +188,15 @@ def pr_gate_review_and_validation(base):
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     assert guard("gh pr create --fill", repo) == "deny"
     assert guard(f"cd {repo} && GH_HOST=x gh pr create --fill", repo) == "deny"
+    def denial(command):
+        return run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo,
+                                          "session_id": "test"})["hookSpecificOutput"]["permissionDecisionReason"]
+    for chained in ("python3 ~/.agents/hooks/review_stamp.py write && gh pr create --fill",
+                    "python3 ~/.agents/hooks/review_stamp.py \\\n  write && gh pr create --fill"):
+        said = denial(chained)
+        assert "before anything in it runs" in said and "a command of its own" in said, \
+            f"a stamp written in the same command can't count, and the message must say how to order it: {said}"
+    assert "a command of its own" not in denial('echo "review_stamp.py write"; gh pr create --fill'), "quoted text writes nothing"
     assert guard("cd no-such-dir; gh pr create --fill", repo) == "deny", "a failed cd can't crash the guard open"
     assert guard("sh -c $'gh pr create --fill'", repo) == "deny", "sh -c $'...'"
     assert guard("""python3 -c 'print("gh pr create")'""", repo) == "allow", "phrase inside a string is not a PR"

@@ -1,0 +1,1 @@
+- When `gh pr create` is blocked by a missing stamp that the same command writes, the guard says so and gives the order; create-pr runs the create as a command of its own.
