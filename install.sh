@@ -131,10 +131,11 @@ pinned_skill() {  # <name> <url> <commit> <folder>
   # Without its own .git, git -C would find the kit's repository and report the kit's HEAD.
   [ -e "$checkout/.git" ] && at=$(git -C "$checkout" rev-parse -q --verify HEAD) && kept="keeping ${at:0:12}"
   if [ $DOCTOR = 1 ]; then
-    if [ -z "$at" ]; then warn "$name is missing (from $url)"; return
-    elif [ "$at" != "$pin" ]; then warn "$name is at ${at:0:12}, pinned to ${pin:0:12}"
-    elif [ -n "$(git -C "$checkout" status --porcelain)" ]; then warn "$name has local changes in vendor/$name"
-    else ok "$name at ${pin:0:12}"; fi
+    if [ -z "$at" ]; then warn "$name is missing (from $url)"; return; fi
+    local changes; changes=$(git -C "$checkout" status --porcelain)
+    [ "$at" = "$pin" ] || warn "$name is at ${at:0:12}, pinned to ${pin:0:12}"
+    [ -z "$changes" ] || warn "$name has local changes in vendor/$name"
+    [ "$at" != "$pin" ] || [ -n "$changes" ] || ok "$name at ${pin:0:12}"
   elif [ "$at" = "$pin" ]; then ok "$name at ${pin:0:12}"
   else
     # Nothing replaces the current checkout or link until the new commit is known to hold the skill.

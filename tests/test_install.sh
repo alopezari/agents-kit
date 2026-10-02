@@ -230,7 +230,10 @@ check "install moves the checkout to the new pin" \
   '[ "$(git -C "$kit/vendor/chosen" rev-parse HEAD)" = "$v2" ] && grep -q "description: v2" "$home/.claude/skills/chosen/SKILL.md"'
 echo "edited in place" >> "$kit/vendor/chosen/skills/chosen/SKILL.md"
 doctor=$(run_install --doctor)
-check "--doctor warns about local changes in a pinned checkout" 'grep -q "  warn  chosen has local changes in vendor/chosen" <<<"$doctor"'
+pin "chosen file://$upstream@$v1#skills/chosen A pinned fixture skill."
+doctor+=$(run_install --doctor)
+check "--doctor warns about local changes in a pinned checkout, also when it is behind its pin" \
+  '[ "$(grep -c "  warn  chosen has local changes in vendor/chosen" <<<"$doctor")" = 2 ] && grep -q "  warn  chosen is at ${v2:0:12}, pinned to ${v1:0:12}" <<<"$doctor"'
 git -C "$kit/vendor/chosen" checkout -q -- .
 pin "chosen file://$upstream@$v3#skills/chosen A pinned fixture skill."
 out=$(run_install)
