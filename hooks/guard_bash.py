@@ -35,7 +35,8 @@ RULES = [
     (GIT + r"checkout(\s+-[\w=-]+)*\s+(--\s+)?\./?(\s|$)",
      "`git checkout .`: discards all uncommitted changes."),
     # --staged alone only unstages; with --worktree it discards like the rest
-    (GIT + r"restore(?=[^;&|\n]*\s(--worktree|-W)(\s|$)|(?![^;&|\n]*\s(--staged|-S)(\s|$)))"
+    (GIT + r"restore(?=[^;&|\n]*\s(--worktree|-[a-zA-Z]*W[a-zA-Z]*)(\s|$)"
+     r"|(?![^;&|\n]*\s(--staged|-[a-zA-Z]*S[a-zA-Z]*)(\s|$)))"
      r"(\s+(-s|--source)\s+[^\s;&|]+|\s+-[\w=~^./@{}-]+)*\s+(--\s+)?\./?(\s|$)",
      "`git restore .`: discards all uncommitted changes."),
     (GIT + r"branch\s+-D\b", "`git branch -D`: force-deletes a branch."),
@@ -67,11 +68,11 @@ def dangerous_rm(command, cwd):
     for segment in re.split(r"[;&|\n]+", command):
         stripped = segment.strip()
         outer += [here] * (len(stripped) - len(stripped.lstrip("(")))
-        try:
-            tokens = [token.strip("()") for token in shlex.split(segment)]
+        try:  # the subshell's parentheses only: a quoted "(old)" in a name stays
+            tokens = shlex.split(stripped.lstrip("(").rstrip(")"))
         except ValueError:
             tokens = []
-        while tokens and tokens[0] in ("builtin", "command"):
+        while tokens and tokens[0] in ("builtin", "command", "{", "then", "do", "else", "!", "time"):
             tokens = tokens[1:]
         if tokens and tokens[0] in ("cd", "pushd"):
             args = [t for t in tokens[1:] if t == "-" or not t.startswith("-")]

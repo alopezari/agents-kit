@@ -111,7 +111,9 @@ def guard_blocks_irreversible(base):
     for cmd in ["cd / && rm -rf opt/projects", "cd /; rm -r opt/projects", "(cd /tmp && true); cd / && rm -rf opt/x",
                 "(cd / && rm -rf opt/projects)"]:
         assert guard(cmd, cwd=work) == "deny", f"a relative rm runs where the cd left it: {cmd}"
-    for cmd in ["pushd / && rm -rf opt/x", "cd /\nrm -rf opt/x", "cd - && rm -rf opt/x", "cd -P / && rm -rf opt/x"]:
+    for cmd in ["pushd / && rm -rf opt/x", "cd /\nrm -rf opt/x", "cd - && rm -rf opt/x", "cd -P / && rm -rf opt/x",
+                "cd -- / && rm -rf opt/x", "{ cd / && rm -rf opt/x; }", "if true; then cd / && rm -rf opt/x; fi",
+                "git restore --staged -Wq ."]:
         assert guard(cmd, cwd=work) == "deny", f"every way of moving counts: {cmd!r}"
     # From /usr, ../x is /x: the subshell's cd into lib must not make it /usr/x.
     assert guard("(cd lib) && rm -rf ../x", cwd="/usr") == "deny"
@@ -133,7 +135,7 @@ def guard_allows_routine(base):
     os.makedirs(os.path.join(work, "sub", "build"))
     assert guard("cd sub && rm -rf build", cwd=work) == "allow"
     assert guard("cd lib && make && cd .. && rm -rf lib/build", cwd="/usr") == "allow", "cd .. comes back, not up"
-    assert guard("git restore --staged -- .") == "allow"
+    assert guard("git restore --staged -- .") == "allow" and guard("git restore -Sq .") == "allow"
 
 
 def guard_mcp_linear(base):
