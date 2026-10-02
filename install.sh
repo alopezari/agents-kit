@@ -30,7 +30,10 @@ link() {
   local target=$1 path=$2
   if [ "$(readlink "$path" 2>/dev/null)" = "$target" ]; then ok "$path"; return; fi
   if [ $DOCTOR = 1 ]; then warn "$path should link to $target"; return; fi
-  mkdir -p "$(dirname "$path")"; backup "$path"; rm -f "$path"; ln -s "$target" "$path"; fix "$path -> $target"
+  mkdir -p "$(dirname "$path")"
+  # A folder keeps its full path under the backups: two harnesses can hold one with the same name.
+  if [ -d "$path" ] && [ ! -L "$path" ]; then mkdir -p "$BACKUP$(dirname "$path")"; mv "$path" "$BACKUP$path"; else backup "$path"; rm -f "$path"; fi
+  ln -s "$target" "$path"; fix "$path -> $target"
 }
 
 # hooks <settings.json> <event> <matcher> <script> <timeout>: one entry per script, other hooks untouched.
@@ -121,13 +124,45 @@ for path in sorted(glob.glob(os.path.join(kit, "profiles", "*", "mcp-writes.json
 PY
 
 echo "External skills"
-# Third-party skills are fetched from their source instead of being copied into the kit.
-while read -r name url _; do
+# Third-party skills are fetched from their source instead of being copied into the kit. A pinned one,
+# <url>@<commit>#<folder>, is checked out in vendor/ at exactly that commit and only its folder is linked in.
+pinned_skill() {  # <name> <url> <commit> <folder>
+  local name=$1 url=$2 pin=$3 folder=$4 checkout="$KIT/vendor/$1" at="" kept="not installed"
+  # Without its own .git, git -C would find the kit's repository and report the kit's HEAD.
+  [ -e "$checkout/.git" ] && at=$(git -C "$checkout" rev-parse -q --verify HEAD) && kept="keeping ${at:0:12}"
+  if [ $DOCTOR = 1 ]; then
+    if [ -z "$at" ]; then warn "$name is missing (from $url)"; return; fi
+    local changes; changes=$(git -C "$checkout" status --porcelain)
+    [ "$at" = "$pin" ] || warn "$name is at ${at:0:12}, pinned to ${pin:0:12}"
+    [ -z "$changes" ] || warn "$name has local changes in vendor/$name"
+    [ "$at" != "$pin" ] || [ -n "$changes" ] || ok "$name at ${pin:0:12}"
+  elif [ "$at" = "$pin" ]; then ok "$name at ${pin:0:12}"
+  else
+    # Nothing replaces the current checkout or link until the new commit is known to hold the skill.
+    [ -e "$checkout/.git" ] || git init -q "$checkout"
+    git -C "$checkout" config remote.origin.url "$url"
+    if ! git -C "$checkout" fetch -q --depth 1 origin "$pin" 2>/dev/null; then
+      warn "$name: cannot fetch ${pin:0:12} from $url; $kept"; return
+    elif [ "$(git -C "$checkout" cat-file -t "$pin:$folder/SKILL.md" 2>/dev/null)" != blob ]; then
+      warn "$name: $folder has no SKILL.md at ${pin:0:12}; $kept"; return
+    elif ! git -C "$checkout" checkout -q --detach "$pin"; then
+      warn "$name: cannot check out ${pin:0:12} in vendor/$name (local changes?); $kept"; return
+    fi
+    fix "$name checked out at ${pin:0:12} from $url"
+  fi
+  if [ ! -f "$checkout/$folder/SKILL.md" ]; then warn "$name: $folder has no SKILL.md at ${at:0:12}; not linked"; return; fi
+  link "$checkout/$folder" "$KIT/skills/$name"
+}
+while read -r name source _; do
   case "$name" in ''|'#'*) continue ;; esac
-  if [ -L "$KIT/skills/$name" ]; then warn "$name is an external skill and a profile's; using the profile's"
+  url=${source%@*} pin=${source##*@} folder=${pin#*#} pin=${pin%%#*}
+  # A copied or moved kit keeps links to the old vendor/ path: those are still the kit's, not a profile's.
+  if [ -L "$KIT/skills/$name" ] && [[ "$(readlink "$KIT/skills/$name")" != */vendor/"$name"/* ]]; then
+    warn "$name is an external skill and a profile's; using the profile's"
+  elif [[ "$source" == *@*#* ]]; then pinned_skill "$name" "$url" "$pin" "$folder"
   elif [ -d "$KIT/skills/$name" ]; then ok "$name"
-  elif [ $DOCTOR = 1 ]; then warn "$name is missing (from $url)"
-  else git clone -q --depth 1 "$url" "$KIT/skills/$name" && fix "$name cloned from $url"; fi
+  elif [ $DOCTOR = 1 ]; then warn "$name is missing (from $source)"
+  else git clone -q --depth 1 "$source" "$KIT/skills/$name" && fix "$name cloned from $source"; fi
 done < "$KIT/skills.external"
 
 echo "Kit repository"

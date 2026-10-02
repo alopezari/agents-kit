@@ -6,7 +6,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 
 ## At a glance
 
-- **3 harnesses** share one `AGENTS.md`, 8 skills and 5 hook scripts (Pi has no MCP, so it runs all but `guard_mcp.py`).
+- **3 harnesses** share one `AGENTS.md`, 9 skills and 5 hook scripts (Pi has no MCP, so it runs all but `guard_mcp.py`).
 - **21 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
@@ -197,6 +197,7 @@ A repository that needs more (a Docker stack, known failing tests, project rules
 | `clarity` | https://github.com/addyosmani/clarity.git | Draft, rewrite or review prose other people will read, so it is specific and sounds like its author without inventing facts. |
 | `create-pr` | core | Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change, pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly. |
 | `follow-pr` | core | Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs once right after create-pr (waiting for CI and bot reviews), then whenever the user asks to follow up on the PR. |
+| `impeccable` | https://github.com/pbakaus/impeccable.git, `.claude/skills/impeccable` at 508d7e8 | Design, critique, audit and polish frontend interfaces with a consistent visual direction, and keep an existing brand. |
 | `self-review` | core | Adversarial multi-lens review of your own diff before it goes to a human, using focused reviewers and a second model family, then verifying every finding before acting on it. Use before opening or updating a pull request, before declaring a non-trivial change done, or when asked to review the current branch. |
 | `ship` | core | See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, prepares the rollback, and closes the loop (issue update, repo notes, local branch). Use when the user is about to deploy a merged PR or says it is deployed. |
 | `spec` | core | Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the self-review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change. |
@@ -351,6 +352,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 - Pull requests
 - Code comments
 - Skills and instructions
+- Design
 - Communication
 
 ## Install and maintain
@@ -411,7 +413,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `repos/` | Per-repository overlays (`notes.md`, `verify`, `wp-cli`) and the shared verify scripts in `_shared/`. |
 | `review-mining/` | The monthly job that learns from human code-review comments. |
 | `site/` | The public landing page and these docs as a website, built from README.md and this file (`site/build.mjs`). |
-| `skills.external` | Third-party skills install.sh clones from their source. |
+| `skills.external` | Third-party skills install.sh fetches from their source, some pinned to a commit in `vendor/`. |
 | `skills/` | Skills linked into every harness; third-party ones are listed in `skills.external`. |
 | `tests/` | The regression suite: `tests/run.sh`. |
 | `tools/` | Node code and dependencies for the tools in `bin/` and the diagram check in `tests/run.sh`. |

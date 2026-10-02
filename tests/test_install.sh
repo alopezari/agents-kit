@@ -187,6 +187,93 @@ if [ -x "$semgrep_dir/semgrep" ]; then
     '[ $red_status = 1 ] && echo "$red" | grep -q "logger-not-error-log" && [ $green_status = 0 ]'
 else echo "skip sample profile verify: semgrep not installed"; fi
 
+# A pinned external skill, `<url>@<commit>#<folder>`: only that folder of that commit is linked in, a new pin moves
+# the checkout, --doctor reports a stale one without touching it, and a broken entry never leaves a bad link.
+upstream="$home/upstream-skills"
+mkdir -p "$upstream/skills/chosen" "$upstream/skills/other"
+printf -- '---\nname: chosen\ndescription: v1\n---\n' > "$upstream/skills/chosen/SKILL.md"
+printf -- '---\nname: other\ndescription: x\n---\n' > "$upstream/skills/other/SKILL.md"
+git -C "$upstream" init -q && git -C "$upstream" config uploadpack.allowAnySHA1InWant true
+commit() { git -C "$upstream" add -A && git -C "$upstream" -c user.name=t -c user.email=t@t commit -qm "$1" && git -C "$upstream" rev-parse HEAD; }
+v1=$(commit v1)
+sed -i '' 's/v1/v2/' "$upstream/skills/chosen/SKILL.md"; v2=$(commit v2)
+git -C "$upstream" mv skills/chosen skills/renamed; v3=$(commit "v3 renames the folder")
+unknown=0123456789abcdef0123456789abcdef01234567
+external_before=$(cat "$kit/skills.external")
+pin() { printf '%s\n' "$external_before" "$@" > "$kit/skills.external"; }
+run_install() { HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" "$@" 2>&1; }
+# A copy installed by hand in each harness before the kit managed it: plain folders where the links go.
+hand_installed=0
+for harness in .claude .codex; do
+  [ -d "$home/$harness" ] || continue
+  mkdir -p "$home/$harness/skills/chosen" && echo "hand-installed" > "$home/$harness/skills/chosen/SKILL.md"; hand_installed=$((hand_installed + 1))
+done
+pin "chosen file://$upstream@$v1#skills/chosen A pinned fixture skill."
+out=$(run_install); status=$?
+check "a pinned external skill links only its folder, at its commit, into every harness" \
+  '[ $status = 0 ] && [ "$(readlink "$kit/skills/chosen")" = "$kit/vendor/chosen/skills/chosen" ] \
+   && [ "$(git -C "$kit/vendor/chosen" rev-parse HEAD)" = "$v1" ] && [ ! -e "$kit/skills/other" ] \
+   && [ "$(readlink "$home/.claude/skills/chosen")" = "$kit/skills/chosen" ] && [ ! -e "$home/.claude/skills/other" ] \
+   && { [ ! -d "$home/.codex" ] || [ "$(readlink "$home/.codex/skills/chosen")" = "$kit/skills/chosen" ]; } \
+   && grep -q "description: v1" "$home/.claude/skills/chosen/SKILL.md"'
+check "replacing the folders installed by hand, each kept in the backups" \
+  '[ "$(cat "$kit"/backups/*"$home"/.*/skills/chosen/SKILL.md | grep -cx hand-installed)" = "$hand_installed" ]'
+again=$(run_install)
+check "and a second install changes nothing" '! grep -q "  fix " <<<"$again" && grep -q "  ok    chosen at ${v1:0:12}" <<<"$again"'
+pin "chosen file://$upstream@$v2#skills/chosen A pinned fixture skill."
+doctor=$(run_install --doctor)
+check "--doctor warns about a checkout behind its pin and leaves it as it is" \
+  'grep -q "  warn  chosen is at ${v1:0:12}, pinned to ${v2:0:12}" <<<"$doctor" && [ "$(git -C "$kit/vendor/chosen" rev-parse HEAD)" = "$v1" ] \
+   && [ -z "$(git -C "$kit/vendor/chosen" status --porcelain)" ] && [ "$(readlink "$kit/skills/chosen")" = "$kit/vendor/chosen/skills/chosen" ]'
+out=$(run_install)
+check "install moves the checkout to the new pin" \
+  '[ "$(git -C "$kit/vendor/chosen" rev-parse HEAD)" = "$v2" ] && grep -q "description: v2" "$home/.claude/skills/chosen/SKILL.md"'
+echo "edited in place" >> "$kit/vendor/chosen/skills/chosen/SKILL.md"
+doctor=$(run_install --doctor)
+pin "chosen file://$upstream@$v1#skills/chosen A pinned fixture skill."
+doctor+=$(run_install --doctor)
+check "--doctor warns about local changes in a pinned checkout, also when it is behind its pin" \
+  '[ "$(grep -c "  warn  chosen has local changes in vendor/chosen" <<<"$doctor")" = 2 ] && grep -q "  warn  chosen is at ${v2:0:12}, pinned to ${v1:0:12}" <<<"$doctor"'
+git -C "$kit/vendor/chosen" checkout -q -- .
+pin "chosen file://$upstream@$v3#skills/chosen A pinned fixture skill."
+out=$(run_install)
+check "a new pin without the folder keeps the previous checkout and a working link" \
+  'grep -q "  warn  chosen: skills/chosen has no SKILL.md at ${v3:0:12}; keeping ${v2:0:12}" <<<"$out" \
+   && [ "$(git -C "$kit/vendor/chosen" rev-parse HEAD)" = "$v2" ] && grep -q "description: v2" "$home/.claude/skills/chosen/SKILL.md"'
+pin "chosen file://$upstream@$unknown#skills/other A pinned fixture skill."
+out=$(run_install); status=$?
+check "a pin that can't be fetched keeps the previous checkout and link, even with a new folder, and warns" \
+  '[ $status = 0 ] && grep -q "  warn  chosen: cannot fetch ${unknown:0:12} from file://$upstream; keeping ${v2:0:12}" <<<"$out" \
+   && [ "$(git -C "$kit/vendor/chosen" rev-parse HEAD)" = "$v2" ] && [ "$(readlink "$kit/skills/chosen")" = "$kit/vendor/chosen/skills/chosen" ]'
+# A kit copied or moved to another path keeps absolute links into the old vendor/: they are relinked, not a profile's.
+ln -sfn "/elsewhere/.agents/vendor/chosen/skills/chosen" "$kit/skills/chosen"
+pin "chosen file://$upstream@$v2#skills/chosen A pinned fixture skill."
+out=$(run_install)
+check "a link into another kit's vendor/ is relinked to this one" \
+  '[ "$(readlink "$kit/skills/chosen")" = "$kit/vendor/chosen/skills/chosen" ] && ! grep -q "chosen is an external skill and a profile" <<<"$out"'
+pin "wrongpath file://$upstream@$v1#skills/missing Points at a folder without a skill." \
+  "unreachable file://$home/no-such-repo@$v1#skills/chosen Its source is gone."
+out=$(run_install)
+check "a folder without a SKILL.md, or a source that can't be fetched, is reported and never linked" \
+  'grep -q "  warn  wrongpath: skills/missing has no SKILL.md at ${v1:0:12}; not installed" <<<"$out" \
+   && grep -q "  warn  unreachable: cannot fetch ${v1:0:12} from file://$home/no-such-repo; not installed" <<<"$out" \
+   && [ ! -L "$kit/skills/wrongpath" ] && [ ! -L "$home/.claude/skills/wrongpath" ] \
+   && [ ! -L "$kit/skills/unreachable" ] && [ ! -L "$home/.claude/skills/unreachable" ]'
+pin "absent file://$upstream@$v1#skills/chosen Not installed yet." "unreachable file://$home/no-such-repo@$v1#skills/chosen Its source is gone."
+doctor=$(run_install --doctor)
+check "--doctor reports a pinned skill not installed yet, or whose first fetch failed, and installs nothing" \
+  'grep -q "  warn  absent is missing (from file://$upstream)" <<<"$doctor" && grep -q "  warn  unreachable is missing (from file://$home/no-such-repo)" <<<"$doctor" \
+   && [ ! -e "$kit/vendor/absent" ] && [ ! -L "$kit/skills/absent" ]'
+pin "release-notes file://$upstream@$v1#skills/chosen Same name as the sample profile's skill."
+profile_link=$(readlink "$kit/skills/release-notes")
+out=$(run_install)$(run_install --doctor)
+check "a profile's skill keeps its name over a pinned external one, on install and --doctor" \
+  '[ "$(grep -c "warn  release-notes is an external skill and a profile.s; using the profile.s" <<<"$out")" = 2 ] \
+   && [ "$(readlink "$kit/skills/release-notes")" = "$profile_link" ] && [ ! -e "$kit/vendor/release-notes" ]'
+# Back to the kit's own list: the uninstall checks below count links into the kit.
+echo "$external_before" > "$kit/skills.external"
+rm -f "$kit/skills/chosen" "$home/.claude/skills/chosen" "$home/.codex/skills/chosen"
+
 # uninstall.sh on the same HOME, with a fake launchctl so the real jobs (labels are per user) stay untouched.
 # `list` reports a job loaded only when its label is in $home/stuck, standing in for a bootout that failed.
 mkdir -p "$home/fakes/launchd"
