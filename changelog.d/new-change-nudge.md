@@ -1,0 +1,1 @@
+- The stop hook tells the user, once per branch, when a session over 150K tokens moves on to another change (a new branch in its directory or in a worktree it edits), that a new session for it starts lighter; `reports brief` there picks it up. Renaming a branch, or leaving the default branch for the first change, doesn't count.

@@ -9,8 +9,9 @@ temporary compose override left behind, or a changed code file the spec's Change
 doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify
 when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even
 one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read. Once a
-branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, tells the user, once, that a new session
-picks it up for less (Claude Code only: it reads the transcript).
+branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change
+with its context over NEW_CHANGE_NUDGE_TOKENS, tells the user, once, that a new session picks it up for less (Claude
+Code only: it reads the transcript).
 
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
 the hook has seen, for the weekly health check. `stop_checks.py verify` runs verify on the current checkout now,
@@ -40,6 +41,10 @@ NO_CHECKS_GRACE_SECS = 300
 MAX_PROBLEMS = 20
 # Every turn re-reads the whole context; past this, a new session that starts from `reports brief` costs less.
 CONTEXT_NUDGE_TOKENS = 250_000
+# A session that moves on to another change carries the earlier one's history into every turn of the new one. Lower
+# than the threshold above: the new change has all its turns ahead of it.
+NEW_CHANGE_NUDGE_TOKENS = 150_000
+DEFAULT_BRANCHES = ("main", "master", "trunk", "develop")
 TRANSCRIPT_TAIL_BYTES = 2_000_000
 SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "spec", "path.sh"))
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
@@ -152,12 +157,19 @@ def main():
         return 0
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
     notice = fresh_session_notice(session, payload)
-    problems = ci_after_push(session, payload)
     marker = os.path.join(MARKER_DIR, f"{session}.edited")
-    if not os.path.exists(marker):
+    edited = None
+    if os.path.exists(marker):
+        edited = [p for p in open(marker).read().splitlines() if p]
+        os.remove(marker)
+    # Runs even when the notice above speaks: it records the branches the session works on.
+    next_change = new_change_notice(session, payload, edited or [])
+    if next_change and not notice:
+        notice, detail = next_change
+        log("stop_checks", "new-change", payload, detail)
+    problems = ci_after_push(session, payload)
+    if edited is None:
         return block(payload, problems, streak=0, notice=notice)
-    edited = [p for p in open(marker).read().splitlines() if p]
-    os.remove(marker)
 
     # Check every checkout the session touched (worktrees included), not only the session's cwd.
     cwd = payload.get("cwd") or os.getcwd()
@@ -225,6 +237,88 @@ def fresh_session_notice(session, payload):
     state = "is merged" if label.startswith("ship") else "is open"
     return (f"This session's context is {tokens // 1000}K tokens, re-read on every turn, and {branch}'s PR {state}. "
             "Follow it up or start the next change in a new session: `~/.agents/bin/reports brief` there picks it up.")
+
+
+def git_or_fail(args, cwd):
+    """git's output; raises CalledProcessError when it fails, where `git` would hand back an empty answer."""
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True, timeout=10).stdout
+
+
+def change_branch(directory):
+    """(common git dir, branch) of the checkout at `directory` when it is on a branch other than the default one
+    (origin's HEAD, else any of DEFAULT_BRANCHES); None outside a repo."""
+    out = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD"], directory).splitlines()
+    if len(out) != 2 or out[1] == "HEAD":
+        return None
+    default = git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], directory).strip()
+    return None if out[1] in ((default.split("/", 1)[-1],) if default else DEFAULT_BRANCHES) else (out[0], out[1])
+
+
+def earlier_names(branch, directory):
+    """The names this branch had before `git branch -m`, from its reflog, which git carries across renames. A copy
+    (`git branch -c`) carries it too, so the names before the copy are another branch's."""
+    names = []
+    for entry in git_or_fail(["reflog", "show", "--format=%gs", f"refs/heads/{branch}"], directory).splitlines():
+        if entry.startswith("Branch: copied "):
+            break
+        renamed = re.match(r"Branch: renamed refs/heads/(.+) to refs/heads/", entry)
+        if renamed:
+            names.append(renamed.group(1))
+    return names
+
+
+def new_change_notice(session, payload, edited):
+    """(message, log detail) once per session and branch: the session works on a branch, in its directory or a
+    worktree it edited, after another one, with a large context. Advisory: any failure here returns None rather than
+    stopping the checks."""
+    transcript = payload.get("transcript_path")
+    if not transcript:
+        return None
+    try:
+        return record_branches_and_notice(session, transcript, payload, edited)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def record_branches_and_notice(session, transcript, payload, edited):
+    directories = dict.fromkeys([payload.get("cwd") or os.getcwd()] + [p if os.path.isdir(p) else os.path.dirname(p) for p in edited])
+    current = {}
+    for directory in directories:
+        found = change_branch(directory) if os.path.isdir(directory) else None
+        if found:
+            current[found] = directory
+    seen_file = os.path.join(MARKER_DIR, f"{session}.branches")
+    try:
+        lines = open(seen_file).read().splitlines()
+    except OSError:
+        lines = []
+    seen = set()
+    for line in lines:
+        try:
+            pair = json.loads(line)
+        except ValueError:
+            continue  # a torn line: that branch's history is lost, nothing more
+        if isinstance(pair, list) and len(pair) == 2 and all(isinstance(part, str) for part in pair):
+            seen.add(tuple(pair))
+    had_history, new = bool(seen), []
+    for (common_dir, branch), directory in current.items():
+        if (common_dir, branch) in seen:
+            continue
+        if not any((common_dir, name) in seen for name in earlier_names(branch, directory)):
+            new.append(branch)
+        seen.add((common_dir, branch))
+    os.makedirs(MARKER_DIR, exist_ok=True)
+    with open(seen_file + ".tmp", "w") as fh:  # replaced whole, so the next stop never reads it half written
+        fh.write("".join(json.dumps(list(pair)) + "\n" for pair in sorted(seen)))
+    os.replace(seen_file + ".tmp", seen_file)
+    if not new or not had_history:  # the session's first change carries no earlier one
+        return None
+    tokens = context_tokens(transcript)
+    if tokens <= NEW_CHANGE_NUDGE_TOKENS:
+        return None
+    return (f"This session's context is {tokens // 1000}K tokens, re-read on every turn, and it has moved on to "
+            f"{new[0]}. A new session for it starts lighter: `~/.agents/bin/reports brief` there picks up its spec and "
+            "reports.", f"{new[0]} {tokens // 1000}K")
 
 
 def block(payload, problems, streak, notice=None):
