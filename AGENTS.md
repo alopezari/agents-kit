@@ -116,6 +116,7 @@ My instructions override skill guidance. Skills are adaptable procedures: apply 
 
 - For any UI work (a page, screen, component or visual change), use the `impeccable` skill, even when I don't name it: it keeps an existing brand and gives new work a visual direction of its own.
 - Before calling UI work done, run its `audit` command on what you changed, then its `polish` command to fix what the audit found.
+- The kit pins Impeccable to a reviewed commit: don't run its update (`npx impeccable update`) even when it reports one; a newer version comes through a kit PR.
 - In a repository other people work in, ask me before creating `PRODUCT.md`, `DESIGN.md` or `.impeccable/`, and before adding them to `.gitignore`. If I say no, carry on without them.
 
 ## Communication

@@ -191,7 +191,7 @@ def readable_source(source):
 
 
 def skills():
-    # External skills are described from skills.external, so the output doesn't depend on whether they are cloned.
+    # External skills are described from skills.external, so the output doesn't depend on whether they are fetched.
     external = [line.split(None, 2) for line in read("skills.external").splitlines()
                 if line.strip() and not line.startswith("#")]
     rows = [(name, readable_source(source), description) for name, source, description in external]

@@ -30,7 +30,9 @@ link() {
   local target=$1 path=$2
   if [ "$(readlink "$path" 2>/dev/null)" = "$target" ]; then ok "$path"; return; fi
   if [ $DOCTOR = 1 ]; then warn "$path should link to $target"; return; fi
-  mkdir -p "$(dirname "$path")"; backup "$path"; rm -f "$path"; ln -s "$target" "$path"; fix "$path -> $target"
+  mkdir -p "$(dirname "$path")"
+  if [ -d "$path" ] && [ ! -L "$path" ]; then mkdir -p "$BACKUP"; mv "$path" "$BACKUP/"; else backup "$path"; rm -f "$path"; fi
+  ln -s "$target" "$path"; fix "$path -> $target"
 }
 
 # hooks <settings.json> <event> <matcher> <script> <timeout>: one entry per script, other hooks untouched.
@@ -124,19 +126,28 @@ echo "External skills"
 # Third-party skills are fetched from their source instead of being copied into the kit. A pinned one,
 # <url>@<commit>#<folder>, is checked out in vendor/ at exactly that commit and only its folder is linked in.
 pinned_skill() {  # <name> <url> <commit> <folder>
-  local name=$1 url=$2 pin=$3 folder=$4 checkout="$KIT/vendor/$1" at=""
-  at=$(git -C "$checkout" rev-parse HEAD 2>/dev/null) || at=""
-  if [ "$at" != "$pin" ] && [ $DOCTOR = 1 ]; then
-    if [ -n "$at" ]; then warn "$name is at ${at:0:12}, pinned to ${pin:0:12}"; else warn "$name is missing (from $url)"; fi
-  elif [ "$at" != "$pin" ]; then
-    [ -d "$checkout/.git" ] || git init -q "$checkout"
+  local name=$1 url=$2 pin=$3 folder=$4 checkout="$KIT/vendor/$1" at="" kept="not installed"
+  # Without its own .git, git -C would find the kit's repository and report the kit's HEAD.
+  [ -e "$checkout/.git" ] && at=$(git -C "$checkout" rev-parse HEAD 2>/dev/null) && kept="keeping ${at:0:12}"
+  if [ $DOCTOR = 1 ]; then
+    if [ -z "$at" ]; then warn "$name is missing (from $url)"; return
+    elif [ "$at" != "$pin" ]; then warn "$name is at ${at:0:12}, pinned to ${pin:0:12}"
+    elif [ -n "$(git -C "$checkout" status --porcelain)" ]; then warn "$name has local changes in vendor/$name"
+    else ok "$name at ${pin:0:12}"; fi
+  elif [ "$at" = "$pin" ]; then ok "$name at ${pin:0:12}"
+  else
+    # Nothing replaces the current checkout or link until the new commit is known to hold the skill.
+    [ -e "$checkout/.git" ] || git init -q "$checkout"
     git -C "$checkout" config remote.origin.url "$url"
-    if git -C "$checkout" fetch -q --depth 1 origin "$pin" 2>/dev/null && git -C "$checkout" checkout -q --detach "$pin"; then
-      fix "$name checked out at ${pin:0:12} from $url"; at=$pin
-    elif [ -n "$at" ]; then warn "$name: cannot fetch ${pin:0:12} from $url; keeping ${at:0:12}"
-    else warn "$name: cannot fetch ${pin:0:12} from $url; not installed"; fi
-  else ok "$name at ${pin:0:12}"; fi
-  [ -n "$at" ] || return 0
+    if ! git -C "$checkout" fetch -q --depth 1 origin "$pin" 2>/dev/null; then
+      warn "$name: cannot fetch ${pin:0:12} from $url; $kept"; return
+    elif ! git -C "$checkout" cat-file -e "$pin:$folder/SKILL.md" 2>/dev/null; then
+      warn "$name: $folder has no SKILL.md at ${pin:0:12}; $kept"; return
+    elif ! git -C "$checkout" checkout -q --detach "$pin"; then
+      warn "$name: cannot check out ${pin:0:12} in vendor/$name (local changes?); $kept"; return
+    fi
+    fix "$name checked out at ${pin:0:12} from $url"
+  fi
   if [ ! -f "$checkout/$folder/SKILL.md" ]; then warn "$name: $folder has no SKILL.md at ${at:0:12}; not linked"; return; fi
   link "$checkout/$folder" "$KIT/skills/$name"
 }
