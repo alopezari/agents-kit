@@ -66,13 +66,17 @@ def refuses_to_lose_work(base):
     assert untracked.returncode == 1 and "notes.txt" in untracked.stderr and checked_out(main, "feat/cart"), untracked
     os.remove(os.path.join(worktree, "notes.txt"))
     open(os.path.join(worktree, ".gitignore"), "w").write(".env\nnode_modules/\n")
-    sh(worktree, "git", "add", ".gitignore")
+    os.makedirs(os.path.join(worktree, "café"))
+    open(os.path.join(worktree, "café", "package.json"), "w").write("{}\n")
+    sh(worktree, "git", "add", ".gitignore", "café")
     modified = sh(base, FREE, worktree)
     assert modified.returncode == 1 and ".gitignore" in modified.stderr and checked_out(main, "feat/cart"), modified
     sh(worktree, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "ignore")
     sh(worktree, "git", "push", "-q")
     os.makedirs(os.path.join(worktree, "node_modules", "pkg"))
     open(os.path.join(worktree, "node_modules", "pkg", "index.js"), "w").write("x\n")
+    os.makedirs(os.path.join(worktree, "café", "node_modules"))
+    open(os.path.join(worktree, "café", "node_modules", "index.js"), "w").write("x\n")
     open(os.path.join(worktree, ".env"), "w").write("TOKEN=only-here\n")
     secret = sh(base, FREE, worktree)
     assert secret.returncode == 1 and ".env" in secret.stderr and "node_modules" not in secret.stderr \

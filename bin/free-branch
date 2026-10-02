@@ -39,8 +39,8 @@ def refusal(worktree, removing):
     dirty = git(worktree, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
     if dirty.strip():
         return f"{worktree} has changes that would stay behind, off the branch; commit or remove them:\n{dirty}"
-    ignored = [] if not removing else [p for p in git(worktree, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory").splitlines()
-               if not REGENERATED.search(p)]
+    ignored = [] if not removing else [p for p in git(worktree, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z").split("\0")
+               if p and not REGENERATED.search(p)]
     if ignored:
         return (f"{worktree} has ignored files that removing it would delete; move them, or remove the worktree "
                 "yourself once they're safe:\n" + "\n".join(ignored))
@@ -85,7 +85,7 @@ def main():
             except GitFailed as error:
                 if "submodule" not in str(error):
                     raise
-                return fail(f"git won't remove a worktree with submodules; check them, then `git worktree remove --force {worktree}`")
+                return fail(f"git won't remove a worktree with submodules; check them, then `git worktree remove --force {shlex.quote(worktree)}`")
             done = f"removed {worktree}"
     except GitFailed as error:
         return fail(str(error))
