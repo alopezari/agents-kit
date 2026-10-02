@@ -394,6 +394,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | optional | `playwright-cli` | npm install -g @playwright/cli | browser checks in the validate skill (bin/browse) |
 | optional | `agent-browser` | npm install -g agent-browser | browser checks in the validate skill (bin/browse) |
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
+| optional | `impeccable` | https://github.com/pbakaus/impeccable/releases | the Design lens and validate's design check (the impeccable skill fetches it on first use) |
 | optional | `docker` | https://www.docker.com | repository verifies that run in containers |
 
 - `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, the Pi adapter, triage, a real install into an empty HOME, the install doctor, and this reference (up to date, and every diagram parses as GitHub renders it).

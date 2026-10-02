@@ -167,6 +167,19 @@ ok = len(timing) == 5 and all(t.startswith("code.py: `P") and t.endswith('+)+$")
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} every flagged regex is named for timing, whole: {timing}")
 
+for label, after, ui in [("a component", {"src/Card.tsx": "export const Card = () => <div className='card' />\n"}, "src/Card.tsx"),
+                         ("a style-only change", {"site.css": "body { color: #222 }\n"}, "site.css"),
+                         ("a Svelte page", {"src/routes/page.svelte": "<h1>Hi</h1>\n"}, "src/routes/page.svelte"),
+                         ("four components", {f"src/C{i}.tsx": "export const C = 1\n" for i in range(4)},
+                          [f"src/C{i}.tsx" for i in range(4)]),
+                         ("a script", {"tool.py": "print(1)\n"}, None)]:
+    result = triage_change({}, after)
+    lens, test = result["lenses"].get("design"), result["tests"].get("design (impeccable detect)")
+    ui = [ui] if isinstance(ui, str) else ui
+    ok = (lens == ui and test == ui) if ui else (lens is None and test is None)
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {'design checks' if ui else 'no design checks'} for {label} ({result['tier']}): {lens}")
+
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected
     fail |= not ok

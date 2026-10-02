@@ -176,14 +176,23 @@ echo "Requirements"
 # deps.txt lists every program the kit runs, and profiles add theirs. Missing required and recommended
 # programs are installed through Homebrew once the person running this agrees (or passed --yes); optional
 # ones serve a single feature, so they are only reported.
-installed() { if [ "$1" = chrome ]; then [ -d "/Applications/Google Chrome.app" ]; else command -v "$1" >/dev/null; fi; }
+installed() {
+  case "$1" in
+    chrome) [ -d "/Applications/Google Chrome.app" ] ;;
+    # The skill's launcher fetches this engine on first use: only its cache counts, since an `impeccable` on PATH
+    # may be a launcher that downloads when asked for --version.
+    impeccable) [ -x "$HOME/.impeccable/bin/$(cat "$KIT/skills/impeccable/scripts/VERSION" 2>/dev/null)/impeccable" ] ;;
+    *) command -v "$1" >/dev/null ;;
+  esac
+}
 install_hint() { case "$1" in brew:*) echo "brew install ${1#brew:}" ;; npm:*) echo "npm install -g ${1#npm:}" ;; *) echo "$1" ;; esac; }
 missing=()
 older_than() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" != "$2" ]; }
 while read -r tier spec how purpose; do
   program=${spec%%>=*}; minimum=${spec#"$program"}; minimum=${minimum#>=}
   if installed "$program"; then
-    version=$("$program" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1) || true  # chrome is an app
+    version=""  # chrome is an app; an impeccable on PATH may be a launcher that downloads, and its cache is pinned
+    [ "$program" = impeccable ] || version=$("$program" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1) || true
     if [ -z "$minimum" ] || [ -z "$version" ] || ! older_than "$version" "$minimum"; then ok "$program${version:+ $version}"; continue; fi
     msg="$program $version is older than $minimum, needed for $purpose: $(install_hint "$how")"
     if [ "$tier" = optional ]; then info "$msg"; else warn "$msg"; fi
