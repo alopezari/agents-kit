@@ -1,0 +1,1 @@
+- The stop hook keeps checking a session's edits after its directory is removed (another session freed its worktree) instead of failing on every turn, and gives up on a git call after 60 seconds instead of holding the session for the hook's 11-minute limit.

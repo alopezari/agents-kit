@@ -61,8 +61,11 @@ GENERATED_FILE = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn
                             r"|(^|/)__pycache__/|\.py[co]$")
 
 
+GIT_TIMEOUT = 60
+
+
 def git(args, cwd):
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True).stdout
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=GIT_TIMEOUT).stdout
 
 
 def added_lines(root):
@@ -97,7 +100,7 @@ def new_options_near_caches(root, lines):
             if name in seen:
                 continue
             seen.add(name)
-            existed = subprocess.run(["git", "grep", "-q", "-F", name, "HEAD", "--"], cwd=root).returncode == 0
+            existed = subprocess.run(["git", "grep", "-q", "-F", name, "HEAD", "--"], cwd=root, timeout=GIT_TIMEOUT).returncode == 0
             if existed:
                 continue
             module = os.path.dirname(path) or "."
@@ -213,8 +216,11 @@ def fresh_session_notice(session, payload):
     transcript = payload.get("transcript_path")
     if not transcript:
         return None
-    out = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD"],
-              payload.get("cwd") or os.getcwd()).splitlines()
+    try:  # the session's directory may be gone: another session removed its worktree
+        out = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD"],
+                  payload.get("cwd") or os.getcwd()).splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return None
     if len(out) != 2 or out[1] == "HEAD":
         return None
     common_dir, branch = out
@@ -348,7 +354,7 @@ def block(payload, problems, streak, notice=None):
 def unmapped_files(root, session):
     """Changed code files the branch's spec has no Change map entry for, each returned once per session."""
     # path.sh finds the spec wherever it is kept: after a branch rename, in a worktree's old place or in $TMPDIR.
-    spec = subprocess.run([SPEC_PATH], cwd=root, capture_output=True, text=True).stdout.strip()
+    spec = subprocess.run([SPEC_PATH], cwd=root, capture_output=True, text=True, timeout=GIT_TIMEOUT).stdout.strip()
     if not os.path.isfile(spec):
         return []
     change_map = re.search(r"^## Change map\s*$(.*?)(?=^## |\Z)", open(spec, errors="ignore").read(), re.M | re.S | re.I)
@@ -453,7 +459,7 @@ def checked_something(output):
 def save_verify_report(root, verify, output, verdict):
     """Keep the last verify run as evidence for the end-of-run summary (`~/.agents/bin/reports`)."""
     reports = os.path.expanduser("~/.agents/bin/reports")
-    path = subprocess.run([reports, "path", "verify"], cwd=root, capture_output=True, text=True).stdout.strip()
+    path = subprocess.run([reports, "path", "verify"], cwd=root, capture_output=True, text=True, timeout=GIT_TIMEOUT).stdout.strip()
     if not path:
         return
     output = output.strip()[-6000:] or "(no output)"
@@ -583,12 +589,16 @@ def run_verify(root):
 
 def in_checkout(root, action, *args):
     """review_stamp works on the checkout in the working directory; the stop hook visits several."""
-    previous = os.getcwd()
+    try:
+        previous = os.getcwd()
+    except FileNotFoundError:  # the session's directory was removed (another session freed its worktree)
+        previous = None
     os.chdir(root)
     try:
         return action(*args)
     finally:
-        os.chdir(previous)
+        if previous:
+            os.chdir(previous)
 
 
 def record_verify(root, kind, checked_fingerprint):
