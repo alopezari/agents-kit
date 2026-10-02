@@ -285,7 +285,7 @@ def unreviewed_pr(command, cwd):
     # The stamps are read before anything in the command runs, so one written by the same command can't count yet.
     order = (" This command writes a stamp itself, but the guard checks before anything in it runs: run "
              "review_stamp.py write (and --kind validate) as a command of its own, then this one."
-             if re.search(r"review_stamp\.py\b[^;&|\n]*\bwrite\b", command) else "")
+             if re.search(r"review_stamp\.py\b[^;&|\n]*\bwrite\b", re.sub(r"\\\n", " ", shell_code(command))) else "")
     if not ok("check", "--kind", "review"):
         return ("No self-review recorded for the current change. Run the self-review skill first "
                 "(it ends with review_stamp.py write); any edit after the review needs a new one." + order)
