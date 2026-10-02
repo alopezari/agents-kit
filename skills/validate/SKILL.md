@@ -72,8 +72,8 @@ Make every check repeatable in one command, because a fix sends you back to re-r
 **Advanced tests, only when triage selects them:**
 - **Query budget:** `~/.agents/bin/wp-query-profile` runs a REST route or PHP snippet inside the local WordPress and reports the query count and repeated query patterns (N+1). Run it on the affected endpoint or code path with a realistic number of items. Repeated patterns that grow with the item count are findings.
 - **Accessibility:** `~/.agents/bin/a11y-check <url>...` runs axe on the pages the change touches and lists serious and critical violations. Compare with the same pages before the change when a violation looks pre-existing.
-- **Design:** for each page the change touches, in the state it touches (logged in, after the interaction):
-  1. Screenshot it at 1280×800 and 390×844 (`$EV/D1-desktop.png`, `$EV/D1-phone.png`).
+- **Design:** for each page the change touches, in the state it touches (logged in, after the interaction), numbered D1, D2… so each keeps its own evidence:
+  1. Screenshot it at 1280×800 and 390×844 (`$EV/D1-desktop.png`, `$EV/D1-phone.png` for the first page).
   2. Scan its URL with Impeccable's detector at both sizes. It writes nothing in the repository; read every finding whatever the exit code (0 can still list advisories), and any code other than 0 or 2 means the page wasn't scanned, a NOT RUN:
      ```bash
      ~/.agents/bin/evidence D1a ~/.agents/skills/impeccable/scripts/impeccable detect --json --viewport 1280x800 <url>

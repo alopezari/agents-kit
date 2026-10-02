@@ -179,9 +179,9 @@ echo "Requirements"
 installed() {
   case "$1" in
     chrome) [ -d "/Applications/Google Chrome.app" ] ;;
-    # The skill's launcher fetches this engine on first use: only look for it, a doctor run must not download.
-    impeccable) [ -x "$HOME/.impeccable/bin/$(cat "$KIT/skills/impeccable/scripts/VERSION" 2>/dev/null)/impeccable" ] ||
-      command -v impeccable >/dev/null ;;
+    # The skill's launcher fetches this engine on first use: only its cache counts, since an `impeccable` on PATH
+    # may be a launcher that downloads when asked for --version.
+    impeccable) [ -x "$HOME/.impeccable/bin/$(cat "$KIT/skills/impeccable/scripts/VERSION" 2>/dev/null)/impeccable" ] ;;
     *) command -v "$1" >/dev/null ;;
   esac
 }
