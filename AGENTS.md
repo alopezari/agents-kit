@@ -124,7 +124,7 @@ My instructions override skill guidance. Skills are adaptable procedures: apply 
 - Once I've approved a comp or a review board, a fidelity gate that keeps failing on that same piece is my decision: record it and move on rather than iterating against the comparator.
 - Before calling UI work done, run its `audit` command on what you changed, then its `polish` command to fix what the audit found.
 - The kit pins Impeccable to a reviewed commit: don't run its update (`npx impeccable update`) even when it reports one; a newer version comes through a kit PR.
-- In a repository other people work in (any with a remote a profile doesn't list as mine in `personal-repos.txt`), ask me before creating `PRODUCT.md`, `DESIGN.md` or `.impeccable/`, before adding them to `.gitignore`, and before Impeccable's `live` or `hooks on`/`reset`, which edit project files. The hooks enforce it: my reply naming the file, `.gitignore` or the command allows it for that turn. If I say no, carry on without them.
+- In a repository other people work in (any with a remote a profile doesn't list as mine in `personal-repos.txt`), ask me before creating `PRODUCT.md`, `DESIGN.md` or `.impeccable/`, before adding them to `.gitignore`, and before Impeccable's `live` or `hooks on`/`reset`, which edit project files. The hooks enforce it: my reply naming the file or the command allows it (to gitignore it, `.gitignore` and the file) for that turn. If I say no, carry on without them.
 
 ## Communication
 

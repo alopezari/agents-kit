@@ -1397,6 +1397,44 @@ def impeccable_guard_edge_cases(base):
     assert grants("Do not add PRODUCT.md to .gitignore") == "[]"
     assert grants("create PRODUCT.md.bak") == "[]", "another file's name"
     assert grants("No tests for now. Create PRODUCT.md.") == "['design.product-md']", "a refusal about something else"
+    assert grants("Now create PRODUCT.md") == "['design.product-md']", "a word starting with no isn't a refusal"
+    assert grants("Note: create DESIGN.md") == "['design.design-md']"
+    assert grants("DESIGN.md? Do not create it.") == "[]" and grants("PRODUCT.md? not now") == "[]"
+
+    fresh = new_repo(base, "fresh")
+    git(fresh, "remote", "add", "origin", "git@github.com:someone/web.git")
+    for command in ["cp /tmp/x PRODUCT.md > /dev/null", "install -d .impeccable", f"ln -s {src}/PRODUCT.md",
+                    "echo x &> PRODUCT.md", "env -i impeccable live", "command -- impeccable live", "nohup impeccable live",
+                    "npx impeccable doctor --fix", "(cd /tmp && true); touch PRODUCT.md",
+                    f"cd {fresh} && apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: PRODUCT.md\n+x\n*** End Patch\nEOF",
+                    "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: .gitignore\n@@\n+PRODUCT.md\n*** End Patch\nEOF"]:
+        assert "say-so" in shell(command, fresh if not command.startswith("cd ") else base), command
+    for command in ["npx impeccable serve-question --schema", "impeccable live --help", "impeccable hooks on --help",
+                    "cat PRODUCT.md", "ls DESIGN.md"]:
+        assert shell(command, fresh) == "allow", f"read-only: {command}"
+    run_hook("prompt_approvals.py", {"prompt": "ok, run impeccable hooks on", "session_id": "e1", "cwd": fresh}, env=env)
+    assert shell("impeccable hooks on", fresh) == "allow"
+    assert "say-so" in shell("impeccable hooks reset", fresh), "approving hooks on doesn't approve reset"
+
+    def tool(inp, cwd=fresh):
+        got = run_hook("guard_files.py", {"tool_name": "apply_patch" if "input" in inp else "Write", "tool_input": inp,
+                                          "cwd": cwd, "session_id": "e2"}, env=env)
+        return (got or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", "allow")
+    patch = "*** Begin Patch\n*** Update File: README.md\n@@\n+See PRODUCT.md\n*** Update File: .gitignore\n@@\n+dist/\n*** End Patch"
+    assert tool({"input": patch}) == "allow", "a README line isn't an ignore rule"
+    assert tool({"file_path": os.path.join(fresh, ".gitignore"), "content": "# PRODUCT.md is tracked\ndist/\n"}) == "allow", \
+        "nor is a comment"
+    os.makedirs(os.path.join(profiles, "broken"), exist_ok=True)
+    open(os.path.join(profiles, "broken", "mcp-writes.json"), "w").write("{not json")
+    personal = new_repo(base, "personal")
+    assert tool({"file_path": os.path.join(personal, "a.py"), "content": "x"}, personal) == "allow", \
+        "a broken MCP profile doesn't block every file write"
+    os.remove(os.path.join(profiles, "broken", "mcp-writes.json"))
+    git(personal, "remote", "add", "origin", "git@github.com:me/site.git")
+    git(personal, "config", "remote.origin.pushurl", "git@github.com:someone/site.git")
+    open(os.path.join(profiles, "broken", "personal-repos.txt"), "w").write("github.com/me\n")
+    assert "say-so" in tool({"file_path": os.path.join(personal, "PRODUCT.md"), "content": "x"}, personal), \
+        "a work push destination makes it shared"
 
     with open(os.path.join(shared, ".git", "config"), "a") as fh:
         fh.write('[remote "x"\n')  # git can't parse its config: that's no proof of a personal repository

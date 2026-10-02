@@ -21,7 +21,12 @@ def written(payload):
     paths += [os.path.join(payload.get("cwd") or os.getcwd(), p) for p in re.findall(r"^\*\*\* Move to: (.+)$", patch, re.M)]
     added = [str(tool_input.get(k) or "") for k in ("content", "new_string")]
     added += [str(e.get("new_string") or "") for e in tool_input.get("edits") or [] if isinstance(e, dict)]
-    added += [line[1:] for line in patch.splitlines() if line.startswith("+")]  # only judged for a .gitignore
+    current = ""
+    for line in patch.splitlines():
+        header = re.match(r"\*\*\* (?:Add|Update) File: (.+)$", line)
+        current = header.group(1) if header else current
+        if line.startswith("+") and os.path.basename(current).lower() == ".gitignore":
+            added.append(line[1:])
     return paths, "\n".join(added)
 
 
@@ -36,7 +41,7 @@ def main():
     cwd = payload.get("cwd") or os.getcwd()
     try:
         paths, gitignore = written(payload)
-        approvals = design_files.guard_mcp().APPROVALS
+        approvals = design_files.APPROVALS_DIR
         if any(os.path.realpath(os.path.join(cwd, os.path.expanduser(p))).startswith(os.path.realpath(approvals) + os.sep)
                for p in paths):
             why = f"Writing in {approvals}: approvals come from the user, not the agent."

@@ -21,16 +21,18 @@ APPROVALS = {
     ".impeccable": "design.impeccable-dir",
     "impeccable live": "design.impeccable-live",
     "hooks on": "design.impeccable-hooks",
-    "hooks reset": "design.impeccable-hooks",
+    "hooks reset": "design.impeccable-hooks-reset",
 }
+APPROVALS_DIR = os.path.expanduser("~/.agents/approvals")  # guard_mcp.APPROVALS, without importing it
 FILES = ("PRODUCT.md", "DESIGN.md", ".impeccable")
 GITIGNORE = "design.gitignore"  # granted by naming .gitignore together with one of the files
 DESIGN_NAME = re.compile(r"(?<![\w-])(PRODUCT\.md|DESIGN\.md|\.impeccable)(?![\w-]|\.\w)", re.I)
 # "no crees PRODUCT.md", "don’t touch DESIGN.md", "DESIGN.md? not yet": a refusal near the name grants nothing.
 # A sentence ends at . ! ? followed by a space, not at the dot inside PRODUCT.md.
 CLAUSE = r"(?:[^.!?\n]|[.!?](?!\s))"
-REFUSAL_BEFORE = re.compile(rf"(?<!\w)(?:no|not|don['’]?t|do not|never|without|sin|nunca|ni){CLAUSE}{{0,80}}$", re.I)
-REFUSAL_AFTER = re.compile(rf"^[?:,]?\s*{CLAUSE}{{0,15}}(?<!\w)(?:no|not yet|todavía no|aún no)(?!\w)", re.I)
+REFUSAL = r"(?<!\w)(?:no|not|don['’]?t|do not|never|without|sin|nunca|ni|todavía no|aún no)(?!\w)"
+REFUSAL_BEFORE = re.compile(rf"{REFUSAL}{CLAUSE}{{0,80}}$", re.I)
+REFUSAL_AFTER = re.compile(rf"^[?:,]?\s*{CLAUSE}{{0,15}}{REFUSAL}", re.I)
 GIT_TIMEOUT = 3
 
 
@@ -76,7 +78,7 @@ def shared_root(directory):
         top = git("rev-parse", "--show-toplevel")
         if top.returncode != 0:
             return None if "not a git repository" in top.stderr else directory
-        remotes = git("config", "--get-regexp", r"^remote\..*\.url$")
+        remotes = git("config", "--get-regexp", r"^remote\..*\.(push)?url$")
     except (OSError, subprocess.TimeoutExpired):
         return directory
     if remotes.returncode not in (0, 1):  # 1: no remote at all
@@ -113,8 +115,14 @@ def new_ignore_rules(path, additions):
             listed = {line.strip().lower() for line in fh if line.strip() and line.strip()[0] not in "#!"}
     except OSError:
         listed = set()
-    words = (w.strip("\"'") for w in re.split(r"\s+", additions))
-    return sorted({w for w in words if DESIGN_NAME.search(w) and w[:1] not in ("#", "!") and w.lower() not in listed})
+    rules = set()
+    for line in additions.splitlines():
+        for word in (w.strip("\"'+") for w in line.split()):
+            if word.startswith("#"):  # the rest of the line is a comment
+                break
+            if DESIGN_NAME.search(word) and not word.startswith("!") and word.lower() not in listed:
+                rules.add(word)
+    return sorted(rules)
 
 
 def blocked(paths, cwd, session, gitignore_additions=""):

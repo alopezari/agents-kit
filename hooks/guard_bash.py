@@ -396,80 +396,85 @@ def targets_kit(repo, host, cwd):
     return bool(common and kit) and os.path.realpath(common) == os.path.realpath(kit)
 
 
-WRITE_TARGET_LAST = {"cp", "mv", "install", "ln"}
-WRITE_TARGET_ALL = {"mkdir", "touch", "tee"}
+COPY_COMMANDS = {"cp", "mv", "install", "ln"}
+# Agents look for PRODUCT.md and DESIGN.md often; these only read what they name, unless the output is redirected.
+READERS = {"cat", "head", "tail", "less", "grep", "rg", "ls", "stat", "test", "[", "wc", "file", "diff"}
 READ_ONLY_IMPECCABLE = {"context", "detect", "doctor", "help", "version", "live-status"}
-REDIRECT_TARGET = re.compile(r"(?<![<\d&])\d?>[>|]?\s*(\"[^\"]*\"|'[^']*'|[^\s;&|<>()]+)")
+IMPECCABLE_FLAGS_ONLY = {"--help", "-h", "--schema", "--version"}
+# What can stand before `impeccable` in a command that runs it: wrappers, runners, their flags, VAR=value.
+RUNS_IMPECCABLE = re.compile(r"-\S*|\w+=\S*|env|command|exec|sudo|nohup|time|npx|bunx|pnpm|dlx|yarn|npm")
+# Quotes split words too: `sh -c 'touch PRODUCT.md'` names PRODUCT.md, and a path with spaces is rare here.
+WORD = re.compile(r"[^\s\"'<>;&|()]+")
 
 
 def impeccable_files(command, cwd, session):
-    """Why a command needs the user first under design_files.py: it writes PRODUCT.md, DESIGN.md or `.impeccable/`,
-    adds them to .gitignore, starts `impeccable live` or runs `impeccable hooks on`/`reset`, or runs another
-    Impeccable command that would create `.impeccable/`. None otherwise."""
+    """Why a command needs the user first under design_files.py: it names PRODUCT.md, DESIGN.md or `.impeccable`
+    where none exists yet, adds them to a .gitignore, or runs Impeccable's `live`, `hooks on`/`reset` or another
+    command that would create `.impeccable/`. None otherwise.
+
+    Coarse on purpose: a name in the command counts as a write, and every folder it cd's into counts as where it
+    runs. Shell is too varied to tell writes from mentions, and a wrong guess costs a question, not a file in someone
+    else's repository."""
+    if not re.search(r"product\.md|design\.md|impeccable", command, re.I):
+        return None  # most commands: no git call
     code = shell_code(command)
-    # A patch run through the shell (Codex's apply_patch) names the files it adds.
-    patched = re.findall(r"^\*\*\* (?:Add File|Move to): (.+)$", command, re.M)
-    why = design_files.blocked(patched, cwd, session, command)
-    if why:
-        return why
     # A newline inside quotes is part of an argument (sed's a\ text), not the end of a command.
     joined = re.sub(r"'[x\n]*'|\"[x\n]*\"", lambda m: m.group().replace("\n", "x"), code)
     cuts = [(0, 0)] + [m.span() for m in re.finditer(r"&&|\|\||(?<![<>&])&(?![>&])|(?<!>)\||[;\n()]", joined)]
+    folders, gitignores, targets, runs = [cwd], [], [], []
+    # A patch run through the shell (Codex's apply_patch) names its files in a heredoc body.
+    for path in re.findall(r"^\*\*\* (?:Add File|Update File|Move to): (.+)$", command, re.M):
+        (gitignores if os.path.basename(path).lower() == ".gitignore" else targets).append(path)
     for (_, start), (boundary, _) in zip(cuts, cuts[1:] + [(len(code), len(code))]):
-        segment, blanked = command[start:boundary], code[start:boundary]
-        if re.fullmatch(r"\s*x*\s*", blanked):  # a heredoc body line, not a command
+        if re.fullmatch(r"\s*x*\s*", code[start:boundary]):  # a heredoc body line, not a command
             continue
-        words = [w.strip("\"'") for w in re.findall(r"\"[^\"]*\"|'[^']*'|\S+", segment)]
-        while words and (re.fullmatch(r"\w+=\S*", words[0]) or words[0] in ("env", "command", "exec", "sudo")):
-            words = words[1:]  # FOO=1 cmd, env FOO=1 cmd
-        if not words:
+        words = WORD.findall(command[start:boundary])
+        if words[:1] == ["cd"] and len(words) > 1:
+            folders.append(cd_into(folders[-1], words[1]))
+        if any(os.path.basename(w).lower() == ".gitignore" for w in words):
+            gitignores += [w for w in words if os.path.basename(w).lower() == ".gitignore"]
+            continue  # the names in it are ignore rules, judged below
+        if words and words[0] in READERS and ">" not in code[start:boundary]:
             continue
-        program = os.path.basename(words[0])
-        if program == "cd" and len(words) > 1:  # later segments run there
-            cwd = cd_into(cwd, words[1])
-            continue
-        if program in ("sh", "bash", "zsh") and "-c" in words[1:-1]:
-            why = impeccable_files(words[words.index("-c") + 1], cwd, session)
-            if why:
-                return why
-            continue
-        targets = [m.group(1).strip("\"'") for m in REDIRECT_TARGET.finditer(segment)]
+        targets += [w for w in words if design_files.DESIGN_NAME.search(w)]
         args = [w for w in words[1:] if not w.startswith("-")]
-        if program in WRITE_TARGET_ALL:
-            targets += args
-        elif program in WRITE_TARGET_LAST and len(args) > 1:
-            dest = os.path.join(cwd, os.path.expanduser(args[-1]))
-            # Into a folder, each source keeps its name there.
-            targets += ([os.path.join(dest, os.path.basename(a.rstrip("/"))) for a in args[:-1]] if os.path.isdir(dest)
-                        else [args[-1]])
-        elif program == "sed" and any(w.startswith("-i") for w in words) and args:
-            targets.append(args[-1])
-        if re.search(r"write_text|open\([^)]*['\"][wa]", segment):
-            targets += re.findall(r"[\w./~-]*(?:PRODUCT\.md|DESIGN\.md|\.impeccable[\w./-]*)", segment, re.I)
-        # A pipe or heredoc carries what goes into the .gitignore: judge it by the whole command.
-        why = design_files.blocked(targets, cwd, session, command)
+        if words and os.path.basename(words[0]) in COPY_COMMANDS and args:
+            # Into a folder (or ln's implicit `.`), each source keeps its name there.
+            dest = args[-1] if len(args) > 1 else "."
+            targets += [os.path.join(dest, os.path.basename(a.rstrip("/"))) for a in args[:-1] or args
+                        if design_files.DESIGN_NAME.search(os.path.basename(a.rstrip("/")))]
+        at = next((i for i, w in enumerate(words) if os.path.basename(w).split("@")[0] == "impeccable"), None)
+        if at is not None and all(RUNS_IMPECCABLE.fullmatch(w) for w in words[:at]):
+            runs.append(words[at + 1:])
+    for folder in dict.fromkeys(folders):
+        why = (design_files.blocked(targets, folder, session)
+               or design_files.blocked(gitignores, folder, session, command)
+               or next(filter(None, (impeccable_run(rest, folder, session) for rest in runs)), None))
         if why:
             return why
-        if program == "npx":
-            words = [w for w in words[1:] if not w.startswith("-")]
-            program = words[0].split("@")[0] if words else ""
-        if program != "impeccable":
-            continue
-        sub, action = (words[1:] + ["help"])[0], (words[2:] + [""])[0]
-        if sub == "live":
-            name, what = "impeccable live", "Starting `impeccable live`, which injects a script into project files,"
-        elif sub in ("hooks", "hook-admin") and action in ("on", "reset"):
-            name, what = f"hooks {action}", f"Running `impeccable {sub} {action}`, which writes hook settings into the project,"
-        elif ((sub in READ_ONLY_IMPECCABLE and "--fix" not in words) or (sub in ("hooks", "hook-admin") and action in ("", "status"))
-              or {"--help", "-h", "--schema", "--version"} & set(words)):
-            continue
-        elif os.path.isdir(os.path.join(cwd, ".impeccable")):  # Impeccable writes .impeccable/ where it runs
-            continue
-        else:
-            name, what = ".impeccable", f"Running `impeccable {sub}`, which creates .impeccable/,"
-        if not design_files.approved(design_files.APPROVALS[name], session) and design_files.shared_root(cwd):
-            return design_files.reason(what, name)
     return None
+
+
+def impeccable_run(rest, folder, session):
+    """Why running `impeccable <rest>` in folder needs the user first, or None."""
+    if IMPECCABLE_FLAGS_ONLY & set(rest):
+        return None
+    named = [w for w in rest if not w.startswith("-")]
+    sub, action = (named or ["help"])[0], (named[1:] or [""])[0]
+    if sub == "live":
+        name, what = "impeccable live", "Starting `impeccable live`, which injects a script into project files,"
+    elif sub in ("hooks", "hook-admin") and action in ("on", "reset"):
+        name, what = f"hooks {action}", f"Running `impeccable {sub} {action}`, which writes hook settings into the project,"
+    elif (sub in READ_ONLY_IMPECCABLE and "--fix" not in rest) or (sub in ("hooks", "hook-admin") and action in ("", "status")):
+        return None
+    elif os.path.isdir(os.path.join(folder, ".impeccable")):  # Impeccable writes .impeccable/ where it runs
+        return None
+    else:
+        name, what = ".impeccable", f"Running `impeccable {sub}`, which creates .impeccable/,"
+    if design_files.approved(design_files.APPROVALS[name], session) or not design_files.shared_root(folder):
+        return None
+    return design_files.reason(what, name)
+
 
 def pr_command_args(command, start):
     """The arguments of the gh command starting at `start`, up to the next shell operator."""
