@@ -103,13 +103,18 @@ def guard_blocks_irreversible(base):
         assert guard(wrapped) == "deny", wrapped
     assert guard("~/.agents/bin/evidence A1 git status") == "allow"
     # `git checkout -q -- .` slipped past and took uncommitted fixes with it.
-    for cmd in ["git checkout -q -- .", "git checkout -f .", "git restore --worktree .", "git restore --source=HEAD~1 ."]:
+    for cmd in ["git checkout -q -- .", "git checkout -f .", "git restore --worktree .", "git restore --source=HEAD~1 .",
+                "git restore -s HEAD .", "git checkout -- ./", "git checkout --conflict=merge ."]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     work = os.path.join(base, "work")
     os.makedirs(os.path.join(work, "opt"))  # rm -rf opt/projects from here would stay inside the working directory
     for cmd in ["cd / && rm -rf opt/projects", "cd /; rm -r opt/projects", "(cd /tmp && true); cd / && rm -rf opt/x",
                 "(cd / && rm -rf opt/projects)"]:
         assert guard(cmd, cwd=work) == "deny", f"a relative rm runs where the cd left it: {cmd}"
+    for cmd in ["pushd / && rm -rf opt/x", "cd /\nrm -rf opt/x", "cd - && rm -rf opt/x", "cd -P / && rm -rf opt/x"]:
+        assert guard(cmd, cwd=work) == "deny", f"every way of moving counts: {cmd!r}"
+    # From /usr, ../x is /x: the subshell's cd into lib must not make it /usr/x.
+    assert guard("(cd lib) && rm -rf ../x", cwd="/usr") == "deny"
     started = time.time()
     assert guard(";" * 60000 + "x/" * 30000) == "allow" and time.time() - started < 3, "a long line must not stall the guard"
     # An edit chained before a blocked step was lost without a word: the agent took it as done.
@@ -127,6 +132,8 @@ def guard_allows_routine(base):
     work = os.path.join(base, "work")
     os.makedirs(os.path.join(work, "sub", "build"))
     assert guard("cd sub && rm -rf build", cwd=work) == "allow"
+    assert guard("cd lib && make && cd .. && rm -rf lib/build", cwd="/usr") == "allow", "cd .. comes back, not up"
+    assert guard("git restore --staged -- .") == "allow"
 
 
 def guard_mcp_linear(base):
