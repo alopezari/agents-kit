@@ -13,7 +13,6 @@ import os
 import re
 import subprocess
 
-from review_stamp import repo_id
 
 # What the user names to allow it -> the approval it grants. The `design.` prefix keeps them apart from services.
 APPROVALS = {
@@ -82,6 +81,7 @@ def shared_root(directory):
         return directory
     if remotes.returncode not in (0, 1):  # 1: no remote at all
         return directory
+    from guard_bash import repo_id  # here, not at the top: guard_bash imports this module
     urls, mine = remotes.stdout.split()[1::2], personal_owners()
     if not urls or all(f"{host}/{slug.split('/')[0]}" in mine for host, slug in map(repo_id, urls)):
         return None

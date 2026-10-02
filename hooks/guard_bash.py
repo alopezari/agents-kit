@@ -18,7 +18,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import harness, log  # noqa: E402
 import design_files  # noqa: E402
 import private_terms  # noqa: E402
-from review_stamp import repo_id  # noqa: E402
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
@@ -368,6 +367,14 @@ def pr_checkout_unknown(command, payload):
     return ("Codex doesn't tell hooks the workdir a command runs in (openai/codex#33986), so this PR command can't be "
             "checked against the right checkout. Start the command with `cd /absolute/path/to/checkout && ` (an existing, "
             "literal path; no other cd, no `&`), and don't set a workdir.")
+
+
+def repo_id(repo, default_host=None):
+    """(host, owner/repo) from OWNER/REPO, HOST/OWNER/REPO, a URL (a PR's too) or a git remote URL."""
+    path = re.sub(r"^(?:\w+://)?(?:[^@/]+@)?", "", repo.strip()).replace(":", "/")
+    path = re.sub(r"/pull/\d+.*$", "", path).rstrip("/")
+    parts = re.sub(r"\.git$", "", path).lower().split("/")
+    return (parts[-3] if len(parts) > 2 else default_host), "/".join(parts[-2:])
 
 
 def targets_kit(repo, host, cwd):
