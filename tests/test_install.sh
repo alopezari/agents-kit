@@ -178,6 +178,10 @@ plugin="$home/Projects/example-plugin"; mkdir -p "$plugin"
 git -C "$plugin" init -q -b main && git -C "$plugin" commit -q --allow-empty -m init && git -C "$plugin" switch -q -c change
 line=$(printf '{"workspace":{"current_dir":"%s"}}' "$plugin" | HOME="$home" "$kit/adapters/claude/statusline.sh" 2>/dev/null)
 check "sample profile: its status line segment names the overlay" 'echo "$line" | grep -q "overlay example-plugin"'
+printf '{"session_id":"sample-turn","cwd":"%s"}' "$plugin" | HOME="$home" AGENTS_TEST=1 python3 "$kit/hooks/stop_checks.py" >/dev/null 2>&1
+for _ in $(seq 50); do [ -s "$home/.agents/logs/example-plugin-turns.jsonl" ] && break; sleep 0.1; done
+check "sample profile: its after-turn runs after a turn in the overlay's repository" \
+  'grep -q "\"session\":\"sample-turn\",\"repo\":\"example-plugin\"" "$home/.agents/logs/example-plugin-turns.jsonl"'
 if [ -x "$semgrep_dir/semgrep" ]; then
   printf '<?php\nerror_log( "x" );\n' > "$plugin/plugin.php"
   red=$(cd "$plugin" && HOME="$home" PATH="$semgrep_dir:$PATH" "$kit/repos/example-plugin/verify" 2>&1); red_status=$?

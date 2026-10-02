@@ -785,6 +785,85 @@ def stop_catches_leftovers_in_worktree(base):
     assert "Debug leftover" in reason and "Skipped or focused test" in reason, reason
 
 
+def profiles_with_after_turn(base, scripts):
+    profiles = os.path.join(base, "profiles")
+    for name, script in scripts.items():
+        os.makedirs(os.path.join(profiles, name))
+        path = os.path.join(profiles, name, "after-turn")
+        with open(path, "w") as fh:
+            fh.write(script)
+        os.chmod(path, 0o755)
+    return {"AGENTS_PROFILES_DIR": profiles, "AGENTS_LOG_DIR": os.path.join(base, "logs")}
+
+
+def wait_for(path, seconds=5):
+    deadline = time.time() + seconds
+    while not os.path.exists(path) and time.time() < deadline:
+        time.sleep(0.05)
+    return os.path.exists(path)
+
+
+SAVE_STDIN = '#!/bin/sh\ncat > "$(dirname "$0")/got.json"\n'
+
+
+def stop_starts_each_profile_after_turn(base):
+    env = profiles_with_after_turn(base, {"one": SAVE_STDIN, "two": SAVE_STDIN})
+    os.makedirs(os.path.join(env["AGENTS_PROFILES_DIR"], "none"))
+    got = [os.path.join(env["AGENTS_PROFILES_DIR"], name, "got.json") for name in ("one", "two")]
+    repo = new_repo(base)
+    run_hook("stop_checks.py", {"session_id": RUN + "at1", "cwd": repo, "transcript_path": "/t.jsonl"}, env=env)
+    assert all(wait_for(path) for path in got), "a turn without edits starts every profile's after-turn"
+    payload = json.load(open(got[0]))
+    assert payload["session_id"] == RUN + "at1" and payload["transcript_path"] == "/t.jsonl", payload
+    for path in got:
+        os.remove(path)
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    run_hook("post_edit.py", {"session_id": RUN + "at1", "cwd": repo, "tool_input": {"file_path": os.path.join(repo, "app.py")}}, env=env)
+    run_hook("stop_checks.py", {"session_id": RUN + "at1", "cwd": repo, "stop_hook_active": True}, env=env)
+    assert all(wait_for(path) for path in got), "a turn with edits, an automatic continuation, starts them too"
+    for path in got:
+        os.remove(path)
+    subprocess.run(["python3", H + "stop_checks.py", "verify"], cwd=repo, capture_output=True,
+                   env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, **env})
+    assert not any(wait_for(path, 1) for path in got), "verify is not a turn"
+    run_hook("stop_checks.py", {"session_id": RUN + "at1", "cwd": repo}, env={**env, "AGENTS_AFTER_TURN": "1"})
+    assert not any(wait_for(path, 1) for path in got), "a session an after-turn started doesn't start another"
+    assert not os.path.exists(env["AGENTS_LOG_DIR"]), "nothing logged when every after-turn starts"
+
+
+def stop_never_waits_for_profile_after_turn(base):
+    repo = new_repo(base)
+    git(repo, "switch", "-q", "-c", "feature")
+    open(os.path.join(repo, "app.py"), "a").write("breakpoint()\n")
+    payload = {"cwd": repo, "padding": "x" * 300_000}
+
+    def timed_stop(session, env):
+        run_hook("post_edit.py", {"session_id": session, "cwd": repo, "tool_input": {"file_path": os.path.join(repo, "app.py")}}, env=env)
+        started = time.time()
+        decision = run_hook("stop_checks.py", {**payload, "session_id": session}, env=env)
+        return decision, time.time() - started
+    without, plain_secs = timed_stop(RUN + "at2a", {"AGENTS_PROFILES_DIR": os.path.join(base, "no-profiles")})
+    env = profiles_with_after_turn(base, {"slow": '#!/bin/sh\nyes noise | head -c 2000000\nsleep 3\n'
+                                                    'touch "$(dirname "$0")/done"\nexit 1\n'})
+    done = os.path.join(env["AGENTS_PROFILES_DIR"], "slow", "done")
+    decision, secs = timed_stop(RUN + "at2b", env)
+    assert decision == without and "Debug leftover" in decision.get("reason", ""), (decision, without)
+    assert secs < plain_secs + 0.5 and not os.path.exists(done), f"the stop hook waited: {secs:.2f}s vs {plain_secs:.2f}s"
+    assert wait_for(done), "the after-turn keeps running after the stop hook returns"
+
+
+def stop_logs_an_after_turn_that_cannot_start(base):
+    env = profiles_with_after_turn(base, {"bad-shebang": "#!/nonexistent/interpreter\n", "works": SAVE_STDIN,
+                                          "not-executable": SAVE_STDIN})
+    os.chmod(os.path.join(env["AGENTS_PROFILES_DIR"], "not-executable", "after-turn"), 0o644)
+    repo = new_repo(base)
+    run_hook("stop_checks.py", {"session_id": RUN + "at3", "cwd": repo}, env=env)
+    assert wait_for(os.path.join(env["AGENTS_PROFILES_DIR"], "works", "got.json")), "one broken profile doesn't stop the others"
+    logged = [json.loads(line) for line in open(os.path.join(env["AGENTS_LOG_DIR"], "hooks.jsonl"))]
+    failed = sorted(entry["detail"].split(":")[0] for entry in logged if entry["decision"] == "profile-after-turn-failed")
+    assert failed == ["bad-shebang", "not-executable"], logged
+
+
 def stop_checks_edits_after_its_directory_is_removed(base):
     repo = new_repo(base)
     git(repo, "switch", "-q", "-c", "feature")
@@ -1151,7 +1230,7 @@ def post_edit_syntax_feedback(base):
 
 
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

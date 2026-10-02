@@ -22,5 +22,6 @@ Keep the repository private when it holds anything about your employer or client
 | `review-mining/repos.txt`, `hosts.txt` | Repositories whose review comments the monthly job learns from, and extra GitHub hosts | read by `review-mining/` |
 | `PROFILE.md` | Context for the monthly trends scan | read by `monitors/trends.sh` |
 | `statusline` | An executable that adds a segment to the Claude Code status line | run by the kit's status line with the same JSON on stdin |
+| `after-turn` | An executable that runs after every agent turn; this one counts turns in the overlay's repository | started in the background by the Stop hook with its JSON on stdin; nothing waits for it, and sessions it starts don't start it again |
 
 Everything is optional: leave out what you don't need. Several profiles can be installed at once and their lists add up, but a skill, repo overlay or direct MCP server with the same name in two profiles is taken from only one of them, so keep those names unique.
