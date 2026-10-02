@@ -82,6 +82,12 @@ def refuses_to_lose_work(base):
         f"detaching deletes nothing, so ignored files don't stop it: {detached}"
     sh(worktree, "git", "switch", "-q", "feat/cart")
     os.remove(os.path.join(worktree, ".env"))
+    os.makedirs(os.path.join(worktree, "dist"))
+    open(os.path.join(worktree, "dist", ".env"), "w").write("TOKEN=only-here\n")
+    in_build_dir = sh(base, FREE, worktree)
+    assert in_build_dir.returncode == 1 and "dist/.env" in in_build_dir.stderr, \
+        f"an ignored file in a directory merely named like build output: {in_build_dir}"
+    shutil.rmtree(os.path.join(worktree, "dist"))
     sh(worktree, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "unpushed")
     ahead = sh(base, FREE, worktree)
     assert ahead.returncode == 1 and "push them" in ahead.stderr and checked_out(main, "feat/cart"), ahead

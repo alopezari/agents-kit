@@ -15,10 +15,12 @@ import shlex
 import subprocess
 import sys
 
-# Ignored paths a removal may delete: anything here comes back from an install or a build. Any other ignored file
-# (.env, local notes, credentials) exists nowhere else.
+# What a removal may delete among ignored paths: a wholly ignored directory (`ls-files --directory` lists it alone,
+# with a trailing slash) named for what an install or a build brings back, and bytecode. Any other ignored file
+# (.env, local notes, credentials), even inside a directory named build/, exists nowhere else. A git clone an install
+# put in vendor/ (Composer --prefer-source) goes with it, local commits included.
 REGENERATED = re.compile(r"(^|/)(node_modules|vendor|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.next|\.nuxt"
-                         r"|\.turbo|\.cache|dist|build|coverage|\.venv|venv|\.tox)(/|$)|\.py[co]$")
+                         r"|\.turbo|\.cache|dist|build|coverage|\.venv|venv|\.tox)/$|\.py[co]$")
 
 
 class GitFailed(Exception):
@@ -38,14 +40,15 @@ def refusal(worktree, removing):
     if dirty.strip():
         return f"{worktree} has changes that would stay behind, off the branch; commit or remove them:\n{dirty}"
     ignored = [] if not removing else [p for p in git(worktree, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory").splitlines()
-               if not REGENERATED.search(p.rstrip("/"))]
+               if not REGENERATED.search(p)]
     if ignored:
         return (f"{worktree} has ignored files that removing it would delete; move them, or remove the worktree "
                 "yourself once they're safe:\n" + "\n".join(ignored))
     try:
         upstream = git(worktree, "rev-parse", "--abbrev-ref", "@{upstream}").strip()
     except GitFailed:
-        return "the branch has no upstream: push it with `git push -u origin <branch>` first"
+        return ("the branch has no upstream, or it was deleted: push it with `git push -u origin <branch>` first, "
+                "or, once its PR is merged, remove the worktree yourself")
     ahead, behind = git(worktree, "rev-list", "--left-right", "--count", "HEAD...@{upstream}").split()
     if ahead != "0":
         return f"the branch has {ahead} commit(s) {upstream} doesn't: push them first"
@@ -77,7 +80,12 @@ def main():
             done = f"detached {worktree} (the session runs there)"
         else:
             common = git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
-            git(common, "worktree", "remove", worktree)
+            try:
+                git(common, "worktree", "remove", worktree)
+            except GitFailed as error:
+                if "submodule" not in str(error):
+                    raise
+                return fail(f"git won't remove a worktree with submodules; check them, then `git worktree remove --force {worktree}`")
             done = f"removed {worktree}"
     except GitFailed as error:
         return fail(str(error))
