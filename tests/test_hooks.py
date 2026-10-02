@@ -632,6 +632,60 @@ def reports_survive_worktree_removal(base):
     assert stamped, "the self-review stamp must survive the hand-off so the PR can be opened from the main checkout"
 
 
+def reports_brief_gives_one_line_per_report(base):
+    repo = new_repo(base)
+    git(repo, "switch", "-q", "-c", "feat/brief")
+    reports = os.path.expanduser("~/.agents/bin/reports")
+
+    def path(kind):
+        return subprocess.run([reports, "path", kind], cwd=repo, capture_output=True, text=True).stdout.strip()
+    spec = subprocess.run([os.path.expanduser("~/.agents/skills/spec/path.sh")], cwd=repo, capture_output=True, text=True).stdout.strip()
+    open(spec, "w").write("# Round prices once\n\nGoal: totals drift.\n" + "x\n" * 200)
+    open(path("review"), "w").write("Self-review (risk: standard)\n" + "detail\n" * 200 + "Open:     the 0.005 case\n")
+    open(path("validation"), "w").write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
+                                         "| A1 | a PASS | + | **PASS** | e |\n| A2 | b | - | FAIL | e |\n|A3|c|+|NOT RUN|-|\n")
+    open(path("follow-pr"), "w").write("## Run 1\nStatus:  waiting on CI\n## Run 2\nStatus:  ready to merge\n")
+    shown = subprocess.run([reports, "brief"], cwd=repo, capture_output=True, text=True).stdout
+    for line in ("Round prices once", "Self-review (risk: standard)", "Open:     the 0.005 case", "1 PASS, 1 FAIL, 1 NOT RUN",
+                 "Status:  ready to merge", path("review")):
+        assert line in shown, (line, shown)
+    assert "detail" not in shown and "waiting on CI" not in shown and len(shown.splitlines()) < 20, shown
+    open(path("review"), "w").write("Self-review\n")
+    open(path("follow-pr"), "w").write("## Run 1\n")
+    done = subprocess.run([reports, "brief"], cwd=repo, capture_output=True, text=True)
+    assert done.returncode == 0 and "no Status line yet" in done.stdout and "1 PASS, 1 FAIL, 1 NOT RUN" in done.stdout, done
+
+
+def stop_suggests_a_fresh_session_once_the_pr_is_open(base):
+    repo = new_repo(base)
+    git(repo, "switch", "-q", "-c", "feat/big")
+    phase = os.path.join(repo, ".git", "agents", "phase", "feat~big.json")
+    os.makedirs(os.path.dirname(phase))
+
+    def transcript(name, context):
+        path = os.path.join(base, name)
+        usage = {"input_tokens": 10, "cache_read_input_tokens": context - 1010, "cache_creation_input_tokens": 1000, "output_tokens": 5}
+        with open(path, "w") as fh:
+            fh.write(json.dumps({"type": "assistant", "message": {"usage": {**usage, "cache_read_input_tokens": 1}}}) + "\n")
+            fh.write(json.dumps({"type": "assistant", "message": {"usage": usage}}) + "\n")
+            fh.write(json.dumps({"type": "assistant", "isSidechain": True, "message": {"usage": {"input_tokens": 1}}}) + "\n")
+        return path
+
+    def stop_with(session, label, context):
+        json.dump({"label": label}, open(phase, "w"))
+        return run_hook("stop_checks.py", {"session_id": RUN + session, "cwd": repo,
+                                           "transcript_path": transcript(session + ".jsonl", context)})
+    first = stop_with("big", "PR open", 300_000)
+    assert first and "300K" in first.get("systemMessage", "") and "bin/reports brief" in first["systemMessage"] \
+        and "decision" not in first, first
+    assert stop_with("big", "PR open", 310_000) is None, "once per session and branch"
+    assert stop_with("small", "PR open", 200_000) is None, "a small context needs no new session"
+    assert stop_with("early", "self-review", 300_000) is None, "mid-change a new session would re-read everything"
+    assert stop_with("edge", "PR open", 250_000) is None, "over 250K, not at it"
+    merged = stop_with("merged", "ship", 300_000)
+    assert merged and "is merged" in merged["systemMessage"], merged
+
+
 def overlay_found_from_worktree_with_another_name(base):
     main = new_repo(base, "zz-agents-overlay-repo")
     wt = os.path.join(base, "zz-agents-overlay-repo-worktree-session-xyz")
@@ -1006,11 +1060,11 @@ def post_edit_syntax_feedback(base):
 
 
 for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
-          stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push, guard_records_the_pushed_checkout,
+          stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, guard_records_the_pushed_checkout,
           post_edit_syntax_feedback]:
     test(t)
 
