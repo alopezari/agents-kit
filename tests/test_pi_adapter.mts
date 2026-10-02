@@ -15,6 +15,7 @@ const repo = mkdtempSync(join(tmpdir(), "pi-sim-"));
 // The hooks inherit this: the stop hook records checkouts, and this one isn't real.
 const state = mkdtempSync(join(tmpdir(), "pi-sim-state-"));
 process.env.AGENTS_STATE_DIR = state;
+process.env.AGENTS_LOG_DIR = state; // and its blocks aren't the user's
 execSync("git init -q && echo x=1 > a.py && git add -A && git -c user.email=t@t -c user.name=t commit -qm i", { cwd: repo });
 const ctx = { cwd: repo, sessionManager: { getSessionId: () => "pi-sim" }, ui: { notify: () => {} } };
 

@@ -1,4 +1,4 @@
-"""Append one JSON line per hook decision to ~/.agents/logs/hooks.jsonl.
+"""Append one JSON line per hook decision to ~/.agents/logs/hooks.jsonl (in AGENTS_LOG_DIR instead when set: tests).
 
 Logging must never break a hook, so every failure here is swallowed.
 """
@@ -6,7 +6,7 @@ import json
 import os
 import time
 
-LOG = os.path.expanduser("~/.agents/logs/hooks.jsonl")
+LOG = os.path.join(os.environ.get("AGENTS_LOG_DIR") or os.path.expanduser("~/.agents/logs"), "hooks.jsonl")
 
 
 def harness(payload):
