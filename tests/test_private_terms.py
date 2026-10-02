@@ -25,7 +25,7 @@ def setup(base):
     profiles = os.path.join(base, "profiles")
     os.makedirs(os.path.join(profiles, "work"))
     open(os.path.join(profiles, "work", "private-terms.txt"), "w").write("# an employer's tickets\nacme-\\d+\nsecret\\s+project\n")
-    env = {**os.environ, "AGENTS_PROFILES_DIR": profiles, "AGENTS_TEST": "1"}
+    env = {**os.environ, "AGENTS_PROFILES_DIR": profiles, "AGENTS_TEST": "1", "AGENTS_LOG_DIR": base}
     other = os.path.join(base, "other")
     os.makedirs(other)
     run(["git", "init", "-q"], other, env)
