@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Regression tests for the kit's hooks. Each test builds throwaway git repos in a temp dir.
 
-Run: python3 ~/.agents/tests/test_hooks.py   (exit 1 on any failure)
+Run: python3 ~/.agents/tests/test_hooks.py          every test, each in its own process (exit 1 on any failure)
+     python3 ~/.agents/tests/test_hooks.py <name>...  only those, one after another in this process
 """
+import concurrent.futures
 import json
 import os
 import shutil
@@ -1059,14 +1061,38 @@ def post_edit_syntax_feedback(base):
     assert not written, f"the syntax check must not write bytecode: {written}"
 
 
-for t in [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
+TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
           stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, guard_records_the_pushed_checkout,
-          post_edit_syntax_feedback]:
-    test(t)
+          post_edit_syntax_feedback]
+
+if sys.argv[1:]:
+    by_name = {t.__name__: t for t in TESTS}
+    for name in sys.argv[1:]:
+        test(by_name[name])
+else:
+    # Each test in a process of its own, as every test already gets its own HOME, hook state and session ids there:
+    # threads would share the HOME's repo overlays and logs.
+    def run_alone(t):
+        done = subprocess.run([sys.executable, os.path.abspath(__file__), t.__name__], capture_output=True, text=True,
+                              errors="replace")
+        # Passed only when it says so and exits 0: a test that exits early, 0 or not, never reported.
+        passed = done.returncode == 0 and f"ok   {t.__name__}\n" in done.stdout
+        if passed:
+            return True, done.stdout
+        said = "" if f"FAIL {t.__name__}" in done.stdout else f"FAIL {t.__name__}\n     exit {done.returncode}, no result\n"
+        return False, said + done.stdout + done.stderr
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 2)) as pool:
+        outcomes = list(pool.map(run_alone, TESTS))
+    shutil.rmtree(STATE, ignore_errors=True)
+    shutil.rmtree(os.environ["HOME"], ignore_errors=True)
+    print("".join(out for _, out in outcomes), end="")
+    failed = sum(not passed for passed, _ in outcomes)
+    print(f"{len(TESTS) - failed}/{len(TESTS)} passed")
+    sys.exit(1 if failed else 0)
 
 shutil.rmtree(STATE, ignore_errors=True)
 shutil.rmtree(os.environ["HOME"], ignore_errors=True)
@@ -1076,5 +1102,4 @@ for name, err in RESULTS:
     print(f"{'FAIL' if err else 'ok  '} {name}")
     if err:
         print("     " + err.strip().replace("\n", "\n     "))
-print(f"{len(RESULTS) - len(failed)}/{len(RESULTS)} passed")
 sys.exit(1 if failed else 0)

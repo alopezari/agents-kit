@@ -1,0 +1,1 @@
+- `tests/test_hooks.py` runs each test in its own process, several at a time: about 4× faster, in CI and in verify whenever a hook changes. `test_hooks.py <name>...` runs only those.
