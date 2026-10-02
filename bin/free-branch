@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Free a pushed branch from its worktree, so the user can switch to it in the main checkout.
+
+  free-branch <worktree>
+
+Run with the session's own directory as the working directory: a worktree the session runs in is detached
+(`git switch --detach`), because removing it would break every hook the session runs from there; any other is
+removed. Refuses, changing nothing, when the worktree has uncommitted or untracked files, commits its upstream
+doesn't have (behind it is fine), or, to remove it, ignored files other than regenerated ones (dependencies, caches,
+build output); never touches the main checkout. Prints the command that switches to the branch.
+"""
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+# What a removal may delete among ignored paths: a wholly ignored directory (`ls-files --directory` lists it alone,
+# with a trailing slash) named for what an install or a build brings back, and bytecode. Any other ignored file
+# (.env, local notes, credentials), even inside a directory named build/, exists nowhere else. A git clone an install
+# put in vendor/ (Composer --prefer-source) goes with it, local commits included.
+REGENERATED = re.compile(r"(^|/)(node_modules|vendor|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.next|\.nuxt"
+                         r"|\.turbo|\.cache|dist|build|coverage|\.venv|venv|\.tox)/$|\.py[co]$")
+
+
+class GitFailed(Exception):
+    pass
+
+
+def git(cwd, *args):
+    result = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise GitFailed(f"git {' '.join(args)}: {result.stderr.strip()}")
+    return result.stdout
+
+
+def refusal(worktree, removing):
+    """Why removing (or detaching) `worktree` could lose something, or None."""
+    dirty = git(worktree, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
+    if dirty.strip():
+        return f"{worktree} has changes that would stay behind, off the branch; commit or remove them:\n{dirty}"
+    ignored = [] if not removing else [p for p in git(worktree, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z").split("\0")
+               if p and not REGENERATED.search(p)]
+    if ignored:
+        return (f"{worktree} has ignored files that removing it would delete; move them, or remove the worktree "
+                "yourself once they're safe:\n" + "\n".join(ignored))
+    try:
+        upstream = git(worktree, "rev-parse", "--abbrev-ref", "@{upstream}").strip()
+    except GitFailed:
+        return ("the branch has no upstream, or it was deleted: push it with `git push -u origin <branch>` first, "
+                "or, once its PR is merged, remove the worktree yourself")
+    ahead, behind = git(worktree, "rev-list", "--left-right", "--count", "HEAD...@{upstream}").split()
+    if ahead != "0":
+        return f"the branch has {ahead} commit(s) {upstream} doesn't: push them first"
+    return None
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1].startswith("-"):
+        print(__doc__)
+        return 2
+    worktree = os.path.realpath(sys.argv[1])
+    try:
+        if os.path.realpath(git(worktree, "rev-parse", "--show-toplevel").strip()) != worktree:
+            return fail(f"{worktree} is not the top of a git worktree")
+        first = git(worktree, "worktree", "list", "--porcelain", "-z").split("\0\0", 1)[0].split("\0")
+        main_checkout = None if "bare" in first else os.path.realpath(first[0].removeprefix("worktree "))
+        if worktree == main_checkout:
+            return fail(f"{worktree} is the main checkout: there is nothing to free")
+        branch = git(worktree, "branch", "--show-current").strip()
+        if not branch:
+            return fail(f"{worktree} is on no branch: there is nothing to free")
+        here = os.path.realpath(os.getcwd())
+        session_runs_there = here == worktree or here.startswith(worktree + os.sep)
+        reason = refusal(worktree, removing=not session_runs_there)
+        if reason:
+            return fail(reason)
+        if session_runs_there:
+            git(worktree, "switch", "--quiet", "--detach")
+            done = f"detached {worktree} (the session runs there)"
+        else:
+            common = git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+            try:
+                git(common, "worktree", "remove", worktree)
+            except GitFailed as error:
+                if "submodule" not in str(error):
+                    raise
+                return fail(f"git won't remove a worktree with submodules; check them, then `git worktree remove --force {shlex.quote(worktree)}`")
+            done = f"removed {worktree}"
+    except GitFailed as error:
+        return fail(str(error))
+    switch = (f"cd {shlex.quote(main_checkout)} && git switch {shlex.quote(branch)}" if main_checkout
+              else f"git switch {shlex.quote(branch)} (in any other worktree)")
+    print(f"{done}; {branch} is free.\nSwitch to it: {switch}")
+    return 0
+
+
+def fail(message):
+    print(f"free-branch: {message}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

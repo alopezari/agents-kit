@@ -54,9 +54,20 @@ Add `--draft` only in the exception from step 1. Print the PR URL.
 
 Run the `follow-pr` skill in the same session (its first run): it waits for the pushed commit's CI with `~/.agents/bin/ci-wait` and reads the bot reviews that come with it. After that, the user runs it on demand.
 
+## 6. Free the branch
+
+When the branch is checked out in a linked worktree (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir` there), free it once that first follow-pr run is over, so the user can switch to it without removing the worktree by hand. Run it with the session's own directory (the one it started in) as the working directory, since that decides what happens:
+
+```bash
+cd <the session's directory> && ~/.agents/bin/free-branch <worktree path>
+```
+
+It removes a worktree you created and detaches the one the session runs in (the session's hooks need that directory). It refuses, changing nothing, while anything there isn't committed and pushed, or, to remove it, while it holds ignored files an install or build doesn't bring back (a `.env`, local notes): it lists them, and they're the user's call. Give the user the switch command it prints. From then on the branch's reports are read from a checkout of it: the main checkout once the user has switched, or a worktree added for a fix (follow-pr).
+
 ## Report
 
 ```
 PR:        <url> (ready | draft: <why>)
+Branch:    free (<worktree removed | detached>; `cd <main checkout> && git switch <branch>`) | in the main checkout
 Evidence:  verify <PASS | FAIL | checked nothing: <tests run instead>> · self-review <stamp ok> · validate <stamp ok | not needed: tests/docs only> · staging <all PASS | none needed | pending: draft>
 ```

@@ -132,19 +132,13 @@ Give the guide in chat in the user's language, and save an English copy to `$(~/
 
 When the staging guide has steps before the merge, the PR waits for their results: the PR description then shows real staging evidence, and a staging failure gets fixed before CI and reviewers spend time on the PR. When there is no guide, or its steps all come after the merge, skip this step; `create-pr` comes next.
 
-**If you worked in a linked worktree** (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`), free the branch so the user can check it out: a branch can be checked out in only one worktree. Detach the worktree from it rather than removing it: the session keeps running in that directory, and once it is gone every repository hook run from it fails ("Cannot find module …/.claude/hooks/…") and the shell guard can't check PR commands. First prove nothing is lost:
-
-1. `git status --porcelain` prints nothing. Uncommitted work would stay behind in the worktree, off the branch; commit it or ask.
-2. The branch is pushed: `git push -u origin <branch>` if it has no upstream yet, then `git rev-parse HEAD` equals `git rev-parse @{upstream}`.
-3. The main checkout is the first `worktree` line of `git worktree list --porcelain`.
-
-Then, in the worktree:
+**If you worked in a linked worktree** (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`), free the branch so the user can check it out: a branch can be checked out in only one worktree. Push it first (`git push -u origin <branch>` if it has no upstream yet), then run it with the session's own directory (the one it started in) as the working directory:
 
 ```bash
-git switch --detach
+cd <the session's directory> && ~/.agents/bin/free-branch <worktree path>
 ```
 
-It stays at the same commit, on no branch, so don't commit there: later work on the branch happens in the main checkout, with `cd <main checkout> && …`, and this session's status line shows no branch. Never switch the main checkout's branch yourself: the user may have work there. The spec, the reports and the stamps live in the repository's shared `.git/agents/`. The tool that created the worktree for the session (Xirp, Claude Code) removes it when the session is archived; one you created yourself with `git worktree add`, tell the user to remove once the session is over, with a check that nothing was committed there since: `git -C <worktree path> merge-base --is-ancestor HEAD origin/<branch> && git worktree remove <worktree path>`.
+It removes a worktree you created with `git worktree add`, and detaches the one the session runs in instead (`git switch --detach`): once that one is gone, every repository hook run from it fails ("Cannot find module …/.claude/hooks/…") and the shell guard can't check PR commands; the tool that created it (Xirp, Claude Code) removes it when the session is archived. It refuses, changing nothing, while the worktree has uncommitted or untracked files or unpushed commits, or, to remove it, ignored files an install or build doesn't bring back: commit and push them, or ask. The `<main checkout>` below is the one in the switch command it prints. A detached worktree stays at the same commit, on no branch, so don't commit there: later work on the branch happens in the main checkout, with `cd <main checkout> && …`, and this session's status line shows no branch. Never switch the main checkout's branch yourself: the user may have work there. The spec, the reports and the stamps live in the repository's shared `.git/agents/`.
 
 Give the user the hand-off in chat, with real values:
 

@@ -17,7 +17,7 @@ cat "$(~/.agents/bin/reports path follow-pr)" 2>/dev/null   # what earlier runs 
 - **First run** (right after `create-pr`): wait for CI as in section 1, then read the comments. Bot reviewers usually post when their own check finishes, so reading earlier misses them.
 - **On-demand runs** (the user asks to follow up): read the current state, don't wait. If checks are still running, say which and handle the rest. In a new session, start with `~/.agents/bin/reports brief`: the phase and one line per report, so you read in full only the reports you need.
 
-Fixes go on the branch wherever it is checked out. If that is the user's main checkout (after the staging hand-off), say what you're about to change before editing there: they may be in the middle of something.
+Fixes go on the branch wherever it is checked out. If that is the user's main checkout (after the staging hand-off), say what you're about to change before editing there: they may be in the middle of something. Once create-pr has freed the branch, run this whole skill (`gh pr view`, `pr-comments`, the reports, ci-wait) from a checkout of the branch: they read the branch checked out where they run, and a session directory create-pr detached has none. That is the main checkout once the user has switched to it; otherwise add a worktree, `git worktree add <path> <branch>`, and free it again with `cd <the session's directory> && ~/.agents/bin/free-branch <path>` at the end of the run, after its CI wait and the report.
 
 ## 1. CI
 
