@@ -76,7 +76,7 @@ def escapes_join_to_their_branch_and_lens(base):
     open(log, "w").write("".join(json.dumps(e) + "\n" for e in entries))
     outcomes.QUALITY_LOG = log
     prs = [{"repo": "o/shop", "branch": "feature/cart"}]
-    outcomes.attach_escapes(prs)
+    outcomes.attach_escapes(prs, {})
     assert [(e["source"], e["lens_ran"]) for e in prs[0]["escapes"]] == [("review", True), ("bot", False)], prs
 
     entries = [
@@ -92,7 +92,7 @@ def escapes_join_to_their_branch_and_lens(base):
     ]
     open(log, "w").write("".join(json.dumps(e) + "\n" for e in entries))
     prs = [{"repo": "o/shop", "branch": "feature/cart"}]
-    outcomes.attach_escapes(prs)
+    outcomes.attach_escapes(prs, {})
     assert [(e["lens"], e["lens_ran"]) for e in prs[0]["escapes"]] == [("spec", True), ("tests", False)], \
         f"a lens run follows every rename to the PR's branch, and only those: {prs}"
 
@@ -100,13 +100,13 @@ def escapes_join_to_their_branch_and_lens(base):
 def sessions_join_by_repo_and_branch(base):
     prs = [{"repo": "o/shop", "branch": "feature/cart", "opened": "2026-10-01T12:00:00Z", "merged": "2026-10-02T12:00:00Z"}]
     sessions = [
-        {"project": "~/p/shop-worktree-session-x", "branches": ["session/x", "feature/cart"], "start_iso": "2026-10-01T10:00:00Z",
+        {"project": "~/p/shop-worktree-session-x", "repos": {"o/shop": ["shop"]}, "branches": ["session/x", "feature/cart"], "start_iso": "2026-10-01T10:00:00Z",
          "minutes": 30, "tokens": {"in": 100, "out": 50, "cache_read": 9000}, "models": {"opus": 3}, "effort": ["high"],
          "phases": {"session/x": {"build": {"out": 500, "cache_read": 0, "cache_write": 0, "minutes": 9}}, "feature/cart": {"build": {"out": 30, "cache_read": 0, "cache_write": 0, "minutes": 12.5}, "validate": {"out": 20, "cache_read": 0, "cache_write": 0, "minutes": 5}}}},
-        {"project": "~/p/shop", "branches": ["feature/cart"], "start_iso": "2026-10-01T11:00:00Z",
+        {"project": "~/p/shop", "repos": {"O/Shop": ["shop"]}, "branches": ["feature/cart"], "start_iso": "2026-10-01T11:00:00Z",
          "minutes": 10, "tokens": {"in": 10, "out": 5, "cache_read": 0}, "models": {"sonnet": 1, "opus": 1}, "effort": ["medium"],
          "phases": {"feature/cart": {"build": {"out": 5, "cache_read": 0, "cache_write": 0, "minutes": 2}}}},
-        {"project": "~/p/blog", "branches": ["feature/cart"], "start_iso": "2026-09-01T00:00:00Z",
+        {"project": "~/p/blog", "repos": {"o/blog": ["blog"]}, "branches": ["feature/cart"], "start_iso": "2026-09-01T00:00:00Z",
          "minutes": 99, "tokens": {"in": 999, "out": 999, "cache_read": 0}, "models": {"haiku": 1}, "effort": ["low"],
          "phases": {"feature/cart": {"build": {"out": 999, "cache_read": 0, "cache_write": 0, "minutes": 99}}}},
     ]
@@ -125,6 +125,28 @@ def sessions_join_by_repo_and_branch(base):
     counts = dict.fromkeys(("review_threads", "changes_requested", "red_pushes", "commits_after_first_review"), 0)
     assert outcomes.summarize([{**prs[0], **counts, "follow_ups": "pending"}])["sessions_joined"]["per_phase"]["validate"]["minutes"] == 5, \
         "phases on the PR's branch and its earlier names only, summed over its sessions in its repo"
+
+
+def a_checkout_named_unlike_its_repo(base):
+    """~/.agents is alopezari/agents-kit: sessions join by origin remote, and the quality log by the checkout's name."""
+    outcomes.QUALITY_LOG = os.path.join(base, "quality.jsonl")
+    entries = [{"kind": "rename", "repo": ".agents", "name": "session/x", "to": "kit-draft"},
+               {"kind": "rename", "repo": "agents-kit", "name": "kit-draft", "to": "kit-change"},  # a clone named after the repo
+               {"kind": "lens", "name": "tests", "repo": ".agents", "branch": "session/x"},
+               {"kind": "escape", "name": "bot", "repo": ".agents", "branch": "kit-change", "verdict": "confirmed", "lens": "tests"}]
+    open(outcomes.QUALITY_LOG, "w").write("".join(json.dumps(e) + "\n" for e in entries))
+    prs = [{"repo": "alopezari/agents-kit", "branch": "kit-change", "opened": "2026-10-01T12:00:00Z", "merged": "2026-10-02T12:00:00Z"}]
+    sessions = [{"project": "~/.agents-worktree-session-x", "repos": {"alopezari/agents-kit": [".agents", "agents-kit"]}, "branches": ["session/x"],
+                 "start_iso": "2026-10-01T10:00:00Z", "minutes": 1, "tokens": {"in": 1, "out": 1, "cache_read": 0},
+                 "phases": {"session/x": {"spec": {"out": 7, "cache_read": 0, "cache_write": 0, "minutes": 1}}}},
+                {"project": "~/p/fork-of-agents-kit", "repos": {"someone/agents-kit": ["agents-kit"]}, "branches": ["kit-change"],
+                 "start_iso": "2026-10-01T10:00:00Z", "minutes": 1, "tokens": {"in": 1, "out": 1, "cache_read": 0}}]
+    outcomes.attach_sessions(prs, sessions)
+    joined = prs[0]["sessions"] or {}
+    assert joined.get("count") == 1 and joined["phases"].get("spec", {}).get("out") == 7, \
+        f"the session under the earlier name joins, the fork with the same name doesn't: {prs[0]['sessions']}"
+    outcomes.attach_escapes(prs, outcomes.local_names(sessions))
+    assert [(e["source"], e["lens_ran"]) for e in prs[0]["escapes"]] == [("bot", True)], prs[0]["escapes"]
 
 
 def quality_log_names_the_repo_not_the_worktree(base):
@@ -150,7 +172,7 @@ def quality_log_names_the_repo_not_the_worktree(base):
 
 RESULTS = []
 for test in (pr_metrics_count_people_not_me_or_bots, follow_ups_need_a_shared_file_and_a_fix_title,
-             escapes_join_to_their_branch_and_lens, sessions_join_by_repo_and_branch,
+             escapes_join_to_their_branch_and_lens, sessions_join_by_repo_and_branch, a_checkout_named_unlike_its_repo,
              quality_log_names_the_repo_not_the_worktree):
     base = tempfile.mkdtemp(prefix="agents-test-outcomes-")
     try:

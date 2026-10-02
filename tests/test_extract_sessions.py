@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
@@ -36,10 +37,19 @@ def edit(path):
     return {"type": "tool_use", "id": f"t-{path}", "name": "Write" if "spec-" in path else "Edit", "input": {"file_path": path}}
 
 
-def session(home, rows, renames=()):
+def bash(command, tool_id="b"):
+    return {"type": "tool_use", "id": f"t-{tool_id}", "name": "Bash", "input": {"command": command}}
+
+
+def session(home, rows, renames=(), cwd="repo"):
+    """Rows' "/repo" is a checkout of o/repo at HOME/repo; with `cwd`, the session ran in HOME/<cwd> instead."""
+    checkout = os.path.join(home, "repo")
+    os.makedirs(checkout)
+    subprocess.run(["git", "init", "-q", checkout], check=True)
+    subprocess.run(["git", "-C", checkout, "remote", "add", "origin", "git@github.com:o/repo.git"], check=True)
     os.makedirs(os.path.join(home, ".claude", "projects", "p"))
     with open(os.path.join(home, ".claude", "projects", "p", "s1.jsonl"), "w") as fh:
-        fh.writelines(json.dumps(r) + "\n" for r in rows)
+        fh.writelines(json.dumps({**r, "cwd": os.path.join(home, cwd)} if r.get("cwd") else r) + "\n" for r in rows)
     os.makedirs(os.path.join(home, ".agents", "logs"))
     with open(os.path.join(home, ".agents", "logs", "quality.jsonl"), "w") as fh:
         fh.writelines(json.dumps({"kind": "rename", "repo": repo, "name": old, "to": new}) + "\n" for repo, old, new in renames)
@@ -99,13 +109,81 @@ def what_ends_a_phase(home):
     assert (phases["build"]["out"], phases["spec"]["out"], phases["validate"]["out"]) == (30, 10, 20), phases
 
 
+def branches_started_by_commands(home):
+    """The session directory stays on one branch (or detached) while the agent starts each change in a worktree."""
+    rows = [user(0, "go", "phase-cost"),
+            *assistant(1, "m0", "phase-cost", [skill("self-review")]),
+            *assistant(2, "m1", "phase-cost", [bash("cd ~/kit && git worktree add -q -b short-outputs $SP/kit-so origin/main")]),
+            *assistant(3, "m2", "phase-cost", [TEXT]),                      # its gitBranch hasn't changed: still short-outputs
+            *assistant(4, "m3", "HEAD", [TEXT]),                            # the session directory detached
+            *assistant(5, "m4", "HEAD", [bash("git fetch -q; git switch -qc guard origin/main"), skill("validate")]),
+            *assistant(6, "m5", "HEAD", [bash("git branch -m guard guard-says-the-order")]),
+            *assistant(7, "m6", "HEAD", [bash("gh pr create --body-file - <<'EOF'\ngit switch -c bogus\nEOF", "m6"),
+                                         bash("cd $(mktemp -d) && git init -q && git checkout -q -b scratch", "m6b")]),
+            *assistant(8, "m7", "HEAD", [bash("git -C ../wt branch -m old-elsewhere new-elsewhere")]),  # not this branch
+            *assistant(9, "m8", "HEAD", [bash("git -C '../my wt' switch -q existing"), bash("git switch -c taken", "m8b")]),
+            {"type": "user", "timestamp": at(9, 1), "gitBranch": "HEAD", "uuid": "r8b",
+             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t-m8b", "is_error": True,
+                                                      "content": "fatal: a branch named 'taken' already exists"}]}},
+            *assistant(10, "m9", "HEAD", [bash("git switch -q after-error >/dev/null && python3 broken.py", "m9")]),
+            {"type": "user", "timestamp": at(10, 1), "gitBranch": "HEAD", "uuid": "r9",
+             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t-m9", "is_error": True,
+                                                      "content": "Traceback: broken.py"}]}}]
+    found = session(home, rows, cwd="repo-worktree-session-gone")
+    assert found["branches"] == ["HEAD", "after-error", "existing", "guard", "guard-says-the-order", "new-elsewhere", "phase-cost",
+                                 "short-outputs"], "a heredoc's body and a throwaway repo's branches aren't the session's: " + str(found["branches"])
+    phases = found["phases"]
+    assert sorted(phases["short-outputs"]) == ["build"] and phases["short-outputs"]["build"]["out"] == 20, phases
+    assert phases["existing"]["build"]["out"] == 10 and phases["after-error"]["build"]["out"] == 10, \
+        f"m8 on the branch switched to; a later step's error doesn't undo m9's switch: {phases}"
+    assert "guard" not in phases and phases["guard-says-the-order"]["validate"]["out"] == 40, \
+        f"a rename carries the branch's phase and its spending to the new name: {phases}"
+    assert found["repos"] == {"o/repo": ["repo"]}, f"a removed worktree's repo comes from its main checkout: {found['repos']}"
+
+
+def writing_the_spec_marks_the_work_before_it(home):
+    """Agents write most specs without invoking the skill again; the spec file is what every spec leaves behind."""
+    rows = [user(0, "go", "session/x"),
+            *assistant(1, "m0", "session/x", [TEXT]),                                   # reading the issue and the code
+            *assistant(2, "m1", "session/x", [TEXT]),
+            *assistant(3, "m2", "session/x", [edit("/g/agents/spec-repo-x.md")]),       # the spec, written with Write
+            *assistant(4, "m3", "session/x", [bash("git branch -m kit-change")]),
+            *assistant(5, "m4", "kit-change", [edit("/repo/app.py")]),                  # the first code edit ends it
+            *assistant(6, "m5", "kit-change", [TEXT]),
+            *assistant(7, "m6", "kit-change", [{**edit("/g/agents/spec-repo-kit-change.md"), "name": "Edit"}]),
+            *assistant(8, "m7", "kit-change", [edit("/repo/app.py")]),
+            *assistant(9, "m8", "other", [TEXT]),
+            *assistant(10, "m9", "other", [skill("self-review")])]
+    phases = session(home, rows)["phases"]
+    assert (phases["kit-change"]["spec"]["out"], phases["kit-change"]["build"]["out"]) == (40, 40), \
+        f"m0-m3 are the spec (m0 and m1 before the file existed), m4-m7 build: a spec edit mid-build is not a new spec: {phases}"
+    assert sorted(phases["other"]) == ["build", "self-review"], f"without a spec, the work before a skill stays build: {phases}"
+
+
+def what_counts_as_starting_the_code(home):
+    rows = [user(0, "go", "main"),
+            *assistant(1, "m0", "main", [edit("/repo/app.py"), bash("git switch -q -c b1 origin/main")]),  # edit on main
+            *assistant(2, "m1", "b1", [edit("/private/tmp/claude-501/x/probe.py")]),                      # scratch: not code
+            *assistant(3, "m2", "b1", [edit("/g/agents/spec-repo-b1.md")]),
+            *assistant(4, "m3", "b1", [edit("/repo/app.py")]),
+            *assistant(5, "m4", "b1", [bash("git branch -m b2")]),                                       # renamed after code
+            *assistant(6, "m5", "b2", [{**edit("/g/agents/spec-repo-b2.md"), "name": "Edit"}]),
+            *assistant(7, "m6", "b2", [bash("git switch -q -c b1 origin/main")]),                     # the old name, reused
+            *assistant(8, "m7", "b1", [edit("/g/agents/spec-repo-b1.md")])]
+    phases = session(home, rows)["phases"]
+    assert "main" not in phases and (phases["b2"]["spec"]["out"], phases["b2"]["build"]["out"]) == (30, 30), \
+        f"m0 (it ends on b1) to m2 spec; after the code edit a rename keeps it started, so the later spec edit is build: {phases}"
+    assert sorted(phases["b1"]) == ["spec"], f"a new branch under a renamed one's old name starts fresh: {phases}"
+
+
 def short_gaps_add_up(home):
     rows = [user(1, "go", "a")] + [row for i in range(31) for row in assistant(1 + 2 * i // 60, f"m{i}", "a", [TEXT], second=2 * i % 60)]
     found = session(home, rows)
     assert found["phases"]["a"]["build"]["minutes"] == 1.0, found["phases"]["a"]
 
 
-for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, short_gaps_add_up):
+for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, branches_started_by_commands,
+             writing_the_spec_marks_the_work_before_it, what_counts_as_starting_the_code, short_gaps_add_up):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:
