@@ -16,6 +16,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import harness, log  # noqa: E402
+import design_files  # noqa: E402
 import private_terms  # noqa: E402
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
@@ -395,6 +396,89 @@ def targets_kit(repo, host, cwd):
     return bool(common and kit) and os.path.realpath(common) == os.path.realpath(kit)
 
 
+COPY_COMMANDS = {"cp", "mv", "install", "ln"}
+# Agents look for PRODUCT.md and DESIGN.md often; these only read what they name, unless the output is redirected.
+READERS = {"cat", "head", "tail", "less", "grep", "rg", "ls", "stat", "test", "[", "wc", "file", "diff"}
+READ_ONLY_IMPECCABLE = {"context", "detect", "doctor", "help", "version", "live-status"}
+IMPECCABLE_FLAGS_ONLY = {"--help", "-h", "--schema", "--version"}
+# What can stand before the program a segment runs: shell keywords, wrappers, runners, their flags, VAR=value.
+LEADING = re.compile(r"-\S*|\w+=\S*|if|then|else|elif|do|while|until|\{|!|time|env|\S*/env|command|exec|nohup|"
+                     r"npx|bunx|pnpm|dlx|yarn|npm|sudo")
+# Quotes split words too: `sh -c 'touch PRODUCT.md'` names PRODUCT.md, and a path with spaces is rare here.
+WORD = re.compile(r"[^\s\"'<>;&|()]+")
+
+
+def impeccable_files(command, cwd, session):
+    """Why a command needs the user first under design_files.py: it names PRODUCT.md, DESIGN.md or `.impeccable`
+    where none exists yet, adds them to a .gitignore, or runs Impeccable's `live`, `hooks on`/`reset` or another
+    command that would create `.impeccable/`. None otherwise.
+
+    Coarse on purpose: a name in the command counts as a write, and every folder it cd's into counts as where it
+    runs. Shell is too varied to tell writes from mentions, and a wrong guess costs a question, not a file in someone
+    else's repository."""
+    if not re.search(r"product\.md|design\.md|impeccable", command, re.I):
+        return None  # most commands: no git call
+    code = shell_code(command)
+    # A newline inside quotes is part of an argument (sed's a\ text), not the end of a command.
+    joined = re.sub(r"'[x\n]*'|\"[x\n]*\"", lambda m: m.group().replace("\n", "x"), code)
+    cuts = [(0, 0)] + [m.span() for m in re.finditer(r"&&|\|\||(?<![<>&])&(?![>&])|(?<!>)\||[;\n()]", joined)]
+    folders, gitignores, targets, runs = [cwd], [], [], []
+    # A patch run through the shell (Codex's apply_patch) names its files in a heredoc body.
+    for path in re.findall(r"^\*\*\* (?:Add File|Update File|Move to): (.+)$", command, re.M):
+        (gitignores if os.path.basename(path).lower() == ".gitignore" else targets).append(path)
+    for (_, start), (boundary, _) in zip(cuts, cuts[1:] + [(len(code), len(code))]):
+        if re.fullmatch(r"\s*x*\s*", code[start:boundary]):  # a heredoc body line, not a command
+            continue
+        segment = command[start:boundary]
+        cd = re.match(r"\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)", segment)
+        if cd:
+            folders.append(cd_into(folders[-1], cd.group(1)))
+        words = WORD.findall(segment)
+        words = words[next((i for i, w in enumerate(words) if not LEADING.fullmatch(w)), len(words)):]
+        if not words or (words[0] in READERS and ">" not in code[start:boundary]):
+            continue
+        if any(os.path.basename(w).lower() == ".gitignore" for w in words):
+            gitignores += [w for w in words if os.path.basename(w).lower() == ".gitignore"]
+            continue  # the names in it are ignore rules, judged below
+        targets += [w for w in words if design_files.DESIGN_NAME.search(w)]
+        args = [w for w in words[1:] if not w.startswith("-")]
+        if os.path.basename(words[0]) in COPY_COMMANDS and args:
+            # Into a folder (or ln's implicit `.`), each source keeps its name there.
+            dest = args[-1] if len(args) > 1 else "."
+            targets += [os.path.join(dest, os.path.basename(a.rstrip("/"))) for a in args[:-1] or args
+                        if design_files.DESIGN_NAME.search(os.path.basename(a.rstrip("/")))]
+        if os.path.basename(words[0]).split("@")[0] == "impeccable":
+            runs.append(words[1:])
+    for folder in dict.fromkeys(folders):
+        why = (design_files.blocked(targets, folder, session)
+               or design_files.blocked(gitignores, folder, session, command)
+               or next(filter(None, (impeccable_run(rest, folder, session) for rest in runs)), None))
+        if why:
+            return why
+    return None
+
+
+def impeccable_run(rest, folder, session):
+    """Why running `impeccable <rest>` in folder needs the user first, or None."""
+    if IMPECCABLE_FLAGS_ONLY & set(rest):
+        return None
+    named = [w for w in rest if not w.startswith("-")]
+    sub, action = (named or ["help"])[0], (named[1:] or [""])[0]
+    if sub == "live":
+        name, what = "impeccable live", "Starting `impeccable live`, which injects a script into project files,"
+    elif sub in ("hooks", "hook-admin") and action in ("on", "reset"):
+        name, what = f"hooks {action}", f"Running `impeccable {sub} {action}`, which writes hook settings into the project,"
+    elif (sub in READ_ONLY_IMPECCABLE and "--fix" not in rest) or (sub in ("hooks", "hook-admin") and action in ("", "status")):
+        return None
+    elif os.path.isdir(os.path.join(folder, ".impeccable")):  # Impeccable writes .impeccable/ where it runs
+        return None
+    else:
+        name, what = ".impeccable", f"Running `impeccable {sub}`, which creates .impeccable/,"
+    if design_files.approved(design_files.APPROVALS[name], session) or not design_files.shared_root(folder):
+        return None
+    return design_files.reason(what, name)
+
+
 def pr_command_args(command, start):
     """The arguments of the gh command starting at `start`, up to the next shell operator."""
     lexer = shlex.shlex(command[start:], posix=True, punctuation_chars=";&|\n")
@@ -547,7 +631,8 @@ def main():
     try:
         cwd = os.path.realpath(cwd or os.getcwd())  # getcwd raises when the directory was deleted
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
-                  or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd))
+                  or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd)
+                  or impeccable_files(command, cwd, payload.get("session_id")))
         if not reason:
             for pattern, why in RULES:
                 if re.search(pattern, command):

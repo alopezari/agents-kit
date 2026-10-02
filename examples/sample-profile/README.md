@@ -17,6 +17,7 @@ Keep the repository private when it holds anything about your employer or client
 | `skills/release-notes/` | A skill only this kind of work needs | linked into every harness's skills |
 | `research/*` | Studies built from this work's data, one file each | each file linked into `~/.agents/research/` |
 | `mcp-writes.json` | Which MCP tool calls write to shared systems; the guard blocks them until you approve that service | read by `hooks/guard_mcp.py` |
+| `personal-repos.txt` | Owners whose repositories are yours alone; elsewhere Impeccable's project files wait for your say-so | read by `hooks/design_files.py` |
 | `private-terms.txt` | Words that must never reach the public kit (ticket prefixes, internal names) | commits and pull requests to the kit that match are refused |
 | `deps.txt` | Programs this work needs, in the core's format | `install.sh` installs or reports them |
 | `review-mining/repos.txt`, `hosts.txt` | Repositories whose review comments the monthly job learns from, and extra GitHub hosts | read by `review-mining/` |

@@ -6,7 +6,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 
 ## At a glance
 
-- **3 harnesses** share one `AGENTS.md`, 9 skills and 5 hook scripts (Pi has no MCP, so it runs all but `guard_mcp.py`).
+- **3 harnesses** share one `AGENTS.md`, 9 skills and 6 hook scripts (Pi has no MCP, so it runs all but `guard_mcp.py`).
 - **21 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
@@ -87,25 +87,31 @@ When the change needs manual tests on staging, `validate` ends by handing you th
 |---|---|---|---|---|
 | Claude Code | PostToolUse | Edit\|Write\|MultiEdit\|NotebookEdit | post_edit.py | 30 |
 | Claude Code | PreToolUse | Bash | guard_bash.py | 10 |
+| Claude Code | PreToolUse | Edit\|Write\|MultiEdit\|NotebookEdit | guard_files.py | 10 |
 | Claude Code | PreToolUse | mcp__.* | guard_mcp.py | 10 |
 | Claude Code | Stop | (every stop) | stop_checks.py | 660 |
 | Claude Code | UserPromptSubmit | (every stop) | prompt_approvals.py | 10 |
 | Codex | PostToolUse | apply_patch\|Edit\|Write | post_edit.py | 30 |
 | Codex | PreToolUse | Bash\|shell\|exec_command\|local_shell | guard_bash.py | 10 |
+| Codex | PreToolUse | apply_patch\|Edit\|Write | guard_files.py | 10 |
 | Codex | PreToolUse | mcp__.* | guard_mcp.py | 10 |
 | Codex | Stop | (every stop) | stop_checks.py | 660 |
 | Codex | UserPromptSubmit | (every stop) | prompt_approvals.py | 10 |
 | Pi | agent_before_settle | (every settle) | stop_checks.py | 660 |
+| Pi | input | (every message) | prompt_approvals.py | 660 |
 | Pi | tool_call | bash | guard_bash.py | 660 |
+| Pi | tool_call | edit\|write | guard_files.py | 660 |
 | Pi | tool_result | edit\|write | post_edit.py | 660 |
 
 **`guard_bash.py`**: PreToolUse guard for shell commands, shared by Claude Code, Codex and Pi (via adapters/pi). Blocks irreversible or outward-facing commands. It is a seatbelt against agent mistakes, not a security boundary: a determined command can evade regexes. Records the checkout of each allowed `git push`, so the stop hook can follow that commit's CI.
+
+**`guard_files.py`**: PreToolUse guard for file tools (Claude Code Edit/Write/MultiEdit/NotebookEdit, Codex apply_patch/Edit/Write, Pi edit/write via adapters/pi): Impeccable's project files in a shared repository need the user first (design_files.py).
 
 **`guard_mcp.py`**: PreToolUse guard for MCP tools that write to shared systems. Reads pass. Writes are allowed when the user's current message names the service (prompt_approvals.py), or the user approved it in the last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves. The shell guard (guard_bash.py) never lets agents create either.
 
 **`post_edit.py`**: PostToolUse hook for file edits, shared by Claude Code, Codex and Pi (via adapters/pi). Runs a fast syntax check on each edited file and records that the session edited files, so the Stop hook only runs its checks after real changes.
 
-**`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex. Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), writes to it are allowed until the user's next message. Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the service only to read from it approves writes for that turn too.
+**`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex, and Pi's input event (adapters/pi). Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards, writes to it are allowed until the user's next message. Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the service only to read from it approves writes for that turn too.
 
 **`stop_checks.py`**: Stop hook shared by Claude Code, Codex and Pi (via adapters/pi). After a turn that edited files since the last stop, looks at the lines the branch adds since the merge-base with the default branch (committed or not) and asks the agent to continue, once, for a skipped or focused test, a deleted test file, a debug leftover, a conflict marker, a possible secret, a new option read near a cache, a temporary compose override left behind, or a changed code file the spec's Change map doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read. Once a branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change with its context over NEW_CHANGE_NUDGE_TOKENS, tells the user, once, that a new session picks it up for less (Claude Code only: it reads the transcript). Every stop also starts each profile's `after-turn` in the background with the stop payload on stdin, and doesn't wait for it.
 
@@ -136,7 +142,7 @@ Every block, and every approved or browser MCP call, is appended to `~/.agents/l
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
 
-It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded.
+It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them (`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in `personal-repos.txt`.
 
 ## Verify: checking the change at the end of every turn
 
@@ -328,6 +334,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `skills/<name>/` | `~/.agents/skills/<name>` |
 | `research/*` | `~/.agents/research/*` |
 | `mcp-writes.json` | read by `hooks/guard_mcp.py` |
+| `personal-repos.txt` | `host/owner` lines `hooks/design_files.py` treats as yours, not shared |
 | `review-mining/repos.txt` | repositories the monthly review mining reads |
 | `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |
 | `PROFILE.md` | work context for the trends scan |

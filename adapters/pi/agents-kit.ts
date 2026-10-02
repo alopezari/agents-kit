@@ -33,17 +33,28 @@ export default function (pi) {
     cwd: ctx.cwd,
   });
 
-  pi.on("input", async (event) => {
-    if (event.source !== "extension") continuedThisTurn = false;
+  pi.on("input", async (event, ctx) => {
+    if (event.source === "extension") return;
+    continuedThisTurn = false;
+    runHook("prompt_approvals.py", { ...base(ctx), prompt: event.text ?? "" });
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "bash") return;
-    const decision = runHook("guard_bash.py", {
-      ...base(ctx),
-      tool_name: "Bash",
-      tool_input: { command: event.input.command },
-    });
+    let decision;
+    if (event.toolName === "bash") {
+      decision = runHook("guard_bash.py", { ...base(ctx), tool_name: "Bash", tool_input: { command: event.input.command } });
+    } else if (event.toolName === "edit" || event.toolName === "write") {
+      decision = runHook("guard_files.py", {
+        ...base(ctx),
+        tool_name: event.toolName === "edit" ? "Edit" : "Write",
+        tool_input: {
+          file_path: event.input.path,
+          content: event.input.content,
+          edits: (Array.isArray(event.input.edits) ? event.input.edits : []).map((e) => ({ new_string: e?.newText })),
+          new_string: event.input.newText,
+        },
+      });
+    } else return;
     const out = decision?.hookSpecificOutput;
     if (out?.permissionDecision === "deny") {
       return { block: true, reason: out.permissionDecisionReason };
