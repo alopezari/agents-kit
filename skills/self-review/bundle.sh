@@ -13,7 +13,7 @@ if [ -f "$spec" ]; then echo; echo "The change was built against this spec:"; ec
 echo
 awk -v lens="## $lens" '$0==lens{on=1;next} /^## /{on=0} on' "$here/lenses.md"
 echo
-echo "Report every issue you suspect, each with file:line, the failing scenario, a severity and a confidence (high/medium/low); low-confidence findings are welcome, because they are verified afterwards. If the diff lacks context you need, say which file and why instead of guessing."
+echo "Report every issue you suspect, each with file:line, the failing scenario, a severity and a confidence (high/medium/low); low-confidence findings are welcome, because they are verified afterwards. If the diff lacks context you need, say which file and why instead of guessing. End with a final line reading exactly \"## Found\", then your tables and every finding below it: only that section is read."
 echo
 echo '```diff'
 git diff -U15 "$merge_base"

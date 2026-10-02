@@ -1,0 +1,1 @@
+- Self-review runs the Codex pass in the background, alongside the same-model lenses and validation, and reads only its **Found** section; AGENTS.md asks for short tool output (line ranges, `--stat`, `--oneline`, `tail`).
