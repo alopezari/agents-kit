@@ -1077,10 +1077,14 @@ else:
     # Each test in a process of its own, as every test already gets its own HOME, hook state and session ids there:
     # threads would share the HOME's repo overlays and logs.
     def run_alone(t):
-        done = subprocess.run([sys.executable, os.path.abspath(__file__), t.__name__], capture_output=True, text=True)
-        if done.returncode and not done.stdout.startswith("FAIL"):
-            return False, f"FAIL {t.__name__}\n     exit {done.returncode}: {done.stderr.strip()[-600:]}\n"
-        return done.returncode == 0, done.stdout
+        done = subprocess.run([sys.executable, os.path.abspath(__file__), t.__name__], capture_output=True, text=True,
+                              errors="replace")
+        # Passed only when it says so and exits 0: a test that exits early, 0 or not, never reported.
+        passed = done.returncode == 0 and f"ok   {t.__name__}\n" in done.stdout
+        if passed:
+            return True, done.stdout
+        said = "" if f"FAIL {t.__name__}" in done.stdout else f"FAIL {t.__name__}\n     exit {done.returncode}, no result\n"
+        return False, said + done.stdout + done.stderr
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 2)) as pool:
         outcomes = list(pool.map(run_alone, TESTS))
     shutil.rmtree(STATE, ignore_errors=True)
