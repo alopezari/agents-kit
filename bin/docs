@@ -416,6 +416,11 @@ def render():
     w("| `deps.txt` | more programs to install and check, in the core's format; a program in both takes the stricter tier |")
     w("| `private-terms.txt` | case-insensitive regexes, one per line, that must never reach the public kit: its commits and pull requests are refused when they match |")
     w("| `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |\n")
+    w("| `after-turn` | an executable the Stop hook starts in the background after every turn, with its JSON on stdin "
+      "(`transcript_path` in Claude Code and Codex, not Pi); it doesn't wait for it or read its output, so the script "
+      "handles its own overlap, rate limits and logging. Its environment has `AGENTS_AFTER_TURN=1`, and the stops of a "
+      "session it starts (`codex exec`, `claude -p`) start no after-turn. A script that can't start is logged as "
+      "`profile-after-turn-failed` |\n")
 
     w("## What the agents are told\n")
     w("`AGENTS.md` sections, in order:\n")

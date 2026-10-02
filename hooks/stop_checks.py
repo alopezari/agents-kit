@@ -11,18 +11,21 @@ when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the
 one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read. Once a
 branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change
 with its context over NEW_CHANGE_NUDGE_TOKENS, tells the user, once, that a new session picks it up for less (Claude
-Code only: it reads the transcript).
+Code only: it reads the transcript). Every stop also starts each profile's `after-turn` in the background with the
+stop payload on stdin, and doesn't wait for it.
 
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
 the hook has seen, for the weekly health check. `stop_checks.py verify` runs verify on the current checkout now,
 saving its report and stamping a pass, which is the only way a verify stamp gets written.
 """
+import glob
 import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -34,6 +37,7 @@ CHECKOUTS = os.path.join(os.environ.get("AGENTS_STATE_DIR") or os.path.expanduse
 OVERRIDE_NAMES = ("docker-compose.override.yml", "docker-compose.override.yaml", "compose.override.yml", "compose.override.yaml")
 OVERRIDE_MARKER = "agents: temporary override"
 VERIFY_TIMEOUT = 600
+PROFILES = os.environ.get("AGENTS_PROFILES_DIR") or os.path.expanduser("~/.agents/profiles")
 CI_WAIT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "ci-wait"))
 # Checks show up a little after a push; "no checks" long after it means the repo runs no CI. ci-wait's
 # GRACE_SECS is the same wait.
@@ -153,6 +157,7 @@ def main():
         payload = json.load(sys.stdin)
     except ValueError:
         return 0
+    start_profile_after_turns(payload)
     if payload.get("stop_hook_active"):
         return 0
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
@@ -205,6 +210,24 @@ def context_tokens(transcript):
         if entry.get("type") == "assistant" and usage and not entry.get("isSidechain"):
             return sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
     return 0
+
+
+def start_profile_after_turns(payload):
+    """Start each profile's after-turn on its own copy of the payload and return at once: a pipe would block on a
+    child that doesn't read it. A session an after-turn starts (codex exec, claude -p) runs these hooks too, so
+    AGENTS_AFTER_TURN marks it and its stops start nothing."""
+    if "AGENTS_AFTER_TURN" in os.environ:
+        return
+    for script in sorted(glob.glob(os.path.join(PROFILES, "*", "after-turn"))):
+        try:
+            with tempfile.TemporaryFile() as stdin:
+                stdin.write(json.dumps(payload).encode())
+                stdin.seek(0)
+                subprocess.Popen([script], stdin=stdin, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True, env={**os.environ, "AGENTS_AFTER_TURN": "1"})
+        except OSError as error:
+            profile = os.path.basename(os.path.dirname(script))
+            log("stop_checks", "profile-after-turn-failed", payload, f"{profile}: {error}")
 
 
 def fresh_session_notice(session, payload):

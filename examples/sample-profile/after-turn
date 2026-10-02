@@ -1,0 +1,11 @@
+#!/bin/bash
+# Runs in the background after every agent turn, with the Stop hook's JSON on stdin (session_id, cwd,
+# stop_hook_active, and transcript_path in Claude Code and Codex). Nothing waits for it and its output is discarded,
+# so it logs what it needs itself. This one counts turns in repositories this profile has an overlay for.
+payload=$(cat)
+dir=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null)
+repo=$(cd "${dir:-.}" 2>/dev/null && "$HOME/.agents/bin/repo-name" 2>/dev/null) || exit 0
+[ -f "$(dirname "$0")/repos/$repo/notes.md" ] || exit 0
+mkdir -p "$HOME/.agents/logs"
+jq -c --arg repo "$repo" --arg ts "$(date +%Y-%m-%dT%H:%M:%S%z)" '{ts: $ts, session: .session_id, repo: $repo}' \
+  <<<"$payload" >> "$HOME/.agents/logs/example-plugin-turns.jsonl"
