@@ -39,6 +39,18 @@ def removes_a_worktree_the_agent_made(base):
     assert f"cd {main} && git switch feat/cart" in out.stdout, out.stdout
 
 
+def frees_a_branch_behind_its_upstream(base):
+    """Someone pushed on top of it (a review suggestion applied on GitHub): nothing here is lost."""
+    main, worktree = setup(base)
+    other = os.path.join(base, "other")
+    sh(base, "git", "clone", "-q", "-b", "feat/cart", os.path.join(base, "origin.git"), other)
+    sh(other, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "suggestion")
+    sh(other, "git", "push", "-q")
+    sh(worktree, "git", "fetch", "-q")
+    out = sh(base, FREE, worktree)
+    assert out.returncode == 0 and not os.path.exists(worktree), out
+
+
 def detaches_the_session_worktree(base):
     main, worktree = setup(base)
     out = sh(worktree, FREE, worktree)
@@ -84,7 +96,7 @@ def leaves_the_main_checkout_alone(base):
     assert out.returncode == 1 and os.path.isdir(main) and "main checkout" in out.stdout + out.stderr, out
 
 
-for test in (removes_a_worktree_the_agent_made, detaches_the_session_worktree, refuses_to_lose_work,
+for test in (removes_a_worktree_the_agent_made, frees_a_branch_behind_its_upstream, detaches_the_session_worktree, refuses_to_lose_work,
              leaves_the_main_checkout_alone):
     base = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-free-branch-"))
     try:

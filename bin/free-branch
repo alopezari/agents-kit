@@ -5,12 +5,13 @@
 
 Run with the session's own directory as the working directory: a worktree the session runs in is detached
 (`git switch --detach`), because removing it would break every hook the session runs from there; any other is
-removed. Refuses, changing nothing, when the worktree has uncommitted or untracked files, a HEAD that isn't its
-upstream's, or, to remove it, ignored files other than regenerated ones (dependencies, caches, build output); never
-touches the main checkout. Prints the command that switches to the branch.
+removed. Refuses, changing nothing, when the worktree has uncommitted or untracked files, commits its upstream
+doesn't have (behind it is fine), or, to remove it, ignored files other than regenerated ones (dependencies, caches,
+build output); never touches the main checkout. Prints the command that switches to the branch.
 """
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -33,7 +34,7 @@ def git(cwd, *args):
 
 def refusal(worktree, removing):
     """Why removing (or detaching) `worktree` could lose something, or None."""
-    dirty = git(worktree, "status", "--porcelain", "--untracked-files=all")
+    dirty = git(worktree, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
     if dirty.strip():
         return f"{worktree} has changes that would stay behind, off the branch; commit or remove them:\n{dirty}"
     ignored = [] if not removing else [p for p in git(worktree, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory").splitlines()
@@ -48,8 +49,6 @@ def refusal(worktree, removing):
     ahead, behind = git(worktree, "rev-list", "--left-right", "--count", "HEAD...@{upstream}").split()
     if ahead != "0":
         return f"the branch has {ahead} commit(s) {upstream} doesn't: push them first"
-    if behind != "0":
-        return f"the worktree is {behind} commit(s) behind {upstream}: nothing is lost, but pull first so it's current"
     return None
 
 
@@ -61,7 +60,7 @@ def main():
     try:
         if os.path.realpath(git(worktree, "rev-parse", "--show-toplevel").strip()) != worktree:
             return fail(f"{worktree} is not the top of a git worktree")
-        first = git(worktree, "worktree", "list", "--porcelain").split("\n\n", 1)[0].splitlines()
+        first = git(worktree, "worktree", "list", "--porcelain", "-z").split("\0\0", 1)[0].split("\0")
         main_checkout = None if "bare" in first else os.path.realpath(first[0].removeprefix("worktree "))
         if worktree == main_checkout:
             return fail(f"{worktree} is the main checkout: there is nothing to free")
@@ -82,7 +81,8 @@ def main():
             done = f"removed {worktree}"
     except GitFailed as error:
         return fail(str(error))
-    switch = f"cd {main_checkout} && git switch {branch}" if main_checkout else f"git switch {branch} (in any other worktree)"
+    switch = (f"cd {shlex.quote(main_checkout)} && git switch {shlex.quote(branch)}" if main_checkout
+              else f"git switch {shlex.quote(branch)} (in any other worktree)")
     print(f"{done}; {branch} is free.\nSwitch to it: {switch}")
     return 0
 
