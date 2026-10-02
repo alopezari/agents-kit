@@ -79,7 +79,7 @@ Make every check repeatable in one command, because a fix sends you back to re-r
      ~/.agents/bin/evidence D1a ~/.agents/skills/impeccable/scripts/impeccable detect --json --viewport 1280x800 <url>
      ~/.agents/bin/evidence D1b ~/.agents/skills/impeccable/scripts/impeccable detect --json --viewport 390x844 <url>
      ```
-     The scan opens the URL fresh, so it sees a login page or the state before an interaction: say which states it couldn't reach, and judge those from the screenshots.
+     The scan opens the URL fresh and scans whatever answers: a login page, a 404 or the state before an interaction pass for the page itself. Check its findings are about the page you meant, say which states it couldn't reach, and judge those from the screenshots.
   3. Run the `impeccable` skill's `audit` on what changed (a workflow the skill describes, not a CLI command), with both screenshots and both scans as input, and save its report as `$EV/D1-audit.md`.
 
   Confirmed findings get fixed in this change or listed in the report with why they stay.
