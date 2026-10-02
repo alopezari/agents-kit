@@ -1027,6 +1027,11 @@ def verify_stamp_and_effort_nudge(base):
         verify_by_hand_empty = subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "verify"], cwd="/",
                                               capture_output=True, text=True)
         assert verify_by_hand_empty.returncode != 0 and "stop_checks.py verify" in verify_by_hand_empty.stderr, "outside a repo too"
+        no_repo = subprocess.run(["python3", H + "stop_checks.py", "verify"], cwd=tempfile.mkdtemp(dir=base),
+                                 capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                                 env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, "GIT_CEILING_DIRECTORIES": base})
+        assert no_repo.returncode == 1 and "not a git repository" in no_repo.stderr and "Traceback" not in no_repo.stderr, \
+            "verify outside a repository says so instead of crashing: " + no_repo.stderr
         with open(os.path.join(vdir, "verify"), "w") as fh:
             fh.write("#!/bin/sh\necho 'ran: nothing to check: no changed files'\n")
         verify_by_hand()
