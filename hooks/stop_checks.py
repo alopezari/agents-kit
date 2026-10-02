@@ -156,12 +156,12 @@ def main():
     if payload.get("stop_hook_active"):
         return 0
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
+    notice = fresh_session_notice(session, payload)
     marker = os.path.join(MARKER_DIR, f"{session}.edited")
     edited = None
     if os.path.exists(marker):
         edited = [p for p in open(marker).read().splitlines() if p]
         os.remove(marker)
-    notice = fresh_session_notice(session, payload)
     # Runs even when the notice above speaks: it records the branches the session works on.
     next_change = new_change_notice(session, payload, edited or [])
     if next_change and not notice:
@@ -295,9 +295,11 @@ def record_branches_and_notice(session, transcript, payload, edited):
     seen = set()
     for line in lines:
         try:
-            seen.add(tuple(json.loads(line)))
-        except (ValueError, TypeError):
+            pair = json.loads(line)
+        except ValueError:
             continue  # a torn line: that branch's history is lost, nothing more
+        if isinstance(pair, list) and len(pair) == 2 and all(isinstance(part, str) for part in pair):
+            seen.add(tuple(pair))
     had_history, new = bool(seen), []
     for (common_dir, branch), directory in current.items():
         if (common_dir, branch) in seen:

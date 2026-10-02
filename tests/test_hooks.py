@@ -738,8 +738,17 @@ def stop_suggests_a_fresh_session_for_the_next_change(base):
     assert not stop_with("nc-codex", 200_000, transcript=False)
     git(repo, "switch", "-q", "feat/b")
     assert not stop_with("nc-codex", 200_000, transcript=False), "no transcript (Codex, Pi): no context to measure"
+    git(repo, "switch", "-q", "-c", "feat/d")
+    phase = os.path.join(repo, ".git", "agents", "phase", "feat~d.json")
+    os.makedirs(os.path.dirname(phase), exist_ok=True)
+    json.dump({"label": "PR open"}, open(phase, "w"))
+    both = stop_with("nc", 300_000).get("systemMessage", "")
+    assert "PR is open" in both and "moved on" not in both, f"one message when both apply: {both}"
+    logged = [l for l in open(os.path.expanduser("~/.agents/logs/hooks.jsonl")) if '"new-change"' in l and RUN + "nc" in l]
+    assert len(logged) == 3, f"copy, b and c; only the notice shown is logged: {logged}"
+    git(repo, "switch", "-q", "feat/a2")
     state = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", RUN + "nc-broken.branches")
-    open(state, "w").write("torn line\n")
+    open(state, "w").write('torn line\n[1]\n["a", 2]\n')
     git(repo, "switch", "-q", "feat/a2")
     stop_with("nc-broken", 200_000)
     assert "feat/a2" in open(state).read(), "a torn state file is history lost, not a crash"
