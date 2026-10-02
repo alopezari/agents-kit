@@ -401,8 +401,9 @@ COPY_COMMANDS = {"cp", "mv", "install", "ln"}
 READERS = {"cat", "head", "tail", "less", "grep", "rg", "ls", "stat", "test", "[", "wc", "file", "diff"}
 READ_ONLY_IMPECCABLE = {"context", "detect", "doctor", "help", "version", "live-status"}
 IMPECCABLE_FLAGS_ONLY = {"--help", "-h", "--schema", "--version"}
-# What can stand before `impeccable` in a command that runs it: wrappers, runners, their flags, VAR=value.
-RUNS_IMPECCABLE = re.compile(r"-\S*|\w+=\S*|env|command|exec|sudo|nohup|time|npx|bunx|pnpm|dlx|yarn|npm")
+# What can stand before the program a segment runs: shell keywords, wrappers, runners, their flags, VAR=value.
+LEADING = re.compile(r"-\S*|\w+=\S*|if|then|else|elif|do|while|until|\{|!|time|env|\S*/env|command|exec|nohup|"
+                     r"npx|bunx|pnpm|dlx|yarn|npm|sudo")
 # Quotes split words too: `sh -c 'touch PRODUCT.md'` names PRODUCT.md, and a path with spaces is rare here.
 WORD = re.compile(r"[^\s\"'<>;&|()]+")
 
@@ -428,24 +429,26 @@ def impeccable_files(command, cwd, session):
     for (_, start), (boundary, _) in zip(cuts, cuts[1:] + [(len(code), len(code))]):
         if re.fullmatch(r"\s*x*\s*", code[start:boundary]):  # a heredoc body line, not a command
             continue
-        words = WORD.findall(command[start:boundary])
-        if words[:1] == ["cd"] and len(words) > 1:
-            folders.append(cd_into(folders[-1], words[1]))
+        segment = command[start:boundary]
+        cd = re.match(r"\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)", segment)
+        if cd:
+            folders.append(cd_into(folders[-1], cd.group(1)))
+        words = WORD.findall(segment)
+        words = words[next((i for i, w in enumerate(words) if not LEADING.fullmatch(w)), len(words)):]
+        if not words or (words[0] in READERS and ">" not in code[start:boundary]):
+            continue
         if any(os.path.basename(w).lower() == ".gitignore" for w in words):
             gitignores += [w for w in words if os.path.basename(w).lower() == ".gitignore"]
             continue  # the names in it are ignore rules, judged below
-        if words and words[0] in READERS and ">" not in code[start:boundary]:
-            continue
         targets += [w for w in words if design_files.DESIGN_NAME.search(w)]
         args = [w for w in words[1:] if not w.startswith("-")]
-        if words and os.path.basename(words[0]) in COPY_COMMANDS and args:
+        if os.path.basename(words[0]) in COPY_COMMANDS and args:
             # Into a folder (or ln's implicit `.`), each source keeps its name there.
             dest = args[-1] if len(args) > 1 else "."
             targets += [os.path.join(dest, os.path.basename(a.rstrip("/"))) for a in args[:-1] or args
                         if design_files.DESIGN_NAME.search(os.path.basename(a.rstrip("/")))]
-        at = next((i for i, w in enumerate(words) if os.path.basename(w).split("@")[0] == "impeccable"), None)
-        if at is not None and all(RUNS_IMPECCABLE.fullmatch(w) for w in words[:at]):
-            runs.append(words[at + 1:])
+        if os.path.basename(words[0]).split("@")[0] == "impeccable":
+            runs.append(words[1:])
     for folder in dict.fromkeys(folders):
         why = (design_files.blocked(targets, folder, session)
                or design_files.blocked(gitignores, folder, session, command)

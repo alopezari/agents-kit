@@ -1412,6 +1412,18 @@ def impeccable_guard_edge_cases(base):
     for command in ["npx impeccable serve-question --schema", "impeccable live --help", "impeccable hooks on --help",
                     "cat PRODUCT.md", "ls DESIGN.md"]:
         assert shell(command, fresh) == "allow", f"read-only: {command}"
+    spaced = os.path.join(base, "My App")
+    os.makedirs(spaced)
+    git(spaced, "init", "-q")
+    git(spaced, "remote", "add", "origin", "git@github.com:someone/my-app.git")
+    for command in ["if true; then impeccable live; fi", "{ impeccable hooks on; }", "! impeccable live",
+                    "/usr/bin/env impeccable live", "env cp /tmp/x/PRODUCT.md .", f'cd "{spaced}" && touch PRODUCT.md']:
+        assert "say-so" in shell(command, fresh if "My App" not in command else base), command
+    for command in ["grep PRODUCT.md .gitignore", "rg 'PRODUCT.md|DESIGN.md' .gitignore"]:
+        assert shell(command, fresh) == "allow", f"read-only: {command}"
+    run_hook("prompt_approvals.py", {"prompt": "add PRODUCT.md to .gitignore", "session_id": "e1", "cwd": fresh}, env=env)
+    assert shell("echo PRODUCT.md >> .gitignore", fresh) == "allow"
+    assert "say-so" in shell("echo DESIGN.md >> .gitignore", fresh), "gitignoring one file doesn't allow the others"
     run_hook("prompt_approvals.py", {"prompt": "ok, run impeccable hooks on", "session_id": "e1", "cwd": fresh}, env=env)
     assert shell("impeccable hooks on", fresh) == "allow"
     assert "say-so" in shell("impeccable hooks reset", fresh), "approving hooks on doesn't approve reset"
@@ -1424,6 +1436,7 @@ def impeccable_guard_edge_cases(base):
     assert tool({"input": patch}) == "allow", "a README line isn't an ignore rule"
     assert tool({"file_path": os.path.join(fresh, ".gitignore"), "content": "# PRODUCT.md is tracked\ndist/\n"}) == "allow", \
         "nor is a comment"
+    assert "say-so" in tool({"file_path": "~/fresh/PRODUCT.md", "content": "x"}, base), "~ is the home, not a folder in cwd"
     os.makedirs(os.path.join(profiles, "broken"), exist_ok=True)
     open(os.path.join(profiles, "broken", "mcp-writes.json"), "w").write("{not json")
     personal = new_repo(base, "personal")

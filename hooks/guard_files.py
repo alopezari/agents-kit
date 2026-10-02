@@ -15,6 +15,8 @@ from hooklog import log  # noqa: E402
 def written(payload):
     """(paths a file tool writes, the text it adds to a .gitignore among them)."""
     tool_input = payload.get("tool_input") or {}
+    if isinstance(tool_input.get("file_path"), str):  # Pi expands ~ before joining the cwd; edited_paths doesn't
+        payload = {**payload, "tool_input": {**tool_input, "file_path": os.path.expanduser(tool_input["file_path"])}}
     paths = post_edit.edited_paths(payload)
     patch = tool_input.get("patch") or tool_input.get("input") or tool_input.get("command") or ""
     patch = "\n".join(map(str, patch)) if isinstance(patch, list) else str(patch)

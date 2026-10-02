@@ -25,7 +25,6 @@ APPROVALS = {
 }
 APPROVALS_DIR = os.path.expanduser("~/.agents/approvals")  # guard_mcp.APPROVALS, without importing it
 FILES = ("PRODUCT.md", "DESIGN.md", ".impeccable")
-GITIGNORE = "design.gitignore"  # granted by naming .gitignore together with one of the files
 DESIGN_NAME = re.compile(r"(?<![\w-])(PRODUCT\.md|DESIGN\.md|\.impeccable)(?![\w-]|\.\w)", re.I)
 # "no crees PRODUCT.md", "don’t touch DESIGN.md", "DESIGN.md? not yet": a refusal near the name grants nothing.
 # A sentence ends at . ! ? followed by a space, not at the dot inside PRODUCT.md.
@@ -34,6 +33,17 @@ REFUSAL = r"(?<!\w)(?:no|not|don['’]?t|do not|never|without|sin|nunca|ni|todav
 REFUSAL_BEFORE = re.compile(rf"{REFUSAL}{CLAUSE}{{0,80}}$", re.I)
 REFUSAL_AFTER = re.compile(rf"^[?:,]?\s*{CLAUSE}{{0,15}}{REFUSAL}", re.I)
 GIT_TIMEOUT = 3
+
+
+def gitignore_grant(name):
+    """Adding `name` to a .gitignore: granted by a message naming .gitignore together with it."""
+    return APPROVALS[name] + "-gitignore"
+
+
+def file_named(rule):
+    """Which of FILES an ignore rule (or a path) names, spelled as in FILES."""
+    found = DESIGN_NAME.search(rule).group(1).lower()
+    return next(n for n in FILES if n.lower() == found)
 
 
 def guard_mcp():
@@ -53,8 +63,8 @@ def approval_names(prompt):
         return any(not REFUSAL_BEFORE.search(prompt[:m.start()]) and not REFUSAL_AFTER.search(prompt[m.end():])
                    for m in re.finditer(rf"(?<![\w.-]){re.escape(name)}(?![\w-]|\.\w)", prompt, re.I))
     grants = {grant for name, grant in APPROVALS.items() if named(name)}
-    if named(".gitignore") and grants & {APPROVALS[n] for n in FILES}:
-        grants.add(GITIGNORE)
+    if named(".gitignore"):
+        grants |= {gitignore_grant(n) for n in FILES if APPROVALS[n] in grants}
     return sorted(grants)
 
 
@@ -134,8 +144,9 @@ def blocked(paths, cwd, session, gitignore_additions=""):
             name = next(n for n, g in APPROVALS.items() if g == grant)
             return reason(f"Creating {name + '/' if name == '.impeccable' else name}", name)
         if os.path.basename(path).lower() == ".gitignore" and gitignore_additions:
-            rules = new_ignore_rules(path, gitignore_additions)
-            if rules and not approved(GITIGNORE, session) and shared_root(existing_folder(path)):
+            rules = [r for r in new_ignore_rules(path, gitignore_additions)
+                     if not approved(gitignore_grant(file_named(r)), session)]
+            if rules and shared_root(existing_folder(path)):
                 return reason(f"Adding {', '.join(rules)} to .gitignore", f".gitignore` together with `{rules[0]}")
     return None
 
