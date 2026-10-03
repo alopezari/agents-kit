@@ -924,6 +924,34 @@ def stop_checks_edits_after_its_directory_is_removed(base):
     assert midway.stdout.strip() == "checked", f"removed while the hook was in another checkout: {midway.stderr[-300:]}"
 
 
+def stop_skips_a_checkout_removed_while_checked(base):
+    # A worktree removed at the end of a session while its verify ran crashed the hook with FileNotFoundError.
+    main = new_repo(base, "zz-agents-vanishing")
+    git(main, "switch", "-q", "-c", "feature")
+    wt = os.path.join(base, "zz-agents-vanishing-wt")
+    git(main, "worktree", "add", "-q", "-b", "session/gone", wt, "trunk")
+    vdir = os.path.expanduser("~/.agents/repos/zz-agents-vanishing")
+    os.makedirs(vdir, exist_ok=True)
+    try:
+        open(os.path.join(vdir, "verify"), "w").write(
+            f'#!/bin/sh\n[ "$(pwd -P)" = "{os.path.realpath(wt)}" ] || exit 0\ngit -C "{main}" worktree remove --force "$PWD"\n'
+            'exit 1\n')
+        os.chmod(os.path.join(vdir, "verify"), 0o755)
+        open(os.path.join(wt, "app.py"), "a").write("y = 2\n")
+        open(os.path.join(main, "app.py"), "a").write("breakpoint()\n")
+        session = RUN + "s22"
+        for path in (os.path.join(wt, "app.py"), os.path.join(main, "app.py")):
+            run_hook("post_edit.py", {"session_id": session, "cwd": main, "tool_input": {"file_path": path}})
+        result = subprocess.run(["python3", H + "stop_checks.py"], input=json.dumps({"session_id": session, "cwd": main}),
+                                capture_output=True, text=True, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+        assert not os.path.isdir(wt) and "Traceback" not in result.stderr, (os.path.isdir(wt), result.stderr[-500:], result.stdout[-300:])
+        reason = (json.loads(result.stdout) if result.stdout.strip() else {}).get("reason", "")
+        assert "Debug leftover" in reason, "the checkouts still there are checked"
+        assert "failed (exit 1)" not in reason, "a removed checkout's verify isn't reported as failing: " + reason
+    finally:
+        shutil.rmtree(vdir, ignore_errors=True)
+
+
 def stop_catches_committed_leftover(base):
     repo = new_repo(base)
     git(repo, "switch", "-q", "-c", "feature")
@@ -1480,7 +1508,7 @@ def impeccable_guard_edge_cases(base):
     assert "say-so" in shell("touch DESIGN.md"), "a failing git counts as shared"
 
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
