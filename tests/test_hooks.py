@@ -704,6 +704,31 @@ def reports_brief_gives_one_line_per_report(base):
     assert done.returncode == 0 and "no Status line yet" in done.stdout and "1 PASS, 1 FAIL, 1 NOT RUN" in done.stdout, done
 
 
+def reports_reads_another_branch(base):
+    main = new_repo(base, "main")
+    reports = os.path.expanduser("~/.agents/bin/reports")
+
+    def run(*args, cwd=main):
+        return subprocess.run([reports, *args], cwd=cwd, capture_output=True, text=True)
+    git(main, "switch", "-q", "-c", "feat/ship")
+    on_branch = {kind: run("path", kind).stdout.strip() for kind in ("staging-guide", "evidence")}
+    open(on_branch["staging-guide"], "w").write("# Checks after the merge\n")
+    open(os.path.join(on_branch["evidence"], "P1.txt"), "w").write("loaded\n")
+    git(main, "switch", "-q", "trunk")
+    wt = os.path.join(base, "wt")
+    git(main, "worktree", "add", "-q", "-b", "other", wt, "trunk")
+    for cwd in (main, wt):
+        for kind, path in on_branch.items():
+            got = run("--branch", "feat/ship", "path", kind, cwd=cwd)
+            assert got.returncode == 0 and got.stdout.strip() == path, (cwd, kind, got)
+        shown = run("--branch", "feat/ship", cwd=cwd).stdout
+        assert "# Checks after the merge" in shown and "P1.txt" in shown, shown
+        brief = run("--branch", "feat/ship", "brief", cwd=cwd)
+        assert brief.returncode == 0 and on_branch["staging-guide"] in brief.stdout and "phase:" not in brief.stdout, brief
+    assert "# Checks after the merge" not in run().stdout, "without --branch it reads the current branch"
+    assert run("--branch").returncode == 2, "--branch needs a name"
+
+
 def stop_suggests_a_fresh_session_once_the_pr_is_open(base):
     repo = new_repo(base)
     git(repo, "switch", "-q", "-c", "feat/big")
@@ -1603,7 +1628,7 @@ def impeccable_guard_reads_prose_as_text(base):
         assert child_cpu() - started < 2, f"{child_cpu() - started:.1f}s of CPU on {label}"
 
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

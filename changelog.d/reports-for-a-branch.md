@@ -1,0 +1,1 @@
+- `bin/reports --branch <name>` prints, or gives the paths of, another branch's reports and evidence, so ship can read a merged pull request's guide from the default branch.

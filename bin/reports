@@ -4,10 +4,22 @@
 #   reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 #   reports                                          print every report that exists, with its path, then list the evidence
 #   reports brief                                    the phase and one line per report, to pick a branch up in a new session
+#   reports --branch <name> …                        the same, for another branch of this repo (a merged PR's, from main)
 set -euo pipefail
-spec="$("$HOME/.agents/skills/spec/path.sh")"
-dir="$(dirname "$spec")"
-suffix="$(basename "$spec" .md)"; suffix="${suffix#spec-}"
+if [ "${1:-}" = "--branch" ]; then
+  [ -n "${2:-}" ] || { echo "usage: reports --branch <name> [path <kind> | brief]" >&2; exit 2; }
+  # Only reads: path.sh would move the current branch's reports, never another's.
+  dir="$(git rev-parse --path-format=absolute --git-common-dir)/agents"
+  tilde='~'  # review_stamp.branch_key: / becomes ~
+  suffix="$("$HOME/.agents/bin/repo-name")-${2//\//$tilde}"
+  other_branch=1
+  shift 2
+else
+  spec="$("$HOME/.agents/skills/spec/path.sh")"
+  dir="$(dirname "$spec")"
+  suffix="$(basename "$spec" .md)"; suffix="${suffix#spec-}"
+  other_branch=0
+fi
 
 if [ "${1:-}" = "path" ]; then
   case "${2:-}" in
@@ -19,8 +31,10 @@ if [ "${1:-}" = "path" ]; then
 fi
 
 if [ "${1:-}" = "brief" ]; then
-  phase="$("$HOME/.agents/bin/phase" --refresh 2>&1)" || phase="unknown (bin/phase failed: ${phase##*$'\n'})"
-  echo "phase: $phase"
+  if [ $other_branch = 0 ]; then
+    phase="$("$HOME/.agents/bin/phase" --refresh 2>&1)" || phase="unknown (bin/phase failed: ${phase##*$'\n'})"
+    echo "phase: $phase"
+  fi
   for kind in spec verify review validation staging-guide follow-pr; do
     f="$dir/$kind-$suffix.md"
     [ -f "$f" ] || continue
