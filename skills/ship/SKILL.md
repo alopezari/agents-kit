@@ -38,7 +38,7 @@ When the user says the deploy is done, or you ran it, read the verification step
 
 - **Issue:** draft the update (what shipped, the PR link, how it was verified in production). Writing to a tracker needs the user's approval; the MCP guard enforces it.
 - **Repo notes:** a trap that cost time in this change (a flaky check, a missing setup step, a deploy surprise) goes into `~/.agents/repos/<repo>/notes.md`, or better, into a check.
-- **Local branch:** offer `git branch -d <branch>` (lowercase `-d` refuses to delete unmerged work).
+- **Worktrees and local branches:** run `~/.agents/bin/prune-merged` from the main checkout. It removes only the worktrees and branches already in origin's default branch that lose nothing, and says why it keeps the rest; pass its kept lines on to the user.
 
 PR outcomes (merged, reverted) reach the monthly analysis on their own; nothing to log here.
 
