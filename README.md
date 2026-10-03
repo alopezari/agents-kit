@@ -69,6 +69,8 @@ Claude Code also loads the kit as a plugin, `mods/kit/`, whose [mod](https://cod
 5. **Guarantees go by tier.** A capability that gives Claude Code a stronger guarantee than Codex has records where each fact came from, such as a step the user marked with a button versus one the agent wrote down. A record without that provenance counts as the weaker tier.
 6. **It calls the kit's Python instead of reimplementing it**, so one rule never has two implementations that drift apart.
 
+Its `/flow` pane shows where the branch is in the flow and runs verify without a turn. While the branch waits on its staging guide, the pane lists each step before the merge with a Pass and a Fail button that record your verdict; from a terminal, `~/.agents/bin/staging mark <step> PASS --by user` does the same. `docs/framework.md` lists every capability with its Codex equivalent.
+
 `install.sh` registers `~/.agents` as the `agents-kit` plugin marketplace and installs `kit@agents-kit`. The plugin loads in place, so a pull reaches it at the next session start or `/reload-plugins`. To work on the mod, run `claude --plugin-dir ~/.agents/mods/kit`, which reloads it on save; `tests/run.sh mods` validates and tests it.
 
 ## Adding a harness

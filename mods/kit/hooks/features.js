@@ -8,12 +8,16 @@ export const FEATURES = [
     "description": "Show where this branch is in the kit's flow, and run verify without a turn",
     "capabilities": [
       {"name": "Phase and reports", "codex": "`bin/reports brief`"},
+      {"name": "Follows the branch into the main checkout once validate detaches the session's own", "codex": "the commands of this list, run from the main checkout"},
       {"name": "Stamps (verify, self-review, validate, staging), current or not, and a verify that checked nothing", "codex": "`python3 ~/.agents/hooks/review_stamp.py check --kind <kind>`"},
       {"name": "The last verify report's ran/skipped/warning/error lines", "codex": "`cat \"$(~/.agents/bin/reports path verify)\"`"},
       {"name": "CI of the pushed HEAD", "codex": "`bin/ci-wait --once --no-log`"},
       {"name": "Context use", "codex": "nothing (Codex shows its own)"},
-      {"name": "Run verify button, without a turn, on the checkout the session is in", "codex": "`python3 ~/.agents/hooks/stop_checks.py verify` in a terminal"},
-      {"name": "Refresh button, and a refresh after each turn while the pane is open", "codex": "running the commands above again"}
+      {"name": "Run verify button, without a turn, on the checkout the pane shows", "codex": "`python3 ~/.agents/hooks/stop_checks.py verify` in a terminal"},
+      {"name": "Refresh button, and a refresh after each turn while the pane is open", "codex": "running the commands above again"},
+      {"name": "The staging guide's steps before the merge, each with its latest result, who gave it, and its evidence files", "codex": "`bin/staging steps --json`"},
+      {"name": "Pass button on each step before the merge, recorded as the user's verdict", "codex": "`bin/staging mark <step> PASS --by user` in a terminal (the shell guard refuses it from the agent)"},
+      {"name": "Fail button on each step before the merge, recorded as the user's verdict", "codex": "`bin/staging mark <step> FAIL --by user` in a terminal"}
     ]
   },
   {

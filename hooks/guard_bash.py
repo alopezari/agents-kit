@@ -7,6 +7,7 @@ regexes. Records the checkout of each allowed `git push`, so the stop hook
 can follow that commit's CI.
 """
 import bisect
+import itertools
 import json
 import os
 import re
@@ -63,6 +64,29 @@ RULES = [
     (r"\bchmod\s+(-R\s+)?777\b", "`chmod 777`: world-writable permissions."),
     (r"\.agents/approvals", "Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent."),
 ]
+
+STAGING_MARK = re.compile(r"(?<![\w-])staging['\"]?\s+mark\b")
+MARKS_AS_USER = ("`bin/staging mark --by user`: a step marked as the user's comes from their own action, the Pass or Fail "
+                 "button in /flow or the command in their terminal. Record your own verdict with `--by agent`.")
+
+
+def marks_as_user(command):
+    """`bin/staging mark … --by user` in the command, read as the shell splits its words: a quoted note can hold
+    `;`, `|` or a newline. A word that is a command itself (`bash -c '…'`) is read the same way."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>")
+        lexer.whitespace_split = True
+        words = list(lexer)
+    except ValueError:  # an unclosed quote: no shell would run it, so read its plain words
+        words = [word.strip("'\"") for word in command.split()]
+    for i, word in enumerate(words):
+        if re.search(r"(?<![\w-])staging$", word) and words[i + 1:i + 2] == ["mark"]:
+            args = list(itertools.takewhile(lambda arg: not set(arg) <= set(";&|()"), words[i + 2:]))
+            if "--by=user" in args or any(a == "--by" and b == "user" for a, b in zip(args, args[1:])):
+                return MARKS_AS_USER
+        elif word != command and STAGING_MARK.search(word) and marks_as_user(word):
+            return MARKS_AS_USER
+    return None
 
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 
@@ -854,7 +878,7 @@ def main():
         cwd = os.path.realpath(cwd or os.getcwd())  # getcwd raises when the directory was deleted
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
                   or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd)
-                  or impeccable_files(command, cwd, payload.get("session_id")))
+                  or impeccable_files(command, cwd, payload.get("session_id")) or marks_as_user(command))
         if not reason:
             for pattern, why in RULES:
                 if re.search(pattern, command):
