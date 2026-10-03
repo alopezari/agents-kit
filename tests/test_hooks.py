@@ -108,7 +108,8 @@ def only_the_user_marks_a_staging_step_as_theirs(base):
                 "~/.agents/bin/staging mark S1 PASS --note 'paid\nrefunded' --by user",
                 "bash -c '~/.agents/bin/staging mark S1 PASS --note \"x;y\" --by user'",
                 "bash -c \"bin/staging mark S1 PASS --note '200; cached | twice' --by user\"",
-                'bin/staging mark S1 PASS "--by" "user"']:
+                'bin/staging mark S1 PASS "--by" "user"', "(bin/staging mark S1 PASS --by user)",
+                "bin/staging mark S1 PASS --by=user>/dev/null"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     for cmd in ["~/.agents/bin/staging mark S1 PASS --by agent --note 'the user said S1 passed'",
                 "~/.agents/bin/staging mark S1 FAIL --by agent --note '200; cached | user saw it'",

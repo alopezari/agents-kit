@@ -73,14 +73,14 @@ def marks_as_user(command):
     """`bin/staging mark … --by user` in the command, read as the shell splits its words: a quoted note can hold
     `;`, `|` or a newline. A word that is a command itself (`bash -c '…'`) is read the same way."""
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>")
         lexer.whitespace_split = True
         words = list(lexer)
     except ValueError:  # an unclosed quote: no shell would run it, so read its plain words
         words = [word.strip("'\"") for word in command.split()]
     for i, word in enumerate(words):
         if re.search(r"(?<![\w-])staging$", word) and words[i + 1:i + 2] == ["mark"]:
-            args = list(itertools.takewhile(lambda arg: not set(arg) <= set(";&|"), words[i + 2:]))
+            args = list(itertools.takewhile(lambda arg: not set(arg) <= set(";&|()"), words[i + 2:]))
             if "--by=user" in args or any(a == "--by" and b == "user" for a, b in zip(args, args[1:])):
                 return MARKS_AS_USER
         elif word != command and STAGING_MARK.search(word) and marks_as_user(word):

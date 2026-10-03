@@ -215,6 +215,10 @@ def mark_locked(guide, evidence, step, result, by, note):
         order = [s for s, _ in before_merge_steps(text)]
         later = [found[0] for other, found in at.items() if other in order and order.index(other) > order.index(step)]
         lines[min(later, default=end):min(later, default=end)] = [row]
+    # Earlier tables of the round lose the step's rows: one row per step, as the PR's staging line lists them all.
+    earlier_rows = [k for t in tables if t[0] < head for k in t[3].get(step, [])]
+    for k in reversed(earlier_rows):
+        del lines[k]
     replace_guide(guide, text[:bounds[0]] + "\n".join(lines) + text[bounds[1]:])
     print(f"{step}: {result} (by {by})")
     return 0

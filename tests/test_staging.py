@@ -352,6 +352,11 @@ def mark_keeps_one_row_per_step_and_says_why_it_cant_write(base):
     assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "user").returncode == 0
     assert [l for l in read(guide).splitlines() if l.startswith("| S1")] == ["| S1 | PASS | user | was FAIL by agent; no saved evidence |"]
     assert read(guide).index("| S1 | PASS") < read(guide).index("Re-run:"), "replaced where it was, not added to the last table"
+    save(guide, GUIDE + "\n## Results (2026-10-01)\n\n| Step | Result | By | Evidence |\n|---|---|---|---|\n| S1 | FAIL | agent | x |\n"
+                        "| S2 | PASS | user | y |\n\nRe-run:\n\n| Step | Result | By | Evidence |\n|---|---|---|---|\n| S1 | PASS | user | z |\n")
+    assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "agent", "--note", "paid").returncode == 0
+    assert [l for l in read(guide).splitlines() if re.match(r"\| S\d", l)] == [
+        "| S2 | PASS | user | y |", "| S1 | PASS | agent | was PASS by user; paid; no saved evidence |"], read(guide)
     assert steps(repo)[2]["result"] == "", "**S3** is no step to review_stamp either"
     lock = os.path.join(os.path.dirname(guide), "." + os.path.basename(guide) + ".lock")
     os.remove(lock)
