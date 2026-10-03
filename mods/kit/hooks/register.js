@@ -444,12 +444,14 @@ async function askToLiftBlock($, e, next) {
     .ask(`A kit guard blocked this call: ${needed.what}.\n\n${previewOf(tool, input)}\n\nAllow it?`,
       { header: 'Approval', options: [ALLOW_ONCE, allowTurn, KEEP_BLOCKED] })
     .catch(() => null)  // dismissed, interrupted, or a -p run with no one to ask: the block stands, as without the mod
+  const outcome = answer === null ? 'dismissed, or no one to ask' : [ALLOW_ONCE, allowTurn, KEEP_BLOCKED].includes(answer) ? answer : 'answered in their own words'
+  $.ui.log(`kit: approval dialog for ${needed.names.join(', ')}: ${outcome}`, { to: 'debug' })
   if (answer === null) return blocked
   if (answer !== ALLOW_ONCE && answer !== allowTurn) {
     const said = answer === KEEP_BLOCKED ? '' : ` They answered: ${JSON.stringify(answer)}.`
     return { deny: `${blocked.text}\nThe user was asked in a dialog and kept it blocked.${said} Don't ask them to approve it again this turn.` }
   }
-  const granted = await approveHelper($, kit, ['grant', session, ...needed.names])
+  const granted = await approveHelper($, kit, [answer === ALLOW_ONCE ? 'once' : 'grant', session, ...needed.names])
   if (granted.failure) {
     $.ui.log("kit: couldn't record your approval, so the call stays blocked: " + granted.failure)
     return blocked

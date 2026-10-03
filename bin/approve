@@ -3,16 +3,19 @@
 
   approve needed < payload.json        {names, what, scope}: the approvals the rule that blocked this call needs
   approve grant <session> <name>...    write them as turn approvals, as the user's message would, until their next one
-  approve revoke <session> <name>...   remove them
+  approve once <session> <name>...     write them for one call, unless the turn has them
+  approve revoke <session> <name>...   remove the ones `once` wrote; a turn approval stays
 
 `needed` reads a PreToolUse payload with the block's text as `deny`. When guard_mcp blocked a write, or guard_bash's
 DROP/TRUNCATE rule a command, it names the service, or the sql.* grant of each statement not granted yet this turn;
 `what` shows them and `scope` says what a turn approval covers. A later rule can still block the same call (a `sudo`
 after the statement). Names is empty for anything else.
 
-`grant` is the user's own answer (the Claude Code mod's dialog); the shell guard refuses it from an agent. It writes
-every name or none. Exits 2, writing nothing, on a missing payload or a session or name that isn't a plain word.
+`grant` and `once` are the user's own answer (the Claude Code mod's dialog); the shell guard refuses them from an agent.
+They write every name or none, and exit 1 when they can't. Exits 2, writing nothing, on a missing payload or a
+session or name that isn't a plain word.
 """
+import contextlib
 import json
 import os
 import re
@@ -25,6 +28,15 @@ from hooklog import log  # noqa: E402
 SESSION = re.compile(r"[\w-]+")  # what guard_mcp.approved keeps of a session id
 NAME = re.compile(r"\w[\w.-]*")
 NOTHING = {"names": [], "what": "", "scope": ""}
+ONCE = "once\n"  # what a one-call approval's file holds; a turn approval's is empty, as prompt_approvals writes it
+
+
+def read(path):
+    try:
+        with open(path) as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
 
 
 def needed(payload):
@@ -43,8 +55,12 @@ def needed(payload):
             if guard_mcp.approved(name, session):
                 continue
             verbs[name] = " ".join(match.group().upper().split())
-            target = re.match(r"[^;'\"\n]{0,60}", command[match.end():]).group().rstrip()
-            shown.append(f"`{verbs[name]}{target}`")
+            # The object, up to where the statement or the shell's quoting ends: `"users"` keeps its quotes, and the
+            # closing quote of `psql -c "… runs"` goes.
+            target = re.match(r"\s*([^;'\n<>|&]{0,60})", command[match.end():]).group(1).rstrip()
+            if target.count('"') % 2:
+                target = target.rstrip('"').rstrip()
+            shown.append(f"`{verbs[name]}{' ' + target if target else ''}`")
         if not verbs:
             return NOTHING
         shown = list(dict.fromkeys(shown))
@@ -73,8 +89,8 @@ def main(argv):
             return refuse("needed reads a PreToolUse payload as JSON on stdin")
         print(json.dumps(needed(payload)))
         return 0
-    if argv[:1] not in (["grant"], ["revoke"]) or len(argv) < 3:
-        return refuse("usage: approve needed < payload.json | approve grant|revoke <session> <name>...")
+    if argv[:1] not in (["grant"], ["once"], ["revoke"]) or len(argv) < 3:
+        return refuse("usage: approve needed < payload.json | approve grant|once|revoke <session> <name>...")
     command, session, names = argv[0], argv[1], argv[2:]
     if not SESSION.fullmatch(session):
         return refuse(f"not a session id: {session!r}")
@@ -82,28 +98,35 @@ def main(argv):
     if bad:
         return refuse(f"not an approval name: {bad[0]!r}")
     folder = os.path.join(guard_mcp.TURN_APPROVALS, session)
-    if command == "grant":
-        written = []
-        try:
-            os.makedirs(folder, exist_ok=True)
-            for name in names:
-                path = os.path.join(folder, name)
-                if not os.path.exists(path):
-                    open(path, "x").close()
-                    written.append(path)
-        except OSError as error:  # all or nothing: a grant cut short would outlive the "Allow once" it was for
-            for path in written:
-                os.remove(path)
-            print(f"approve: couldn't write the approval: {error}", file=sys.stderr)
-            return 1
-        log("approve", "approve-dialog", {"session_id": session}, ",".join(sorted(names)))
+    if command == "revoke":
+        for name in names:
+            if read(os.path.join(folder, name)) == ONCE:  # never a turn approval, the user's message's or a dialog's
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(os.path.join(folder, name))
+        log("approve", "revoke-once", {"session_id": session}, ",".join(sorted(names)))
         return 0
-    for name in names:
-        try:
-            os.remove(os.path.join(folder, name))
-        except FileNotFoundError:
-            pass
-    log("approve", "revoke-dialog", {"session_id": session}, ",".join(sorted(names)))
+    before = {}
+    try:
+        os.makedirs(folder, exist_ok=True)
+        for name in names:
+            path = os.path.join(folder, name)
+            if command == "once" and os.path.exists(path):
+                continue  # a turn approval already covers it
+            before[path] = read(path)
+            with open(path, "w") as fh:  # a turn approval over a once one: its revoke then leaves it
+                fh.write(ONCE if command == "once" else "")
+    except OSError as error:  # all or nothing: a grant cut short would outlive the answer it was for
+        for path, content in before.items():
+            with contextlib.suppress(OSError):
+                if content is None:
+                    os.remove(path)
+                else:
+                    with open(path, "w") as fh:
+                        fh.write(content)
+        print(f"approve: couldn't write the approval: {error}", file=sys.stderr)
+        return 1
+    log("approve", "approve-dialog" if command == "grant" else "approve-once", {"session_id": session},
+        ",".join(sorted(names)))
     return 0
 
 

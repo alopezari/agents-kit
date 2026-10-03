@@ -110,6 +110,8 @@ def only_the_user_marks_a_staging_step_as_theirs(base):
                 "bash -c \"bin/staging mark S1 PASS --note '200; cached | twice' --by user\"",
                 'bin/staging mark S1 PASS "--by" "user"', "(bin/staging mark S1 PASS --by user)",
                 "bin/staging \\\n  mark S1 PASS --by user", "bash -c 'bin/staging \\\n mark S1 PASS --by user'",
+                "bin/staging >/dev/null mark S1 PASS --by user", "bin/staging mark S1 PASS --by >/dev/null user",
+                "bin/staging ma\\\nrk S1 PASS --by user",
                 "bin/staging mark S1 PASS --by=user>/dev/null"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     for cmd in ["~/.agents/bin/staging mark S1 PASS --by agent --note 'the user said S1 passed'",
@@ -126,11 +128,13 @@ def only_the_user_grants_an_approval_in_a_dialog(base):
                 "~/.agents/bin/evidence A1 ~/.agents/bin/approve grant s1 linear", "(bin/approve grant s1 x)",
                 "bin/approve \\\n  grant s1 linear", "bin/approve \\\n  'grant' s1 linear",
                 "bash -c 'bin/approve \\\n grant s1 linear'", "bin/approve > /dev/null grant s1 linear",
-                "bin/approve 2>/dev/null grant s1 x", "bin/approve >&2 grant s1 x"]:
+                "bin/approve 2>/dev/null grant s1 x", "bin/approve >&2 grant s1 x", "bin/approve &>/dev/null grant s1 x",
+                "bin/approve >|/dev/null grant s1 x", "bin/approve &>>log grant s1 x", "bin/approve g\\\nrant s1 x",
+                "bin/approve once s1 linear", "bash -c 'bin/approve once s1 x'"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     for cmd in ["~/.agents/bin/approve needed < payload.json", "~/.agents/bin/approve revoke s1 sql.drop-table",
                 "git log --grep 'grant'", "echo approved grants", "bin/auto-approve grant s1 x",
-                "bin/approve revoke s1 x \\\n  && echo grant"]:
+                "bin/approve revoke s1 x \\\n  && echo grant", "bin/approve revoke s1 x > /dev/null 2>&1"]:
         assert guard(cmd) == "allow", f"should allow: {cmd}"
 
 

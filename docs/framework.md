@@ -235,7 +235,8 @@ The rules every mod follows are in the README (Mods contract). `install.sh` inst
 ```
 approve needed < payload.json        {names, what, scope}: the approvals the rule that blocked this call needs
 approve grant <session> <name>...    write them as turn approvals, as the user's message would, until their next one
-approve revoke <session> <name>...   remove them
+approve once <session> <name>...     write them for one call, unless the turn has them
+approve revoke <session> <name>...   remove the ones `once` wrote; a turn approval stays
 ```
 
 **`bin/browse`**: A/B harness for browser tooling in the validate skill: Playwright CLI vs agent-browser.

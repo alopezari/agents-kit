@@ -35,9 +35,9 @@ function stub(on, { answer = 'Allow once' as Answer, needed = { exitCode: 0, std
     const [command, verb, session, ...names] = e.argv
     if (command !== APPROVE) return { deny: 'unexpected command: ' + e.argv.join(' ') }
     if (verb === 'needed') return answerWith(needed)
-    if (verb === 'grant' && session === SESSION && ok(grant)) granted = names
+    if ((verb === 'grant' || verb === 'once') && session === SESSION && ok(grant)) granted = names
     if (verb === 'revoke' && ok(revoke)) granted = granted.filter((n) => !names.includes(n))
-    return answerWith(verb === 'grant' ? grant : revoke)
+    return answerWith(verb === 'revoke' ? revoke : grant)
   })
   on('tool.call', ($, e) => {
     // $.ui.ask is a call of the dialog's tool, through every hook but the asking one.
@@ -67,7 +67,7 @@ test('allow once: the same call runs again with a grant the hook takes back righ
   expect(result.text).toBe('dropped')
   expect(calls.length).toBe(2)
   expect(calls[1]).toEqual(calls[0])
-  expect(ran.map((r) => r.argv)).toEqual([[APPROVE, 'needed'], [APPROVE, 'grant', SESSION, 'sql.drop-table'],
+  expect(ran.map((r) => r.argv)).toEqual([[APPROVE, 'needed'], [APPROVE, 'once', SESSION, 'sql.drop-table'],
     [APPROVE, 'revoke', SESSION, 'sql.drop-table']])
   expect(JSON.parse(ran[0].stdin)).toEqual({ tool_name: 'Bash', tool_input: { command: DROP, description: 'drop it' },
     session_id: SESSION, cwd: '/work/repo', deny: BLOCKED })

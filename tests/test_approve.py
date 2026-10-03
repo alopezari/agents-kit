@@ -67,6 +67,12 @@ def names_the_approvals_that_would_lift_a_block(base):
     assert got["names"] == ["sql.drop-database", "sql.drop-table", "sql.truncate-table"], got
     assert got["what"] == "`TRUNCATE TABLE runs`, `DROP DATABASE x`, `DROP TABLE y` destroy database data", got
     assert got["scope"] == "any DROP DATABASE or DROP TABLE or TRUNCATE TABLE", got
+    assert needed(env, bash("echo 'DROP TABLE x' > out.sql && mysql < out.sql"))["what"] == \
+        "`DROP TABLE x` destroys database data", "the statement stops where the shell takes over"
+    assert needed(env, bash("echo DROP TABLE x > out.sql"))["what"] == "`DROP TABLE x` destroys database data"
+    assert needed(env, bash('psql -c \'DROP TABLE "users"\''))["what"] == '`DROP TABLE "users"` destroys database data'
+    assert needed(env, bash('psql -c "DROP TABLE runs"'))["what"] == "`DROP TABLE runs` destroys database data"
+    assert needed(env, bash("psql <<'SQL'\nDROP TABLE\n  runs;\nSQL"))["what"] == "`DROP TABLE runs` destroys database data"
     got = needed(env, mcp("mcp__linear__save_issue", {"title": "Fix it"}))
     assert got == {"names": ["linear"], "what": "`save_issue` writes to linear, which other people see",
                    "scope": "every linear write"}, got
@@ -103,13 +109,24 @@ def a_grant_is_the_turn_approval_a_message_would_write(base):
     with open(os.path.join(base, ".agents", "logs", "hooks.jsonl")) as fh:
         logged = [json.loads(line) for line in fh if '"approve-dialog"' in line]
     assert [e["detail"] for e in logged] == ["linear,sql.drop-table"], logged
-    assert run(env, "revoke", "s1", "sql.drop-table").returncode == 0
-    assert guard(env, "guard_bash.py", drop) == "deny" and guard(env, "guard_mcp.py", issue) == "allow", \
-        "revoke removes only the names it's given"
-    assert run(env, "revoke", "s1", "sql.drop-table").returncode == 0, "revoking what isn't there is fine"
+    assert run(env, "revoke", "s1", "sql.drop-table", "linear").returncode == 0
+    assert guard(env, "guard_bash.py", drop) == "allow" and guard(env, "guard_mcp.py", issue) == "allow", \
+        "revoke never takes back a turn approval"
+    schema = bash("psql -c 'DROP SCHEMA s'")
+    assert run(env, "once", "s1", "sql.drop-schema", "linear").returncode == 0
+    assert guard(env, "guard_bash.py", schema) == "allow", "a one-call approval lifts the block too"
+    assert run(env, "revoke", "s1", "sql.drop-schema", "linear").returncode == 0
+    assert guard(env, "guard_bash.py", schema) == "deny", "revoke takes back what once wrote"
+    assert guard(env, "guard_mcp.py", issue) == "allow", "and leaves the turn approval once found already there"
+    assert run(env, "once", "s1", "sql.drop-schema").returncode == 0
+    assert run(env, "grant", "s1", "sql.drop-schema").returncode == 0, "the user allows it for the turn meanwhile"
+    assert run(env, "revoke", "s1", "sql.drop-schema").returncode == 0
+    assert guard(env, "guard_bash.py", schema) == "allow", "a one-call flow ending never takes back a turn approval"
+    assert run(env, "revoke", "s1", "sql.truncate-table").returncode == 0, "revoking what isn't there is fine"
     subprocess.run(["python3", os.path.join(KIT, "hooks", "prompt_approvals.py")], env=env, capture_output=True,
                    input=json.dumps({"prompt": "thanks", "session_id": "s1", "cwd": "/tmp"}), text=True)
-    assert guard(env, "guard_mcp.py", issue) == "deny", "a dialog's approval ends with the user's next message too"
+    assert guard(env, "guard_mcp.py", issue) == "deny" and guard(env, "guard_bash.py", schema) == "deny", \
+        "a dialog's approval ends with the user's next message too"
     approvals = os.path.join(base, ".agents", "approvals")
     assert run(env, "grant", "s1", "linear").returncode == 0
     before = sorted(os.path.relpath(os.path.join(d, f), base) for d, _, fs in os.walk(base) for f in fs)
@@ -120,11 +137,12 @@ def a_grant_is_the_turn_approval_a_message_would_write(base):
         assert done.returncode == 2 and done.stderr.startswith("approve:"), (args, done)
     after = sorted(os.path.relpath(os.path.join(d, f), base) for d, _, fs in os.walk(base) for f in fs)
     assert after == before, f"a refused call writes and removes nothing: {set(before) ^ set(after)}"
-    os.symlink("/nonexistent", os.path.join(approvals, "turn", "s1", "sql.drop-table"))
-    done = run(env, "grant", "s1", "sql.drop-schema", "sql.drop-table")
-    assert done.returncode == 1 and "couldn't write the approval" in done.stderr, done
-    assert not os.path.exists(os.path.join(approvals, "turn", "s1", "sql.drop-schema")), \
-        "a grant cut short takes back the names it wrote"
+    for verb in ("grant", "once"):
+        os.symlink("/nonexistent", os.path.join(approvals, "turn", "s1", "sql.drop-table"))  # a name it can't write
+        done = run(env, verb, "s1", "sql.drop-schema", "sql.drop-table")
+        assert done.returncode == 1 and "couldn't write the approval" in done.stderr, (verb, done)
+        assert not os.path.exists(os.path.join(approvals, "turn", "s1", "sql.drop-schema")), \
+            f"{verb} cut short takes back the names it wrote"
 
 
 for test in (names_the_approvals_that_would_lift_a_block, a_grant_is_the_turn_approval_a_message_would_write):

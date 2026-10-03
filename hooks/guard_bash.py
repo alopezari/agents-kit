@@ -65,37 +65,36 @@ RULES = [
     (r"\.agents/approvals", "Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent."),
 ]
 
-# Before splitting words: whether a word may hold a command worth reading again. `\` and a newline is a continuation.
-STAGING_MARK = re.compile(r"(?<![\w-])staging['\"]?(\s|\\\n)+['\"]?mark\b")
+# Whether a command, or a word that is one (`bash -c '…'`), may hold the call: read its words only then.
+STAGING_MARK = re.compile(r"(?<![\w-])staging\b[\s\S]*\bmark\b")
 MARKS_AS_USER = ("`bin/staging mark --by user`: a step marked as the user's comes from their own action, the Pass or Fail "
                  "button in /flow or the command in their terminal. Record your own verdict with `--by agent`.")
-APPROVE_GRANT = re.compile(r"(?<![\w-])approve\b[\s\S]*\bgrant\b")
-GRANTS_APPROVAL = ("`bin/approve grant`: an approval comes from the user, in their message or in the dialog Claude Code "
-                   "shows when a guard blocks a call, not from the agent.")
+APPROVE_GRANT = re.compile(r"(?<![\w-])approve\b[\s\S]*\b(grant|once)\b")
+GRANTS_APPROVAL = ("`bin/approve grant|once`: an approval comes from the user, in their message or in the dialog Claude "
+                   "Code shows when a guard blocks a call, not from the agent.")
+REDIRECT = re.compile(r"&?[<>]+[&|]?")  # >, >>, 2>&1's >&, &>, >|, <<
+CONTINUATION = "\\\n"
 
 
 def shell_words(command):
-    """The command's words as the shell splits them: a quoted note can hold `;`, `|` or a newline, and a line
-    continuation joins the words around it."""
+    """The words the shell hands the commands in `command`: a quoted note can hold `;`, `|` or a newline, a line
+    continuation joins what it splits, and a redirect (`> /dev/null`, `2>&1`) is no word."""
+    command = command.replace(CONTINUATION, "")
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>")
         lexer.whitespace_split = True
-        return [word for word in lexer if word != "\n"]  # shlex keeps a continuation's newline as a word
+        words = list(lexer)
     except ValueError:  # an unclosed quote: no shell would run it, so read its plain words
         return [word.strip("'\"") for word in command.split()]
-
-
-def without_redirects(words):
-    """The words from the first one a redirect doesn't take: `> /dev/null`, `2> log`, `>&2` can stand between a
-    command and its arguments."""
-    while words:
-        if re.fullmatch(r"\d*", words[0]) and words[1:2] and re.fullmatch(r"[<>]+&?", words[1]):
-            words = words[1:]  # the fd number before `>`
-        elif re.fullmatch(r"[<>]+&?", words[0]):
-            words = words[2:]
-        else:
-            break
-    return words
+    kept, target = [], False
+    for i, word in enumerate(words):
+        if target:
+            target = False
+        elif REDIRECT.fullmatch(word):
+            target = True
+        elif not (word.isdigit() and i + 1 < len(words) and REDIRECT.fullmatch(words[i + 1])):  # the 2 of 2> log
+            kept.append(word)
+    return kept
 
 
 def marks_as_user(command):
@@ -107,20 +106,20 @@ def marks_as_user(command):
             args = list(itertools.takewhile(lambda arg: not set(arg) <= set(";&|()"), words[i + 2:]))
             if "--by=user" in args or any(a == "--by" and b == "user" for a, b in zip(args, args[1:])):
                 return MARKS_AS_USER
-        elif word != command and STAGING_MARK.search(word) and marks_as_user(word):
+        elif word != command and STAGING_MARK.search(word.replace(CONTINUATION, "")) and marks_as_user(word):
             return MARKS_AS_USER
     return None
 
 
 def grants_approval(command):
-    """`bin/approve grant` in the command, read as marks_as_user reads it: only the mod's dialog runs it."""
-    if not APPROVE_GRANT.search(command):
+    """`bin/approve grant|once` in the command, read as marks_as_user reads it: only the mod's dialog runs it."""
+    if not APPROVE_GRANT.search(command.replace(CONTINUATION, "")):
         return None
     words = shell_words(command)
     for i, word in enumerate(words):
-        if re.search(r"(?<![\w-])approve$", word) and without_redirects(words[i + 1:])[:1] == ["grant"]:
+        if re.search(r"(?<![\w-])approve$", word) and words[i + 1:i + 2] in (["grant"], ["once"]):
             return GRANTS_APPROVAL
-        if word != command and APPROVE_GRANT.search(word) and grants_approval(word):
+        if word != command and grants_approval(word):
             return GRANTS_APPROVAL
     return None
 
