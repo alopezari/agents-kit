@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
@@ -104,7 +105,10 @@ def run(argv):
         assign()
         current = assigned()
     start = time.time()
-    proc = subprocess.run([current["tool"], *argv], capture_output=True, text=True)
+    env = dict(os.environ)
+    # playwright-cli writes its session logs to ./.playwright-cli/, which would land in the repository under test.
+    env.setdefault("PLAYWRIGHT_MCP_OUTPUT_DIR", os.path.join(tempfile.gettempdir(), "agents-browse", branch_key(run_key())))
+    proc = subprocess.run([current["tool"], *argv], capture_output=True, text=True, env=env)
     sys.stdout.write(proc.stdout)
     sys.stderr.write(proc.stderr)
     log("call", tool=current["tool"], run_id=current["run_id"], command=argv[0] if argv else "",

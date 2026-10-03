@@ -86,7 +86,21 @@ def finish_without_assignment_fails(base):
     assert done.returncode == 1 and not events(home), (done.returncode, events(home))
 
 
-for test in (full_run_alternates_and_logs, codex_started_from_claude_is_codex, finish_without_assignment_fails):
+def playwright_logs_stay_out_of_the_repository(base):
+    home, worktree, env = setup(base)
+    tool = os.path.join(base, "tools", "playwright-cli")
+    open(tool, "w").write('#!/bin/sh\necho "$PLAYWRIGHT_MCP_OUTPUT_DIR"\n')  # it writes .playwright-cli/ in cwd otherwise
+    browse = os.path.join(home, ".agents", "bin", "browse")
+    run([browse, "assign"], worktree, env)
+    where = run([browse, "snapshot"], worktree, env).stdout.strip()
+    assert where.startswith(env["TMPDIR"]) and not where.startswith(worktree), where
+    mine = os.path.join(base, "logs-here")
+    assert run([browse, "snapshot"], worktree, {**env, "PLAYWRIGHT_MCP_OUTPUT_DIR": mine}).stdout.strip() == mine, \
+        "a folder the user chose is kept"
+
+
+for test in (full_run_alternates_and_logs, codex_started_from_claude_is_codex, finish_without_assignment_fails,
+             playwright_logs_stay_out_of_the_repository):
     base = tempfile.mkdtemp(prefix="agents-test-browse-")
     try:
         test(base)
