@@ -24,6 +24,9 @@ const NEEDS_ATTENTION = /couldn't read|^Couldn't|^CI: failed|^Run verify.* faile
 // out of lenses.md. No edit tools is a convenience for the reviewer, not a guard (Bash can still write): the hooks
 // run for subagents too.
 const REVIEWER_TOOLS = ['Read', 'Grep', 'Glob', 'Bash']
+// Registering takes tens of milliseconds and must land before the first turn (`claude -p` starts one at once), so the
+// session start waits for it, but never longer than this.
+const REVIEWERS_WAIT_MS = 2_000
 
 // What the pane draws. One gathering runs at a time: a request during one gathers again once it ends.
 let shown = null
@@ -329,10 +332,15 @@ export function register(on) {
   on('session.start', async ($, e, next) => {
     const flow = FEATURES.find((feature) => feature.command === 'flow')
     await $.command.register({ name: 'flow', description: flow.description, immediate: true })
-    const started = await next(e)
-    // After the start, which every session waits on; the agents are there from the next turn either way.
-    void registerReviewers($).catch((error) => $.ui.log('kit: review agents: ' + messageOf(error), { to: 'debug' }))
-    return started
+    const waited = new AbortController()
+    const registering = registerReviewers($)
+      .catch((error) => $.ui.log('kit: review agents: ' + messageOf(error), { to: 'debug' }))
+      .finally(() => waited.abort())
+    const timer = $.clock.sleep(REVIEWERS_WAIT_MS, { signal: waited.signal }).then(() => 'timed out', () => 'registered')
+    if ((await Promise.race([registering.then(() => 'registered'), timer])) === 'timed out') {
+      await $.ui.log('kit: review agents: still registering after 2 s, so the session started without them', { to: 'debug' })
+    }
+    return next(e)
   })
 
   on('command.run', { command: 'flow' }, async ($) => {

@@ -593,12 +593,32 @@ test('a reviewer the host refuses is logged, and the next one is still registere
   expect(logged[0].to).toBe('debug')
 })
 
-test('session start does not wait for the reviewers: a triage that never answers holds nothing up', async ($, on) => {
-  stub(on, {}, { process: () => new Promise(() => {}) })
+test('the reviewers are registered before the session starts, so its first turn has them', async ($, on) => {
+  const registered = []
+  stub(on, { [TRIAGE_ARGV]: { exitCode: 0, stdout: JSON.stringify(LENSES) } })
+  on('agent.register', ($, e) => {
+    registered.push(e.name)
+    return { value: { agent: 'kit:' + e.name } }
+  })
   on('session.start', () => ({ cwd: ROOT }))
-  const started = await Promise.race([
-    $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT }).then(() => 'started'),
-    new Promise((resolve) => setTimeout(() => resolve('held up'), 2_000)),
-  ])
-  expect(started).toBe('started')
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT })
+  expect(registered).toEqual(['review-correctness', 'review-ux-a11y-i18n'])
+})
+
+test('a triage that never answers holds the session start up for 2 s at most', async ($, on) => {
+  const { clock } = stub(on, {}, { process: () => new Promise(() => {}) })
+  const logged = []
+  on('ui.log', ($, e) => {
+    logged.push(e)
+    return undefined
+  })
+  on('session.start', () => ({ cwd: ROOT }))
+  let started = false
+  const start = $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT }).then(() => (started = true))
+  await clock.advance(1_999)
+  expect(started).toBe(false)
+  await clock.advance(1)
+  await start
+  expect(started).toBe(true)
+  expect(logged).toEqual([{ text: 'kit: review agents: still registering after 2 s, so the session started without them', to: 'debug' }])
 })
