@@ -405,7 +405,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | Path | Purpose |
 |---|---|
 | `.githooks/` | Keeps this reference in sync on every commit. |
-| `.github/` | CI: installs the kit on a macOS runner and runs `tests/run.sh` on every pull request, and checks each one adds a changelog entry under `changelog.d/`. |
+| `.github/` | CI: installs the kit on three macOS runners and runs part of `tests/run.sh` on each, on every pull request, and checks each one adds a changelog entry under `changelog.d/`. |
 | `AGENTS.md` | The instructions every harness loads (linked as CLAUDE.md / AGENTS.md). |
 | `CHANGELOG.md` | What changed in each version, and how a release is cut. |
 | `LICENSE` | MIT. |

@@ -3,7 +3,7 @@
 #   ~/.agents/tests/run.sh                        every section
 #   ~/.agents/tests/run.sh hooks install          only those sections
 #   ~/.agents/tests/run.sh --skip hooks install   all but those (CI's third job, so a new section lands there)
-# Sections run concurrently, each printed as one block in this order when it finishes.
+# Sections run concurrently; each prints as one block, in this order, once it and every section above it have finished.
 cd "$(dirname "$0")" || exit 2
 # A hook run by a test must log into the test's own place (its HOME, or AGENTS_LOG_DIR), never into the real log the
 # monthly job reads: count the real log's lines from a checkout under the temp dir, before and after.
@@ -24,15 +24,16 @@ print(count)
 PY
 }
 
-# Each section is a function section_<name> (dashes as underscores) that returns non-zero on any failure; its title
-# is the matching entry of `titles`.
-names=(hooks generic-verify gh-wrapper baselines semgrep phase quality-log pr-comments free-branch pr-validation spec
-  browse verify-changed deps outcomes sessions frontmatter pi triage ci-wait docs site version install doctor)
-titles=("hooks" "generic verify" "gh proxy wrapper" "harness baselines" "semgrep rules" "flow phase" "quality log input"
-  "pull request comments not handled yet" "free a branch from its worktree" "pull request validation section"
-  "spec lint and second reading" "browser A/B harness" "verify on changed lines" "dependencies" "outcomes and escapes"
-  "sessions and phases" "skill frontmatter" "pi adapter" "triage" "CI wait" "framework reference" "site build" "version"
-  "install on a new machine" "install doctor")
+# Each section is a function section_<name> (dashes as underscores) that returns non-zero on any failure.
+sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wrapper" "baselines|harness baselines"
+  "semgrep|semgrep rules" "phase|flow phase" "quality-log|quality log input"
+  "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree"
+  "pr-validation|pull request validation section" "spec|spec lint and second reading" "browse|browser A/B harness"
+  "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes"
+  "sessions|sessions and phases" "frontmatter|skill frontmatter" "pi|pi adapter" "triage|triage" "ci-wait|CI wait"
+  "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
+  "doctor|install doctor")
+names=("${sections[@]%%|*}")
 
 section_hooks() { local f=0; python3 test_hooks.py || f=1; python3 test_private_terms.py || f=1; return $f; }
 section_generic_verify() { python3 test_verify_auto.py; }
@@ -100,25 +101,37 @@ section_doctor() {
 }
 
 skip=0 asked=()
+[ "${1-}" = --skip ] && { skip=1; shift; [ $# -gt 0 ] || { echo "--skip needs section names"; exit 2; }; }
 for arg in "$@"; do
-  if [ "$arg" = --skip ]; then skip=1; continue; fi
-  [[ " ${names[*]} " == *" $arg "* ]] || { echo "unknown section: $arg (sections: ${names[*]})"; exit 2; }
+  known=0
+  for name in "${names[@]}"; do [ "$arg" = "$name" ] && known=1; done
+  [ $known = 1 ] || { echo "unknown section: $arg (sections: ${names[*]}; --skip goes first)"; exit 2; }
   asked+=("$arg")
 done
 picked=()
 for i in "${!names[@]}"; do
-  if [ ${#asked[@]} = 0 ]; then picked+=("$i"); continue; fi
-  [[ " ${asked[*]} " == *" ${names[$i]} "* ]] && named=1 || named=0
-  [ $named != $skip ] && picked+=("$i")
+  named=0
+  for arg in "${asked[@]-}"; do [ "$arg" = "${names[$i]}" ] && named=1; done
+  if [ ${#asked[@]} = 0 ] || [ $named != $skip ]; then picked+=("$i"); fi
 done
+[ ${#picked[@]} -gt 0 ] || { echo "no section left to run"; exit 2; }
 
 logged_before=$(from_tests) || { echo "FAIL couldn't read $hook_log"; exit 1; }
 out=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-XXXXXX") || exit 2
 trap 'rm -rf "$out"' EXIT
-# Without job control a script's background jobs ignore SIGINT, and Ctrl-C would leave every section running. With
-# it each section is a process group of its own, which an interrupt ends with the tests it started, never the caller.
-set -m
-trap 'for pid in "${pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done; exit 130' INT TERM
+# A script's background jobs ignore SIGINT, so a signal here ends each section's process tree. No set -m: a group per
+# section would outlive a harness that kills this shell's process group on timeout. Each process is stopped before its
+# children are listed: test_hooks' pool would otherwise start the next test as each one dies, and orphan it.
+end_tree() {
+  local child
+  kill -STOP "$1" 2>/dev/null
+  for child in $(pgrep -P "$1"); do end_tree "$child"; done
+  kill -TERM "$1" 2>/dev/null; kill -CONT "$1" 2>/dev/null
+}
+interrupted() { for pid in "${pids[@]}"; do end_tree "$pid"; done; exit "$1"; }
+trap 'interrupted 129' HUP
+trap 'interrupted 130' INT
+trap 'interrupted 143' TERM
 pids=()
 for i in "${picked[@]}"; do
   "section_${names[$i]//-/_}" >"$out/$i" 2>&1 &
@@ -128,7 +141,7 @@ fail=0
 for n in "${!picked[@]}"; do
   i=${picked[$n]}
   wait "${pids[$n]}" || fail=1
-  printf '\n== %s\n' "${titles[$i]}"
+  printf '\n== %s\n' "${sections[$i]#*|}"
   cat "$out/$i"
 done
 
