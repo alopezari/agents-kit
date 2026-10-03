@@ -70,6 +70,18 @@ unwire() {
   elif [[ $current == *"$line"* ]] || { [ -n "$current" ] && grep -qF "$line" "$current" 2>/dev/null; }; then
     warn "your status line ($current) runs the kit's; edit it by hand"
   fi
+  # Removing the marketplace also uninstalls the kit plugin and drops its settings entries.
+  market=""
+  if command -v claude >/dev/null; then
+    market=$(claude plugin marketplace list --json 2>/dev/null | jq -r '[.[] | select(.name == "agents-kit") | .path // ""] | first // ""') \
+      || warn "couldn't list Claude Code's plugin marketplaces; remove agents-kit by hand if it is there"
+  fi
+  if [ -n "$market" ] && [ "$(cd "$market" 2>/dev/null && pwd -P)" = "$(cd "$KIT" && pwd -P)" ]; then
+    # Not warn(), which is quiet while applying: this failure only happens then.
+    if [ $APPLY = 1 ] && ! claude plugin marketplace remove agents-kit >/dev/null 2>&1; then
+      printf '  warn  claude plugin marketplace remove agents-kit failed; run it by hand\n'
+    else todo "kit plugin and the agents-kit marketplace ($KIT)"; fi
+  fi
 
   echo "Codex"
   unlink_kit "$HOME/.codex/AGENTS.md"

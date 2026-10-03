@@ -1,0 +1,1 @@
+- Claude Code gets the kit as a plugin: `/flow` opens a pane with the branch's phase, stamps, last verify, CI and context, and runs verify without a turn. `install.sh` installs it when Claude Code 2.1.287 or later is there, and the README states the rules every mod follows so Codex keeps the same flow.

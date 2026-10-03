@@ -28,3 +28,7 @@ profiles/
 !/skills/spec/
 !/skills/validate/
 !/skills/write-pr-description/
+
+# Written by Claude Code each time it loads the mod from a directory, for the version running
+mods/kit/.claude-plugin/types/
+mods/kit/tsconfig.json

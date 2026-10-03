@@ -1059,6 +1059,7 @@ def verify_stamp_and_effort_nudge(base):
         assert not stamped("verify")
         done = verify_by_hand()
         assert done.returncode == 0 and stamped("verify") and "ran: pytest" in done.stdout, done.stdout + done.stderr
+        assert "checked nothing" not in done.stderr, done.stderr
         verify_stamp = subprocess.run(["python3", "-c", f"import sys; sys.path.insert(0, {H!r}); import review_stamp as r; "
                                        "print(r.stamp_path('verify'))"], cwd=repo, capture_output=True, text=True).stdout.strip()
         os.chmod(verify_stamp, 0o400)
@@ -1070,8 +1071,10 @@ def verify_stamp_and_effort_nudge(base):
         verify_by_hand()
         with open(os.path.join(vdir, "verify"), "w") as fh:
             fh.write("#!/bin/sh\necho 'ran: nothing to check: no changed files'\n")
-        verify_by_hand()
+        done = verify_by_hand()
         assert stamped("verify-empty") and not stamped("verify"), "the latest run's stamp is the only one left"
+        # The /flow pane's button reads this run's verdict here, not from a stamp another run can replace.
+        assert done.returncode == 0 and "verify passed, but it checked nothing" in done.stderr, done.stderr
         with open(os.path.join(vdir, "verify"), "w") as fh:
             fh.write("#!/bin/sh\necho failing; exit 1\n")
         done = verify_by_hand()

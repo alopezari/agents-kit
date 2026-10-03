@@ -1,0 +1,7 @@
+{
+  "name": "agents-kit",
+  "owner": { "name": "agents-kit" },
+  "plugins": [
+    { "name": "kit", "source": "./mods/kit", "description": "The agents kit inside Claude Code: the /flow pane" }
+  ]
+}
