@@ -47,7 +47,7 @@ def run(name, status="completed", conclusion="success", job=None):
     return {"name": name, "status": status, "conclusion": conclusion if status == "completed" else None, "details_url": url}
 
 
-def ci_wait(states, *args):
+def ci_wait(states, *args, grace):
     base = tempfile.mkdtemp(prefix="agents-test-ci-wait-")
     try:
         os.makedirs(os.path.join(base, "bin"))
@@ -56,14 +56,14 @@ def ci_wait(states, *args):
         os.chmod(gh, 0o755)
         json.dump(states, open(os.path.join(base, "states.json"), "w"))
         env = {**os.environ, "PATH": os.path.join(base, "bin") + ":" + os.environ["PATH"], "FAKE_GH_DIR": base,
-               "CI_WAIT_POLL_SECS": "0.2", "CI_WAIT_GRACE_SECS": "1"}
+               "CI_WAIT_POLL_SECS": "0.2", "CI_WAIT_GRACE_SECS": grace}
         result = subprocess.run([CI_WAIT, "--sha", SHA, *args], capture_output=True, text=True, env=env, timeout=60)
         return result.returncode, result.stdout + result.stderr
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
 
-CASES = [  # (name, states, args, exit code, text that must appear, text that must not)
+CASES = [  # (name, states, args, exit code, text that must appear, text that must not[, grace in seconds])
     ("all passed", [{"runs": [run("suite"), run("lint", conclusion="skipped")]}], [], 0, ["suite: success", "lint: skipped"], []),
     ("a failed Actions job shows its log tail", [{"runs": [run("suite", conclusion="failure", job=7), run("lint")]}], [], 1,
      ["suite: failure", "FAIL stop_asks_once: AssertionError", "log line 200", f"ci-wait: failed on {SHA[:12]}: suite\n"],
@@ -79,7 +79,7 @@ CASES = [  # (name, states, args, exit code, text that must appear, text that mu
      ["suite: queued", "still running"], []),
     ("--once while running doesn't wait", [{"runs": [run("suite", status="in_progress")]}, {"runs": [run("suite")]}], ["--once"], 2,
      ["suite: in_progress"], ["suite: success"]),
-    ("no checks after the grace period", [{"runs": []}], ["--timeout", "20"], 3, ["no checks"], []),
+    ("no checks after the grace period", [{"runs": []}], ["--timeout", "20"], 3, ["no checks"], [], "1"),
     ("no checks yet at a timeout inside the grace period", [{"runs": []}], ["--timeout", "0.5"], 2, ["no checks yet"], []),
     ("green on the last look before the timeout isn't settled", [{"runs": [run("suite", status="queued")]}, {"runs": [run("suite")]}],
      ["--timeout", "0.3"], 2, ["still running"], []),
@@ -98,8 +98,10 @@ CASES = [  # (name, states, args, exit code, text that must appear, text that mu
 ]
 
 fail = 0
-for name, states, args, code, present, absent in CASES:
-    got, out = ci_wait(states, *args)
+# A long default grace: on a loaded runner one fake gh call can take over a second, which a short grace reads as
+# "no checks" in cases about something else.
+for name, states, args, code, present, absent, *grace in CASES:
+    got, out = ci_wait(states, *args, grace=grace[0] if grace else "30")
     ok = got == code and all(p in out for p in present) and not any(a in out for a in absent)
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} {name}" + ("" if ok else f": exit {got}, wanted {code}\n     {out.strip()[-400:]}"))

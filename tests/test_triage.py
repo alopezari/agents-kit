@@ -5,7 +5,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 
 TRIAGE = os.path.expanduser("~/.agents/bin/triage")
 GIT_SENSE = ["cwd = pr_checkout(command, cwd)", "git checkout -b fix", "- uses: actions/checkout@v4",
