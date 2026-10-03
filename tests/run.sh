@@ -99,16 +99,23 @@ section_mods() {
   else echo "FAIL these depend on the mod, so the flow would break without it:"; echo "$users"; f=1; fi
   return $f
 }
+# A worktree has no node_modules until someone installs them: install them from the lockfile, mostly from npm's cache.
+node_deps() {
+  [ -d ~/.agents/"$1"/node_modules ] && return 0
+  if (cd ~/.agents/"$1" && npm ci --prefer-offline --no-audit --no-fund >/dev/null 2>&1); then
+    echo "ok   installed $1 dependencies (npm ci)"
+  else echo "FAIL npm ci failed in $(cd ~/.agents && pwd -P)/$1"; return 1; fi
+}
 section_docs() {
   local f=0
+  node_deps tools/mermaid || return 1
   ~/.agents/bin/docs --check || f=1
   node ~/.agents/tools/mermaid/check.mjs ~/.agents/docs/framework.md || f=1
   return $f
 }
 section_site() {
-  if [ ! -d ~/.agents/site/node_modules ]; then
-    echo "FAIL site dependencies missing in $(cd ~/.agents && pwd -P)/site: run npm ci there (install.sh does it for ~/.agents)"; return 1
-  elif node ~/.agents/site/build.mjs >/dev/null; then echo "ok   landing and docs build from the current sources"
+  node_deps site || return 1
+  if node ~/.agents/site/build.mjs >/dev/null; then echo "ok   landing and docs build from the current sources"
   else return 1; fi
 }
 section_version() {
