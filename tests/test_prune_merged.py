@@ -105,8 +105,16 @@ def a_failed_fetch_removes_nothing(base):
     assert out.returncode == 1 and os.path.isdir(done) and "fetch" in out.stderr, out
 
 
+def keeps_a_worktree_it_cannot_inspect(base):
+    main = setup(base)
+    gone = worktree(base, main, "gone")
+    shutil.rmtree(gone)  # its directory deleted by hand: git still lists it
+    out = sh(main, PRUNE)
+    assert out.returncode == 0 and f"kept {gone}: couldn't inspect" in out.stdout, out
+
+
 for test in (removes_merged_and_keeps_the_rest_with_reasons, keeps_the_worktree_it_runs_in,
-             a_failed_fetch_removes_nothing):
+             a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect):
     base = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-"))
     try:
         test(base)

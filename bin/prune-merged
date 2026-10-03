@@ -3,7 +3,8 @@
 
   prune-merged [--dry-run]
 
-Fetches origin first, and stops, removing nothing, when that fails: a stale ref would call unmerged work merged.
+Fetches origin's default branch first (origin/HEAD names it), also with --dry-run, and stops, removing nothing, when
+that fails: a stale ref would call unmerged work merged. A worktree it can't inspect is kept.
 A linked worktree goes when its HEAD is in origin/<default> and removing it loses nothing: no changes, no ignored
 files other than regenerated ones (free-branch's rule), not locked, not where this runs, and no running process has
 its working directory inside it (another session may still work there). Then each local branch merged into
@@ -52,8 +53,13 @@ def keep_reason(path, locked, default, here, cwds):
         return "can't tell whether a running process uses it (lsof failed)"
     if any(cwd == path or cwd.startswith(path + os.sep) for cwd in cwds):
         return "in use: a running process works inside it"
-    if subprocess.run(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default]).returncode != 0:
+    if not os.path.isdir(path):
+        return "couldn't inspect it: its directory is gone (`git worktree prune` forgets it)"
+    ancestor = subprocess.run(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default], capture_output=True, text=True)
+    if ancestor.returncode == 1:
         return f"has commits not in {default}"
+    if ancestor.returncode != 0:
+        raise GitFailed(f"git merge-base: {ancestor.stderr.strip()}")
     changes = git(path, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none").strip()
     if changes:
         return "has changes: " + ", ".join(line[3:] for line in changes.splitlines()[:5])
@@ -72,17 +78,21 @@ def main():
     dry = bool(args)
     try:
         root = git(os.getcwd(), "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
-        try:
-            git(root, "fetch", "--quiet", "--prune", "origin")
-        except GitFailed as error:
-            print(f"prune-merged: couldn't fetch origin, so nothing was removed: {error}", file=sys.stderr)
-            return 1
         default = git(root, "rev-parse", "--abbrev-ref", "origin/HEAD").strip()
+        try:
+            # The default branch alone, without --prune: the comparison must be fresh, and tags stay untouched.
+            git(root, "fetch", "--quiet", "origin", default.removeprefix("origin/"))
+        except GitFailed as error:
+            print(f"prune-merged: couldn't fetch {default}, so nothing was removed: {error}", file=sys.stderr)
+            return 1
         here = os.path.realpath(os.getcwd())
         cwds = process_cwds()
         failed = False
         for path, branch, locked in worktrees(root)[1:]:
-            reason = keep_reason(path, locked, default, here, cwds)
+            try:
+                reason = keep_reason(path, locked, default, here, cwds)
+            except GitFailed as error:  # unknown is never safe
+                reason = f"couldn't inspect it: {error}"
             if reason:
                 print(f"kept {path}: {reason}")
             elif dry:
