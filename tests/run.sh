@@ -45,7 +45,7 @@ sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wra
   "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree"
   "pr-validation|pull request validation section" "spec|spec lint and second reading" "browse|browser A/B harness"
   "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes"
-  "sessions|sessions and phases" "frontmatter|skill frontmatter" "pi|pi adapter" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
+  "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
   "doctor|install doctor" "kit-home|every test refuses another checkout")
 names=("${sections[@]%%|*}")
@@ -72,8 +72,6 @@ section_verify_changed() { python3 test_verify_changed.py; }
 section_deps() { python3 test_deps.py; }
 section_outcomes() { python3 test_outcomes.py; }
 section_sessions() { python3 test_extract_sessions.py; }
-section_frontmatter() { node test_skill_frontmatter.mjs; }
-section_pi() { node test_pi_adapter.mts 2>/dev/null; }
 section_triage() {
   local f=0
   if ~/.agents/bin/triage --json --range HEAD~1..HEAD 2>/dev/null | jq -e '.tier and .lenses.correctness' >/dev/null; then

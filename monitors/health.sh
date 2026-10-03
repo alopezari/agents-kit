@@ -12,13 +12,13 @@ notes=()
 
 days_since() { echo $(( ( $(date +%s) - $(stat -f %m "$1") ) / 86400 )); }
 
-# 1. Regression suite (hooks, semgrep rules, Pi adapter, triage, install doctor).
+# 1. Regression suite (hooks, semgrep rules, triage, install doctor).
 suite=$("$K/tests/run.sh" 2>&1); suite_rc=$?
 [ $suite_rc = 0 ] || problems+=("Regression suite failed: $(grep -E '^FAIL|  warn ' <<<"$suite" | head -5 | tr '\n' ';')")
 
 # 2. Harness and tool versions: a new version can change the hook contract or add a native feature.
 programs=$(cat "$K/deps.txt" "$K"/profiles/*/deps.txt 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)' | awk '{ p = $2; sub(/>=.*/, "", p) } p != "chrome" { print p }')
-current=$(for c in claude codex pi $programs; do
+current=$(for c in claude codex $programs; do
   printf '%s %s\n' "$c" "$($c --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?[^ ]*' | head -1)"; done | sort -u)
 if [ -f "$STATE/versions.txt" ]; then
   changed=$(diff <(sort "$STATE/versions.txt") <(sort <<<"$current") | grep '^>' | cut -c3-)

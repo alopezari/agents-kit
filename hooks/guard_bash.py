@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse guard for shell commands, shared by Claude Code, Codex and Pi (via adapters/pi).
+"""PreToolUse guard for shell commands, shared by Claude Code and Codex.
 
 Blocks irreversible or outward-facing commands. It is a seatbelt against
 agent mistakes, not a security boundary: a determined command can evade
@@ -149,7 +149,7 @@ def quoted_spans(command):
     return spans
 
 
-# Claude Code and Codex give the hook 10 s and let the command through when it runs out; Pi waits up to 660 s. All
+# Claude Code and Codex give the hook 10 s and let the command through when it runs out. All
 # the git and stamp calls of one run share this budget, so the deny still arrives in time.
 HOOK_BUDGET = 8
 deadline = None  # set by main(); the tests that import this module have none

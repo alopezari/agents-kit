@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""PreToolUse guard for file tools (Claude Code Edit/Write/MultiEdit/NotebookEdit, Codex apply_patch/Edit/Write, Pi
-edit/write via adapters/pi): Impeccable's project files in a shared repository need the user first (design_files.py)."""
+"""PreToolUse guard for file tools (Claude Code Edit/Write/MultiEdit/NotebookEdit, Codex apply_patch/Edit/Write):
+Impeccable's project files in a shared repository need the user first (design_files.py)."""
 import json
 import os
 import re
@@ -15,7 +15,7 @@ from hooklog import log  # noqa: E402
 def written(payload):
     """(paths a file tool writes, the text it adds to a .gitignore among them)."""
     tool_input = payload.get("tool_input") or {}
-    if isinstance(tool_input.get("file_path"), str):  # Pi expands ~ before joining the cwd; edited_paths doesn't
+    if isinstance(tool_input.get("file_path"), str):  # a ~ path means home; edited_paths would join it to the cwd
         payload = {**payload, "tool_input": {**tool_input, "file_path": os.path.expanduser(tool_input["file_path"])}}
     paths = post_edit.edited_paths(payload)
     patch = tool_input.get("patch") or tool_input.get("input") or tool_input.get("command") or ""

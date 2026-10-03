@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook for Claude Code and Codex, and Pi's input event (adapters/pi).
+"""UserPromptSubmit hook for Claude Code and Codex.
 
 Asking for a write is approving it: when the user's message names a service guard_mcp.py guards
 (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards,

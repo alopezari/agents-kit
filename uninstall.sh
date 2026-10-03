@@ -89,7 +89,7 @@ unwire() {
   for profile in deep light; do unlink_kit "$HOME/.codex/$profile.config.toml"; done
   [ -f "$HOME/.codex/hooks.json" ] && unhook "$HOME/.codex/hooks.json"
 
-  echo "Pi"
+  echo "Pi (links an older install made)"
   unlink_kit "$HOME/.pi/agent/AGENTS.md"
   unlink_kit "$HOME/.pi/agent/extensions/agents-kit.ts"
 
