@@ -11,7 +11,9 @@ if [ "$(cd .. && pwd -P)" != "$(cd "$HOME/.agents" 2>/dev/null && pwd -P)" ]; th
   kit_home=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-home-XXXXXX") || exit 2
   ln -s "$(cd .. && pwd -P)" "$kit_home/.agents" || { rmdir "$kit_home"; exit 2; }  # else the re-run would loop
   # exec, so a signal reaches the suite's own handlers; it removes this HOME on exit.
-  HOME="$kit_home" AGENTS_SUITE_OWN_HOME="$kit_home" exec bash "$PWD/run.sh" "$@"
+  # npm's cache stays the user's: node_deps installs a worktree's dependencies from it.
+  npm_config_cache=${npm_config_cache:-$(npm config get cache 2>/dev/null)} \
+    HOME="$kit_home" AGENTS_SUITE_OWN_HOME="$kit_home" exec bash "$PWD/run.sh" "$@"
 fi
 remove_own_home() {  # the link first: rm never reaches the checkout
   [ -n "${AGENTS_SUITE_OWN_HOME:-}" ] && rm -f "$AGENTS_SUITE_OWN_HOME/.agents" && rm -rf "$AGENTS_SUITE_OWN_HOME"
@@ -42,7 +44,7 @@ PY
 # Each section is a function section_<name> (dashes as underscores) that returns non-zero on any failure.
 sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wrapper" "baselines|harness baselines"
   "semgrep|semgrep rules" "phase|flow phase" "quality-log|quality log input"
-  "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree"
+  "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree" "prune-merged|remove merged worktrees and branches"
   "pr-validation|pull request validation section" "staging|staging results" "spec|spec lint and second reading" "browse|browser A/B harness"
   "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes"
   "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
@@ -65,6 +67,7 @@ section_phase() { python3 test_phase.py; }
 section_quality_log() { python3 test_quality_log.py; }
 section_pr_comments() { python3 test_pr_comments.py; }
 section_free_branch() { python3 test_free_branch.py; }
+section_prune_merged() { python3 test_prune_merged.py; }
 section_pr_validation() { python3 test_pr_validation.py; }
 section_staging() { python3 test_staging.py; }
 section_spec() { python3 test_spec.py; }
@@ -98,16 +101,23 @@ section_mods() {
   else echo "FAIL these depend on the mod, so the flow would break without it:"; echo "$users"; f=1; fi
   return $f
 }
+# A worktree has no node_modules until someone installs them: install them from the lockfile, mostly from npm's cache.
+node_deps() {
+  [ -d ~/.agents/"$1"/node_modules ] && return 0
+  if (cd ~/.agents/"$1" && npm ci --prefer-offline --no-audit --no-fund >/dev/null 2>&1); then
+    echo "ok   installed $1 dependencies (npm ci)"
+  else echo "FAIL npm ci failed in $(cd ~/.agents && pwd -P)/$1"; return 1; fi
+}
 section_docs() {
   local f=0
+  node_deps tools/mermaid || return 1
   ~/.agents/bin/docs --check || f=1
   node ~/.agents/tools/mermaid/check.mjs ~/.agents/docs/framework.md || f=1
   return $f
 }
 section_site() {
-  if [ ! -d ~/.agents/site/node_modules ]; then
-    echo "FAIL site dependencies missing in $(cd ~/.agents && pwd -P)/site: run npm ci there (install.sh does it for ~/.agents)"; return 1
-  elif node ~/.agents/site/build.mjs >/dev/null; then echo "ok   landing and docs build from the current sources"
+  node_deps site || return 1
+  if node ~/.agents/site/build.mjs >/dev/null; then echo "ok   landing and docs build from the current sources"
   else return 1; fi
 }
 section_version() {

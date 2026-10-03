@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **17 command-line tools**: a11y-check, browse, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, quality-log, repo-name, reports, staging, triage, wp-query-profile.
+- **18 command-line tools**: a11y-check, browse, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, staging, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -283,6 +283,12 @@ pr-comments    inline comments on the diff, conversation comments and review sum
 
 ```
 pr-validation    verify's verdict and what it ran, the self-review's findings, each validation check with its
+```
+
+**`bin/prune-merged`**: Remove the worktrees and local branches of this repository whose work is already in origin's default branch.
+
+```
+prune-merged [--dry-run]
 ```
 
 **`bin/quality-log`**: Record what a review lens or test type produced, and what got past them, so the monthly job can keep only perspectives that pay off.
