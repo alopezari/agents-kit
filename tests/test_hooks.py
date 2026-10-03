@@ -104,10 +104,13 @@ def only_the_user_marks_a_staging_step_as_theirs(base):
                 "cd /x && $HOME/.agents/bin/staging mark S1 PASS --note ok --by 'user'", "staging mark S1 PASS --by user",
                 "~/.agents/bin/staging mark S1 PASS --note '200; cached | twice' --by user",
                 "~/.agents/bin/staging mark S1 PASS \\\n  --by user", '"/Users/me/.agents/bin/staging" mark S1 PASS --by user',
-                "~/.agents/bin/evidence S1 bash -c '~/.agents/bin/staging mark S1 PASS --by user'"]:
+                "~/.agents/bin/evidence S1 bash -c '~/.agents/bin/staging mark S1 PASS --by user'",
+                "~/.agents/bin/staging mark S1 PASS --note 'paid\nrefunded' --by user",
+                "bash -c '~/.agents/bin/staging mark S1 PASS --note \"x;y\" --by user'"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     for cmd in ["~/.agents/bin/staging mark S1 PASS --by agent --note 'the user said S1 passed'",
                 "~/.agents/bin/staging mark S1 FAIL --by agent --note '200; cached | user saw it'",
+                "~/.agents/bin/staging mark S1 FAIL --by agent --note 'agrees with --by user'",
                 "~/.agents/bin/staging steps --json", "git switch staging && git log --by-user"]:
         assert guard(cmd) == "allow", f"should allow: {cmd}"
 

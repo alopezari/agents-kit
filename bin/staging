@@ -29,6 +29,7 @@ ROUND = re.compile(r"^## Results(?! after the deploy)\b.*$", re.M)  # ship's tab
 
 
 PIPE = re.compile(r"(?<!\\)\|")
+VERDICT = re.compile(r"[*_]*(PASS|FAIL|NOT RUN)\b")  # what review_stamp counts as a result
 
 
 def cells_of(line):
@@ -70,11 +71,14 @@ def round_tables(lines):
 
 
 def recorded(lines):
-    """{step: {column: cell}}, the last row for a step winning, as review_stamp reads the round."""
+    """{step: {column: cell}}, the last row for a step with a result winning, as review_stamp reads the round."""
     rows = {}
     for _, _, names, at in round_tables(lines):
         for step, found in at.items():
-            rows[step] = dict(zip(names, cells_of(lines[found[-1]])))
+            for k in found:
+                cells = dict(zip(names, cells_of(lines[k])))
+                if VERDICT.match(cells.get("Result", "")):
+                    rows[step] = cells
     return rows
 
 
@@ -162,6 +166,9 @@ def replace_guide(guide, text):
 
 def mark_locked(guide, evidence, step, result, by, note):
     text = read_guide(guide)
+    if text is None:
+        print(f"staging: no staging guide at {guide}", file=sys.stderr)
+        return 2
     if step not in [s for s, _ in before_merge_steps(text)]:
         print(f"staging: no step {step} before the merge in {guide}", file=sys.stderr)
         return 2
@@ -184,7 +191,7 @@ def mark_locked(guide, evidence, step, result, by, note):
             lines[k] = with_cell(lines[k], after, filler)
         names = names[:after + 1] + ["By"] + names[after + 1:]
     # One "was" at most: the verdict this one overrides, or the one an earlier override already kept.
-    was = re.match(r"was [^;]*", earlier.get("Evidence", ""))
+    was = re.match(r"was (?:PASS|FAIL|NOT RUN)\b[^;]*", earlier.get("Evidence", ""))
     if earlier.get("Result") and earlier.get("By", "").strip("*_") != by:
         who = earlier.get("By", "").strip("*_")
         was = f"was {re.sub(r'[*_]', '', earlier['Result'])}" + (f" by {who}" if who else "")
@@ -193,7 +200,7 @@ def mark_locked(guide, evidence, step, result, by, note):
     files = evidence_files(evidence, step)
     links = ", ".join(f"[{os.path.basename(f)}]({f})".replace("|", "\\|") for f in files) or "no saved evidence"
     told = " ".join(note.split()).replace("|", "\\|")
-    cells = dict(zip(names, cells_of(lines[at[step][0]]))) if step in at else {}
+    cells = dict(zip(names, cells_of(lines[at[step][-1]]))) if step in at else {}
     cells.update({names[0]: step, "Result": result, "By": by, "Evidence": "; ".join(c for c in (was, told, links) if c)})
     row = row_line([cells.get(name, "") for name in names])
     if step in at:

@@ -184,6 +184,9 @@ def mark_leaves_ships_table_and_keeps_whose_verdict_it_replaced(base):
     text = read(guide)
     assert text.endswith(ship), "ship's table stays as it was, last"
     assert f"| S1 | FAIL | agent | was PASS by user; S1.txt shows a 500; [S1.txt]({evidence}/S1.txt) |" in text, text
+    assert sh(repo, STAGING, "mark", "S2", "PASS", "--by", "agent", "--note", "was told to").returncode == 0
+    assert sh(repo, STAGING, "mark", "S2", "PASS", "--by", "agent").returncode == 0
+    assert "| S2 | PASS | agent | no saved evidence |" in read(guide), "a note isn't taken for the verdict it overrode"
     assert sh(repo, STAGING, "mark", "S1", "FAIL", "--by", "agent").returncode == 0
     assert f"| S1 | FAIL | agent | was PASS by user; [S1.txt]({evidence}/S1.txt) |" in read(guide), \
         "the same writer again keeps the verdict it overrode"
@@ -239,14 +242,15 @@ def mark_reads_bold_headers_and_keeps_columns_it_doesnt_know(base):
     repo = new_repo(base)
     guide, evidence = paths(repo)
     save(guide, GUIDE + "\n## Results (2026-10-01)\n\n| **Step** | **Result** | **Evidence** | Notes |\n|---|---|---|---|\n"
-                        "| S2 | **FAIL** | refund 500 | ask ops |\n| S3 | PASS | none needed | keep me |\n")
-    assert [(x["result"], x["by"]) for x in steps(repo)][1:] == [("FAIL", ""), ("PASS", "")], steps(repo)
+                        "| S2 | **FAIL** | refund 500 | ask ops |\n| S3 | PASS | none needed | keep me |\n"
+                        "| S3 | pending | rerun | later |\n")
+    assert [(x["result"], x["by"]) for x in steps(repo)][1:] == [("FAIL", ""), ("PASS", "")], steps(repo)  # "pending" is no result
     note = "refund shows\nin the admin | twice"
     assert sh(repo, STAGING, "mark", "S2", "PASS", "--by", "agent", "--note", note).returncode == 0
     lines = read(guide).split("## Results (2026-10-01)\n\n")[1].splitlines()
     assert lines == ["| **Step** | **Result** | By | **Evidence** | Notes |", "|---|---| --- |---|---|",
                      "| S2 | PASS | agent | was FAIL; refund shows in the admin \\| twice; no saved evidence | ask ops |",
-                     "| S3 | PASS |  | none needed | keep me |"], lines
+                     "| S3 | PASS |  | none needed | keep me |", "| S3 | pending |  | rerun | later |"], lines
     assert read(guide).count("| Step") + read(guide).count("| **Step") == 1, "no second table"
 
 

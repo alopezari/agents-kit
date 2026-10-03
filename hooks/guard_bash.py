@@ -7,6 +7,7 @@ regexes. Records the checkout of each allowed `git push`, so the stop hook
 can follow that commit's CI.
 """
 import bisect
+import itertools
 import json
 import os
 import re
@@ -69,17 +70,21 @@ MARKS_AS_USER = ("`bin/staging mark --by user`: a step marked as the user's come
 
 
 def marks_as_user(command):
-    """`bin/staging mark … --by user` in the command: read past a quoted note's `;` or `|` and line continuations, and
-    inside `bash -c '…'` too."""
-    joined = re.sub(r"\\\n", "  ", command)  # same length as shell_code's, so offsets in one read the other
-    code = shell_code(joined)
-    for mark in STAGING_MARK.finditer(joined):
-        stop = re.compile(r"[;&|\n]").search(code, mark.end())
-        for by in re.compile(r"--by(?:\s+|=)").finditer(code, mark.end(), stop.start() if stop else len(code)):
-            if re.match(r"['\"]?user\b", joined[by.end():]):
+    """`bin/staging mark … --by user` in the command, read as the shell splits its words: a quoted note can hold
+    `;`, `|` or a newline. A word that is a command itself (`bash -c '…'`) is read the same way."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        words = list(lexer)
+    except ValueError:  # an unclosed quote: no shell would run it, so read its plain words
+        words = [word.strip("'\"") for word in command.split()]
+    for i, word in enumerate(words):
+        if re.search(r"(?<![\w-])staging$", word) and words[i + 1:i + 2] == ["mark"]:
+            args = list(itertools.takewhile(lambda arg: not set(arg) <= set(";&|"), words[i + 2:]))
+            if "--by=user" in args or any(a == "--by" and b == "user" for a, b in zip(args, args[1:])):
                 return MARKS_AS_USER
-    if re.search(r"(?<![\w-])staging['\"]?\s+mark\b[^;&|\n]*--by(\s+|=)['\"]?user\b", joined):
-        return MARKS_AS_USER
+        elif word != command and STAGING_MARK.search(word) and marks_as_user(word):
+            return MARKS_AS_USER
     return None
 
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")

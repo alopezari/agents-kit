@@ -38,7 +38,7 @@ let verifyStopping = false
 // Marks run one at a time, in the order pressed, each shown as pending until it lands.
 let marking = Promise.resolve()
 let pendingMarks = []
-// { root, branch, text }: shown only while the pane shows that checkout.
+// { root, text }: shown while the pane shows that checkout, whatever its branch now: a refusal says the branch moved.
 let markFailure = null
 // A step's title is cut to this, so its result and evidence stay on the line.
 const TITLE_CHARS = 60
@@ -121,14 +121,15 @@ function markStep($, id, result) {
       const kit = await kitDir($)
       // --branch: the checkout itself may have moved since the pane showed this step.
       const marked = await run($, [kit + '/bin/staging', 'mark', id, result, '--by', 'user', '--branch', branch], root)
-      markFailure = marked.failure || marked.exitCode !== 0 ? { root, branch, text: `Couldn't mark ${label}: ` + failureOf(marked) } : null
+      if (marked.failure || marked.exitCode !== 0) markFailure = { root, text: `Couldn't mark ${label}: ` + failureOf(marked) }
+      else if (markFailure?.root === root) markFailure = null
     } finally {
       pendingMarks.splice(pendingMarks.indexOf(label), 1)
     }
     await gather($)
   }).catch((error) => {
     // A broken chain would leave every later press doing nothing.
-    markFailure = { root, branch, text: `Couldn't mark ${label}: ` + messageOf(error) }
+    markFailure = { root, text: `Marked ${label}, or not: the pane failed while it ran: ` + messageOf(error) }
     $.ui.invalidate('ui.render')
   })
   return marking
@@ -455,7 +456,7 @@ export function register(on) {
     // One row per step before the merge, each with its own Pass and Fail: what a press records is the user's.
     // The buttons lead the row, so they line up whatever the step's line holds.
     const staging = shown?.staging
-    const failure = markFailure && markFailure.root === shown?.root && markFailure.branch === shown?.branch ? markFailure.text : null
+    const failure = markFailure && markFailure.root === shown?.root ? markFailure.text : null
     const steps = staging?.steps ?? []
     const stagingRows = !staging || (!staging.failure && !steps.length && !failure && !pendingMarks.length) ? [] : [
       Text({ children: [' '] }),

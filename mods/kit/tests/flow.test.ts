@@ -756,6 +756,20 @@ test('a mark keeps the checkout its button showed, even when the pane moves befo
   expect(marks).toEqual([[KIT + '/bin/staging mark S1 FAIL --by user --branch feature', ROOT], [MARK_S2, ROOT]])
 })
 
+test('a mark refused because the branch moved says so on the branch the pane now shows', async ($, on) => {
+  let runs = repo()
+  const { clock } = stub(on, new Proxy({}, { get: (target, key) => runs[key] }))
+  const ui = await openPane($, clock)
+  runs = repo({
+    'git branch --show-current': { exitCode: 0, stdout: 'other\n' },
+    [MARK_S2]: { exitCode: 2, stderr: 'staging: the checkout is on other, not feature: nothing marked\n' },
+  })
+  await ui.press({ key: 'staging-S2-PASS' })
+  await clock.settle()
+  expect(await texts(ui)).toMatch(/^other @/m)
+  expect(await texts(ui)).toContain("Couldn't mark S2 Pass: exit 2: staging: the checkout is on other, not feature: nothing marked")
+})
+
 test('a mark that fails stays in sight when the steps are gone', async ($, on) => {
   const runs = repo({ [MARK_S2]: { exitCode: 2, stderr: 'staging: no staging guide at /g.md\n' } })
   const { clock } = stub(on, runs)
