@@ -63,6 +63,8 @@ RULES = [
      "`make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production."),
     (r"\bchmod\s+(-R\s+)?777\b", "`chmod 777`: world-writable permissions."),
     (r"\.agents/approvals", "Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent."),
+    (r"(?<![\w-])approve['\"]?\s+['\"]?grant\b", "`bin/approve grant`: an approval comes from the user, in their message or "
+     "in the dialog Claude Code shows when a guard blocks a call, not from the agent."),
 ]
 
 STAGING_MARK = re.compile(r"(?<![\w-])staging['\"]?\s+mark\b")

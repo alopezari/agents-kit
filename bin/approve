@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""The approvals a guard's block needs, and the turn approvals the user's answer in a dialog writes.
+
+  approve needed < payload.json        {names, what}: the approvals this call's approvable rules still need, and the write
+  approve grant <session> <name>...    write them as turn approvals, as the user's message would, until their next one
+  approve revoke <session> <name>...   remove them
+
+`needed` reads a PreToolUse payload: a guarded MCP service's write, or the sql.* grant of each DROP/TRUNCATE
+statement in a shell command, not granted yet this turn. Granting them lifts those rules only, not another block on
+the same call (a `sudo`); names is empty for anything else.
+
+`grant` is the user's own answer (the Claude Code mod's dialog); the shell guard refuses it from an agent.
+Exits 2, writing nothing, on a missing payload or a session or name that isn't a plain word.
+"""
+import json
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
+import guard_mcp  # noqa: E402
+from hooklog import log  # noqa: E402
+
+SESSION = re.compile(r"[\w-]+")  # what guard_mcp.approved keeps of a session id
+NAME = re.compile(r"\w[\w.-]*")
+
+
+def needed(payload):
+    session = payload.get("session_id")
+    tool_input = payload.get("tool_input") or {}
+    if payload.get("tool_name") == "Bash":
+        import guard_bash  # only here: it loads the whole shell guard
+        command = str(tool_input.get("command") or "")
+        statements = {}
+        for match in re.finditer(guard_bash.DATABASE_DESTROY, command):
+            statements.setdefault(guard_bash.database_grant(match.group()), " ".join(match.group().upper().split()))
+        names = sorted(name for name in statements if not guard_mcp.approved(name, session))
+        what = ", ".join(f"`{statements[name]}`" for name in names) + " destroys database data"
+        return {"names": names, "what": what if names else ""}
+    tool_name = str(payload.get("tool_name") or "")
+    hit = None if guard_mcp.BROWSER_MCP.match(tool_name) else guard_mcp.classify(tool_name, tool_input)
+    if not hit or guard_mcp.approved(hit[0], session):
+        return {"names": [], "what": ""}
+    return {"names": [hit[0]], "what": f"`{hit[1]}` writes to {hit[0]}, which other people see"}
+
+
+def refuse(why):
+    print(f"approve: {why}", file=sys.stderr)
+    return 2
+
+
+def main(argv):
+    if argv[:1] == ["needed"] and len(argv) == 1:
+        try:
+            payload = json.loads(sys.stdin.read())
+        except ValueError:
+            return refuse("needed reads a PreToolUse payload as JSON on stdin")
+        if not isinstance(payload, dict):
+            return refuse("needed reads a PreToolUse payload as JSON on stdin")
+        print(json.dumps(needed(payload)))
+        return 0
+    if argv[:1] not in (["grant"], ["revoke"]) or len(argv) < 3:
+        return refuse("usage: approve needed < payload.json | approve grant|revoke <session> <name>...")
+    command, session, names = argv[0], argv[1], argv[2:]
+    if not SESSION.fullmatch(session):
+        return refuse(f"not a session id: {session!r}")
+    bad = [name for name in names if not NAME.fullmatch(name)]
+    if bad:
+        return refuse(f"not an approval name: {bad[0]!r}")
+    folder = os.path.join(guard_mcp.TURN_APPROVALS, session)
+    if command == "grant":
+        os.makedirs(folder, exist_ok=True)
+        for name in names:
+            open(os.path.join(folder, name), "w").close()
+        log("approve", "approve-dialog", {"session_id": session}, ",".join(sorted(names)))
+        return 0
+    for name in names:
+        try:
+            os.remove(os.path.join(folder, name))
+        except FileNotFoundError:
+            pass
+    log("approve", "revoke-dialog", {"session_id": session}, ",".join(sorted(names)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,4 +1,4 @@
-// What each command and agent type of the mod offers, and what Codex has instead: bin/docs prints it in
+// What each command, hook and agent type of the mod offers, and what Codex has instead: bin/docs prints it in
 // docs/framework.md, and tests/flow.test.ts fails when the mod registers a command or agent, or draws a button,
 // this list doesn't name.
 // Kept as one JSON value after the `=`, which bin/docs reads without running JavaScript.
@@ -18,6 +18,13 @@ export const FEATURES = [
       {"name": "The staging guide's steps before the merge, each with its latest result, who gave it, and its evidence files", "codex": "`bin/staging steps --json`"},
       {"name": "Pass button on each step before the merge, recorded as the user's verdict", "codex": "`bin/staging mark <step> PASS --by user` in a terminal (the shell guard refuses it from the agent)"},
       {"name": "Fail button on each step before the merge, recorded as the user's verdict", "codex": "`bin/staging mark <step> FAIL --by user` in a terminal"}
+    ]
+  },
+  {
+    "hook": "tool.call",
+    "description": "Ask the user in a dialog when a kit guard blocks a call they could approve",
+    "capabilities": [
+      {"name": "A blocked MCP write or `DROP`/`TRUNCATE` command shown in a dialog: allowed once, for the turn, or kept blocked", "codex": "the user's next message naming the service or opening with `allow <statement>`, or `touch ~/.agents/approvals/<service>`"}
     ]
   },
   {

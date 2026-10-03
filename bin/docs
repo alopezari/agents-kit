@@ -187,7 +187,8 @@ def mod_features():
     """[(what the mod registers, description, [(capability, what Codex has instead)])] from mods/kit/hooks/features.js."""
     source = read(require("mods/kit/hooks/features.js"))
     value = source.split("export const FEATURES =", 1)[1]
-    return [(f"`/{f['command']}`" if "command" in f else f"`kit:{f['agentPrefix']}-<lens>` agents", f["description"],
+    return [(f"`/{f['command']}`" if "command" in f else f"`{f['hook']}` hook" if "hook" in f
+             else f"`kit:{f['agentPrefix']}-<lens>` agents", f["description"],
              [(c["name"], c["codex"]) for c in f["capabilities"]]) for f in json.loads(value)]
 
 
@@ -340,7 +341,9 @@ def render():
       "In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding "
       "them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them "
       "(`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in "
-      "`personal-repos.txt`.\n")
+      "`personal-repos.txt`. In Claude Code, the kit's mod asks you right away instead, in a dialog that shows the "
+      "blocked MCP write or `DROP`/`TRUNCATE` command: allowing it writes the same approval your message would, once or "
+      "for the turn (`bin/approve`, which the shell guard refuses from the agent).\n")
 
     w("## Verify: checking the change at the end of every turn\n")
     w("\"The change\" is everything the branch adds since it left the default branch, committed or not, plus untracked files: "
@@ -379,10 +382,11 @@ def render():
     w("\nHarnesses pick a skill by its description; you can also call one by name (`/spec` in Claude Code).\n")
 
     w("## Claude Code mod\n")
-    w("Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code, defines the self-review's reviewer agents and runs the kit's tools "
-      "without a turn. It owns no state and no safety: it shows and runs what the rest of the kit does, so Codex, "
+    w("Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code, defines the self-review's reviewer agents, runs the kit's tools "
+      "without a turn and asks you about a blocked call you could approve. It owns no state and no safety: it shows "
+      "and runs what the rest of the kit does, and the hooks still decide what is blocked, so Codex, "
       "and a session without the mod, get the same flow. Each capability names what Codex has instead.\n")
-    w("| Command or agent | Capability | Codex has instead |\n|---|---|---|")
+    w("| Command, hook or agent | Capability | Codex has instead |\n|---|---|---|")
     for registered, description, capabilities in mod_features():
         for i, (capability, codex) in enumerate(capabilities):
             w(f"| {f'{registered}: {cell(description)}' if i == 0 else ''} | {cell(capability)} | {cell(codex)} |")
