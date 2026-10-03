@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Remove the worktrees and local branches of this repository whose work is already in origin's default branch.
+
+  prune-merged [--dry-run]
+
+Fetches origin first, and stops, removing nothing, when that fails: a stale ref would call unmerged work merged.
+A linked worktree goes when its HEAD is in origin/<default> and removing it loses nothing: no changes, no ignored
+files other than regenerated ones (free-branch's rule), not locked, not where this runs, and no running process has
+its working directory inside it (another session may still work there). Then each local branch merged into
+origin/<default> and checked out nowhere is deleted; one still checked out stays with its worktree. Prints one line
+per linked worktree and deleted branch: what it removed, or why it kept it. --dry-run prints what it would do and changes nothing.
+"""
+import importlib.machinery
+import importlib.util
+import os
+import subprocess
+import sys
+
+_loader = importlib.machinery.SourceFileLoader(
+    "free_branch", os.path.join(os.path.dirname(os.path.realpath(__file__)), "free-branch"))
+_spec = importlib.util.spec_from_loader("free_branch", _loader)
+free_branch = importlib.util.module_from_spec(_spec)
+_loader.exec_module(free_branch)
+REGENERATED, git, GitFailed = free_branch.REGENERATED, free_branch.git, free_branch.GitFailed
+
+
+def worktrees(root):
+    """(path, branch or None, locked) for each worktree, the main checkout first."""
+    entries = []
+    for block in git(root, "worktree", "list", "--porcelain").strip().split("\n\n"):
+        fields = dict((line.split(" ", 1) + [""])[:2] for line in block.splitlines())
+        branch = fields.get("branch", "").removeprefix("refs/heads/") or None
+        entries.append((os.path.realpath(fields["worktree"]), branch, "locked" in fields))
+    return entries
+
+
+def process_cwds():
+    """Every running process's working directory, or None when lsof can't tell."""
+    result = subprocess.run(["lsof", "-a", "-d", "cwd", "-Fn"], capture_output=True, text=True)
+    if result.returncode not in (0, 1) or not result.stdout:
+        return None
+    return {os.path.realpath(line[1:]) for line in result.stdout.splitlines() if line.startswith("n")}
+
+
+def keep_reason(path, locked, default, here, cwds):
+    if locked:
+        return "locked"
+    if here == path or here.startswith(path + os.sep):
+        return "this command runs there"
+    if cwds is None:
+        return "can't tell whether a running process uses it (lsof failed)"
+    if any(cwd == path or cwd.startswith(path + os.sep) for cwd in cwds):
+        return "in use: a running process works inside it"
+    if subprocess.run(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default]).returncode != 0:
+        return f"has commits not in {default}"
+    changes = git(path, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none").strip()
+    if changes:
+        return "has changes: " + ", ".join(line[3:] for line in changes.splitlines()[:5])
+    ignored = [p for p in git(path, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
+               .split("\0") if p and not REGENERATED.search(p)]
+    if ignored:
+        return "has ignored files only it holds: " + ", ".join(ignored[:5])
+    return None
+
+
+def main():
+    args = sys.argv[1:]
+    if args not in ([], ["--dry-run"]):
+        print(__doc__)
+        return 2
+    dry = bool(args)
+    try:
+        root = git(os.getcwd(), "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+        try:
+            git(root, "fetch", "--quiet", "--prune", "origin")
+        except GitFailed as error:
+            print(f"prune-merged: couldn't fetch origin, so nothing was removed: {error}", file=sys.stderr)
+            return 1
+        default = git(root, "rev-parse", "--abbrev-ref", "origin/HEAD").strip()
+        here = os.path.realpath(os.getcwd())
+        cwds = process_cwds()
+        failed = False
+        for path, branch, locked in worktrees(root)[1:]:
+            reason = keep_reason(path, locked, default, here, cwds)
+            if reason:
+                print(f"kept {path}: {reason}")
+            elif dry:
+                print(f"would remove {path}")
+            else:
+                try:
+                    git(root, "worktree", "remove", "--force", path)  # --force: only regenerated ignored files remain
+                    print(f"removed {path}")
+                except GitFailed as error:
+                    print(f"kept {path}: removal failed: {error}")
+                    failed = True
+        checked_out = {branch for _, branch, _ in worktrees(root) if branch}
+        local_default = default.removeprefix("origin/")
+        for branch in git(root, "branch", "--merged", default, "--format=%(refname:short)").split():
+            if branch == local_default or branch in checked_out:
+                continue
+            if dry:
+                print(f"would delete branch {branch}")
+                continue
+            try:
+                git(root, "branch", "-D", branch)  # -D: -d compares with HEAD, and --merged above checked origin
+                print(f"deleted branch {branch}")
+            except GitFailed as error:
+                print(f"kept branch {branch}: {error}")
+                failed = True
+    except GitFailed as error:
+        print(f"prune-merged: {error}", file=sys.stderr)
+        return 1
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

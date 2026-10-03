@@ -19,8 +19,10 @@ import sys
 # with a trailing slash) named for what an install or a build brings back, and bytecode. Any other ignored file
 # (.env, local notes, credentials), even inside a directory named build/, exists nowhere else. A git clone an install
 # put in vendor/ (Composer --prefer-source) goes with it, local commits included.
+# A tool cache that ignores itself with its own .gitignore (ruff, pytest, mypy) is listed file by file; it only holds cache.
 REGENERATED = re.compile(r"(^|/)(node_modules|vendor|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.next|\.nuxt"
-                         r"|\.turbo|\.cache|dist|build|coverage|\.venv|venv|\.tox)/$|\.py[co]$")
+                         r"|\.turbo|\.cache|dist|build|coverage|\.venv|venv|\.tox)/$|\.py[co]$"
+                         r"|(^|/)\.(pytest|mypy|ruff)_cache/")
 
 
 class GitFailed(Exception):
