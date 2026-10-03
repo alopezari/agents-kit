@@ -74,7 +74,7 @@ def removes_merged_and_keeps_the_rest_with_reasons(base):
         before = branches(main)
         dry = sh(main, PRUNE, "--dry-run")
         assert dry.returncode == 0 and os.path.isdir(done) and branches(main) == before, dry
-        assert f"would remove {done}" in dry.stdout, dry.stdout
+        assert f"would remove {done}" in dry.stdout and "would delete branch done" in dry.stdout, dry.stdout
         out = sh(main, PRUNE)
     finally:
         sleeper.kill()

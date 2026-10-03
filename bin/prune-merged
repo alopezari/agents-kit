@@ -4,12 +4,12 @@
   prune-merged [--dry-run]
 
 Fetches origin's default branch first (origin/HEAD names it), also with --dry-run, and stops, removing nothing, when
-that fails: a stale ref would call unmerged work merged. A worktree it can't inspect is kept.
-A linked worktree goes when its HEAD is in origin/<default> and removing it loses nothing: no changes, no ignored
-files other than regenerated ones (free-branch's rule), not locked, not where this runs, and no running process has
-its working directory inside it (another session may still work there). Then each local branch merged into
-origin/<default> and checked out nowhere is deleted; one still checked out stays with its worktree. Prints one line
-per linked worktree and deleted branch: what it removed, or why it kept it. --dry-run prints what it would do and changes nothing.
+that fails: a stale ref would call unmerged work merged. A linked worktree goes when its HEAD is in origin/<default>
+and removing it loses nothing: no changes, no ignored files other than regenerated ones (free-branch's rule), no
+submodules, not locked, not where this runs, and no running process has its working directory inside it (another
+session may still work there). A worktree it can't inspect is kept. Then each local branch merged into
+origin/<default> and checked out nowhere is deleted, if it hasn't moved since. Prints one line per linked worktree and
+deleted branch: what it removed, or why it kept it. --dry-run prints what it would do and changes nothing else.
 """
 import importlib.machinery
 import importlib.util
@@ -29,8 +29,8 @@ REGENERATED, git, GitFailed = free_branch.REGENERATED, free_branch.git, free_bra
 def worktrees(root):
     """(path, branch or None, locked) for each worktree, the main checkout first."""
     entries = []
-    for block in git(root, "worktree", "list", "--porcelain").strip().split("\n\n"):
-        fields = dict((line.split(" ", 1) + [""])[:2] for line in block.splitlines())
+    for block in git(root, "worktree", "list", "--porcelain", "-z").strip("\0").split("\0\0"):
+        fields = dict((line.split(" ", 1) + [""])[:2] for line in block.split("\0"))
         branch = fields.get("branch", "").removeprefix("refs/heads/") or None
         entries.append((os.path.realpath(fields["worktree"]), branch, "locked" in fields))
     return entries
@@ -38,8 +38,11 @@ def worktrees(root):
 
 def process_cwds():
     """Every running process's working directory, or None when lsof can't tell."""
-    result = subprocess.run(["lsof", "-a", "-d", "cwd", "-Fn"], capture_output=True, text=True)
-    if result.returncode not in (0, 1) or not result.stdout:
+    try:
+        result = subprocess.run(["lsof", "-a", "-d", "cwd", "-Fn"], capture_output=True, text=True)
+    except OSError:
+        return None
+    if result.returncode != 0 or not result.stdout:  # a partial list could leave out the one process that matters
         return None
     return {os.path.realpath(line[1:]) for line in result.stdout.splitlines() if line.startswith("n")}
 
@@ -55,6 +58,8 @@ def keep_reason(path, locked, default, here, cwds):
         return "in use: a running process works inside it"
     if not os.path.isdir(path):
         return "couldn't inspect it: its directory is gone (`git worktree prune` forgets it)"
+    if os.path.exists(os.path.join(path, ".gitmodules")):
+        return "has submodules, whose ignored files this doesn't inspect"
     ancestor = subprocess.run(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default], capture_output=True, text=True)
     if ancestor.returncode == 1:
         return f"has commits not in {default}"
@@ -80,14 +85,16 @@ def main():
         root = git(os.getcwd(), "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
         default = git(root, "rev-parse", "--abbrev-ref", "origin/HEAD").strip()
         try:
-            # The default branch alone, without --prune: the comparison must be fresh, and tags stay untouched.
-            git(root, "fetch", "--quiet", "origin", default.removeprefix("origin/"))
+            # The default branch alone, into its tracking ref whatever the fetch config says, and no tags.
+            name = default.removeprefix("origin/")
+            git(root, "fetch", "--quiet", "--no-tags", "origin", f"+refs/heads/{name}:refs/remotes/origin/{name}")
         except GitFailed as error:
             print(f"prune-merged: couldn't fetch {default}, so nothing was removed: {error}", file=sys.stderr)
             return 1
         here = os.path.realpath(os.getcwd())
         cwds = process_cwds()
         failed = False
+        removed_branches = set()
         for path, branch, locked in worktrees(root)[1:]:
             try:
                 reason = keep_reason(path, locked, default, here, cwds)
@@ -97,23 +104,26 @@ def main():
                 print(f"kept {path}: {reason}")
             elif dry:
                 print(f"would remove {path}")
+                removed_branches.add(branch)
             else:
                 try:
-                    git(root, "worktree", "remove", "--force", path)  # --force: only regenerated ignored files remain
+                    git(root, "worktree", "remove", path)  # no --force: git checks again that nothing changed since
                     print(f"removed {path}")
                 except GitFailed as error:
                     print(f"kept {path}: removal failed: {error}")
                     failed = True
-        checked_out = {branch for _, branch, _ in worktrees(root) if branch}
+        checked_out = {branch for _, branch, _ in worktrees(root) if branch} - removed_branches
         local_default = default.removeprefix("origin/")
-        for branch in git(root, "branch", "--merged", default, "--format=%(refname:short)").split():
+        for line in git(root, "branch", "--merged", default, "--format=%(objectname) %(refname:short)").splitlines():
+            oid, branch = line.split(" ", 1)
             if branch == local_default or branch in checked_out:
                 continue
             if dry:
                 print(f"would delete branch {branch}")
                 continue
             try:
-                git(root, "branch", "-D", branch)  # -D: -d compares with HEAD, and --merged above checked origin
+                # Only if it still points where --merged saw it: a branch moved since keeps its new commits.
+                git(root, "update-ref", "-d", f"refs/heads/{branch}", oid)
                 print(f"deleted branch {branch}")
             except GitFailed as error:
                 print(f"kept branch {branch}: {error}")
