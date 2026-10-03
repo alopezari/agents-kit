@@ -9,7 +9,7 @@ cd "$(dirname "$0")" || exit 2
 # linked to it, as the verify overlay does. Its tests see no install outside .agents, so the doctor is skipped.
 if [ "$(cd .. && pwd -P)" != "$(cd "$HOME/.agents" 2>/dev/null && pwd -P)" ]; then
   kit_home=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-home-XXXXXX") || exit 2
-  ln -s "$(cd .. && pwd -P)" "$kit_home/.agents"
+  ln -s "$(cd .. && pwd -P)" "$kit_home/.agents" || { rmdir "$kit_home"; exit 2; }  # else the re-run would loop
   HOME="$kit_home" AGENTS_SUITE_OWN_HOME=1 bash "$PWD/run.sh" "$@"; status=$?
   rm -f "$kit_home/.agents" && rm -rf "$kit_home"  # the link first: rm never reaches the checkout
   exit $status
