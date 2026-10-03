@@ -320,9 +320,28 @@ echo "Scheduled jobs"
 nodebin=$(dirname "$(command -v node 2>/dev/null || echo /usr/local/bin/node)")
 # Job labels are per user, not per HOME: a test install must not replace the real jobs.
 [ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && ok "skipped (AGENTS_SKIP_LAUNCHD is set)"
-render() { sed -e "s#__HOME__#$HOME#g" -e "s#__NODEBIN__#$1#g" -e "s#__LABEL__#$label#g" "$tpl"; }
-for tpl in "$KIT"/launchd/*.plist; do
+render() {
+  sed -e "s#__HOME__#$HOME#g" -e "s#__NODEBIN__#$1#g" -e "s#__LABEL__#$label#g" -e "s#__PROFILE__#$profile_dir#g" "$tpl"
+}
+# A profile's launchd/*.plist load the same way, with __PROFILE__ for its directory. As with skills, a job name
+# stays with the kit, then with the first profile alphabetically.
+templates=("$KIT"/launchd/*.plist); profile_dirs=(); job_owners=""
+for tpl in "${templates[@]}"; do profile_dirs+=(""); done
+for profile in "$KIT"/profiles/*/; do
   [ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && break
+  for tpl in "$profile"launchd/*.plist; do
+    [ -e "$tpl" ] || continue
+    job=$(basename "$tpl"); name=$(basename "$profile")
+    owner=$(lookup="$job" awk -F'\t' '$1 == ENVIRON["lookup"] { print $2; exit }' <<<"$job_owners")
+    if [ -e "$KIT/launchd/$job" ]; then warn "launchd/$job in profile $name has the name of the kit's own; skipped"; continue; fi
+    if [ -n "$owner" ]; then warn "launchd/$job is in profiles $owner and $name; using $owner's"; continue; fi
+    job_owners+="$job	$name"$'\n'
+    templates+=("$tpl"); profile_dirs+=("${profile%/}")
+  done
+done
+for i in "${!templates[@]}"; do
+  [ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && break
+  tpl=${templates[$i]} profile_dir=${profile_dirs[$i]}
   label="com.$(id -un).$(basename "$tpl" .plist)"; dest="$HOME/Library/LaunchAgents/$label.plist"
   if [ $DOCTOR = 1 ]; then
     # A job is fine while the node it names is installed, even when the shell runs another nvm version.

@@ -1,0 +1,1 @@
+- A profile can schedule its own jobs: `install.sh` loads its `launchd/*.plist` like the kit's, with `__PROFILE__` for the profile's directory, and `uninstall.sh`, the doctor and the weekly health check cover them too.
