@@ -13,6 +13,9 @@ import subprocess
 import sys
 from datetime import datetime
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
+from review_stamp import quality_log  # noqa: E402
+
 HOME = os.path.expanduser("~")
 EXCLUDE_CWD = ("/private/tmp/claude-501", "/tmp/")
 CORRECTION = re.compile(
@@ -147,7 +150,7 @@ def checkout(cwd):
 def branch_renames():
     """(repo, old branch) -> new names, from the quality log's rename lines: a renamed branch is the same change."""
     try:
-        lines = open(f"{HOME}/.agents/logs/quality.jsonl").read().splitlines()
+        lines = open(quality_log()).read().splitlines()
     except OSError:
         return {}
     renames = {}

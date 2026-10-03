@@ -31,6 +31,9 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
+from review_stamp import quality_log  # noqa: E402
+
 KIT_START = "2026-09-24"
 BASELINE_MONTHS = 6
 FOLLOW_UP_DAYS = 14
@@ -39,7 +42,7 @@ DETAIL_BATCH = 10
 FOLLOW_UP_BATCH = 5
 SEARCH_LIMIT = 1000
 GH = os.path.expanduser("~/.agents/bin/gh")
-QUALITY_LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
+QUALITY_LOG = quality_log()
 BASELINE_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline.json")
 BOT = re.compile(r"\[bot\]$|copilot|coderabbit|claude|codex|gemini|github-actions|dependabot", re.I)
 FOLLOW_UP_TITLE = re.compile(r"\b(revert|fix|hotfix|regression|bug)", re.I)

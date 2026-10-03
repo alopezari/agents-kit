@@ -9,6 +9,7 @@ import tempfile
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 RESULTS = []
+KIT_FILES = ("bin/quality-log", "bin/repo-name", "review-mining/taxonomy.md", "hooks/review_stamp.py")
 
 
 def setup(base):
@@ -16,7 +17,8 @@ def setup(base):
     home = os.path.join(base, "home")
     os.makedirs(os.path.join(home, ".agents", "bin"))
     os.makedirs(os.path.join(home, ".agents", "review-mining"))
-    for rel in ("bin/quality-log", "bin/repo-name", "review-mining/taxonomy.md"):
+    for rel in KIT_FILES:
+        os.makedirs(os.path.dirname(os.path.join(home, ".agents", rel)), exist_ok=True)
         shutil.copy(os.path.join(KIT, rel), os.path.join(home, ".agents", rel))
     return home
 
@@ -64,7 +66,79 @@ def refuses_malformed_entries(base):
     assert entries(home) == [], "nothing was written"
 
 
-for test in (writes_well_formed_entries, refuses_malformed_entries):
+def a_session_on_a_worktree_logs_to_the_main_checkout(base):
+    """A session whose ~/.agents links to a kit worktree kept its rows there, and lost them when the worktree went."""
+    kit, worktree, home = (os.path.join(base, name) for name in ("kit", "worktree", "home"))
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q", kit], check=True)
+    subprocess.run([*git, "-C", kit, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    subprocess.run([*git, "-C", kit, "worktree", "add", "-q", "-b", "feature", worktree], check=True)
+    for rel in KIT_FILES:
+        os.makedirs(os.path.dirname(os.path.join(worktree, rel)), exist_ok=True)
+        shutil.copy(os.path.join(KIT, rel), os.path.join(worktree, rel))
+    os.makedirs(home)
+    os.symlink(worktree, os.path.join(home, ".agents"))
+    session = {key: value for key, value in os.environ.items() if key != "AGENTS_KIT_UNDER_TEST"}
+    rename = ["python3", "-c", f"import sys; sys.path.insert(0, {os.path.join(worktree, 'hooks')!r}); import review_stamp; "
+              "review_stamp.log_rename('repo', 'session-x', 'feature/x')"]
+
+    def write(env):
+        env = {**env, "HOME": home}
+        assert subprocess.run([os.path.join(home, ".agents", "bin", "quality-log"), "test", "e2e", "--issues", "0"], cwd=home,
+                              env=env, capture_output=True).returncode == 0
+        assert subprocess.run(rename, env=env, capture_output=True).returncode == 0
+
+    def rows(checkout):
+        path = os.path.join(checkout, "logs", "quality.jsonl")
+        return [json.loads(line)["kind"] for line in open(path)] if os.path.exists(path) else []
+
+    # A GIT_DIR inherited from the caller names another repository; -C alone doesn't override it.
+    other = os.path.join(base, "other")
+    subprocess.run([*git, "init", "-q", other], check=True)
+    write({**session, "GIT_DIR": os.path.join(other, ".git")})
+    assert (rows(kit), rows(worktree), rows(other)) == (["test", "rename"], [], []), (rows(kit), rows(worktree), rows(other))
+    # Under the suite (AGENTS_KIT_UNDER_TEST), rows stay in the HOME it made, never in the real log.
+    write(os.environ)
+    assert (rows(kit), rows(worktree)) == (["test", "rename"], ["test", "rename"]), (rows(kit), rows(worktree))
+
+
+def other_kit_layouts_keep_their_rows_in_the_kit(base):
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    session = {key: value for key, value in os.environ.items() if key != "AGENTS_KIT_UNDER_TEST"}
+
+    def write(home, kit, **env):
+        for rel in KIT_FILES:
+            os.makedirs(os.path.dirname(os.path.join(kit, rel)), exist_ok=True)
+            shutil.copy(os.path.join(KIT, rel), os.path.join(kit, rel))
+        return subprocess.run([os.path.join(kit, "bin", "quality-log"), "test", "e2e", "--issues", "0"], cwd=home,
+                              env={**session, "HOME": home, **env}, capture_output=True, text=True)
+
+    # A plain ~/.agents inside a HOME that is itself a git repository (dotfiles).
+    dotfiles = os.path.join(base, "dotfiles")
+    subprocess.run([*git, "init", "-q", dotfiles], check=True)
+    assert write(dotfiles, os.path.join(dotfiles, ".agents")).returncode == 0
+    assert os.path.exists(os.path.join(dotfiles, ".agents", "logs", "quality.jsonl")), os.listdir(dotfiles)
+    # A kit whose git dir lives elsewhere (--separate-git-dir, as a submodule's does).
+    home = os.path.join(base, "home")
+    kit = os.path.join(home, ".agents")
+    subprocess.run([*git, "init", "-q", "--separate-git-dir", os.path.join(base, "kit.git"), kit], check=True)
+    subprocess.run([*git, "-C", kit, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    assert write(home, kit).returncode == 0
+    assert os.path.exists(os.path.join(kit, "logs", "quality.jsonl")), os.listdir(base)
+    # A worktree of it: git names the git dir as the main worktree, which isn't a checkout to write into.
+    worktree = os.path.join(base, "worktree")
+    subprocess.run([*git, "-C", kit, "worktree", "add", "-q", "-b", "feature", worktree], check=True)
+    linked_home = os.path.join(base, "linked-home")
+    os.makedirs(linked_home)
+    os.symlink(worktree, os.path.join(linked_home, ".agents"))
+    out = write(linked_home, worktree)
+    # It says so instead of quietly keeping rows where a removal would lose them.
+    assert out.returncode == 0 and "couldn't find the kit's main checkout" in out.stderr, out
+    assert os.path.exists(os.path.join(worktree, "logs", "quality.jsonl")), os.listdir(worktree)
+
+
+for test in (writes_well_formed_entries, refuses_malformed_entries, a_session_on_a_worktree_logs_to_the_main_checkout,
+             other_kit_layouts_keep_their_rows_in_the_kit):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)

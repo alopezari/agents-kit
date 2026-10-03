@@ -7,7 +7,7 @@ only perspectives that pay off.
   quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 
 Refuses malformed input (exit 2) without writing: a flag left without its value once took the next flag as one.
-Appends to ~/.agents/logs/quality.jsonl with the repo, branch and the triage tier. hooks/review_stamp.py appends
+Appends to logs/quality.jsonl in the kit's main checkout with the repo, branch and the triage tier. hooks/review_stamp.py appends
 "rename" lines there too, so review-mining/outcomes.py can join lens runs to a branch renamed after them.
 """
 import argparse
@@ -18,8 +18,10 @@ import subprocess
 import sys
 import time
 
-LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
-TAXONOMY = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "review-mining", "taxonomy.md")
+KIT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")
+TAXONOMY = os.path.join(KIT, "review-mining", "taxonomy.md")
+sys.path.insert(0, os.path.join(KIT, "hooks"))
+from review_stamp import quality_log  # noqa: E402
 
 
 def git(*args):
@@ -81,8 +83,9 @@ def main():
                                          capture_output=True, text=True, timeout=60).stdout)["tier"]
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
         tier = None
-    os.makedirs(os.path.dirname(LOG), exist_ok=True)
-    with open(LOG, "a") as fh:
+    log = quality_log()
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    with open(log, "a") as fh:
         fh.write(json.dumps({
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": kind, "name": name, "tier": tier,
             "repo": subprocess.run([os.path.expanduser("~/.agents/bin/repo-name")], capture_output=True,

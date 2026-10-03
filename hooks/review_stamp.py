@@ -31,7 +31,6 @@ import sys
 import tempfile
 import time
 
-QUALITY_LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
 # Where path.sh keeps a spec and its reports while a sandbox makes .git read-only.
 TMP_SPECS = os.path.join(os.environ.get("TMPDIR") or "/tmp", "agents-specs")
 NOT_BEHAVIOR = re.compile(
@@ -199,11 +198,35 @@ def relink_evidence(report, old_dir, new_dir):
             fh.write(text.replace(old_dir, new_dir))
 
 
+def quality_log():
+    """The main checkout's logs/quality.jsonl, even when ~/.agents links to a kit worktree: rows kept in a worktree are
+    lost when it is removed. Under the suite (AGENTS_KIT_UNDER_TEST) they stay in the HOME it made."""
+    kit = os.path.realpath(os.path.expanduser("~/.agents"))
+    try:
+        with open(os.path.join(kit, ".git")) as fh:
+            linked = "/worktrees/" in fh.read()
+    except OSError:  # a directory (the main checkout) or none (not a checkout, maybe inside a dotfiles repo)
+        linked = False
+    if not linked or os.environ.get("AGENTS_KIT_UNDER_TEST"):
+        return os.path.join(kit, "logs", "quality.jsonl")
+    # -C doesn't override a GIT_DIR the caller exported, which would name another repository.
+    listed = subprocess.run(["git", "-C", kit, "worktree", "list", "--porcelain", "-z"], capture_output=True, text=True,
+                            env={key: value for key, value in os.environ.items() if not key.startswith("GIT_")})
+    main = listed.stdout.partition("\0")[0].removeprefix("worktree ") if listed.returncode == 0 else ""
+    # git lists the git dir, not a checkout, for a repository made with --separate-git-dir.
+    if main and os.path.exists(os.path.join(main, ".git")):
+        return os.path.join(main, "logs", "quality.jsonl")
+    print(f"quality log: couldn't find the kit's main checkout ({listed.stderr.strip() or main}), so this row goes to "
+          f"{kit}, a worktree whose removal loses it", file=sys.stderr)
+    return os.path.join(kit, "logs", "quality.jsonl")
+
+
 def log_rename(repo, old, new):
     """Lens runs are logged under the branch's name at the time, and the monthly job joins them to the PR's branch."""
     try:
-        os.makedirs(os.path.dirname(QUALITY_LOG), exist_ok=True)
-        with open(QUALITY_LOG, "a") as fh:
+        path = quality_log()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as fh:
             fh.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": "rename", "repo": repo,
                                  "name": old, "to": new}) + "\n")
     except OSError as error:  # a sandbox that can't write ~/.agents/logs must still get its spec path
