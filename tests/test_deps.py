@@ -15,7 +15,7 @@ PYTHON_CALLS = [r'shutil\.which\(\s*"([\w.-]+)"', r'subprocess\.(?:run|Popen|che
 SHELL_CALLS = [r'command -v "?([\w.-]+)']
 NOT_DEPENDENCIES = {
     "grep", "tar", "brew",  # macOS ships them; brew is how install.sh installs the rest
-    "codex", "pi",  # harnesses: install.sh wires the ones it finds
+    "codex",  # harnesses: install.sh wires the ones it finds
     # verify_auto.py runs the project's own tools and reports them as skipped when the project has none
     "cargo", "eslint", "go", "gofmt", "pytest", "ruff", "shellcheck",
 }

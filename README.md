@@ -1,6 +1,6 @@
 # agents-kit
 
-One setup for every coding agent you use (Claude Code, Codex, Pi): the same instructions, skills, guardrails and checks, whichever harness runs the work. Agents are told to work like a staff engineer, and hooks check that they did: irreversible and outward-facing commands stop and wait for you, every turn that edits code is verified, and a pull request can't be opened until the exact change has been self-reviewed.
+One setup for every coding agent you use (Claude Code, Codex): the same instructions, skills, guardrails and checks, whichever harness runs the work. Agents are told to work like a staff engineer, and hooks check that they did: irreversible and outward-facing commands stop and wait for you, every turn that edits code is verified, and a pull request can't be opened until the exact change has been self-reviewed.
 
 **[docs/framework.md](docs/framework.md)** is the full reference: every hook, guard rule, check, skill, tool and scheduled job, with diagrams. It is generated from the code on every commit, so it describes what the kit does now.
 
@@ -36,7 +36,7 @@ To remove it, `~/.agents/uninstall.sh` lists every link, hook, status line, sche
 
 What it doesn't do, on a new machine:
 
-1. Install or log in to the harnesses (`claude`, `codex`, `pi`) and `gh`. Install them before running `install.sh`, which only wires the harnesses it finds.
+1. Install or log in to the harnesses (`claude`, `codex`) and `gh`. Install them before running `install.sh`, which only wires the harnesses it finds.
 2. Trust the Codex hooks. Open Codex once and approve them; `install.sh --doctor` warns until you do.
 3. Install harness plugins, other than the kit's own, or MCP servers. Add the ones you use yourself, or keep their setup in a profile.
 
@@ -74,7 +74,7 @@ Claude Code also loads the kit as a plugin, `mods/kit/`, whose [mod](https://cod
 ## Adding a harness
 
 1. Point its global instructions file at `AGENTS.md`, and its skills directory at `skills/` if it has one.
-2. Write `adapters/<harness>/` to translate its events into the payloads above. `adapters/pi/agents-kit.ts` is the reference:
+2. If it has no hook settings of its own, write `adapters/<harness>/` to translate its events into the payloads above:
    - before a command → `guard_bash.py`;
    - after an edit → `post_edit.py`;
    - at idle or stop → `stop_checks.py`, with a guard so the stop check continues the agent only once per user turn.

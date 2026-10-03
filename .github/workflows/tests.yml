@@ -38,8 +38,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      # Pi's own YAML parser checks the skills' frontmatter (tests/test_skill_frontmatter.mjs).
-      - run: npm install -g @earendil-works/pi-coding-agent@0.87.1
       # The kit's Claude Code plugin is validated and tested with the claude CLI (tests/run.sh mods); no sign-in needed.
       - run: npm install -g @anthropic-ai/claude-code@2.1.288
       # The kit must live at ~/.agents.

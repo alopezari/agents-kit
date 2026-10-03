@@ -18,7 +18,7 @@ done
 # Real programs are reached through scripts, not symlinks: a test writing a fake over one must replace the script,
 # never the real binary (a symlink once let a fake claude overwrite the installed Claude Code).
 bin="$home/bin"; mkdir -p "$bin"; real_programs=()
-for program in python3 git jq node npm claude codex pi; do
+for program in python3 git jq node npm claude codex; do
   path=$(command -v "$program") || continue
   real_programs+=("$path"); printf '#!/bin/sh\nexec "%s" "$@"\n' "$path" > "$bin/$program"; chmod +x "$bin/$program"
 done
@@ -375,6 +375,31 @@ else
   check "without claude, the kit plugin is an info line, not a warning" \
     'grep -q "info  kit plugin: claude is not installed" <<<"$doctor" && ! grep -q "warn  kit plugin" <<<"$doctor"'
 fi
+# The kit no longer supports Pi: the links an older install made into the kit go, the rest of ~/.pi stays.
+pi_links() {
+  mkdir -p "$home/.pi/agent/extensions"
+  ln -sfn "$kit/AGENTS.md" "$home/.pi/agent/AGENTS.md"
+  ln -sfn "$kit/adapters/pi/agents-kit.ts" "$home/.pi/agent/extensions/agents-kit.ts"
+}
+pi_links; ln -sfn "$home/elsewhere.ts" "$home/.pi/agent/extensions/mine.ts"; echo '{"theme":"dark"}' > "$home/.pi/agent/settings.json"
+doctor=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor 2>&1)
+check "--doctor warns about the links an older install made for Pi, and leaves them" \
+  'grep -q "warn  $home/.pi/agent/AGENTS.md is left from the kit.s Pi support" <<<"$doctor" \
+   && grep -q "warn  $home/.pi/agent/extensions/agents-kit.ts is left" <<<"$doctor" && [ -L "$home/.pi/agent/extensions/agents-kit.ts" ] && [ -L "$home/.pi/agent/AGENTS.md" ]'
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes 2>&1)
+check "install.sh removes the kit's Pi links and keeps the rest of ~/.pi" \
+  '[ ! -L "$home/.pi/agent/AGENTS.md" ] && [ ! -L "$home/.pi/agent/extensions/agents-kit.ts" ] && [ -L "$home/.pi/agent/extensions/mine.ts" ] \
+   && [ "$(cat "$home/.pi/agent/settings.json")" = "{\"theme\":\"dark\"}" ] && grep -q "fix   removed $home/.pi/agent/AGENTS.md" <<<"$out"'
+check "and a second run says nothing about Pi" '! HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes 2>&1 | grep -q "\.pi/"'
+echo "my own Pi instructions" > "$home/.pi/agent/AGENTS.md"; ln -sfn "$kit/../elsewhere.ts" "$home/.pi/agent/extensions/agents-kit.ts"
+HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes >/dev/null 2>&1
+check "a file, or a link out of the kit through .., at those paths is the user's, and stays" \
+  '[ "$(cat "$home/.pi/agent/AGENTS.md")" = "my own Pi instructions" ] && [ "$(readlink "$home/.pi/agent/extensions/agents-kit.ts")" = "$kit/../elsewhere.ts" ]'
+rm "$home/.pi/agent/AGENTS.md"; pi_links; chmod 555 "$home/.pi/agent/extensions"
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes 2>&1)
+chmod 755 "$home/.pi/agent/extensions"
+check "a link it can't remove is a warning naming it, and the run goes on" \
+  'grep -q "warn  couldn.t remove $home/.pi/agent/extensions/agents-kit.ts" <<<"$out" && [ ! -L "$home/.pi/agent/AGENTS.md" ] && grep -qx "Done." <<<"$out"'
 # Back to the kit's own list: the uninstall checks below count links into the kit.
 echo "$external_before" > "$kit/skills.external"
 rm -f "$kit/skills/chosen" "$home/.claude/skills/chosen" "$home/.codex/skills/chosen"
@@ -491,8 +516,9 @@ agents=$(ls "$home/Library/LaunchAgents")
 mine=$(echo "$agents" | sed -n 1p); stuck=$(echo "$agents" | sed -n 2p)
 echo '<plist><string>/usr/bin/true</string></plist>' > "$home/Library/LaunchAgents/$mine"  # the user's own job now
 basename "$stuck" .plist > "$home/stuck"
+pi_links  # a machine that never ran install.sh again after Pi support went
 out=$(HOME="$home" "$kit/uninstall.sh" --yes 2>&1)
-check "uninstall.sh --yes removes every link into the kit" '[ "$(kit_links)" = 0 ]'
+check "uninstall.sh --yes removes every link into the kit, Pi's from an older install too" '[ "$(kit_links)" = 0 ] && [ ! -L "$home/.pi/agent/AGENTS.md" ]'
 check "and the kit plugin with its marketplace" '[ -z "$(market_path)" ] && [ "$(kit_plugin_state)" = absent ]'
 check "and the kit's hooks and status line from Claude Code and Codex" \
   '! grep -qF "/.agents/" "$S" "$home/.codex/hooks.json"'

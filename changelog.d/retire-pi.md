@@ -1,0 +1,1 @@
+- The kit no longer supports Pi: it runs on Claude Code and Codex. `install.sh` removes the links an older install made under `~/.pi` and leaves the rest of it, including your settings.
