@@ -13,24 +13,23 @@ versions=$(cat "$K/monitors/state/versions.txt" 2>/dev/null || echo "unknown")
 context=$(cat "$K"/profiles/*/PROFILE.md 2>/dev/null || echo "No profile; judge relevance for general software work.")
 claude_model=$(jq -r '"\(.model // "default") advisor=\(.advisorModel // "none")"' "$HOME/.claude/settings.json" 2>/dev/null)
 codex_model=$(grep -E '^(model|model_reasoning_effort) *=' "$HOME/.codex/config.toml" 2>/dev/null | tr '\n' ' ')
-pi_model=$(jq -r '"\(.defaultModel // .model // "?") thinking=\(.defaultThinkingLevel // "?")"' "$HOME/.pi/agent/settings.json" 2>/dev/null)
 
 prompt=$(cat <<PROMPT
 You are scouting for changes that matter to a personal coding-agent kit. Today is $(date +%F).
 
 The kit lives in $K (read README.md first, then AGENTS.md, skills/*/SKILL.md, hooks/, bin/, install.sh as needed).
-It runs the same instructions, skills and hooks on Claude Code, Codex CLI and Pi.
+It runs the same instructions, skills and hooks on Claude Code and Codex CLI.
 Work context from the user's profiles:
 $context
 
 Installed versions:
 $versions
-Models: Claude Code $claude_model; Codex $codex_model; Pi $pi_model.
+Models: Claude Code $claude_model; Codex $codex_model.
 Deliberate choices and their evidence are in research/ (e.g. routing-analysis-*.md for models and effort); flag a change against one only when new evidence contradicts it.
 Previous scan: ${PREV:-none}. Read it and do not repeat items unless something changed.
 
 Search the web (official changelogs, release notes and docs first; then engineering blogs and discussions) for the last ~6 weeks:
-1. Claude Code, Codex CLI and Pi releases: hook events or payload changes, new settings, skills/plugins changes,
+1. Claude Code and Codex CLI releases: hook events or payload changes, new settings, skills/plugins changes,
    subagent or review features, anything that breaks or duplicates what hooks/ or install.sh does.
 2. Model releases and deprecations from Anthropic and OpenAI relevant to coding agents; changes to effort or advisor behavior.
 3. Tool releases: semgrep, gitleaks, Playwright CLI, agent-browser, PHPStan, phpcs/WPCS, axe-core.

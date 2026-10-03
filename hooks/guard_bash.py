@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse guard for shell commands, shared by Claude Code, Codex and Pi (via adapters/pi).
+"""PreToolUse guard for shell commands, shared by Claude Code and Codex.
 
 Blocks irreversible or outward-facing commands. It is a seatbelt against
 agent mistakes, not a security boundary: a determined command can evade
@@ -7,6 +7,7 @@ regexes. Records the checkout of each allowed `git push`, so the stop hook
 can follow that commit's CI.
 """
 import bisect
+import itertools
 import json
 import os
 import re
@@ -52,7 +53,8 @@ RULES = [
     (r"\b(npm|pnpm|yarn)\s+publish\b|\btwine\s+upload\b|\bgem\s+push\b|\bdocker\s+push\b",
      "`npm|pnpm|yarn publish`, `twine upload`, `gem push`, `docker push`: publishes a package or image."),
     (DATABASE_DESTROY, "`DROP DATABASE|TABLE|SCHEMA`, `TRUNCATE TABLE`: destroys database data. Instead of running it "
-                       "themselves, the user can allow one until their next message by starting it with the line "
+                       "themselves, the user can allow one until their next message, by sending a message that only "
+                       "asks for it in plain words (`drop the test databases`) or that starts with the line "
                        "`allow DROP DATABASE` (or the statement needed)."),
     (r"\bwp\s+(db\s+(drop|reset|clean)|site\s+(empty|delete))\b", "`wp db drop|reset|clean`, `wp site empty|delete`: destroys WordPress data."),
     (r"\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z)?sh\b", "`curl … | sh`: pipes a download straight into a shell."),
@@ -62,6 +64,29 @@ RULES = [
     (r"\bchmod\s+(-R\s+)?777\b", "`chmod 777`: world-writable permissions."),
     (r"\.agents/approvals", "Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent."),
 ]
+
+STAGING_MARK = re.compile(r"(?<![\w-])staging['\"]?\s+mark\b")
+MARKS_AS_USER = ("`bin/staging mark --by user`: a step marked as the user's comes from their own action, the Pass or Fail "
+                 "button in /flow or the command in their terminal. Record your own verdict with `--by agent`.")
+
+
+def marks_as_user(command):
+    """`bin/staging mark … --by user` in the command, read as the shell splits its words: a quoted note can hold
+    `;`, `|` or a newline. A word that is a command itself (`bash -c '…'`) is read the same way."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>")
+        lexer.whitespace_split = True
+        words = list(lexer)
+    except ValueError:  # an unclosed quote: no shell would run it, so read its plain words
+        words = [word.strip("'\"") for word in command.split()]
+    for i, word in enumerate(words):
+        if re.search(r"(?<![\w-])staging$", word) and words[i + 1:i + 2] == ["mark"]:
+            args = list(itertools.takewhile(lambda arg: not set(arg) <= set(";&|()"), words[i + 2:]))
+            if "--by=user" in args or any(a == "--by" and b == "user" for a, b in zip(args, args[1:])):
+                return MARKS_AS_USER
+        elif word != command and STAGING_MARK.search(word) and marks_as_user(word):
+            return MARKS_AS_USER
+    return None
 
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 
@@ -148,7 +173,7 @@ def quoted_spans(command):
     return spans
 
 
-# Claude Code and Codex give the hook 10 s and let the command through when it runs out; Pi waits up to 660 s. All
+# Claude Code and Codex give the hook 10 s and let the command through when it runs out. All
 # the git and stamp calls of one run share this budget, so the deny still arrives in time.
 HOOK_BUDGET = 8
 deadline = None  # set by main(); the tests that import this module have none
@@ -531,14 +556,93 @@ def database_grant(statement):
 
 def database_approval_names(prompt):
     """The approvals a user's message grants: the lines it opens with that read `allow DROP DATABASE` (or another
-    statement). Only there: questions, refusals, quotes, pasted dumps and code examples name them anywhere else."""
-    grants = set()
+    statement), or a message that only asks in plain words (plain_request_grants). Only there: questions, refusals,
+    quotes, pasted dumps and code examples name them anywhere else."""
+    grants = plain_request_grants(prompt)
     for line in prompt.splitlines():  # not lstrip(): an indented first line is a code example
         allow = DATABASE_ALLOW_LINE.fullmatch(line.rstrip())
         if not allow:
             break
         grants.add(database_grant(allow.group(1)))
     return sorted(grants)
+
+
+PLAIN_VERBS = {**dict.fromkeys(["borra", "borrad", "elimina", "eliminad", "suprime", "suprimid", "drop", "delete",
+                                "remove", "destroy", "wipe"], "DROP"),
+               **dict.fromkeys(["vacía", "vacia", "vaciad", "trunca", "truncad", "truncate", "empty"], "TRUNCATE")}
+PLAIN_OBJECTS = {**dict.fromkeys(["database", "databases", "db", "dbs", "bd", "bds", "bbdd", "base", "bases"],
+                                 "DATABASE"),
+                 **dict.fromkeys(["table", "tables", "tabla", "tablas"], "TABLE")}  # a schema is mostly Zod's or JSON's
+PLAIN_DETERMINERS = {"the", "a", "an", "all", "every", "each", "both", "this", "that", "these", "those", "my", "our",
+                     "your", "el", "la", "los", "las", "un", "una", "unos", "unas", "todo", "toda", "todos", "todas",
+                     "ese", "esa", "esos", "esas", "este", "esta", "estos", "estas", "mi", "mis", "tu", "tus", "su",
+                     "sus", "nuestro", "nuestra", "nuestros", "nuestras", "ambos", "ambas"}
+PLAIN_THANKS = re.compile(r"((please|por favor|gracias|muchas gracias|thanks) )*")
+PLAIN_YES = re.compile(r"((sí|si|yes|ok|okay|vale|claro|perfecto|perfect|genial|great|sure|adelante|go ahead|dale|"
+                       r"venga|de acuerdo|bien|good|please|por favor|gracias|muchas gracias|thanks) )*")
+PLAIN_LEADS = {"please", "por", "favor", "now", "ahora", "also", "too", "también", "tambien", "then", "just"}
+PLAIN_MODIFIERS = {"test", "tests", "testing", "old", "unused", "temporary", "temp", "local", "stale", "scratch", "dev",
+                   "legacy", "leftover", "orphaned", "duplicate", "empty", "fixture", "viejo", "vieja", "viejos",
+                   "viejas", "antiguo", "antigua", "antiguos", "antiguas", "temporal", "temporales"}
+PLAIN_TAIL = re.compile(r"((de|of) (prueba|pruebas|test|tests|testing) )?"
+                        r"((please|por favor|now|ahora|too|también|tambien|thanks|gracias) )*")
+
+
+def plain_request_grants(prompt):
+    """The approvals a message grants when, after any opening allow lines, all it says is yes and asks in plain
+    words: "Sí, borra las bases de prueba", "Perfect. Drop the test databases and empty the runs table." One clause
+    that isn't a yes or a request (another instruction, a question, a condition, a retraction), or a character
+    beyond words and `,.!¡-*` (a label, a quote, code, markup), and the message grants nothing."""
+    lines = prompt.splitlines()
+    while lines and DATABASE_ALLOW_LINE.fullmatch(lines[0].rstrip()):
+        lines.pop(0)
+    grants = set()
+    for line in filter(str.strip, lines):
+        if not re.fullmatch(r"[\w ,.!¡*-]+", line) or line[0] == " " or ".." in line:  # an example; "pero..."
+            return set()
+        for sentence in re.split(r"(?<=[.!])\s+", line.rstrip()):
+            sentence = sentence.replace("¡", "").rstrip(".! ")
+            unfinished = re.search(r"(,|\b(?:and|y)\b)\s*(,|$)", sentence, re.I)  # "Drop the tables and"
+            if unfinished or not re.search(r"\w", sentence):
+                return set()
+            for clause in re.split(r",|\b(?:and|y)\b", sentence, flags=re.I):
+                words = re.findall(r"[\w*.-]+", clause)
+                said = "".join(w.lower() + " " for w in words)
+                if (PLAIN_THANKS if grants else PLAIN_YES).fullmatch(said):  # "…, si" is an if; "por" alone isn't
+                    continue
+                grants.add(plain_request(words))
+    return set() if None in grants else grants
+
+
+def plain_request(words):
+    """The approval an imperative clause asks for, `[please] VERB [too] DET [DET] [old, test, arm_test_*] OBJECT
+    [de prueba] [please]` ("borra también las tablas de prueba", "drop the old test databases"), else None."""
+    lower = [w.lower() for w in words] + [""]
+    i = 0
+    while lower[i] in PLAIN_LEADS:
+        i += 1
+    if lower[i] not in PLAIN_VERBS or words[i].isupper():
+        return None
+    verb = PLAIN_VERBS[lower[i]]
+    i += 1
+    while lower[i] in PLAIN_LEADS:
+        i += 1
+    if lower[i] not in PLAIN_DETERMINERS:
+        return None
+    i += 1 + (lower[i + 1] in PLAIN_DETERMINERS)
+    while lower[i] in PLAIN_MODIFIERS or re.fullmatch(r"(?=.*[\d_*])[^\W_][\w*]*", lower[i]):  # arm_test_*
+        i += 1
+    if lower[i] not in PLAIN_OBJECTS:
+        return None
+    tail = " ".join(lower[i + 1:-1])
+    if lower[i] in ("base", "bases"):  # alone it's a base class or image: "base de datos", "bases de prueba"
+        if not re.match(r"de (datos|prueba|pruebas|test|tests)\b", tail):
+            return None
+        tail = re.sub(r"^de datos ?", "", tail)
+    statement = f"{verb} {PLAIN_OBJECTS[lower[i]]}"
+    if not PLAIN_TAIL.fullmatch(tail + " " if tail else "") or not re.fullmatch(DATABASE_DESTROY, statement):
+        return None  # something after the object ("the table headers"), or emptying a database
+    return database_grant(statement)
 
 
 def approved_database_grants(command, session):
@@ -774,7 +878,7 @@ def main():
         cwd = os.path.realpath(cwd or os.getcwd())  # getcwd raises when the directory was deleted
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
                   or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd)
-                  or impeccable_files(command, cwd, payload.get("session_id")))
+                  or impeccable_files(command, cwd, payload.get("session_id")) or marks_as_user(command))
         if not reason:
             for pattern, why in RULES:
                 if re.search(pattern, command):

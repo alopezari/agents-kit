@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook for Claude Code and Codex, and Pi's input event (adapters/pi).
+"""UserPromptSubmit hook for Claude Code and Codex.
 
 Asking for a write is approving it: when the user's message names a service guard_mcp.py guards
 (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards,
 writes to it are allowed until the user's next message. A DROP or TRUNCATE statement guard_bash.py refuses
-needs more than a mention: the message opens with the line `allow <statement>`.
+needs more than a mention: the message opens with the line `allow <statement>`, or does nothing but ask for it in
+plain words ("Sí, borra las bases de prueba", "drop the test databases").
 Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the
 service only to read from it approves writes for that turn too.
 """

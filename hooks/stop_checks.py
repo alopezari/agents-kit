@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stop hook shared by Claude Code, Codex and Pi (via adapters/pi).
+"""Stop hook shared by Claude Code and Codex.
 
 After a turn that edited files since the last stop, looks at the lines the
 branch adds since the merge-base with the default branch (committed or not) and asks

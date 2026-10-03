@@ -1,1 +1,1 @@
-- A profile can provide an `after-turn` executable: the Stop hook starts it in the background after every agent turn in Claude Code, Codex and Pi, with the stop payload on stdin, without waiting for it. Sessions it starts (`codex exec`, `claude -p`) don't start it again.
+- A profile can provide an `after-turn` executable: the Stop hook starts it in the background after every agent turn in Claude Code and Codex, with the stop payload on stdin, without waiting for it. Sessions it starts (`codex exec`, `claude -p`) don't start it again.
