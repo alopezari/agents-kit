@@ -1508,6 +1508,9 @@ def impeccable_guard_reads_prose_as_text(base):
             ("a heredoc into the file", "cat > DESIGN.md <<'EOF'\n# Design\nEOF"),
             ("sh -c with spaces", "sh -c 'cd . && touch PRODUCT.md'")]:
         assert "say-so" in shell(command), label
+    started = time.time()
+    shell("echo PRODUCT.md '" + "a " * 100000)  # an unclosed quote: a backtracking regex took seconds here
+    assert time.time() - started < 2, f"{time.time() - started:.1f}s on a long unclosed quote"
 
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, stop_catches_committed_leftover,

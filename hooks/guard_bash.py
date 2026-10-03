@@ -460,8 +460,13 @@ def without_prose(command):
     text = "\n".join(kept)
     if RUNS_QUOTED_CODE.search(text):
         return text
-    return re.sub(r"'[^']*\s[^']*'|\"(?:[^\"\\$`]|\\.)*\s(?:[^\"\\$`]|\\.)*\"",
-                  lambda m: m.group() if re.search(r"\bcd\s+$", text[:m.start()]) else "''", text)  # "My App" is a folder
+
+    def prose(m):  # whole strings, judged here: a regex that looks for the space itself backtracks quadratically
+        quoted = m.group()
+        runs = quoted[0] == '"' and ("$" in quoted or "`" in quoted)
+        is_cd_target = re.search(r"\bcd\s+$", text[max(0, m.start() - 20):m.start()])  # "My App" is a folder
+        return "''" if re.search(r"\s", quoted) and not runs and not is_cd_target else quoted
+    return re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", prose, text)
 
 
 def impeccable_files(command, cwd, session):
