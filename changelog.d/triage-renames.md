@@ -1,1 +1,1 @@
-- `bin/triage` counts a renamed file even when only its name changed, and a deleted file listed after another change, so the lenses they need (design, for a renamed page) still run.
+- `bin/triage` counts a renamed file even when only its name changed (both its old and new path, unescaped when git would quote them), and a deleted file listed after another change, so the lenses they need (design, for a renamed page) still run.

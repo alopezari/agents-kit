@@ -119,18 +119,18 @@ def base_ref():
 
 def collect(rng):
     if rng:
-        diff = git("diff", "--unified=0", "--no-color", rng)
+        diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", rng)
         untracked = []
     else:
         merge_base = git("merge-base", "HEAD", base_ref()).strip() or "HEAD"
-        diff = git("diff", "--unified=0", "--no-color", merge_base)
+        diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", merge_base)
         untracked = git("ls-files", "--others", "--exclude-standard").splitlines()
     files, added, removed, path = {}, [], 0, None
     for line in diff.splitlines():
         if line.startswith("diff --git "):
             path = None  # a deleted file's "--- a/" comes before its "+++ /dev/null"
-        elif line.startswith("rename to "):  # a pure rename has no ---/+++ lines at all
-            files.setdefault(line[len("rename to "):], 0)
+        elif line.startswith(("rename from ", "rename to ")):  # a pure rename has no ---/+++ lines at all
+            files.setdefault(line.split(" ", 2)[2], 0)
         elif line.startswith("+++ "):
             path = line[6:] if line.startswith("+++ b/") else None
             if path:
