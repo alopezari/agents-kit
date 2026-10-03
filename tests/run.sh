@@ -6,20 +6,22 @@
 # Sections run concurrently; each prints as one block, in this order, once it and every section above it have finished.
 cd "$(dirname "$0")" || exit 2
 # A hook run by a test must log into the test's own place (its HOME, or AGENTS_LOG_DIR), never into the real log the
-# monthly job reads: count the real log's lines from a checkout under the temp dir, before and after.
+# monthly job reads. A line counts as this run's when it carries the run's id (hooklog adds AGENTS_SUITE_RUN) or its cwd
+# is under the run's own temp root; sessions logging from elsewhere in the temp dir while the suite runs have neither.
 hook_log="$HOME/.agents/logs/hooks.jsonl"
-tmp_root="$(python3 -c 'import os, tempfile; print(os.path.realpath(tempfile.gettempdir()))')"
-from_tests() { python3 - "$hook_log" "$tmp_root" <<'PY'
+from_tests() { python3 - "$hook_log" "$run_root" "$AGENTS_SUITE_RUN" <<'PY'
 import json, os, sys
-log, root = sys.argv[1:]
+log, root, run = sys.argv[1:]
+root = os.path.realpath(root)
 lines = open(log, errors="replace").read().splitlines() if os.path.exists(log) else []
 count = 0
 for line in lines:
     try:
-        cwd = os.path.realpath(str(json.loads(line).get("cwd") or ""))
-    except ValueError:
+        entry = json.loads(line)
+        cwd = os.path.realpath(str(entry.get("cwd") or ""))
+    except (ValueError, AttributeError):
         continue  # a line cut by a crash, or still being appended
-    count += os.path.commonpath([cwd, root]) == root
+    count += entry.get("suite_run") == run or os.path.commonpath([cwd, root]) == root
 print(count)
 PY
 }
@@ -116,9 +118,10 @@ for i in "${!names[@]}"; do
 done
 [ ${#picked[@]} -gt 0 ] || { echo "no section left to run"; exit 2; }
 
-logged_before=$(from_tests) || { echo "FAIL couldn't read $hook_log"; exit 1; }
-out=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-XXXXXX") || exit 2
-trap 'rm -rf "$out"' EXIT
+run_root=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-XXXXXX") || exit 2
+trap 'rm -rf "$run_root"' EXIT
+out="$run_root/out" && mkdir "$out" "$run_root/tmp" || exit 2
+export TMPDIR="$run_root/tmp" AGENTS_SUITE_RUN="${run_root##*/}"
 # A script's background jobs ignore SIGINT, so a signal here ends each section's process tree. No set -m: a group per
 # section would outlive a harness that kills this shell's process group on timeout. Each process is stopped before its
 # children are listed: test_hooks' pool would otherwise start the next test as each one dies, and orphan it.
@@ -128,7 +131,7 @@ end_tree() {
   for child in $(pgrep -P "$1"); do end_tree "$child"; done
   kill -TERM "$1" 2>/dev/null; kill -CONT "$1" 2>/dev/null
 }
-interrupted() { for pid in "${pids[@]}"; do end_tree "$pid"; done; exit "$1"; }
+interrupted() { for pid in "${pids[@]}"; do end_tree "$pid"; done; wait; exit "$1"; }
 trap 'interrupted 129' HUP
 trap 'interrupted 130' INT
 trap 'interrupted 143' TERM
@@ -141,15 +144,15 @@ fail=0
 for n in "${!picked[@]}"; do
   i=${picked[$n]}
   wait "${pids[$n]}" || fail=1
+  unset "pids[$n]"  # reaped: an interrupt must not signal a pid the system may have reused
   printf '\n== %s\n' "${sections[$i]#*|}"
   cat "$out/$i"
 done
 
 printf '\n== %s\n' "real hook log untouched"
-if ! logged_after=$(from_tests); then
+if ! logged=$(from_tests); then
   echo "FAIL couldn't read $hook_log"; fail=1
-elif [ $(( logged_after - logged_before )) -gt 0 ]; then
-  logged=$(( logged_after - logged_before ))
+elif [ "$logged" -gt 0 ]; then
   echo "FAIL $logged lines from tests landed in $hook_log: give the test its own HOME or AGENTS_LOG_DIR"; fail=1
 else echo "ok   no test logged into $hook_log"; fi
 
