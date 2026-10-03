@@ -209,7 +209,13 @@ def asking_for_a_service_approves_its_writes_for_that_turn(base):
         "a name that ends in a symbol"
 
 
-def an_allow_line_approves_a_database_statement_for_that_turn(base):
+DATABASE_STATEMENTS = {"DROP DATABASE": "psql -c 'DROP DATABASE arm_test_1'", "DROP TABLE": "psql -c 'DROP TABLE runs'",
+                       "DROP SCHEMA": "psql -c 'DROP SCHEMA s'", "TRUNCATE TABLE": "psql -c 'TRUNCATE TABLE runs'"}
+
+
+def database_approval_hooks(base):
+    """`prompt(text)` sends a user message through prompt_approvals.py; `guard_in(command)` runs guard_bash.py on a
+    command and returns "allow" or the denial."""
     env = {**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, "HOME": base,
            "AGENTS_PROFILES_DIR": os.path.join(base, "profiles")}
 
@@ -229,8 +235,12 @@ def an_allow_line_approves_a_database_statement_for_that_turn(base):
         assert got["hookSpecificOutput"]["permissionDecision"] == "deny", got
         return got["hookSpecificOutput"]["permissionDecisionReason"]
 
-    statements = {"DROP DATABASE": "psql -c 'DROP DATABASE arm_test_1'", "DROP TABLE": "psql -c 'DROP TABLE runs'",
-                  "DROP SCHEMA": "psql -c 'DROP SCHEMA s'", "TRUNCATE TABLE": "psql -c 'TRUNCATE TABLE runs'"}
+    return prompt, guard_in
+
+
+def an_allow_line_approves_a_database_statement_for_that_turn(base):
+    prompt, guard_in = database_approval_hooks(base)
+    statements = DATABASE_STATEMENTS
     denial = guard_in(statements["DROP DATABASE"])
     assert "destroys database data" in denial and "`allow DROP DATABASE`" in denial, "the denial says how to allow it"
     for name, command in statements.items():
@@ -267,6 +277,100 @@ def an_allow_line_approves_a_database_statement_for_that_turn(base):
     assert guard_in(statements["DROP TABLE"]) == "allow", "the user's own approval file works as for services"
     os.utime(os.path.join(approvals, "sql.drop-table"), (time.time() - 3600,) * 2)
     assert guard_in(statements["DROP TABLE"]) != "allow", "and expires as theirs do"
+
+
+def a_plain_request_approves_a_database_statement_for_that_turn(base):
+    prompt, guard_in = database_approval_hooks(base)
+    assert "in plain words" in guard_in(DATABASE_STATEMENTS["DROP DATABASE"]), "the denial says a plain request works"
+
+    def allowed():
+        return {name for name, command in DATABASE_STATEMENTS.items() if guard_in(command) == "allow"}
+
+    for text, grants in [("borra las bases de prueba", {"DROP DATABASE"}),
+                         ("Sí, borra las bases de prueba", {"DROP DATABASE"}),
+                         ("Si por favor, borra las bases de prueba", {"DROP DATABASE"}),
+                         ("Perfecto.\nBorra la base de datos de prueba", {"DROP DATABASE"}),
+                         ("¡Sí! Borra las bases de prueba", {"DROP DATABASE"}),
+                         ("Vale\nborra las bases de prueba", {"DROP DATABASE"}),
+                         ("drop the test databases please", {"DROP DATABASE"}),
+                         ("Go ahead and delete the arm_test_* databases", {"DROP DATABASE"}),
+                         ("Borra también las tablas de prueba", {"DROP TABLE"}),
+                         ("vacía las tablas de prueba", {"TRUNCATE TABLE"}),
+                         ("Vacia las tablas", {"TRUNCATE TABLE"}),
+                         ("Gracias.\n\nBorra las bases de prueba. Gracias!", {"DROP DATABASE"}),
+                         ("Truncate the run_logs table", {"TRUNCATE TABLE"}),
+                         ("Drop the test databases, and empty the old test tables!", {"DROP DATABASE", "TRUNCATE TABLE"}),
+                         ("allow DROP SCHEMA\nwipe all the test tables", {"DROP SCHEMA", "DROP TABLE"})]:
+        prompt(text)
+        assert allowed() == grants, f"{text!r} approves {sorted(grants)}, got {sorted(allowed())}"
+    for text in ["can you drop the test databases?", "Don't drop the database",
+                 "Borra las bases de prueba.\n\nY luego revisa el CI"]:
+        prompt("allow DROP DATABASE\nallow DROP TABLE\nallow DROP SCHEMA\nallow TRUNCATE TABLE")
+        prompt(text)
+        assert not allowed(), f"grants nothing and revokes the last ones: {text!r}, got {sorted(allowed())}"
+
+    # Only an imperative request opening the message grants: a verb or object word anywhere else is a question, a
+    # refusal, a report, a paste, or a word for something else.
+    negatives = [
+        "¿puedes borrar las bases de prueba si te doy permiso?", "borra las bases de prueba?",
+        "Could you drop the test databases", "Could you, please, drop the test databases",
+        "Is it safe to drop the database", "Which scripts drop the tables", "Quién elimina la tabla runs",
+        "Why did you delete the tables", "I didn’t ask you to drop the database", "you shouldn't drop the database",
+        "I asked you to drop the test databases", "no borres las bases", "Do not (drop the test databases)",
+        "Do not run any of these:\n- drop the test databases\n- truncate the runs table",
+        "Things to avoid: drop the test databases", "Never run destructive stuff, e.g. drop the test databases",
+        "Avoid these:\n1. drop the test databases", "Ya borre las bases de prueba", "Ya borré las bases de prueba",
+        "you deleted the tables", "ERROR:  cannot drop the currently open database",
+        "Failed to drop the table runs: permission denied", "I'll drop the test databases myself",
+        "Let me drop the test databases myself", "Maybe drop the test databases",
+        "Write a script to drop the test databases", "Our teardown hooks drop the test databases after each run",
+        "El teardown borra la tabla runs al final y por eso falla", "Mira por qué el test elimina la base de datos",
+        "Quieres que borre la tabla", 'Juan said "drop the test databases" in the ticket',
+        "Ana dijo: borra las bases de prueba", '"drop the test databases"', "“borra las bases de prueba”",
+        "Rather than drop the table, truncate it", "Drop the test databases, no, wait, keep them",
+        "Borra las bases de prueba. Bueno, mejor no.", "After the migration passes, drop the old tables",
+        "En cuanto termines, borra las tablas viejas", "Si te doy permiso, borra las bases de prueba",
+        "Borra las bases de prueba si, como dijiste, ya no sirven.",
+        "Borra las bases solo si, por ejemplo, pasan las pruebas", "drop the test databases later",
+        "drop the test databases next week", "Drop the test databases after I confirm",
+        "Drop the test databases provided the backup succeeds", "borra los datos de la tabla runs",
+        "delete all rows from the table", "drop the rows of the table", "Delete the table rows for user 5",
+        "Delete the table headers", "Wipe the table contents", "drop the table of contents",
+        "remove the database password from the logs", "Delete the database backup file", "Delete the database.yml file",
+        "Remove the db connection pool", "Delete the schema.json file", "Elimina el esquema de validación del formulario",
+        "Remove the table from the settings page and use a list", "Drop all the tables except users",
+        "Remove the base class", "Elimina la clase base y usa composición", "Borra la imagen base del Dockerfile",
+        "vacía las bases de prueba", "the empty table shows no rows", "the drop table button is broken",
+        "> borra las bases de prueba", "    drop the test databases", "  drop the test databases",
+        "\tdrop the test databases", "```\nborra las bases de prueba\n```", "~~~\nborra las bases de prueba\n~~~",
+        "Mira esto:\n```\nborra las bases de prueba", "drop table runs;", "DROP the test databases",
+        "Run `drop the test databases` again", "drop the test databases if exists",
+        "Drop the test databases. Is that safe?", "Borra las bases de prueba. ¿Es seguro?",
+        "Drop the old tables. But only after the migration passes.", "Borra las bases de prueba. Solo si pasan los tests.",
+        "Drop the test databases. Tomorrow.", "Borra las bases de prueba. Olvídalo.", "Drop the test databases. Nevermind.",
+        "Drop the test databases\n\nActually no, wait, keep them.", "Drop the test databases\nDont do it yet",
+        "# drop the test databases\nfor db in dbs:\n    cur.execute(q)", "// drop the test databases\nteardown();",
+        "~~drop the test databases~~", "[ ] drop the test databases", '"""\nDrop the test databases.\n"""',
+        "Drop the legacy tables\nThis issue is assigned to me, write a spec for it.", "Remove the Zod schema",
+        "remove the old schemas", "Borra el esquema", "Delete the word database", "Elimina la palabra tabla",
+        "Drop the test databases\nif the backup succeeds", "Drop the test databases\n  Wait, do not do that.",
+        '"Yes. Drop the test databases. Thanks."', "delete /the/test/database", "Drop the test databases. Scratch that.",
+        "Delete the file database", "Delete the environment variable database", "Elimina el término tabla",
+        "Drop the test databases. But...", "Borra las bases de prueba, pero...", "Borra las bases de prueba, si",
+        "Drop the test databases and", "Borra las bases de prueba...", "Dale: drop the test databases\nYou: thanks",
+        "You: empty the old test tables", "Delete the env-var database", "Drop the test databases. .",
+        "Drop the test databases, thank", "Drop the test databases, por", "Borra las bases de prueba y ¡",
+        "Delete the _word_ database", "Delete the **environment variable** database", "Borra las bases de prueba por",
+        "drop the test databases and, thanks", "drop the test databases..", "Remove the old base", "Empty result tables", "Remove the user settings page table",
+        "Delete the data in tables", "Borra la imagen base", "(drop the test databases)", "`drop the test databases`",
+        "Drop the test databases. I don't want that.","Sí, borra las bases de prueba: DROP DATABASE"]
+    code = (f"import json, sys; sys.path.insert(0, {H!r}); import guard_bash; "
+            "print(json.dumps([guard_bash.database_approval_names(t) for t in json.load(sys.stdin)]))")
+    done = subprocess.run(["python3", "-c", code], input=json.dumps(negatives), capture_output=True, text=True,
+                          env={**os.environ, "HOME": base})
+    assert done.returncode == 0 and not done.stderr, done.stderr
+    granted = {t: g for t, g in zip(negatives, json.loads(done.stdout)) if g}
+    assert not granted, f"grant nothing: {granted}"
 
 
 def guard_mcp_logs_browser_mcp(base):
@@ -1695,7 +1799,8 @@ def impeccable_guard_reads_prose_as_text(base):
         shell(command)
         assert child_cpu() - started < 2, f"{child_cpu() - started:.1f}s of CPU on {label}"
 
-TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
+TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn,
+         a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
