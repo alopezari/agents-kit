@@ -1,1 +1,1 @@
-- `bin/triage` counts a renamed file even when only its name changed (both its old and new path, unescaped when git would quote them), and a deleted file listed after another change, so the lenses they need (design, for a renamed page) still run.
+- `bin/triage` counts a renamed file even when only its name changed (both paths, read as git quotes them), a deleted file listed after another change, and an untracked file with a non-ASCII name, so the lenses they need (design, for a renamed page) still run. A moved manifest no longer reports every dependency as new.
