@@ -8,6 +8,7 @@
 The self-review and validate skills run the lenses and tests this selects. Every rule is a regex
 over changed paths or added lines, so a selection can always be traced back to its signal.
 """
+import ast
 import json
 import os
 import re
@@ -105,7 +106,7 @@ BUDGET = {"low": "< 5 min", "standard": "<= 20 min", "high": "<= 45 min"}
 
 
 def git(*args, cwd=None):
-    return subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd).stdout
+    return subprocess.run(["git", *args], capture_output=True, text=True, errors="replace", cwd=cwd).stdout
 
 
 def base_ref():
@@ -115,6 +116,13 @@ def base_ref():
         if git("rev-parse", "--verify", "--quiet", ref).strip():
             return ref
     return "HEAD"
+
+
+def diff_path(field):
+    """A path as git prints it in a diff: C-quoted when it holds a quote, a backslash or a control character, and
+    followed by a tab in ---/+++ lines when it holds a space."""
+    field = field.rstrip("\t")
+    return ast.literal_eval(field) if field.startswith('"') else field
 
 
 def collect(rng):
@@ -130,13 +138,16 @@ def collect(rng):
         if line.startswith("diff --git "):
             path = None  # a deleted file's "--- a/" comes before its "+++ /dev/null"
         elif line.startswith(("rename from ", "rename to ")):  # a pure rename has no ---/+++ lines at all
-            files.setdefault(line.split(" ", 2)[2], 0)
+            files.setdefault(diff_path(line.split(" ", 2)[2]), 0)
         elif line.startswith("+++ "):
-            path = line[6:] if line.startswith("+++ b/") else None
+            new = diff_path(line[4:])
+            path = new[2:] if new.startswith("b/") else None
             if path:
                 files.setdefault(path, 0)
-        elif line.startswith("--- a/") and path is None:
-            files.setdefault(line[6:], 0)
+        elif line.startswith("--- ") and path is None:
+            old = diff_path(line[4:])
+            if old.startswith("a/"):
+                files.setdefault(old[2:], 0)
         elif path and line.startswith("+") and not line.startswith("+++"):
             files[path] += 1
             added.append((path, line[1:]))

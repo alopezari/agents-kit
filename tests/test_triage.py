@@ -182,12 +182,18 @@ for label, after, ui in [("a component", {"src/Card.tsx": "export const Card = (
 
 page = "---\ntitle: Pricing\n---\n<h1>Pricing</h1>\n"
 for label, old, new in [("a rename alone is a change to the renamed file", "src/pages/old.astro", "src/pages/pricing.astro"),
-                        ("a renamed file keeps its name when git quotes it", "src/pages/old.astro", "src/pages/précios.astro"),
+                        ("a renamed file keeps its non-ASCII name", "src/pages/old.astro", "src/pages/précios.astro"),
+                        ("a renamed file keeps its name when git quotes it", "src/pages/old.astro", 'src/pages/page"name.astro'),
                         ("a UI file moved out of a UI folder still gets design checks", "src/components/Card.php", "src/helpers/Card.php")]:
     renamed = triage_change({old: page}, {old: None, new: page})
     ok = (new if new.endswith(".astro") else old) in renamed["lenses"].get("design", [])
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} {label}: {renamed['lenses'].get('design')}")
+styles = "".join(f".rule-{i} {{ color: red; }}\n" for i in range(20))
+edited = triage_change({"src/old page.css": styles}, {"src/old page.css": None, "src/new page.css": styles + ".x { }\n"})
+ok = edited["files"] == 2
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} a renamed file with a space in its name counts once per path: {edited['files']} files")
 removed = triage_change({"a.py": "x = 1\n", "src/Old.tsx": "export const Old = 1\n"}, {"a.py": "x = 2\n", "src/Old.tsx": None})
 ok = "src/Old.tsx" in removed["lenses"].get("design", []) and "design" in removed["lenses"]
 fail |= not ok
