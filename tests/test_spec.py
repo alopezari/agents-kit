@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """skills/spec: the lint that checks a spec's shape, and the prompt for its second reading."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import os
 import shutil
 import subprocess

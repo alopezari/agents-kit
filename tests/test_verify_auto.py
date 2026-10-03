@@ -4,6 +4,7 @@ tools (node_modules/.bin, .venv/bin, vendor/bin), so results don't depend on wha
 
 Run: python3 ~/.agents/tests/test_verify_auto.py   (exit 1 on any failure)
 """
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import os
 import shutil
 import subprocess

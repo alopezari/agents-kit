@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """bin/ci-wait: waits for the checks of one commit and says how they ended, with a fake gh standing in for GitHub."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import json
 import os
 import shutil

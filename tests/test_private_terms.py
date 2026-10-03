@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Profiles' private terms stay out of the kit: its commits (git hooks) and its pull requests (guard_bash)."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import json
 import os
 import shutil

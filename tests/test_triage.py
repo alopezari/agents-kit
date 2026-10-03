@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """bin/triage: a shop's checkout raises the risk and a git checkout doesn't; a new dependency is named for review."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import json
 import os
 import subprocess
