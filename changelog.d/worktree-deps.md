@@ -1,0 +1,1 @@
+- `tests/run.sh` installs a checkout's missing node dependencies (`npm ci`, from npm's cache when it can) before the docs and site sections, so the suite passes from a fresh worktree without running npm by hand.
