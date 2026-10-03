@@ -208,6 +208,66 @@ def asking_for_a_service_approves_its_writes_for_that_turn(base):
         "a name that ends in a symbol"
 
 
+def an_allow_line_approves_a_database_statement_for_that_turn(base):
+    env = {**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, "HOME": base,
+           "AGENTS_PROFILES_DIR": os.path.join(base, "profiles")}
+
+    def hook(script, payload):
+        done = subprocess.run(["python3", H + script], input=json.dumps(payload), capture_output=True, text=True,
+                              env=env)
+        assert done.returncode == 0 and not done.stderr, f"{script} failed: {done.stderr}"
+        return json.loads(done.stdout) if done.stdout.strip() else None
+
+    def prompt(text, session="s1"):
+        hook("prompt_approvals.py", {"prompt": text, "session_id": session, "cwd": "/tmp"})
+
+    def guard_in(command, session="s1"):
+        got = hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": "/tmp", "session_id": session})
+        if not got:
+            return "allow"
+        assert got["hookSpecificOutput"]["permissionDecision"] == "deny", got
+        return got["hookSpecificOutput"]["permissionDecisionReason"]
+
+    statements = {"DROP DATABASE": "psql -c 'DROP DATABASE arm_test_1'", "DROP TABLE": "psql -c 'DROP TABLE runs'",
+                  "DROP SCHEMA": "psql -c 'DROP SCHEMA s'", "TRUNCATE TABLE": "psql -c 'TRUNCATE TABLE runs'"}
+    denial = guard_in(statements["DROP DATABASE"])
+    assert "destroys database data" in denial and "`allow DROP DATABASE`" in denial, "the denial says how to allow it"
+    for name, command in statements.items():
+        prompt(f"Allow {name.lower()}  \nSí, adelante.")
+        assert guard_in(command) == "allow", f"an opening allow line approves {name}, in any case"
+        others = [c for n, c in statements.items() if n != name]
+        assert all(guard_in(c) != "allow" for c in others), f"allowing {name} approves no other statement"
+    prompt("allow TRUNCATE TABLE\nallow DROP SCHEMA\nboth on the scratch copy")
+    assert guard_in("psql -c 'TRUNCATE TABLE runs; DROP SCHEMA s'") == "allow", "several opening allow lines"
+    prompt("allow DROP DATABASE\r\nthanks")
+    assert guard_in("PGPASSWORD=s3cret psql -c 'drop  database x'") == "allow", \
+        "a CRLF line approves; the command in any case and spacing"
+    with open(os.path.join(base, ".agents", "logs", "hooks.jsonl")) as fh:
+        logged = [json.loads(line) for line in fh if '"allow-approved"' in line]
+    assert [e["detail"] for e in logged][-1:] == ["sql.drop-database"], "an approved statement leaves a trace"
+    assert not any("s3cret" in e["detail"] for e in logged), "the trace holds the approval, not the command's secrets"
+    assert guard_in(statements["DROP DATABASE"], session="s2") != "allow", "another session's message approves nothing"
+    assert guard_in("psql -c 'DROP DATABASE x; TRUNCATE TABLE runs'") != "allow", "every statement in the command"
+    assert guard_in("psql -c 'DROP DATABASE x' && wp db reset --yes") != "allow", "other rules still hold"
+    prompt("now fix the failing test")
+    assert guard_in(statements["DROP DATABASE"]) != "allow", "the approval lasts until the user's next message"
+    # Each of these named the statement; a mention can't tell a request from a question, a refusal or a paste.
+    for text in ["DROP DATABASE", "Sí, borra las bases de prueba: DROP DATABASE", "why did you run DROP DATABASE?",
+                 "don't allow DROP DATABASE", "allow DROP DATABASE later, not now", "> allow DROP DATABASE",
+                 "-- dump\nDROP DATABASE IF EXISTS shop;\nCREATE DATABASE shop;", f"why was this blocked? {denial}",
+                 "Explain this, don't run it:\n```\nallow DROP DATABASE\n```", "an example:\n    allow DROP DATABASE",
+                 "Explain this:\n~~~sql\nallow DROP DATABASE\n~~~", "```text\nallow DROP DATABASE",
+                 "allow DROP\nDATABASE", "ok\nallow DROP DATABASE", "    allow DROP DATABASE\n", "\nallow DROP DATABASE"]:
+        prompt("allow DROP DATABASE")
+        prompt(text)
+        assert guard_in(statements["DROP DATABASE"]) != "allow", f"grants nothing and revokes the last one: {text!r}"
+    approvals = os.path.join(base, ".agents", "approvals")
+    open(os.path.join(approvals, "sql.drop-table"), "w").close()
+    assert guard_in(statements["DROP TABLE"]) == "allow", "the user's own approval file works as for services"
+    os.utime(os.path.join(approvals, "sql.drop-table"), (time.time() - 3600,) * 2)
+    assert guard_in(statements["DROP TABLE"]) != "allow", "and expires as theirs do"
+
+
 def guard_mcp_logs_browser_mcp(base):
     log = os.path.expanduser("~/.agents/logs/hooks.jsonl")
     for tool in ("mcp__playwright-headless__browser_navigate", "mcp__claude-in-chrome__navigate", "mcp__linear__get_issue"):
@@ -1088,6 +1148,7 @@ def verify_stamp_and_effort_nudge(base):
         assert not stamped("verify")
         done = verify_by_hand()
         assert done.returncode == 0 and stamped("verify") and "ran: pytest" in done.stdout, done.stdout + done.stderr
+        assert "checked nothing" not in done.stderr, done.stderr
         verify_stamp = subprocess.run(["python3", "-c", f"import sys; sys.path.insert(0, {H!r}); import review_stamp as r; "
                                        "print(r.stamp_path('verify'))"], cwd=repo, capture_output=True, text=True).stdout.strip()
         os.chmod(verify_stamp, 0o400)
@@ -1099,8 +1160,10 @@ def verify_stamp_and_effort_nudge(base):
         verify_by_hand()
         with open(os.path.join(vdir, "verify"), "w") as fh:
             fh.write("#!/bin/sh\necho 'ran: nothing to check: no changed files'\n")
-        verify_by_hand()
+        done = verify_by_hand()
         assert stamped("verify-empty") and not stamped("verify"), "the latest run's stamp is the only one left"
+        # The /flow pane's button reads this run's verdict here, not from a stamp another run can replace.
+        assert done.returncode == 0 and "verify passed, but it checked nothing" in done.stderr, done.stderr
         with open(os.path.join(vdir, "verify"), "w") as fh:
             fh.write("#!/bin/sh\necho failing; exit 1\n")
         done = verify_by_hand()
@@ -1631,7 +1694,7 @@ def impeccable_guard_reads_prose_as_text(base):
         shell(command)
         assert child_cpu() - started < 2, f"{child_cpu() - started:.1f}s of CPU on {label}"
 
-TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
+TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,

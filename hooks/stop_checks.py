@@ -568,7 +568,7 @@ def check_checkout(root, session, payload):
     deleted = git(["diff", review_stamp.merge_base(root), "--name-only", "--diff-filter=D"], root).splitlines()
     problems += [f"Test file deleted: {p}" for p in deleted if TEST_FILE.search(p)]
 
-    verify_problems, verify_failed, _, stamp_error = run_verify(root)
+    verify_problems, verify_failed, _, _, stamp_error = run_verify(root)
     problems += verify_problems
     if stamp_error:  # logged, not blocking: a missing stamp only makes a skill run verify again
         log("stop_checks", "verify-stamp", payload, f"{root}: {stamp_error}")
@@ -577,20 +577,20 @@ def check_checkout(root, session, payload):
 
 def run_verify(root):
     """Run the repo's verify in root, save its report and leave only this run's stamp: the only path to a verify
-    stamp. Returns (problems, failed, output, stamp error or None)."""
+    stamp. Returns (problems, failed, output, whether it checked anything, stamp error or None)."""
     verify = os.path.expanduser(f"~/.agents/repos/{review_stamp.repo_name(root)}/verify")
     if not os.access(verify, os.X_OK):
         verify = AUTO_VERIFY
     if not os.access(verify, os.X_OK):
         problems = [f"No verify to run: neither {verify} nor ~/.agents/repos/<repo>/verify is executable."]
         save_verify_report(root, verify, "", "FAIL (no verify to run)")
-        return problems, True, "", record_verify(root, None, "")
+        return problems, True, "", False, record_verify(root, None, "")
     # Stamped with the content verify started from: an edit made while it ran leaves the change unstamped.
     try:
         checked_fingerprint = in_checkout(root, review_stamp.fingerprint)
     except RuntimeError as error:
         # An earlier run's stamp must not outlive a run that couldn't check anything.
-        return [f"Couldn't fingerprint the change, so verify can't stamp it: {error}"], True, "", record_verify(root, None, "")
+        return [f"Couldn't fingerprint the change, so verify can't stamp it: {error}"], True, "", False, record_verify(root, None, "")
     try:
         result = subprocess.run([verify], cwd=root, capture_output=True, text=True, errors="replace", timeout=VERIFY_TIMEOUT)
     except subprocess.TimeoutExpired as timeout:
@@ -598,20 +598,20 @@ def run_verify(root):
         output = "".join(part.decode(errors="replace") if isinstance(part, bytes) else part or ""
                          for part in (timeout.stdout, timeout.stderr))
         save_verify_report(root, verify, output, f"FAIL (timed out after {VERIFY_TIMEOUT}s)")
-        return [f"{verify} timed out after {VERIFY_TIMEOUT}s."], True, output, record_verify(root, None, "")
+        return [f"{verify} timed out after {VERIFY_TIMEOUT}s."], True, output, False, record_verify(root, None, "")
     except OSError as error:
         save_verify_report(root, verify, "", f"FAIL (couldn't start: {error})")
-        return [f"{verify} couldn't start: {error}"], True, "", record_verify(root, None, "")
+        return [f"{verify} couldn't start: {error}"], True, "", False, record_verify(root, None, "")
     output = result.stdout + result.stderr
     checked = checked_something(result.stdout + "\n" + result.stderr)
     if result.returncode != 0:
         save_verify_report(root, verify, output, f"FAIL (exit {result.returncode})")
         problems = [f"{verify} failed (exit {result.returncode}):\n{output.strip()[-3000:]}"]
-        return problems, True, output, record_verify(root, None, "")
+        return problems, True, output, False, record_verify(root, None, "")
     save_verify_report(root, verify, output, "PASS" if checked else "PASS, but nothing was checked")
     # Lets the skills skip re-running verify on a change it already passed. A run that checked nothing
     # gets its own stamp, so the flow moves on without reporting it as a pass.
-    return [], False, output, record_verify(root, "verify" if checked else "verify-empty", checked_fingerprint)
+    return [], False, output, checked, record_verify(root, "verify" if checked else "verify-empty", checked_fingerprint)
 
 
 def in_checkout(root, action, *args):
@@ -646,10 +646,12 @@ def verify_here():
         print(f"stop_checks.py verify: verify runs on a repository's changes; {toplevel.stderr.strip()}", file=sys.stderr)
         return 1
     root = toplevel.stdout.strip()
-    problems, failed, output, stamp_error = run_verify(root)
+    problems, failed, output, checked, stamp_error = run_verify(root)
     print(output, end="")
     for problem in problems + [stamp_error] * bool(stamp_error):
         print(problem.splitlines()[0], file=sys.stderr)
+    if not failed and not checked:
+        print("verify passed, but it checked nothing: no check printed a ran: line", file=sys.stderr)
     return 1 if failed or stamp_error else 0
 
 
