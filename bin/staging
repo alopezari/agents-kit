@@ -63,7 +63,7 @@ def round_tables(lines):
         while end < len(lines) and PIPE.search(lines[end]):
             cells = cells_of(lines[end])
             if not set("".join(cells)) <= set("-: "):
-                rows.setdefault(cells[0].strip("*_"), []).append(end)
+                rows.setdefault(cells[0], []).append(end)  # as written: review_stamp reads **S1** as no step
             end += 1
         tables.append((i, end, names, rows))
         i = end
@@ -144,7 +144,9 @@ def mark(guide, evidence, step, result, by, note, branch):
     # Read, change and replace under one lock: the pane's button and an agent's mark can land at the same moment.
     with open(os.path.join(os.path.dirname(guide), "." + os.path.basename(guide) + ".lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        refused = elsewhere(branch)  # again: the checkout can move while a mark waits for the lock
+        # Again: the checkout can move while a mark waits for the lock, or before it named the guide.
+        refused = elsewhere(branch) or (None if review_stamp.report_paths("staging-guide")[0] == guide else
+                                        "staging: the checkout moved while marking: nothing marked")
         if refused:
             print(refused, file=sys.stderr)
             return 2
@@ -183,7 +185,9 @@ def mark_locked(guide, evidence, step, result, by, note):
         while k > 1 and not lines[k - 1].strip():
             k -= 1
         lines[k:k] = ["", row_line(HEADER), "|" + "---|" * len(HEADER)]
-    head, end, names, at = round_tables(lines)[-1]
+    # The table already holding the step's row, so it keeps one; a new step goes in the last table.
+    tables = round_tables(lines)
+    head, end, names, at = ([t for t in tables if step in t[3]] or tables)[-1]
     if "By" not in names:
         after = names.index("Result")
         for k in range(head, end):
@@ -198,7 +202,7 @@ def mark_locked(guide, evidence, step, result, by, note):
     else:
         was = was.group(0) if was else ""
     files = evidence_files(evidence, step)
-    links = ", ".join(f"[{os.path.basename(f)}]({f})".replace("|", "\\|") for f in files) or "no saved evidence"
+    links = ", ".join(f"[{os.path.basename(f)}](<{f}>)".replace("|", "\\|") for f in files) or "no saved evidence"
     told = " ".join(note.split()).replace("|", "\\|")
     cells = dict(zip(names, cells_of(lines[at[step][-1]]))) if step in at else {}
     cells.update({names[0]: step, "Result": result, "By": by, "Evidence": "; ".join(c for c in (was, told, links) if c)})
@@ -231,7 +235,11 @@ def main():
     if args.command == "steps":
         print(json.dumps(steps(guide, evidence)))
         return 0
-    return mark(guide, evidence, args.step, args.result, args.by, args.note, args.branch)
+    try:
+        return mark(guide, evidence, args.step, args.result, args.by, args.note, args.branch)
+    except OSError as error:
+        print(f"staging: couldn't write the staging guide {guide}: {error}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

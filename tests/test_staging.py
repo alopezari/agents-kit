@@ -112,15 +112,15 @@ def mark_writes_one_row_per_step_into_the_latest_round(base):
     text = read(guide)
     assert text.startswith(GUIDE), "the guide above the results is untouched"
     assert f"## Results ({TODAY})\n\n| Step | Result | By | Evidence |\n|---|---|---|---|\n" in text, text
-    assert f"| S1 | PASS | user | [S1.txt]({evidence}/S1.txt) |" in text, text
+    assert f"| S1 | PASS | user | [S1.txt](<{evidence}/S1.txt>) |" in text, text
     assert sh(repo, STAGING, "mark", "S2", "FAIL", "--by", "agent", "--note", "refund 500 | twice").returncode == 0
     assert sh(repo, STAGING, "mark", "S1", "FAIL", "--by", "user").returncode == 0
     rows = [line for line in read(guide).splitlines() if re.match(r"\| S\d", line)]
-    assert rows == [f"| S1 | FAIL | user | [S1.txt]({evidence}/S1.txt) |",
+    assert rows == [f"| S1 | FAIL | user | [S1.txt](<{evidence}/S1.txt>) |",
                     "| S2 | FAIL | agent | refund 500 \\| twice; no saved evidence |"], rows
     assert read(guide).count("## Results") == 1, "marks go into one round"
     assert sh(repo, STAGING, "mark", "S3", "PASS", "--by", "user").returncode == 0
-    save(guide, read(guide).replace("| S1 | FAIL", "| S1 | FAIL").replace(f"| S1 | FAIL | user | [S1.txt]({evidence}/S1.txt) |\n", ""))
+    save(guide, read(guide).replace("| S1 | FAIL", "| S1 | FAIL").replace(f"| S1 | FAIL | user | [S1.txt](<{evidence}/S1.txt>) |\n", ""))
     assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "user").returncode == 0
     assert [l.split(" | ")[0] for l in read(guide).splitlines() if re.match(r"\| S\d", l)] == ["| S1", "| S2", "| S3"], \
         "a new row goes in the guide's step order"
@@ -183,12 +183,12 @@ def mark_leaves_ships_table_and_keeps_whose_verdict_it_replaced(base):
     assert sh(repo, STAGING, "mark", "S1", "FAIL", "--by", "agent", "--note", "S1.txt shows a 500").returncode == 0
     text = read(guide)
     assert text.endswith(ship), "ship's table stays as it was, last"
-    assert f"| S1 | FAIL | agent | was PASS by user; S1.txt shows a 500; [S1.txt]({evidence}/S1.txt) |" in text, text
+    assert f"| S1 | FAIL | agent | was PASS by user; S1.txt shows a 500; [S1.txt](<{evidence}/S1.txt>) |" in text, text
     assert sh(repo, STAGING, "mark", "S2", "PASS", "--by", "agent", "--note", "was told to").returncode == 0
     assert sh(repo, STAGING, "mark", "S2", "PASS", "--by", "agent").returncode == 0
     assert "| S2 | PASS | agent | no saved evidence |" in read(guide), "a note isn't taken for the verdict it overrode"
     assert sh(repo, STAGING, "mark", "S1", "FAIL", "--by", "agent").returncode == 0
-    assert f"| S1 | FAIL | agent | was PASS by user; [S1.txt]({evidence}/S1.txt) |" in read(guide), \
+    assert f"| S1 | FAIL | agent | was PASS by user; [S1.txt](<{evidence}/S1.txt>) |" in read(guide), \
         "the same writer again keeps the verdict it overrode"
     save(guide, GUIDE + ship)
     assert sh(repo, STAGING, "mark", "S2", "PASS", "--by", "user").returncode == 0
@@ -230,8 +230,8 @@ def mark_changes_only_its_row_of_the_latest_rounds_last_table(base):
     save(guide, GUIDE + older + first + second + tail)
     save(os.path.join(evidence, "S1.txt"), "200")
     assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "user").returncode == 0
-    row = f"| S1 | PASS | user | was FAIL by agent; [S1.txt]({evidence}/S1.txt) |"
-    assert read(guide) == GUIDE + older + first + second.replace("| S2  |", row + "\n| S2  |") + tail, read(guide)
+    row = f"| S1 | PASS | user | was FAIL by agent; [S1.txt](<{evidence}/S1.txt>) |"
+    assert read(guide) == GUIDE + older + first.replace("|S1|FAIL|agent|S1 was 500|", row) + second + tail, read(guide)
     latest = read(guide).split("## Results (2026-10-01)")[1].split("## Results after")[0].splitlines()
     assert [(r[1], r[3]) for r in review_stamp.result_rows(latest, evidence) if r[0] == "S1"][-1] == ("PASS", True), \
         "review_stamp reads the row mark wrote as S1's"
@@ -262,7 +262,7 @@ def mark_links_every_evidence_file_of_the_step(base):
         save(os.path.join(evidence, name), "x")
     os.makedirs(os.path.join(evidence, "S1c.txt"))
     assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "user").returncode == 0
-    links = ", ".join(f"[{n}]({evidence}/{n})" for n in ("S1-receipt.png", "S1.txt", "S1b.txt"))
+    links = ", ".join(f"[{n}](<{evidence}/{n}>)" for n in ("S1-receipt.png", "S1.txt", "S1b.txt"))
     assert f"| S1 | PASS | user | {links} |" in read(guide), read(guide)
 
 
@@ -344,6 +344,22 @@ def a_step_without_a_title_and_a_branch_with_a_pipe(base):
     assert [r[1:4:2] for r in review_stamp.result_rows(read(guide).splitlines(), evidence)] == [("PASS", True)], read(guide)
 
 
+def mark_keeps_one_row_per_step_and_says_why_it_cant_write(base):
+    repo = new_repo(base)
+    guide, evidence = paths(repo)
+    save(guide, GUIDE + "\n## Results (2026-10-01)\n\n| Step | Result | By | Evidence |\n|---|---|---|---|\n| S1 | FAIL | agent | x |\n"
+                        "\nRe-run:\n\n| Step | Result | By | Evidence |\n|---|---|---|---|\n| S2 | PASS | user | y |\n| **S3** | PASS | user | z |\n")
+    assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "user").returncode == 0
+    assert [l for l in read(guide).splitlines() if l.startswith("| S1")] == ["| S1 | PASS | user | was FAIL by agent; no saved evidence |"]
+    assert read(guide).index("| S1 | PASS") < read(guide).index("Re-run:"), "replaced where it was, not added to the last table"
+    assert steps(repo)[2]["result"] == "", "**S3** is no step to review_stamp either"
+    lock = os.path.join(os.path.dirname(guide), "." + os.path.basename(guide) + ".lock")
+    os.remove(lock)
+    os.makedirs(lock)
+    out = sh(repo, STAGING, "mark", "S2", "FAIL", "--by", "user")
+    assert out.returncode == 1 and out.stderr.startswith("staging: couldn't write the staging guide") and "Traceback" not in out.stderr, out
+
+
 for test in (lists_the_steps_before_the_merge_with_their_latest_result_and_evidence,
              prints_nothing_without_steps_before_the_merge, mark_writes_one_row_per_step_into_the_latest_round,
              mark_keeps_a_hand_written_round_and_adds_the_by_column, refuses_what_it_cant_record_and_changes_nothing,
@@ -351,7 +367,8 @@ for test in (lists_the_steps_before_the_merge_with_their_latest_result_and_evide
              mark_refuses_a_branch_other_than_the_one_shown, marks_at_the_same_time_all_land,
              mark_changes_only_its_row_of_the_latest_rounds_last_table, mark_reads_bold_headers_and_keeps_columns_it_doesnt_know,
              mark_links_every_evidence_file_of_the_step, an_interrupted_mark_leaves_the_earlier_guide, a_mark_waits_for_the_lock,
-             marks_alone_dont_pass_the_staging_gate, a_step_without_a_title_and_a_branch_with_a_pipe):
+             marks_alone_dont_pass_the_staging_gate, a_step_without_a_title_and_a_branch_with_a_pipe,
+             mark_keeps_one_row_per_step_and_says_why_it_cant_write):
     base = tempfile.mkdtemp(prefix="agents-test-staging-")
     try:
         test(base)
