@@ -85,8 +85,13 @@ unwire() {
   # Job labels are per user, not per HOME: a test HOME must not unload the real jobs.
   if [ -n "${AGENTS_SKIP_LAUNCHD:-}" ]; then [ $APPLY = 1 ] || echo "  skipped (AGENTS_SKIP_LAUNCHD is set)"
   else
-    for tpl in "$KIT"/launchd/*.plist; do
+    seen=" "
+    for tpl in "$KIT"/launchd/*.plist "$KIT"/profiles/*/launchd/*.plist; do
+      [ -e "$tpl" ] || continue
+      case "${tpl#"$KIT"/}" in *[[:space:]\&\#\\\<\>]*) continue ;; esac  # install.sh skips these
       label="com.$(id -un).$(basename "$tpl" .plist)"; dest="$HOME/Library/LaunchAgents/$label.plist"
+      case "$seen" in *" $label "*) continue ;; esac  # two profiles naming a job alike installed one of them
+      seen+="$label "
       grep -qF "$KIT/" "$dest" 2>/dev/null || continue  # a job the user replaced is theirs
       if [ $APPLY = 1 ]; then
         launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true  # fails when it isn't loaded

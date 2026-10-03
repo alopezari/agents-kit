@@ -41,8 +41,14 @@ if [ -n "$last" ]; then
 elif [ "$(date +%d)" -gt 7 ] && [ -d "$K/review-mining/runs/$(date +%Y-%m)" ]; then
   problems+=("Monthly review mining ran this month but never produced a proposal.")
 fi
-for job in review-mining health trends; do
-  launchctl list "com.$(id -un).agents-$job" >/dev/null 2>&1 || problems+=("launchd job com.$(id -un).agents-$job is not loaded; run ~/.agents/install.sh.")
+seen=" "
+for tpl in "$K"/launchd/*.plist "$K"/profiles/*/launchd/*.plist; do
+  [ -e "$tpl" ] || continue
+  case "${tpl#"$K"/}" in *[[:space:]\&\#\\\<\>]*) continue ;; esac  # install.sh skips these
+  label="com.$(id -un).$(basename "$tpl" .plist)"
+  case "$seen" in *" $label "*) continue ;; esac  # two profiles naming a job alike installed one of them
+  seen+="$label "
+  launchctl list "$label" >/dev/null 2>&1 || problems+=("launchd job $label is not loaded; run ~/.agents/install.sh.")
 done
 [ -s "$K/monitors/state/review-mining.err.log" ] && [ "$(days_since "$K/monitors/state/review-mining.err.log")" -lt 8 ] \
   && notes+=("review-mining wrote to its error log this week: $(tail -1 "$K/monitors/state/review-mining.err.log")")

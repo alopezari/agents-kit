@@ -320,13 +320,38 @@ echo "Scheduled jobs"
 nodebin=$(dirname "$(command -v node 2>/dev/null || echo /usr/local/bin/node)")
 # Job labels are per user, not per HOME: a test install must not replace the real jobs.
 [ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && ok "skipped (AGENTS_SKIP_LAUNCHD is set)"
-render() { sed -e "s#__HOME__#$HOME#g" -e "s#__NODEBIN__#$1#g" -e "s#__LABEL__#$label#g" "$tpl"; }
-for tpl in "$KIT"/launchd/*.plist; do
+render() {
+  sed -e "s#__HOME__#$HOME#g" -e "s#__NODEBIN__#$1#g" -e "s#__LABEL__#$label#g" -e "s#__PROFILE__#$profile_dir#g" "$tpl"
+}
+# A profile's launchd/*.plist load the same way, with __PROFILE__ for its directory. As with skills, a job name
+# stays with the kit, then with the first profile alphabetically.
+templates=("$KIT"/launchd/*.plist); profile_dirs=(); job_owners=""
+for tpl in "${templates[@]}"; do profile_dirs+=(""); done
+for profile in "$KIT"/profiles/*/; do
   [ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && break
+  for tpl in "$profile"launchd/*.plist; do
+    [ -e "$tpl" ] || continue
+    job=$(basename "$tpl"); name=$(basename "$profile")
+    case "${tpl#"$KIT"/}" in *[[:space:]\&\#\\\<\>]*) warn "launchd/$job in profile $name skipped: its path has a space or a character a plist can't hold as is"; continue ;; esac
+    owner=$(lookup="$job" awk -F'\t' '$1 == ENVIRON["lookup"] { print $2; exit }' <<<"$job_owners")
+    if [ -e "$KIT/launchd/$job" ]; then warn "launchd/$job in profile $name has the name of the kit's own; skipped"; continue; fi
+    if [ -n "$owner" ]; then warn "launchd/$job is in profiles $owner and $name; using $owner's"; continue; fi
+    job_owners+="$job	$name"$'\n'
+    templates+=("$tpl"); profile_dirs+=("${profile%/}")
+  done
+done
+for i in "${!templates[@]}"; do
+  [ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && break
+  tpl=${templates[$i]} profile_dir=${profile_dirs[$i]}
   label="com.$(id -un).$(basename "$tpl" .plist)"; dest="$HOME/Library/LaunchAgents/$label.plist"
   if [ $DOCTOR = 1 ]; then
     # A job is fine while the node it names is installed, even when the shell runs another nvm version.
     node_line=$(render __NODEBIN__ | grep -F -m1 __NODEBIN__ || true)
+    if [ -z "$node_line" ]; then  # a profile job that runs no node
+      if [ "$(render "$nodebin")" = "$(cat "$dest" 2>/dev/null)" ] && launchctl list "$label" >/dev/null 2>&1; then ok "$label"
+      else warn "$label is not installed or out of date"; fi
+      continue
+    fi
     before_node=${node_line%%__NODEBIN__*} after_node=${node_line#*__NODEBIN__}
     job_node=$(grep -F -- "$before_node" "$dest" 2>/dev/null | head -1 || true); job_node=${job_node#"$before_node"}; job_node=${job_node%"$after_node"}
     if [ -n "$job_node" ] && [ -x "$job_node/node" ] && [ "$(render "$job_node")" = "$(cat "$dest")" ] \

@@ -310,6 +310,40 @@ export PATH="$home/fakes/launchd:$PATH"  # the rest of the test is this block
 if [ "$(command -v launchctl)" != "$home/fakes/launchd/launchctl" ]; then echo "FAIL the fake launchctl isn't first in PATH"; exit 1; fi
 unset AGENTS_SKIP_LAUNCHD  # CI sets it; the fake launchctl above is what keeps the real jobs safe here
 mkdir -p "$home/.claude" "$home/.codex"  # wired by their directories when the harnesses aren't installed (CI)
+# A profile's jobs load like the kit's; a name the kit or an earlier profile already uses is skipped.
+clash="$home/zz-jobs"; mkdir -p "$clash/launchd"
+for name in agents-health sample-weekly; do
+  printf '<plist><string>__PROFILE__/x.sh</string><string>__LABEL__</string></plist>\n' > "$clash/launchd/$name.plist"
+done
+odd="$home/client#1"; mkdir -p "$odd/launchd"
+printf '<plist><string>__PROFILE__/x.sh</string></plist>\n' > "$odd/launchd/odd-weekly.plist"
+HOME="$home" "$kit/install.sh" --yes --profile "$odd" >/dev/null 2>&1
+out=$(HOME="$home" "$kit/install.sh" --yes --profile "$clash" 2>&1); status=$?
+job="$home/Library/LaunchAgents/com.$(id -un).sample-weekly.plist"
+printf '<plist><string>__PROFILE__/x.sh</string></plist>\n' > "$clash/launchd/weekly brief.plist"
+printf '<plist><string>__LABEL__</string><string>__PROFILE__/x.sh</string></plist>\n' > "$clash/launchd/plain-weekly.plist"
+check "a profile path or job name a plist can't hold is skipped with a warning, and the install goes on" \
+  '[ $status = 0 ] && grep -q "warn  launchd/odd-weekly.plist in profile client#1 skipped" <<<"$out" \
+   && [ ! -e "$home/Library/LaunchAgents/com.$(id -un).odd-weekly.plist" ]'
+out=$(HOME="$home" "$kit/install.sh" --yes 2>&1)
+check "and one whose file name has a space" \
+  'grep -q "warn  launchd/weekly brief.plist in profile zz-jobs skipped" <<<"$out" && [ ! -e "$home/Library/LaunchAgents/com.$(id -un).weekly brief.plist" ]'
+echo "com.$(id -un).plain-weekly" > "$home/stuck"  # the fake launchctl reports it loaded
+doctor=$(HOME="$home" "$kit/install.sh" --doctor 2>&1)
+check "the doctor accepts a loaded profile job that runs no node" 'grep -q "ok    com.$(id -un).plain-weekly$" <<<"$doctor"'
+rm "$home/stuck" "$home/Library/LaunchAgents/com.$(id -un).plain-weekly.plist" "$clash/launchd/plain-weekly.plist" "$clash/launchd/weekly brief.plist"
+rm "$kit/profiles/client#1"
+check "a profile's job is rendered with every placeholder filled and loaded" \
+  '[ -f "$job" ] && ! grep -q "__[A-Z]*__" "$job" && grep -qF "$kit/profiles/sample-profile/weekly.sh" "$job" \
+   && grep -qF "bootstrap gui/$(id -u) $job" "$home/launchctl.log"'
+check "one named like the kit's own or an earlier profile's is warned about and skipped" \
+  'grep -q "warn  launchd/agents-health.plist in profile zz-jobs has the name of the kit.s own; skipped" <<<"$out" \
+   && grep -q "warn  launchd/sample-weekly.plist is in profiles sample-profile and zz-jobs; using sample-profile.s" <<<"$out" \
+   && ! grep -qF "profiles/zz-jobs" "$home/Library/LaunchAgents"/*.plist'
+rm "$kit/profiles/zz-jobs" "$job"
+doctor=$(HOME="$home" "$kit/install.sh" --doctor 2>&1)
+check "the doctor reports a profile job that isn't installed" \
+  'grep -q "warn  com.$(id -un).sample-weekly is not installed or out of date" <<<"$doctor"'
 wired=$(HOME="$home" "$kit/install.sh" --yes 2>&1)
 # Jobs name the node they run, taken from the shell's PATH: a shell on another nvm version mustn't make the doctor warn
 # while that node is still installed. Every job counts as loaded here, so only the plists decide.
