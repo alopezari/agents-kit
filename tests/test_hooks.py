@@ -1517,6 +1517,16 @@ def impeccable_guard_reads_prose_as_text(base):
             ("python flags with values", "python3 -W ignore -c \"open('PRODUCT.md', 'w').write('x')\""),
             ("long shell flags", "bash --noprofile --norc -c 'touch PRODUCT.md'"),
             ("node long flags", "node --input-type=module -e \"import fs from 'fs'; fs.writeFileSync('PRODUCT.md', 'x')\""),
+            ("python behind command", "command python3 -c \"open('PRODUCT.md', 'w').write('x')\""),
+            ("python behind env", "env MODE=test python3 -c \"open('PRODUCT.md', 'w').write('x')\""),
+            ("python in an if", "if python3 -c \"open('PRODUCT.md', 'w').write('x')\"; then :; fi"),
+            ("awk", "awk 'BEGIN { print \"text\" > \"PRODUCT.md\" }'"),
+            ("a process substitution", "source <(printf '%s\\n' 'touch PRODUCT.md')"),
+            ("a heredoc example in a comment, closed later", "# Example <<'EOF'\ntouch PRODUCT.md\nEOF\nN=$(pwd)"),
+            ("a dashed unquoted delimiter", "cat <<DOC-END\nDOC\n'$(touch PRODUCT.md)'\nDOC-END"),
+            ("apostrophes in comments", "# Don't forget the file\ntouch PRODUCT.md\n# It's done"),
+            ("escaped quotes", "echo \\'start; touch PRODUCT.md; echo \\'end"),
+            ("a quoted .gitignore with a space", "N=$(pwd); echo PRODUCT.md >> 'My App/.gitignore'"),
             ("$( inside double quotes", 'echo "$(touch PRODUCT.md) done"'),
             ("a heredoc into .gitignore", "cat >> .gitignore <<'EOF'\nPRODUCT.md\nEOF\nN=$(wc -l < .gitignore)"),
             ("a heredoc into the file", "cat > DESIGN.md <<'EOF'\n# Design\nEOF"),
@@ -1524,7 +1534,9 @@ def impeccable_guard_reads_prose_as_text(base):
         assert "say-so" in shell(command), label
     # Backtracking regexes took seconds on each of these.
     for label, command in [("a long unclosed quote", "echo PRODUCT.md '" + "a " * 100000),
-                           ("a run of separators", "echo PRODUCT.md " + ";" * 100000)]:
+                           ("a run of separators", "echo PRODUCT.md " + ";" * 100000),
+                           ("escaped quotes", "echo PRODUCT.md " + '\\"a ' * 20000 + "; touch DESIGN.md"),
+                           ("many short strings", "N=$(pwd); echo " + "'a b' " * 20000)]:
         started = time.time()
         shell(command)
         assert time.time() - started < 2, f"{time.time() - started:.1f}s on {label}"

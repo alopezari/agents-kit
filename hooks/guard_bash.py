@@ -6,6 +6,7 @@ agent mistakes, not a security boundary: a determined command can evade
 regexes. Records the checkout of each allowed `git push`, so the stop hook
 can follow that commit's CI.
 """
+import bisect
 import json
 import os
 import re
@@ -439,51 +440,62 @@ LEADING = re.compile(r"-\S*|\w+=\S*|if|then|else|elif|do|while|until|\{|!|time|e
 WORD = re.compile(r"[^\s\"'<>;&|()]+")
 
 
-# Text that may run as code however it arrives: eval or sh -c, a here-string, or a shell or interpreter wherever a
-# command starts, since its script can come from a quoted argument, a heredoc or a pipe.
-RUNS_QUOTED_CODE = re.compile(RUNS_QUOTED_TEXT.pattern + r"|<<<|(?:^|[|;&\n(`]|\$\()\s*(?:\w+=\S*\s+)*"
-                              r"(?:(?:sudo|env|exec|xargs|nohup|time)\s+(?:-\S+\s+)*)*(?:[^\s/;&|()`]*/)*"
-                              r"(?:(?:ba|z|da|k|fi)?sh|python[\d.]*|node|perl|ruby|php|deno|bun|osascript)\b")
-HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(?:(['\"])([^'\"\s]+)\1|\\(\w+)|(\w+))")
-QUOTED_TARGET_PATH = re.compile(r"(?:^.|/)(?:product\.md|design\.md|\.impeccable)(?:/|.$)", re.I)  # .$: the quote
+# Prose a command carries without running it: a message flag's argument, what an unpiped echo or printf prints, and a
+# quoted heredoc fed to one of these commands. Everything else is read as before, however it might run.
+MESSAGE_FLAG = re.compile(r"(?:^|\s)(?:-[a-zA-Z]*m|--(?:message|title|body|notes|subject))(?:=|\s+)$")
+PROSE_HEREDOC_COMMANDS = ("cat", "tee", "git", "gh")
+HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(?:(['\"])([^'\"\s]+)\1|\\([^\s;&|<>()]+)|([^\s;&|<>()'\"\\]+))")
 
 
 def without_prose(command):
-    """The command with what bash never runs as a command blanked: quoted-delimiter heredoc bodies, and quoted text
-    with spaces in it (a commit message, an echo), unless the command runs quoted text as code. shell_code() reads
-    everything as code once a $( appears anywhere, which here would turn every mention into a write. Whatever this
-    can't read for sure, it leaves whole: missing a write costs more than asking about a mention."""
-    kept, delimiters = [], []  # (word, quoted) of each heredoc still open, in order
+    """The command with the prose it carries blanked, so a mention of PRODUCT.md, DESIGN.md or Impeccable there isn't
+    read as a write: shell_code() reads everything as code once a $( appears anywhere. Whatever this can't read for
+    sure, it leaves whole: missing a write costs more than asking about a mention."""
+    kept, heredocs = [], []  # (delimiter, body is prose) of each heredoc still open, in order
     for line in command.split("\n"):
-        if delimiters:
-            word, quoted = delimiters[0]
-            if line.lstrip("\t") == word:
-                delimiters.pop(0)
+        if heredocs:
+            delimiter, prose = heredocs[0]
+            if line.lstrip("\t") == delimiter:
+                heredocs.pop(0)
                 kept.append(line)
-            elif quoted:
+            elif prose:
                 kept.append("")
             elif "$(" in line or "`" in line:
-                return command  # bash expands it, quotes and all
+                return command  # an unquoted body expands, quotes and all
             else:
                 kept.append(line)
             continue
         kept.append(line)
-        delimiters = [(m.group(2) or m.group(3) or m.group(4), not m.group(4)) for m in HEREDOC.finditer(line)]
-        if delimiters and line.endswith("\\"):
+        words = line.split()
+        prose = bool(words) and words[0] in PROSE_HEREDOC_COMMANDS and not re.search(r"(?<!\|)\|(?!\|)", line)
+        heredocs = [(m.group(2) or m.group(3) or m.group(4), prose and not m.group(4)) for m in HEREDOC.finditer(line)]
+        if heredocs and line.endswith("\\"):
             return command  # the header goes on, redirects and all, on the next line
-    if delimiters:
-        return command  # a heredoc that never ends was a mention of one, in a comment or a message
     text = "\n".join(kept)
-    if RUNS_QUOTED_CODE.search(text):
-        return command  # python3 - <<'PY' runs its heredoc body too
+    if heredocs or RUNS_QUOTED_TEXT.search(text):
+        return command  # a heredoc that never ends was only a mention of one
 
-    def prose(m):  # whole strings, judged here: a regex that looks for the space itself backtracks quadratically
-        quoted = m.group()
-        runs = quoted[0] == '"' and ("$" in quoted or "`" in quoted)
-        is_cd_target = re.search(r"\bcd\s+$", text[max(0, m.start() - 20):m.start()])  # "My App" is a folder
-        is_prose = re.search(r"\s", quoted) and not QUOTED_TARGET_PATH.search(quoted)
-        return "''" if is_prose and not runs and not is_cd_target else quoted
-    return re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", prose, text)
+    spans = quoted_spans(text)
+    masked = list(text)
+    for start, end in spans:
+        masked[start:end] = "q" * (end - start)
+    masked = "".join(masked)
+    # Each pipeline judged once: per string, its slice of a long command would make this quadratic. No cut at a
+    # parenthesis: what an echo prints inside $(...) or <(...) is fed to another command.
+    cuts = [0] + [i for m in re.finditer(r"&&|\|\||[;&\n]", masked) for i in m.span()] + [len(masked)]
+    starts = cuts[::2]
+    printing = [bool(re.match(r"\s*(?:echo|printf)\b", masked[a:b])) and "|" not in masked[a:b]
+                for a, b in zip(starts, cuts[1::2])]
+    out, last = [], 0
+    for start, end in spans:
+        quoted, before = text[start:end], masked[max(0, start - 40):start]
+        if quoted[0] == '"' and ("$" in quoted or "`" in quoted):
+            continue
+        prints = printing[bisect.bisect_right(starts, start) - 1] and not re.search(r"[<>]\s*$", before)
+        if MESSAGE_FLAG.search(before) or prints:
+            out += [text[last:start], "''"]
+            last = end
+    return "".join(out) + text[last:]
 
 
 def impeccable_files(command, cwd, session):
