@@ -141,9 +141,13 @@ test('the mod registers exactly the commands features.js describes, each to run 
 
 test('every button the pane draws is a capability features.js lists', async ($, on) => {
   const { clock } = stub(on, repo())
-  const labels = [...new Set(await buttons(await openPane($, clock)))]
+  const labels = await buttons(await openPane($, clock))
   const declared = FEATURES.flatMap((f) => f.capabilities.map((c) => c.name.match(/^(.+) button\b/)?.[1]).filter(Boolean))
-  expect(labels.sort()).toEqual(declared.sort())
+  expect([...new Set(labels)].sort()).toEqual(declared.sort())
+  // Pass and Fail come once per step, every other button once.
+  const perStep = ['Pass', 'Fail']
+  expect(labels.filter((label) => !perStep.includes(label)).sort()).toEqual(declared.filter((label) => !perStep.includes(label)).sort())
+  expect(labels.filter((label) => perStep.includes(label)).length).toBe(perStep.length * STEPS.length)
 })
 
 test('the pane shows the phase, stamps, verify lines, CI and context for the branch it names', async ($, on) => {

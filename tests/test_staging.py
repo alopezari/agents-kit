@@ -119,6 +119,11 @@ def mark_writes_one_row_per_step_into_the_latest_round(base):
     assert rows == [f"| S1 | FAIL | user | [S1.txt]({evidence}/S1.txt) |",
                     "| S2 | FAIL | agent | refund 500 \\| twice; no saved evidence |"], rows
     assert read(guide).count("## Results") == 1, "marks go into one round"
+    assert sh(repo, STAGING, "mark", "S3", "PASS", "--by", "user").returncode == 0
+    save(guide, read(guide).replace("| S1 | FAIL", "| S1 | FAIL").replace(f"| S1 | FAIL | user | [S1.txt]({evidence}/S1.txt) |\n", ""))
+    assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "user").returncode == 0
+    assert [l.split(" | ")[0] for l in read(guide).splitlines() if re.match(r"\| S\d", l)] == ["| S1", "| S2", "| S3"], \
+        "a new row goes in the guide's step order"
 
 
 def mark_keeps_a_hand_written_round_and_adds_the_by_column(base):
@@ -223,7 +228,7 @@ def mark_changes_only_its_row_of_the_latest_rounds_last_table(base):
     save(os.path.join(evidence, "S1.txt"), "200")
     assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "user").returncode == 0
     row = f"| S1 | PASS | user | was FAIL by agent; [S1.txt]({evidence}/S1.txt) |"
-    assert read(guide) == GUIDE + older + first + second + row + "\n" + tail, read(guide)
+    assert read(guide) == GUIDE + older + first + second.replace("| S2  |", row + "\n| S2  |") + tail, read(guide)
     latest = read(guide).split("## Results (2026-10-01)")[1].split("## Results after")[0].splitlines()
     assert [(r[1], r[3]) for r in review_stamp.result_rows(latest, evidence) if r[0] == "S1"][-1] == ("PASS", True), \
         "review_stamp reads the row mark wrote as S1's"
