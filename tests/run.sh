@@ -6,11 +6,11 @@
 # Sections run concurrently; each prints as one block, in this order, once it and every section above it have finished.
 cd "$(dirname "$0")" || exit 2
 # The tests reach the kit through ~/.agents. Run from another checkout, re-run under a HOME holding only .agents,
-# linked to it, as CI and the verify overlay do.
+# linked to it, as the verify overlay does. Its tests see no install outside .agents, so the doctor is skipped.
 if [ "$(cd .. && pwd -P)" != "$(cd "$HOME/.agents" 2>/dev/null && pwd -P)" ]; then
   kit_home=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-home-XXXXXX") || exit 2
   ln -s "$(cd .. && pwd -P)" "$kit_home/.agents"
-  HOME="$kit_home" bash "$PWD/run.sh" "$@"; status=$?
+  HOME="$kit_home" AGENTS_SUITE_OWN_HOME=1 bash "$PWD/run.sh" "$@"; status=$?
   rm -f "$kit_home/.agents" && rm -rf "$kit_home"  # the link first: rm never reaches the checkout
   exit $status
 fi
@@ -86,7 +86,8 @@ section_docs() {
   return $f
 }
 section_site() {
-  if [ ! -d ~/.agents/site/node_modules ]; then echo "FAIL site dependencies missing: run install.sh"; return 1
+  if [ ! -d ~/.agents/site/node_modules ]; then
+    echo "FAIL site dependencies missing in $(cd ~/.agents && pwd -P)/site: run npm ci there (install.sh does it for ~/.agents)"; return 1
   elif node ~/.agents/site/build.mjs >/dev/null; then echo "ok   landing and docs build from the current sources"
   else return 1; fi
 }
@@ -109,6 +110,9 @@ section_kit_home() {
 }
 section_doctor() {
   local doctor doctor_status warnings
+  if [ -n "${AGENTS_SUITE_OWN_HOME:-}" ]; then
+    echo "skipped: the doctor checks an installed HOME, and this run made its own; run it from ~/.agents"; return 0
+  fi
   doctor=$(~/.agents/install.sh --doctor 2>&1); doctor_status=$?
   warnings=$(grep "  warn " <<<"$doctor")
   if [ $doctor_status = 0 ] && [ -z "$warnings" ]; then echo "ok   no warnings"; return 0; fi
