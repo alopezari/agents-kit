@@ -45,7 +45,7 @@ sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wra
   "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree"
   "pr-validation|pull request validation section" "spec|spec lint and second reading" "browse|browser A/B harness"
   "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes"
-  "sessions|sessions and phases" "frontmatter|skill frontmatter" "pi|pi adapter" "triage|triage" "ci-wait|CI wait"
+  "sessions|sessions and phases" "frontmatter|skill frontmatter" "pi|pi adapter" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
   "doctor|install doctor" "kit-home|every test refuses another checkout")
 names=("${sections[@]%%|*}")
@@ -83,6 +83,22 @@ section_triage() {
   return $f
 }
 section_ci_wait() { python3 test_ci_wait.py; }
+section_mods() {
+  local f=0 kit=~/.agents
+  command -v claude >/dev/null || { echo "FAIL claude is not installed: the mod can't be validated or tested"; return 1; }
+  local validated; validated=$(cd "$kit/mods/kit" && claude plugin validate --strict . 2>&1) && echo "ok   claude plugin validate --strict" \
+    || { echo "FAIL claude plugin validate --strict:"; echo "$validated" | tail -8; f=1; }
+  (cd "$kit/mods/kit" && claude plugin test) || f=1
+  # The flow must work without the mod: nothing it runs on may depend on it. Only bin/docs (which documents it)
+  # and bin/changelog (which sets its version) name it.
+  local users dir dirs=()
+  for dir in hooks skills bin repos/_shared adapters monitors launchd tools review-mining; do dirs+=("$kit/$dir"); done
+  users=$(grep -rlE "kit@agents-kit|mods/kit|features\.js|hooks/register\.js" "${dirs[@]}" --exclude-dir=node_modules 2>/dev/null \
+    | grep -vxE "$kit/bin/(docs|changelog)")
+  if [ -z "$users" ]; then echo "ok   no hook, skill or tool depends on the mod"
+  else echo "FAIL these depend on the mod, so the flow would break without it:"; echo "$users"; f=1; fi
+  return $f
+}
 section_docs() {
   local f=0
   ~/.agents/bin/docs --check || f=1
@@ -102,6 +118,9 @@ section_version() {
     && grep -qxE "## \[${version//./\\.}\] - [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])" ~/.agents/CHANGELOG.md; then
     echo "ok   VERSION $version has its CHANGELOG entry"
   else echo "FAIL VERSION ($version) needs a '## [$version] - <date>' heading in CHANGELOG.md"; f=1; fi
+  plugin_version=$(jq -r .version ~/.agents/mods/kit/.claude-plugin/plugin.json)
+  if [ "$plugin_version" = "$version" ]; then echo "ok   the kit's Claude Code plugin is at VERSION $version"
+  else echo "FAIL mods/kit/.claude-plugin/plugin.json has version $plugin_version, VERSION has $version (bin/changelog release sets both)"; f=1; fi
   bash test_changelog_check.sh || f=1
   return $f
 }

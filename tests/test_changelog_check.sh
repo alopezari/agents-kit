@@ -15,6 +15,7 @@ printf '# Changelog\n\n## [Unreleased]\n\n- Old entry (#1).\n\n## [0.1.0] - 2026
 mkdir changelog.d && printf -- '- Already released elsewhere.\n' > changelog.d/older.md
 echo '# One file per pull request' > changelog.d/README.md
 echo 0.1.0 > VERSION
+mkdir -p mods/kit/.claude-plugin && printf '{"name": "kit", "version": "0.1.0", "author": {"name": "a"}}\n' > mods/kit/.claude-plugin/plugin.json
 commit base
 
 case_() {  # case_ <expect pass|fail> <description> <command that changes the branch>
@@ -53,6 +54,7 @@ ok "release moves Unreleased and each fragment, with its PR number, under the ve
   "$(sed -n '/^## \[Unreleased\]/,/^## \[0.1.0\]/p' CHANGELOG.md)" "$expected"
 ok "release deletes the fragments it released, and keeps the README" "$(ls changelog.d)" README.md
 ok "release sets VERSION" "$(cat VERSION)" 0.2.0
+ok "and the kit plugin's version, keeping its other fields" "$(jq -c . mods/kit/.claude-plugin/plugin.json)" '{"name":"kit","version":"0.2.0","author":{"name":"a"}}'
 commit "release 0.2.0"
 git tag v0.2.0
 
@@ -78,4 +80,25 @@ git rm -q changelog.d/direct.md && commit "drop direct"
 "$changelog" release 0.2.1 > /dev/null 2>&1; ok "releasing a version CHANGELOG.md already has fails" "$?" 1
 "$changelog" release 00.3.0 > /dev/null 2>&1; ok "a version with a leading zero fails" "$?" 1
 ok "and changes nothing" "$(cat CHANGELOG.md VERSION)" "$before"
+git checkout -q -b feat/12 main && printf -- "- Thing 12.\n" > changelog.d/feat~12.md && commit "work 12"
+git checkout -q main && git -c user.name=t -c user.email=t@t merge -q --no-ff feat/12 -m "Merge pull request #12 from o/feat-12"
+echo '[]' > mods/kit/.claude-plugin/plugin.json && commit "a manifest that isn't an object"
+before=$(cat CHANGELOG.md VERSION mods/kit/.claude-plugin/plugin.json changelog.d/*)
+out=$("$changelog" release 0.3.0 2>&1); code=$?
+ok "a release whose kit plugin manifest isn't a JSON object fails" "$code" 1
+ok "and names it" "$(echo "$out" | grep -c "mods/kit/.claude-plugin/plugin.json is not a JSON object")" 1
+ok "and changes nothing" "$(cat CHANGELOG.md VERSION mods/kit/.claude-plugin/plugin.json changelog.d/*)" "$before"
+printf '{"name": "kit", "version": "0.2.1"}\n' > mods/kit/.claude-plugin/plugin.json && commit "a manifest again" && chmod 444 mods/kit/.claude-plugin/plugin.json
+before=$(cat CHANGELOG.md VERSION mods/kit/.claude-plugin/plugin.json changelog.d/*)
+out=$("$changelog" release 0.3.0 2>&1); code=$?
+chmod 644 mods/kit/.claude-plugin/plugin.json
+ok "a release that can't write the kit plugin's manifest fails" "$code" 1
+ok "and names it" "$(echo "$out" | grep -c "can't write mods/kit/.claude-plugin/plugin.json")" 1
+ok "and changes nothing" "$(cat CHANGELOG.md VERSION mods/kit/.claude-plugin/plugin.json changelog.d/*)" "$before"
+git rm -q mods/kit/.claude-plugin/plugin.json && commit "drop the plugin manifest"
+before=$(cat CHANGELOG.md VERSION changelog.d/*)
+out=$("$changelog" release 0.3.0 2>&1); code=$?
+ok "a release without the kit plugin's manifest fails" "$code" 1
+ok "and names it" "$(echo "$out" | grep -c "can't read mods/kit/.claude-plugin/plugin.json")" 1
+ok "and changes nothing" "$(cat CHANGELOG.md VERSION changelog.d/*)" "$before"
 exit $fail

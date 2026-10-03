@@ -13,7 +13,7 @@ const REPO_URL = "https://github.com/alopezari/agents-kit";
 const MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@12.0.0/dist/mermaid.esm.min.mjs";
 // README sections that belong in the docs, and where: the rest of the README is covered by the reference.
 const README_BEFORE = ["Install", "Make it yours"];
-const README_AFTER = ["Hook contract", "Adding a harness"];
+const README_AFTER = ["Hook contract", "Mods contract", "Adding a harness"];
 
 const read = (path) => readFileSync(join(KIT, path), "utf8");
 
