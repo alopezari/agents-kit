@@ -18,7 +18,7 @@ const VERIFY_DEADLINE_MS = 660_000
 const CHECKED_NOTHING = 'verify passed, but it checked nothing'
 // A gathering whose branch or HEAD moved while it ran is gathered again, this many times in all.
 const GATHER_ATTEMPTS = 2
-const NEEDS_ATTENTION = /couldn't read|^Couldn't|^CI: failed|^Run verify.* failed/
+const NEEDS_ATTENTION = /couldn't read|^Couldn't|^CI: failed|^Run verify.* failed|· FAIL \(/
 
 // Each self-review lens becomes the agent type `kit:review-<key>`, briefed from what `bin/triage --lens-briefs` cuts
 // out of lenses.md. No edit tools is a convenience for the reviewer, not a guard (Bash can still write): the hooks
@@ -35,6 +35,9 @@ let gatherAgain = false
 let verifyRun = { state: 'idle' }
 // A verify stopped at its deadline holds the button until its child is gone, so two never write one report.
 let verifyStopping = false
+// Marks run one at a time: two `bin/staging mark` at once would each rewrite the guide from what it read.
+let marking = Promise.resolve()
+let markFailure = null
 
 async function run($, argv, cwd, timeoutMs = PROCESS_TIMEOUT_MS) {
   try {
@@ -84,6 +87,36 @@ async function verifyReportLines($, kit, root) {
   }
 }
 
+// { steps } for the guide's steps before the merge, or { failure } when bin/staging can't list them.
+async function stagingSteps($, kit, root) {
+  const listed = await run($, [kit + '/bin/staging', 'steps', '--json'], root)
+  if (listed.failure || listed.exitCode !== 0) return { failure: "couldn't read: " + failureOf(listed) }
+  try {
+    return { steps: JSON.parse(listed.stdout) }
+  } catch (error) {
+    return { failure: "couldn't read: bin/staging printed something not JSON: " + messageOf(error) }
+  }
+}
+
+function stepLine(step) {
+  const result = step.result ? step.result + (step.by ? ' (' + step.by + ')' : '') : 'not marked'
+  const evidence = step.evidence.length ? step.evidence.map((path) => path.split('/').pop()).join(', ') : 'no evidence yet'
+  return [step.id + ' ' + step.title, result, evidence].join(' · ')
+}
+
+function markStep($, id, result) {
+  marking = marking.then(async () => {
+    if (!shown?.root) return
+    const { root, branch } = shown
+    const kit = await kitDir($)
+    // --branch: the checkout may have moved since the pane showed this step.
+    const marked = await run($, [kit + '/bin/staging', 'mark', id, result, '--by', 'user', '--branch', branch], root)
+    markFailure = marked.failure || marked.exitCode !== 0 ? `Couldn't mark ${id} ${result}: ` + failureOf(marked) : null
+    await gather($)
+  })
+  return marking
+}
+
 async function ciLine($, kit, root, head) {
   const upstream = await run($, ['git', 'rev-parse', '--verify', '--quiet', '@{u}'], root)
   if (upstream.exitCode === 1) return 'CI: HEAD not pushed (no upstream)'
@@ -122,22 +155,36 @@ function dateTimeOf(ms) {
   return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' + timeOf(ms)
 }
 
-// The checkout at `cwd`: { root, branch, head }, or { none } saying why there is no change to follow.
+// The checkout at `cwd`: { root, branch, head, inMain? }, or { none } saying why there is no change to follow.
 async function checkout($, cwd) {
   const top = await run($, ['git', 'rev-parse', '--show-toplevel'], cwd)
   if (top.failure) return { none: "Couldn't read the repository: " + top.failure }
   // git exits 128 for "not a git repository", and for a refused or broken one too.
   if (top.exitCode !== 0 && /not a git repository/.test(top.stderr)) return { none: 'Not in a git repository: no change to follow.' }
   if (top.exitCode !== 0) return { none: "Couldn't read the repository: " + failureOf(top) }
-  const root = top.stdout.trim()
+  const at = await branchAt($, top.stdout.trim())
+  if (at.none || at.branch) return at
+  return (await mainCheckout($, at.root)) ?? { none: 'Detached HEAD: no change to follow.' }
+}
+
+async function branchAt($, root) {
   const [branch, head] = await Promise.all([
     run($, ['git', 'branch', '--show-current'], root),
     run($, ['git', 'rev-parse', 'HEAD'], root),
   ])
   if (head.failure || head.exitCode !== 0) return { none: "Couldn't read HEAD: " + failureOf(head) }
   if (branch.failure || branch.exitCode !== 0) return { none: "Couldn't read the branch: " + failureOf(branch) }
-  if (!branch.stdout.trim()) return { none: 'Detached HEAD: no change to follow.' }
   return { root, branch: branch.stdout.trim(), head: head.stdout.trim() }
+}
+
+// validate step 7 frees the branch by detaching the session's worktree, and the user checks it out in the main one.
+async function mainCheckout($, root) {
+  const common = await run($, ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], root)
+  if (common.failure || common.exitCode !== 0) return { none: "Detached HEAD, and couldn't find the main checkout: " + failureOf(common) }
+  const main = common.stdout.trim().replace(/\/\.git$/, '')
+  if (main === root || main === common.stdout.trim()) return null
+  const at = await branchAt($, main)
+  return at.none || at.branch ? { ...at, inMain: !at.none } : null
 }
 
 function clip(text) {
@@ -145,7 +192,7 @@ function clip(text) {
 }
 
 function nameOf(at) {
-  return at.branch + ' @ ' + at.head.slice(0, 7)
+  return at.branch + ' @ ' + at.head.slice(0, 7) + (at.inMain ? ' in the main checkout ' + at.root : '')
 }
 
 function sameCheckout(a, b) {
@@ -167,9 +214,10 @@ async function collect($) {
       flow = brief.stdout.split('\n').filter((line) => line && !/^\s/.test(line) && !line.startsWith('Read one in full'))
       if (flow[0] === 'phase: ') return { none: 'On the default branch: no change to follow.' }
     }
-    const [stamps, report, ci, context, gatheredAt] = await Promise.all([
+    const [stamps, report, staging, ci, context, gatheredAt] = await Promise.all([
       Promise.all(STAMPS.map(([label, kind]) => stampLine($, kit, at.root, label, kind))),
       verifyReportLines($, kit, at.root),
+      stagingSteps($, kit, at.root),
       ciLine($, kit, at.root, at.head),
       contextLine($),
       $.clock.now(),
@@ -181,8 +229,10 @@ async function collect($) {
     if (moved && attempt < GATHER_ATTEMPTS) continue
     return {
       root: at.root,
+      branch: at.branch,
       heading: nameOf(at) + ' · gathered ' + timeOf(gatheredAt) + (moved ? ' · the checkout moved while gathering: Refresh' : ''),
       sections: [['Flow', flow], ['Stamps', stamps], ['Last verify report', report], ['CI and context', [ci, context]]],
+      staging,
     }
   }
 }
@@ -382,6 +432,26 @@ export function register(on) {
       ...(shown?.root ? [Button({ key: 'run-verify', label: 'Run verify', hotkey: 'v', plain: true, onPress: () => void runVerify($) })] : []),
       Button({ key: 'refresh', label: 'Refresh', hotkey: 'r', plain: true, onPress: () => void gather($) }),
     ]
+    // One row per step before the merge, each with its own Pass and Fail: what a press records is the user's.
+    const staging = shown?.staging
+    const stagingRows = !staging || (staging.steps && staging.steps.length === 0) ? [] : [
+      Text({ children: [' '] }),
+      Text({ dimColor: true, children: ['Staging before the merge'] }),
+      ...(markFailure ? [line(markFailure)] : []),
+      ...(staging.failure ? [line(staging.failure)] : staging.steps.map((step) => Box({
+        flexDirection: 'row',
+        columnGap: 2,
+        children: [
+          line(stepLine(step)),
+          ...['PASS', 'FAIL'].map((result) => Button({
+            key: `staging-${step.id}-${result}`,
+            label: result === 'PASS' ? 'Pass' : 'Fail',
+            plain: true,
+            onPress: () => void markStep($, step.id, result),
+          })),
+        ],
+      }))),
+    ]
     // The buttons and the run they started come first: a long report scrolls the bottom of the pane away.
     return Box({
       flexDirection: 'column',
@@ -389,6 +459,7 @@ export function register(on) {
         ...top,
         Box({ flexDirection: 'row', columnGap: 2, children: buttons }),
         ...verifyLines().map(line),
+        ...stagingRows,
         ...sections,
       ],
     })

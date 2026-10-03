@@ -43,7 +43,7 @@ PY
 sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wrapper" "baselines|harness baselines"
   "semgrep|semgrep rules" "phase|flow phase" "quality-log|quality log input"
   "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree"
-  "pr-validation|pull request validation section" "spec|spec lint and second reading" "browse|browser A/B harness"
+  "pr-validation|pull request validation section" "staging|staging results" "spec|spec lint and second reading" "browse|browser A/B harness"
   "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes"
   "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
@@ -66,6 +66,7 @@ section_quality_log() { python3 test_quality_log.py; }
 section_pr_comments() { python3 test_pr_comments.py; }
 section_free_branch() { python3 test_free_branch.py; }
 section_pr_validation() { python3 test_pr_validation.py; }
+section_staging() { python3 test_staging.py; }
 section_spec() { python3 test_spec.py; }
 section_browse() { python3 test_browse.py; }
 section_verify_changed() { python3 test_verify_changed.py; }

@@ -7,11 +7,11 @@ The kit gives every coding agent you use the same way of working: one set of ins
 ## At a glance
 
 - **2 harnesses** share one `AGENTS.md`, 9 skills and 6 hook scripts.
-- **22 guard rules** block irreversible or outward-facing shell commands before they run.
+- **23 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **16 command-line tools**: a11y-check, browse, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, quality-log, repo-name, reports, triage, wp-query-profile.
+- **17 command-line tools**: a11y-check, browse, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, quality-log, repo-name, reports, staging, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -130,6 +130,7 @@ Every block, every approved or browser MCP call and every shell command a user's
 - `make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production.
 - `chmod 777`: world-writable permissions.
 - Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent.
+- `bin/staging mark --by user`: a step marked as the user's comes from their own action, the Pass or Fail button in /flow or the command in their terminal. Record your own judgement with `--by agent`.
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
@@ -211,12 +212,16 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 | Command or agent | Capability | Codex has instead |
 |---|---|---|
 | `/flow`: Show where this branch is in the kit's flow, and run verify without a turn | Phase and reports | `bin/reports brief` |
+|  | Once the session's own checkout is detached (validate frees the branch that way), the branch in the main checkout | the commands of this list, run from the main checkout |
 |  | Stamps (verify, self-review, validate, staging), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
 |  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
 |  | CI of the pushed HEAD | `bin/ci-wait --once --no-log` |
 |  | Context use | nothing (Codex shows its own) |
-|  | Run verify button, without a turn, on the checkout the session is in | `python3 ~/.agents/hooks/stop_checks.py verify` in a terminal |
+|  | Run verify button, without a turn, on the checkout the pane shows | `python3 ~/.agents/hooks/stop_checks.py verify` in a terminal |
 |  | Refresh button, and a refresh after each turn while the pane is open | running the commands above again |
+|  | The staging guide's steps before the merge, each with its latest result, who gave it, and its evidence files | `bin/staging steps --json` |
+|  | Pass button on each step before the merge, recorded as the user's verdict | `bin/staging mark <step> PASS --by user` in a terminal (the shell guard refuses it from the agent) |
+|  | Fail button on each step before the merge, recorded as the user's verdict | `bin/staging mark <step> FAIL --by user` in a terminal |
 | `kit:review-<lens>` agents: One reviewer agent type per self-review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/self-review/lenses.md` |
 
 The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.
@@ -299,6 +304,13 @@ reports path evidence                            the directory (created) for val
 reports                                          print every report that exists, with its path, then list the evidence
 reports brief                                    the phase and one line per report, to pick a branch up in a new session
 reports --branch <name> …                        the same, for another branch of this repo (a merged PR's, from main)
+```
+
+**`bin/staging`**: The staging guide's steps before the merge, and the PASS/FAIL row each one gets in its latest results.
+
+```
+staging steps --json                                   [{id, title, result, by, evidence}] for every S step
+staging mark <step> PASS|FAIL --by user|agent [--note <text>] [--branch <name>]
 ```
 
 **`bin/triage`**: Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.

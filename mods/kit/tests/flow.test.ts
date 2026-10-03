@@ -25,6 +25,12 @@ const PANE = {
   },
 } as const
 
+const STEPS = [
+  { id: 'S1', title: 'Pay with a test card', result: 'PASS', by: 'user', evidence: ['/work/repo/.git/agents/evidence/S1.txt'] },
+  { id: 'S2', title: 'Refund it', result: '', by: '', evidence: [] },
+]
+const MARK_S2 = KIT + '/bin/staging mark S2 PASS --by user --branch feature'
+
 type Run = { exitCode: number; stdout?: string; stderr?: string } | { deny: string }
 
 // A repository on a feature branch, pushed, with green CI, two stamps current and a verify report.
@@ -38,6 +44,7 @@ function repo(overrides: Record<string, Run> = {}): Record<string, Run> {
       stdout: 'phase: validate\nspec           Add the pane\n               /x/spec.md\nRead one in full with cat <path>, or all of them with: ~/.agents/bin/reports\n',
     },
     [KIT + '/bin/reports path verify']: { exitCode: 0, stdout: REPORT + '\n' },
+    [KIT + '/bin/staging steps --json']: { exitCode: 0, stdout: JSON.stringify(STEPS) },
     'python3 /home/.agents/hooks/review_stamp.py check --kind verify': { exitCode: 0 },
     'python3 /home/.agents/hooks/review_stamp.py check --kind verify-empty': { exitCode: 1 },
     'python3 /home/.agents/hooks/review_stamp.py check --kind review': { exitCode: 0 },
@@ -81,7 +88,7 @@ function stub(on, runs: Record<string, Run>, { surfaces = ['terminal'], report =
     ran.push(key)
     cwds.push(e.init?.cwd)
     timeouts.push(e.init?.timeoutMs)
-    const answer = runs[key]
+    const answer = runs[e.init?.cwd + ': ' + key] ?? runs[key]  // a key may name the directory it answers in
     if (!answer) return { deny: 'unexpected command: ' + key }
     if ('deny' in answer) return answer
     return { value: { exitCode: answer.exitCode, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' } }
@@ -132,7 +139,7 @@ test('the mod registers exactly the commands features.js describes, each to run 
 
 test('every button the pane draws is a capability features.js lists', async ($, on) => {
   const { clock } = stub(on, repo())
-  const labels = await buttons(await openPane($, clock))
+  const labels = [...new Set(await buttons(await openPane($, clock)))]
   const declared = FEATURES.flatMap((f) => f.capabilities.map((c) => c.name.match(/^(.+) button\b/)?.[1]).filter(Boolean))
   expect(labels.sort()).toEqual(declared.sort())
 })
@@ -240,7 +247,12 @@ test('each kind of no change to follow says which, and a failed read is never on
     [{ 'git rev-parse --show-toplevel': { exitCode: 128, stderr: 'fatal: detected dubious ownership' } }, /^Couldn't read the repository: exit 128: fatal: detected dubious ownership$/m],
     [{ 'git rev-parse HEAD': { exitCode: 128, stderr: "fatal: ambiguous argument 'HEAD'" } }, /^Couldn't read HEAD: exit 128: fatal: ambiguous argument 'HEAD'$/m],
     [{ 'git branch --show-current': { deny: 'git hung' } }, /^Couldn't read the branch: .*git hung$/m],
-    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' } }, /^Detached HEAD: no change to follow\.$/m],
+    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' }, 'git rev-parse --path-format=absolute --git-common-dir': { exitCode: 0, stdout: ROOT + '/.git\n' } },
+      /^Detached HEAD: no change to follow\.$/m],
+    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' }, 'git rev-parse --path-format=absolute --git-common-dir': { exitCode: 0, stdout: '/main/.git\n' } },
+      /^Detached HEAD: no change to follow\.$/m],
+    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' }, 'git rev-parse --path-format=absolute --git-common-dir': { deny: 'git hung' } },
+      /^Detached HEAD, and couldn't find the main checkout: .*git hung$/m],
     [{ [KIT + '/bin/reports brief']: { exitCode: 0, stdout: 'phase: \n' } }, /^On the default branch: no change to follow\.$/m],
   ]
   let runs = repo()
@@ -621,4 +633,88 @@ test('a triage that never answers holds the session start up for 2 s at most', a
   await start
   expect(started).toBe(true)
   expect(logged).toEqual([{ text: 'kit: review agents: still registering after 2 s, so the session started without them', to: 'debug' }])
+})
+
+test('the pane lists the steps before the merge, each with Pass and Fail buttons', async ($, on) => {
+  const { clock } = stub(on, repo())
+  const ui = await openPane($, clock)
+  const shown = await texts(ui)
+  expect(shown).toContain('Staging before the merge')
+  expect(shown).toMatch(/^S1 Pay with a test card · PASS \(user\) · S1\.txt$/m)
+  expect(shown).toMatch(/^S2 Refund it · not marked · no evidence yet$/m)
+  expect(await buttons(ui)).toEqual(['Run verify', 'Refresh', 'Pass', 'Fail', 'Pass', 'Fail'])
+})
+
+test('once the session is detached, the pane follows the branch the user took in the main checkout', async ($, on) => {
+  const { clock, ran, cwds } = stub(on, repo({
+    [ROOT + ': git branch --show-current']: { exitCode: 0, stdout: '\n' },
+    'git rev-parse --path-format=absolute --git-common-dir': { exitCode: 0, stdout: '/main/.git\n' },
+    [MARK_S2]: { exitCode: 0, stdout: 'S2: PASS (by user)\n' },
+  }))
+  const ui = await openPane($, clock)
+  expect(await texts(ui)).toMatch(/^feature @ [0-9a-f]{7} in the main checkout \/main · gathered/m)
+  expect(cwds[ran.indexOf(KIT + '/bin/staging steps --json')]).toBe('/main')
+  await ui.press({ key: 'staging-S2-PASS' })
+  await clock.settle()
+  expect(cwds[ran.indexOf(MARK_S2)]).toBe('/main')
+})
+
+test("Pass marks the step as the user's in the session's checkout, then gathers again", async ($, on) => {
+  const { clock, ran, cwds } = stub(on, repo({ [MARK_S2]: { exitCode: 0, stdout: 'S2: PASS (by user)\n' } }))
+  const ui = await openPane($, clock)
+  await ui.press({ key: 'staging-S2-PASS' })
+  await clock.settle()
+  expect(ran).toContain(MARK_S2)
+  expect(cwds[ran.indexOf(MARK_S2)]).toBe(ROOT)
+  expect(ran.filter((key) => key === KIT + '/bin/staging steps --json').length).toBe(2)
+})
+
+test('a mark that fails says why, in bold, until the next mark', async ($, on) => {
+  const { clock } = stub(on, repo({ [MARK_S2]: { exitCode: 2, stderr: 'staging: no step S2 before the merge in /g.md\n' } }))
+  const ui = await openPane($, clock)
+  await ui.press({ key: 'staging-S2-PASS' })
+  await clock.settle()
+  expect(await texts(ui)).toContain("Couldn't mark S2 PASS: exit 2: staging: no step S2 before the merge in /g.md")
+  expect(await isBold(ui, /^Couldn't mark S2/)).toEqual([true])
+})
+
+test('two quick presses mark one after the other, never at once', async ($, on) => {
+  let release
+  const runs = repo()
+  const marks: string[] = []
+  const { clock } = stub(on, runs, {
+    process: async ($, e) => {
+      const key = e.argv.join(' ')
+      if (key.startsWith(KIT + '/bin/staging mark')) {
+        marks.push(key)
+        if (marks.length === 1) await new Promise((resolve) => (release = resolve))
+        return { value: { exitCode: 0, stdout: '', stderr: '' } }
+      }
+      const answer = runs[key]
+      return 'deny' in answer ? answer : { value: { exitCode: answer.exitCode, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' } }
+    },
+  })
+  const ui = await openPane($, clock)
+  await ui.press({ key: 'staging-S1-FAIL' })
+  await ui.press({ key: 'staging-S2-PASS' })
+  await clock.settle()
+  // The first is still writing the guide: the second waits for it.
+  expect(marks).toEqual([KIT + '/bin/staging mark S1 FAIL --by user --branch feature'])
+  release()
+  await clock.settle()
+  expect(marks).toEqual([KIT + '/bin/staging mark S1 FAIL --by user --branch feature', MARK_S2])
+})
+
+test('no steps before the merge: no staging section and no Pass or Fail buttons', async ($, on) => {
+  const { clock } = stub(on, repo({ [KIT + '/bin/staging steps --json']: { exitCode: 0, stdout: '[]' } }))
+  const ui = await openPane($, clock)
+  expect(await texts(ui)).not.toContain('Staging before the merge')
+  expect(await buttons(ui)).toEqual(['Run verify', 'Refresh'])
+})
+
+test("a step list that can't be read says so, with no buttons", async ($, on) => {
+  const { clock } = stub(on, repo({ [KIT + '/bin/staging steps --json']: { exitCode: 1, stderr: "staging: bin/reports didn't name this branch's staging guide\n" } }))
+  const ui = await openPane($, clock)
+  expect(await texts(ui)).toContain("couldn't read: exit 1: staging: bin/reports didn't name this branch's staging guide")
+  expect(await buttons(ui)).toEqual(['Run verify', 'Refresh'])
 })

@@ -99,6 +99,15 @@ def test(fn):
 
 
 # --- guard_bash ------------------------------------------------------------------------------
+def only_the_user_marks_a_staging_step_as_theirs(base):
+    for cmd in ["~/.agents/bin/staging mark S1 PASS --by user", "bin/staging mark S2 FAIL --by=user",
+                "cd /x && $HOME/.agents/bin/staging mark S1 PASS --note ok --by 'user'", "staging mark S1 PASS --by user"]:
+        assert guard(cmd) == "deny", f"should deny: {cmd}"
+    for cmd in ["~/.agents/bin/staging mark S1 PASS --by agent --note 'the user said S1 passed'",
+                "~/.agents/bin/staging steps --json", "git switch staging && git log --by-user"]:
+        assert guard(cmd) == "allow", f"should allow: {cmd}"
+
+
 def guard_blocks_irreversible(base):
     for cmd in ["git push --force origin x", "git -C /x push --force origin b", "git push origin trunk",
                 "git push origin HEAD:main", "git reset --hard HEAD~1", "git branch -D old", "gh pr merge 12",
@@ -1695,7 +1704,7 @@ def impeccable_guard_reads_prose_as_text(base):
         shell(command)
         assert child_cpu() - started < 2, f"{child_cpu() - started:.1f}s of CPU on {label}"
 
-TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
+TESTS = [guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,

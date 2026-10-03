@@ -61,6 +61,9 @@ RULES = [
      "`make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production."),
     (r"\bchmod\s+(-R\s+)?777\b", "`chmod 777`: world-writable permissions."),
     (r"\.agents/approvals", "Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent."),
+    (r"(?<![\w-])staging\s+mark\b[^;&|\n]*--by(\s+|=)['\"]?user\b",
+     "`bin/staging mark --by user`: a step marked as the user's comes from their own action, the Pass or Fail "
+     "button in /flow or the command in their terminal. Record your own judgement with `--by agent`."),
 ]
 
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")

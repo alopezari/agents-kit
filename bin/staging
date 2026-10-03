@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""The staging guide's steps before the merge, and the PASS/FAIL row each one gets in its latest results.
+
+  staging steps --json                                   [{id, title, result, by, evidence}] for every S step
+  staging mark <step> PASS|FAIL --by user|agent [--note <text>] [--branch <name>]
+                                                         write that step's row into the latest "## Results (<date>)"
+
+Run in the branch's checkout. `mark` starts a round when the guide has none, replaces the step's earlier row in the
+latest one and keeps the others; its Evidence cell links the step's files in the evidence directory (<step>.txt,
+<step><letter>.txt, <step>-*.png), after "was <result> by <who>" when it replaces someone else's verdict. `--by user` is
+the user's own action (the Claude Code mod's buttons, their terminal); the shell guard refuses it from an agent.
+Exits 2, changing nothing, on a step the guide doesn't have, no guide, or a checkout on another branch than --branch.
+"""
+import argparse
+import datetime
+import json
+import os
+import fcntl
+import re
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
+import review_stamp  # noqa: E402
+
+HEADER = ["Step", "Result", "By", "Evidence"]
+ROUND = re.compile(r"^## Results(?! after the deploy)\b.*$", re.M)  # ship's table holds the steps after the merge
+
+
+def cells_of(line):
+    # Markdown tables: outer pipes optional, \| is a pipe inside a cell.
+    return [c.strip() for c in re.split(r"(?<!\\)\|", re.sub(r"^\s*\||(?<!\\)\|\s*$", "", line))]
+
+
+def before_merge_steps(text):
+    section = re.search(r"^## Before the merge\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    return re.findall(r"^### (S\d+)\b[.:]?\s*(.*)$", section.group(1), re.M) if section else []
+
+
+def latest_round(text):
+    """(start, end) of the latest round's text, or None."""
+    starts = [m.start() for m in ROUND.finditer(text)]
+    if not starts:
+        return None
+    following = re.search(r"^## ", text[starts[-1] + 1:], re.M)
+    return starts[-1], (starts[-1] + 1 + following.start()) if following else len(text)
+
+
+def round_table(lines):
+    """(first line, last line + 1, {step: {column: cell}}) of the round's table with Result and Evidence, or None."""
+    for i, line in enumerate(lines):
+        if "|" in line and {"Result", "Evidence"} <= set(cells_of(line)):
+            names, end, rows = cells_of(line), i + 1, {}
+            while end < len(lines) and "|" in lines[end]:
+                cells = cells_of(lines[end])
+                if not set("".join(cells)) <= set("-: "):
+                    rows[cells[0]] = dict(zip(names, cells))
+                end += 1
+            return i, end, rows
+    return None
+
+
+def evidence_files(evidence, step):
+    if not os.path.isdir(evidence):
+        return []
+    named = re.compile(rf"^{step}(?:[a-z]?\.txt|-.+\.png)$")
+    return [os.path.join(evidence, name) for name in sorted(os.listdir(evidence))
+            if named.match(name) and os.path.getsize(os.path.join(evidence, name)) > 0]
+
+
+def guide_and_evidence():
+    guide, evidence = review_stamp.report_paths("staging-guide", "evidence")
+    if not guide:
+        sys.exit("staging: bin/reports didn't name this branch's staging guide")
+    return guide, evidence
+
+
+def read_guide(guide):
+    try:
+        with open(guide) as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+def steps(guide, evidence):
+    text = read_guide(guide) or ""
+    bounds = latest_round(text)
+    table = round_table(text[bounds[0]:bounds[1]].splitlines()) if bounds else None
+    rows = table[2] if table else {}
+    return [{"id": step, "title": title.strip(), "result": re.sub(r"[*_]", "", rows.get(step, {}).get("Result", "")),
+             "by": rows.get(step, {}).get("By", ""), "evidence": evidence_files(evidence, step)}
+            for step, title in before_merge_steps(text)]
+
+
+def mark(guide, evidence, step, result, by, note, branch):
+    if branch:
+        current = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
+        if current != branch:
+            print(f"staging: the checkout is on {current or 'a detached HEAD'}, not {branch}: nothing marked", file=sys.stderr)
+            return 2
+    if not os.path.isfile(guide):
+        print(f"staging: no staging guide at {guide}", file=sys.stderr)
+        return 2
+    # Read, change and replace under one lock: the pane's button and an agent's mark can land at the same moment.
+    with open(os.path.join(os.path.dirname(guide), "." + os.path.basename(guide) + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return mark_locked(guide, evidence, step, result, by, note)
+
+
+def replace_guide(guide, text):
+    # A temp file renamed over the guide: an interrupted write leaves the earlier guide, never half of one.
+    fd, temp = tempfile.mkstemp(dir=os.path.dirname(guide), prefix="." + os.path.basename(guide) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.chmod(temp, os.stat(guide).st_mode & 0o777)
+        os.replace(temp, guide)
+    except BaseException:
+        os.unlink(temp)
+        raise
+
+
+def mark_locked(guide, evidence, step, result, by, note):
+    text = read_guide(guide)
+    if step not in [s for s, _ in before_merge_steps(text)]:
+        print(f"staging: no step {step} before the merge in {guide}", file=sys.stderr)
+        return 2
+    files = evidence_files(evidence, step)
+    links = ", ".join(f"[{os.path.basename(f)}]({f})" for f in files) or "no saved evidence"
+    bounds = latest_round(text)
+    if not bounds:
+        text = text.rstrip("\n") + f"\n\n## Results ({datetime.date.today().isoformat()})\n\n"
+        bounds = (text.rindex("## Results"), len(text))
+    lines = text[bounds[0]:bounds[1]].rstrip("\n").split("\n")
+    table = round_table(lines)
+    start, end, rows = table if table else (len(lines), len(lines), {})
+    if not table:
+        lines += [""] if lines[-1] else []
+        start = end = len(lines)
+    earlier = rows.get(step, {})
+    replaced = [f"was {re.sub(r'[*_]', '', earlier['Result'])} by {earlier['By']}"] if earlier.get("By") not in ("", None, by) else []
+    told = [note.replace("|", "\\|")] if note else []
+    rows[step] = {"Step": step, "Result": result, "By": by, "Evidence": "; ".join(replaced + told + [links])}
+    rendered = ["| " + " | ".join(HEADER) + " |", "|" + "---|" * len(HEADER)]
+    rendered += ["| " + " | ".join(cells.get(name, "") for name in HEADER) + " |" for cells in rows.values()]
+    lines[start:end] = rendered
+    updated = text[:bounds[0]] + "\n".join(lines) + "\n" + ("\n" + text[bounds[1]:].lstrip("\n") if text[bounds[1]:].strip() else "")
+    replace_guide(guide, updated)
+    print(f"{step}: {result} (by {by})")
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="staging", description=__doc__.split("\n")[0])
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("steps").add_argument("--json", action="store_true", required=True)
+    marking = commands.add_parser("mark")
+    marking.add_argument("step")
+    marking.add_argument("result", choices=["PASS", "FAIL"])
+    marking.add_argument("--by", choices=["user", "agent"], required=True)
+    marking.add_argument("--note", default="")
+    marking.add_argument("--branch", default="", help="refuse unless the checkout is on this branch")
+    args = parser.parse_args()
+    guide, evidence = guide_and_evidence()
+    if args.command == "steps":
+        print(json.dumps(steps(guide, evidence)))
+        return 0
+    return mark(guide, evidence, args.step, args.result, args.by, args.note, args.branch)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

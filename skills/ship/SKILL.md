@@ -34,7 +34,7 @@ Before the user deploys, give the rollback in the same format:
 
 ## 3. Close the loop
 
-When the user says the deploy is done, or you ran it, read the verification steps' evidence and append a `## Results after the deploy (<date>)` table to the staging guide, in validate's step 7 shape (`| Step | Result | Evidence |`, P1, P2…). When every step passed:
+When the user says the deploy is done, or you ran it, read the verification steps' evidence and append a `## Results after the deploy (<date>)` table to the staging guide, with one row per P step (`| Step | Result | Evidence |`), the observation that decided it and a link to its file by its absolute path. When every step passed:
 
 - **Issue:** draft the update (what shipped, the PR link, how it was verified in production). Writing to a tracker needs the user's approval; the MCP guard enforces it.
 - **Repo notes:** a trap that cost time in this change (a flaky check, a missing setup step, a deploy surprise) goes into `~/.agents/repos/<repo>/notes.md`, or better, into a check.

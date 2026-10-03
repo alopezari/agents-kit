@@ -156,21 +156,16 @@ Give the user the hand-off in chat, with real values:
 
 1. `cd <main checkout> && git status --short`. **Expected:** nothing. If it lists files, commit or stash them first.
 2. `git switch <branch> && git pull --ff-only`.
-3. `~/.agents/bin/reports` prints the staging guide at the end. Follow its "Before the merge" part from step 0, and tell me when you're done, or at the first step whose output doesn't match its Expected. Each step saves its own evidence, so you don't need to copy outputs.
+3. `~/.agents/bin/reports` prints the staging guide at the end. Follow its "Before the merge" part from step 0, and tell me when you're done, or at the first step whose output doesn't match its Expected. Each step saves its own evidence, so you don't need to copy outputs. In Claude Code, `/flow` lists the steps with a Pass and a Fail button each.
 
 From here the user owns the checkout. Propose fixes instead of editing it, unless they ask you to.
 
-**When the user reports back,** read each step's evidence in `$EVIDENCE_DIR` and judge it against the step's Expected yourself; the user's word settles only what left no file (a step they describe, a UI they looked at without a screenshot). Append the results to the staging-guide report:
+**When the user reports back,** or marks steps with the Pass and Fail buttons of Claude Code's `/flow` pane, read each step's evidence in `$EVIDENCE_DIR` and judge it against the step's Expected yourself; the user's word settles only what left no file (a step they describe, a UI they looked at without a screenshot). `~/.agents/bin/staging steps --json` lists the steps with their latest result, who gave it and their evidence files. Record each verdict with the kit's tool, from the branch's checkout, never by writing a table by hand: a second `## Results` round would hide the rows the buttons wrote.
 
-```
-## Results (<date>)
-
-| Step | Result | Evidence |
-|---|---|---|
-| S1 | PASS | `1.3.0`, no `Error:`: [output](/Users/me/repo/.git/agents/evidence-repo-feat~x/S1.txt) |
-| S4 | FAIL | the badge is missing: ![product page](/Users/me/repo/.git/agents/evidence-repo-feat~x/S4-product.png) |
+```bash
+~/.agents/bin/staging mark S4 FAIL --by agent --note "the badge is missing from S4-product.png"
 ```
 
-One row per step of the "Before the merge" part, with the observation that decided it and a link to its file by its absolute path. Ask the user only about a step with no evidence. A failure is a finding: fix it (verify, the self-review re-check and this skill's stamp again), update the guide, and ask for the affected steps to be re-run. When every step passed, continue with `create-pr`.
+It writes the step's row into the latest `## Results (<date>)` round, starting one when there is none, with a By column and a link to each of the step's evidence files by absolute path. A row the user marked (`By` is `user`) that the evidence bears out stays as it is. When the evidence says otherwise, mark your verdict with `--by agent` and a `--note` naming what decided it: the row keeps `was PASS by user`, and tell the user why. `--by user` is the user's own (their button, or the same command in their terminal), and the shell guard refuses it from you. Ask the user only about a step with no evidence. A failure is a finding: fix it (verify, the self-review re-check and this skill's stamp again), update the guide, and ask for the affected steps to be re-run. When every step passed, continue with `create-pr`.
 
 Record that they passed for this exact change: `python3 ~/.agents/hooks/review_stamp.py write --kind staging`. It refuses while a step lacks a PASS backed by evidence, and any later edit makes it stale: the guard then holds `gh pr ready` and the status line shows "staging: re-run" until the affected steps pass again and the stamp is rewritten.
