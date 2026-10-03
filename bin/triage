@@ -127,7 +127,11 @@ def collect(rng):
         untracked = git("ls-files", "--others", "--exclude-standard").splitlines()
     files, added, removed, path = {}, [], 0, None
     for line in diff.splitlines():
-        if line.startswith("+++ "):
+        if line.startswith("diff --git "):
+            path = None  # a deleted file's "--- a/" comes before its "+++ /dev/null"
+        elif line.startswith("rename to "):  # a pure rename has no ---/+++ lines at all
+            files.setdefault(line[len("rename to "):], 0)
+        elif line.startswith("+++ "):
             path = line[6:] if line.startswith("+++ b/") else None
             if path:
                 files.setdefault(path, 0)

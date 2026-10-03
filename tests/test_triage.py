@@ -180,6 +180,16 @@ for label, after, ui in [("a component", {"src/Card.tsx": "export const Card = (
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} {'design checks' if ui else 'no design checks'} for {label} ({result['tier']}): {lens}")
 
+page = "---\ntitle: Pricing\n---\n<h1>Pricing</h1>\n"
+renamed = triage_change({"src/pages/old.astro": page}, {"src/pages/old.astro": None, "src/pages/pricing.astro": page})
+ok = renamed["lenses"].get("design") == ["src/pages/pricing.astro"]
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} a rename alone is a change to the renamed file: {renamed['lenses']}")
+removed = triage_change({"a.py": "x = 1\n", "src/Old.tsx": "export const Old = 1\n"}, {"a.py": "x = 2\n", "src/Old.tsx": None})
+ok = "src/Old.tsx" in removed["lenses"].get("design", []) and "design" in removed["lenses"]
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} a file deleted after another change is still counted: {removed['lenses'].get('design')}")
+
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected
     fail |= not ok
