@@ -57,6 +57,19 @@ Every hook is a small program with one contract: a JSON payload on stdin, a JSON
 - Deny a command: `{"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": ...}}`.
 - Block after an edit or at stop: `{"decision": "block", "reason": ...}`, optionally with `systemMessage` for the user.
 
+## Mods contract
+
+Claude Code also loads the kit as a plugin, `mods/kit/`, whose [mod](https://code.claude.com/docs/en/plugins/mods/overview) runs inside Claude Code: it can draw panes and run commands without a turn. Mods exist only in Claude Code, so the kit keeps working the same with or without them. Every mod follows these rules:
+
+1. **It owns no workflow state.** Specs, stamps, reports and evidence stay in `.git/agents/` and go through `bin/` and `hooks/review_stamp.py`, so a change started in Claude Code can be finished in Codex, and the other way round. What those tools cache or migrate follows their own rules.
+2. **It owns no safety.** The Python hooks decide what is blocked, in every harness. A mod can only add to that in Claude Code. A disabled or failed mod leaves the behavior as it was without it, which is what Codex has.
+3. **Every capability names what Codex has instead**, or says it has nothing. They are listed in `mods/kit/hooks/features.js`, which `docs/framework.md` prints, and the mod's tests fail when it registers a command the list doesn't name.
+4. **The flow works fully with the mod disabled or failed.** `claude --safe-mode` turns off the kit's settings hooks too, so it isn't a supported way to run the kit.
+5. **Guarantees go by tier.** A capability that gives Claude Code a stronger guarantee than Codex has records where each fact came from, such as a step the user marked with a button versus one the agent wrote down. A record without that provenance counts as the weaker tier.
+6. **It calls the kit's Python instead of reimplementing it**, so one rule never has two implementations that drift apart.
+
+`install.sh` registers `~/.agents` as the `agents-kit` plugin marketplace and installs `kit@agents-kit`. The plugin loads in place, so a pull reaches it at the next session start or `/reload-plugins`. To work on the mod, run `claude --plugin-dir ~/.agents/mods/kit`, which reloads it on save; `tests/run.sh mods` validates and tests it.
+
 ## Adding a harness
 
 1. Point its global instructions file at `AGENTS.md`, and its skills directory at `skills/` if it has one.

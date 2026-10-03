@@ -296,6 +296,49 @@ out=$(run_install)$(run_install --doctor)
 check "a profile's skill keeps its name over a pinned external one, on install and --doctor" \
   '[ "$(grep -c "warn  release-notes is an external skill and a profile.s; using the profile.s" <<<"$out")" = 2 ] \
    && [ "$(readlink "$kit/skills/release-notes")" = "$profile_link" ] && [ ! -e "$kit/vendor/release-notes" ]'
+# The kit plugin, through the real claude: this HOME's kit is the agents-kit marketplace, and its plugin is installed.
+kit_plugin_state() { HOME="$home" claude plugin list --json 2>/dev/null | jq -r '[.[] | select(.id == "kit@agents-kit") | .enabled | tostring] | first // "absent"'; }
+market_path() { HOME="$home" claude plugin marketplace list --json 2>/dev/null | jq -r '[.[] | select(.name == "agents-kit") | .path] | first // ""'; }
+same_dir() { [ -n "$1" ] && [ "$(cd "$1" 2>/dev/null && pwd -P)" = "$(cd "$2" && pwd -P)" ]; }
+if ! command -v claude >/dev/null; then echo "FAIL claude is not installed: the kit plugin can't be tested"; fail=1
+else
+  check "install.sh registers the kit as the agents-kit marketplace and installs its plugin, without needing --yes" \
+    'grep -q "fix   kit plugin installed" <<<"$first" && [ "$(kit_plugin_state)" = true ] && same_dir "$(market_path)" "$kit"'
+  again=$(run_install --yes)
+  check "and a second install finds both in place" \
+    'grep -q "ok    kit plugin (the /flow mod)" <<<"$again" && ! grep -qE "fix   (kit plugin|marketplace agents-kit)" <<<"$again"'
+  S="$home/.claude/settings.json"
+  jq '.enabledPlugins["other@elsewhere"] = false | .myOwnKey = 1' "$S" > "$S.tmp" && mv "$S.tmp" "$S"
+  HOME="$home" claude plugin disable kit@agents-kit >/dev/null 2>&1
+  again=$(run_install --yes)
+  check "a kit plugin the user disabled stays off, and says how to turn it on" \
+    'grep -q "info  kit plugin is disabled" <<<"$again" && [ "$(kit_plugin_state)" = false ]'
+  check "and the user's other plugins and settings stay" \
+    'jq -e ".enabledPlugins[\"other@elsewhere\"] == false and .myOwnKey == 1" "$S" >/dev/null'
+  HOME="$home" claude plugin enable kit@agents-kit >/dev/null 2>&1
+  # Another marketplace named agents-kit is the user's: warned about, never replaced.
+  mkdir -p "$home/other-market/.claude-plugin"
+  echo '{"name": "agents-kit", "owner": {"name": "someone"}, "plugins": []}' > "$home/other-market/.claude-plugin/marketplace.json"
+  HOME="$home" claude plugin marketplace remove agents-kit >/dev/null 2>&1
+  HOME="$home" claude plugin marketplace add "$home/other-market" >/dev/null 2>&1
+  again=$(run_install --yes)
+  check "a marketplace named agents-kit that points elsewhere is warned about and left alone" \
+    'grep -q "warn  kit plugin: a marketplace named agents-kit already points at" <<<"$again" && same_dir "$(market_path)" "$home/other-market"'
+  HOME="$home" claude plugin marketplace remove agents-kit >/dev/null 2>&1
+  run_install --yes >/dev/null
+  check "and once it is gone, install.sh registers the kit again" '[ "$(kit_plugin_state)" = true ] && same_dir "$(market_path)" "$kit"'
+  # A Claude Code too old for mods, and none at all, through fakes on their own PATH.
+  mkdir -p "$home/fakes/old-claude" "$home/fakes/no-claude"
+  printf '#!/bin/sh\n[ "$1" = --version ] && { echo "2.1.200 (Claude Code)"; exit 0; }\nexec "%s" "$@"\n' "$(command -v claude)" > "$home/fakes/old-claude/claude"
+  chmod +x "$home/fakes/old-claude/claude"
+  doctor=$(PATH="$home/fakes/old-claude:$PATH" HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor 2>&1)
+  check "--doctor warns that a Claude Code older than 2.1.287 can't run the kit plugin" \
+    'grep -q "warn  kit plugin: Claude Code 2.1.200 is older than 2.1.287" <<<"$doctor"'
+  for program in "$bin"/*; do [ "${program##*/}" = claude ] || ln -sf "$program" "$home/fakes/no-claude/"; done
+  doctor=$(PATH="$home/fakes/no-claude:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor 2>&1)
+  check "without claude, the kit plugin is an info line, not a warning" \
+    'grep -q "info  kit plugin: claude is not installed" <<<"$doctor" && ! grep -q "warn  kit plugin" <<<"$doctor"'
+fi
 # Back to the kit's own list: the uninstall checks below count links into the kit.
 echo "$external_before" > "$kit/skills.external"
 rm -f "$kit/skills/chosen" "$home/.claude/skills/chosen" "$home/.codex/skills/chosen"
@@ -412,6 +455,7 @@ echo '<plist><string>/usr/bin/true</string></plist>' > "$home/Library/LaunchAgen
 basename "$stuck" .plist > "$home/stuck"
 out=$(HOME="$home" "$kit/uninstall.sh" --yes 2>&1)
 check "uninstall.sh --yes removes every link into the kit" '[ "$(kit_links)" = 0 ]'
+check "and the kit plugin with its marketplace" '[ -z "$(market_path)" ] && [ "$(kit_plugin_state)" = absent ]'
 check "and the kit's hooks and status line from Claude Code and Codex" \
   '! grep -qF "/.agents/" "$S" "$home/.codex/hooks.json"'
 check "keeping the user's own hook, skill and settings" \

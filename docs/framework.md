@@ -213,6 +213,21 @@ A repository that needs more (a Docker stack, known failing tests, project rules
 
 Harnesses pick a skill by its description; you can also call one by name (`/spec` in Claude Code).
 
+## Claude Code mod
+
+Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code and runs the kit's tools without a turn. It owns no state and no safety: it shows and runs what the rest of the kit does, so Codex, and a session without the mod, get the same flow. Each capability names what Codex has instead.
+
+| Command | Capability | Codex has instead |
+|---|---|---|
+| `/flow`: Show where this branch is in the kit's flow, and run verify without a turn | Phase and reports | `bin/reports brief` |
+|  | Stamps (verify, self-review, validate, staging), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
+|  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
+|  | CI of the pushed HEAD | `bin/ci-wait --once --no-log` |
+|  | Context use | nothing (Codex shows its own) |
+|  | Run verify button, without a turn | `python3 ~/.agents/hooks/stop_checks.py verify` in a terminal |
+
+The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.
+
 ## Command-line tools
 
 **`bin/a11y-check`**: Accessibility check (axe-core) of the given URLs. See ~/.agents/tools/a11y/check.mjs.
@@ -391,7 +406,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | recommended | `semgrep` | brew install semgrep | verify's semgrep rules; tests/run.sh |
 | recommended | `gitleaks` | brew install gitleaks | the secrets check at the end of each turn |
 | recommended | `php` | brew install php | the generic verify's PHP checks; tests/run.sh |
-| optional | `claude` | https://claude.com/claude-code | the scheduled jobs (they run `claude -p`) |
+| optional | `claude ≥ 2.1.287` | https://claude.com/claude-code | the scheduled jobs (they run `claude -p`) and the kit plugin (mods) |
 | optional | `playwright-cli` | npm install -g @playwright/cli | browser checks in the validate skill (bin/browse) |
 | optional | `agent-browser` | npm install -g agent-browser | browser checks in the validate skill (bin/browse) |
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
@@ -405,6 +420,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 
 | Path | Purpose |
 |---|---|
+| `.claude-plugin/` | Makes `~/.agents` the `agents-kit` plugin marketplace, so `mods/kit` loads in place. |
 | `.githooks/` | Keeps this reference in sync on every commit. |
 | `.github/` | CI: installs the kit on three macOS runners and runs part of `tests/run.sh` on each, on every pull request, and checks each one adds a changelog entry under `changelog.d/`. |
 | `AGENTS.md` | The instructions every harness loads (linked as CLAUDE.md / AGENTS.md). |
@@ -421,6 +437,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `hooks/` | The hook scripts all harnesses share (one JSON contract: stdin in, decision out). |
 | `install.sh` | Wires the kit into each installed harness; `--doctor` reports without changing anything. |
 | `launchd/` | Templates for the scheduled jobs (macOS). |
+| `mods/` | The kit's Claude Code plugin (`mods/kit/`): a mod that adds what only Claude Code can show, on top of the shared flow. |
 | `monitors/` | The weekly health check and the mid-month trends scan. |
 | `repos/` | Per-repository overlays (`notes.md`, `verify`, `wp-cli`) and the shared verify scripts in `_shared/`. |
 | `review-mining/` | The monthly job that learns from human code-review comments. |

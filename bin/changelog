@@ -3,18 +3,21 @@
 
   changelog release <version>   move CHANGELOG.md's Unreleased lines and every changelog.d/ entry under
                                 "## [<version>] - <today>", each entry ending in the number of the pull request that
-                                merged it, delete the entries and set VERSION; then commit and tag v<version> yourself
+                                merged it, delete the entries and set VERSION and the kit plugin's version; then commit and tag v<version> yourself
 
 The number comes from the merge commit ("Merge pull request #N …") that brought the entry into the current branch.
 An entry no merge brought in (committed straight to the branch, or squashed) stops the release and changes nothing.
 """
 import datetime
+import json
 import os
 import re
 import subprocess
 import sys
 
 GIT_TIMEOUT = 30
+# The kit's Claude Code plugin carries the kit's version: Claude Code warns about a plugin without one.
+PLUGIN_MANIFEST = "mods/kit/.claude-plugin/plugin.json"
 
 
 def git(*args):
@@ -88,12 +91,21 @@ def release(version):
     lines = unreleased + [line for _, entry_lines, _ in sorted(released) for line in entry_lines]
     if not lines:
         sys.exit("changelog: nothing to release: no line under Unreleased and no entry in changelog.d/")
+    # Read before writing anything, so a missing manifest stops the release with nothing half done.
+    try:
+        with open(PLUGIN_MANIFEST) as fh:
+            manifest = json.load(fh)
+    except (OSError, ValueError) as error:
+        sys.exit(f"changelog: can't read {PLUGIN_MANIFEST}, whose version the release sets: {error}")
     today = datetime.date.today().isoformat()
     body = f"## [Unreleased]\n\n## [{version}] - {today}\n\n" + "\n".join(lines) + "\n\n"
     with open("CHANGELOG.md", "w") as fh:
         fh.write(text[:section.start()] + body + text[section.end():])
     with open("VERSION", "w") as fh:
         fh.write(version + "\n")
+    manifest["version"] = version
+    with open(PLUGIN_MANIFEST, "w") as fh:
+        fh.write(json.dumps(manifest, indent=2) + "\n")
     for _, _, path in released:
         os.remove(path)
     print(f"Released {len(lines)} lines as {version}. Review CHANGELOG.md, commit, and tag v{version}.")
