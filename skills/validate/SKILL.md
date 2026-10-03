@@ -1,6 +1,6 @@
 ---
 name: validate
-description: Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, writes a step-by-step guide for whatever can only be tested on staging or production, and hands the branch over for those tests. Use for behavior changes before opening a PR, or when asked to test a change.
+description: Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, writes a step-by-step guide for whatever can only be tested on staging or production or after the merge, and hands the branch over for staging tests. Use for behavior changes before opening a PR, or when asked to test a change.
 effort: high
 ---
 
@@ -32,7 +32,8 @@ Place each check where it can really run:
 |---|---|
 | Unit | Logic already covered by tests; list it, don't re-test it |
 | Local | Anything the local stack can reproduce: endpoints, CLI, cron, admin UI, data changes |
-| Staging / production | Real catalogues, shared infrastructure, third-party integrations, scale, things local can't fabricate |
+| Local, after the merge | What needs the merged code installed on this machine (a scheduled job or a tool installed from the default branch). Run it from the branch first when that touches nothing shared (a temporary install, a copy of the state); what really needs the merge you run yourself once the user merges, as the guide's agent-run steps (step 6) |
+| Only the user | Staging, production, shared infrastructure, third-party integrations, scale, accounts or devices you don't have |
 
 Group the checks into blocks (A. endpoint, B. engine, C. public page, D. wp-admin, E. CLI…) and number them. Show the plan to the user before running it when it's large.
 
@@ -120,11 +121,11 @@ python3 ~/.agents/hooks/review_stamp.py write --kind validate
 
 Then clean up in one go: temporary scripts and `/tmp` files. Keep the evidence directory: it is the report's proof. Revert the override (delete it, then `docker compose up -d`), restore the state you recorded, and confirm with `git status --short` that the working tree only holds the change itself.
 
-## 6. Guide for what only staging or production can test
+## 6. Guide for what you can't run before the merge
 
-Give the user a step-by-step guide they can follow without you and without guessing:
+The guide holds steps that couldn't run in step 4. What needs staging, production or access you don't have is the user's; what runs on this machine is yours, before the merge or after it. A repo with no staging environment has no S steps unless a check needs something only the user has before the merge (another device, an account). When every step is yours there is no hand-off: the guide lists what you'll run after the merge, and you tell the user you'll run it when they say the PR is merged. Give the user a step-by-step guide they can follow without you and without guessing:
 
-- **Two parts, split at the merge.** `## Before the merge` holds what staging can prove now, as steps `### S1.`, `### S2.`…, ending with "Put the environment back as it was"; the PR waits only for these. `## After the merge` holds what needs the production deploy (a production dry run, a backfill, a scoring run), as steps `### P1.`…; the `ship` skill takes them over when the user deploys. A step that can't run before the merge never goes in the first part: the PR would wait for it forever. When nothing can be proven before the merge, the first part says so and has no S steps, and the PR doesn't wait.
+- **Two parts, split at the merge.** `## Before the merge` holds what staging can prove now, as steps `### S1.`, `### S2.`…, ending with "Put the environment back as it was"; the PR waits only for these. `## After the merge` holds what needs the production deploy (a production dry run, a backfill, a scoring run), as steps `### P1.`…, and the local checks that need the merged code installed on this machine; the `ship` skill takes them over when the user deploys. Each P step's **Where** says who runs it: `you`, or `the agent, on this machine`. A step that can't run before the merge never goes in the first part: the PR would wait for it forever. When nothing can be proven before the merge, the first part has no S steps, only a line saying why (none at all for a repo with no staging environment), and the PR doesn't wait.
 - **Step 0 lists everything needed up front:** access and accounts (by name, never secret values), VPN, proxy or tunnel, tools and versions, the branch or build to deploy, what the deploy overwrites, how long the whole guide takes, and a `export VAR=...` block that sets every value later steps reuse (site URL, IDs, branch). It includes `export EVIDENCE_DIR="$(cd <the user's checkout> && ~/.agents/bin/reports path evidence)" && echo "$EVIDENCE_DIR"`, with the checkout's real path, whose Expected is a directory ending in `evidence-<repo>-<branch key>` (an empty value makes `bin/evidence` refuse to run), so every step saves its evidence next to the reports from whichever directory it runs in. Computed there, not pasted as a path: the reports move out of `$TMPDIR` once `.git` is writable.
 - **Every step has four parts:**
   - **Why:** one line on what it proves.

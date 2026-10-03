@@ -104,6 +104,16 @@ def keeps_qualified_verdicts_and_bounded_sections(base):
         "a latest round at the end of the file, still empty, isn't the earlier PASS"
 
 
+def a_guide_with_only_steps_after_the_merge_claims_no_pending_staging(base):
+    repo = new_repo(base)
+    write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
+    write(repo, "review", "Self-review (risk: low; lenses: correctness)\nFixed:\nRejected: none.\n")
+    write(repo, "staging-guide", "# Checks after the merge\n\n## Before the merge\n\nNothing here.\n\n"
+                                 "## After the merge\n\n### P1. Load the job\n\n### P2. One full run\n")
+    out = sh(repo, PR_VALIDATION)
+    assert out.stdout.endswith("- Staging: none before the merge; after it: P1, P2.\n"), out.stdout
+
+
 def a_missing_verify_or_review_fails_naming_it(base):
     repo = new_repo(base)
     write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
@@ -113,7 +123,9 @@ def a_missing_verify_or_review_fails_naming_it(base):
 
 
 for test in (builds_the_section_from_every_report, counts_open_findings_and_skips_absent_reports,
-             keeps_qualified_verdicts_and_bounded_sections, a_missing_verify_or_review_fails_naming_it):
+             keeps_qualified_verdicts_and_bounded_sections,
+             a_guide_with_only_steps_after_the_merge_claims_no_pending_staging,
+             a_missing_verify_or_review_fails_naming_it):
     base = tempfile.mkdtemp(prefix="agents-test-pr-validation-")
     try:
         test(base)

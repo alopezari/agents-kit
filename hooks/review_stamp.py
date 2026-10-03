@@ -324,7 +324,7 @@ def staging_phase(guide, evidence, stamped):
         before_merge = re.search(r"^## Before the merge\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
         steps = re.findall(r"^### (S\d+)\b", before_merge.group(1), re.M) if before_merge else []
         if not steps:
-            return None  # every step needs production: the ship skill runs them
+            return None  # every step comes after the merge: the ship skill runs them
         # Only a table with Result and Evidence columns counts: "no FAIL line" in the evidence isn't a failure.
         results = {first: (result, backed) for first, result, _, backed in result_rows(latest.splitlines(), evidence)}
         if any(results.get(step, ("",))[0] == "FAIL" for step in steps):

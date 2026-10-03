@@ -53,7 +53,7 @@ When two approaches are viable, pick one and give the one-line reason; don't wri
 - Prove the change works by running it: the repo's tests, lint and type checks, and the behavior itself (run the app, the CLI, the request, the browser flow). Reading the diff is not verification.
 - A bug fix comes with a test that fails without the fix, when the repo has a test harness for that area. It must fail for the reason the report describes, not on a missing symbol or broken setup, and assert the behavior that was asked for, through the interface a caller sees.
 - Write the test first when a spec criterion's check can be one: see it fail for the reason the criterion names, then implement until it passes. A test written after the code tends to check what the code does, not what was asked. A criterion that can't be automated says so in its `verify:`.
-- For behavior changes, run the `validate` skill before opening a PR. It covers the full unit suite, positive and negative checks against the local stack, and a step-by-step guide for anything only staging or production can test.
+- For behavior changes, run the `validate` skill before opening a PR. It covers the full unit suite, positive and negative checks against the local stack (the ones that need the merged code installed here, you run yourself after I merge), and a step-by-step guide for anything only staging or production can test.
 - Report exactly what you ran and what you did not. Never claim a result you haven't observed.
 - When something needs the user to check or run it by hand (a staging test, a setup step, a fix you can't apply), give numbered steps with a copy-paste command block for each, real values instead of placeholders, and the expected result plus what to do if it differs. The validate skill's step 6 is the full format.
 
@@ -82,7 +82,7 @@ Drawn from an analysis of ~2,700 human code-review comments. Write changes that 
 
 ## Pull requests
 
-The path of a change, one skill per step: `spec` → build → `self-review` → `validate` (ends by handing me the branch when staging needs manual tests) → `create-pr` → `follow-pr` (CI and review comments, until it's ready to merge) → I merge → `ship` (when I deploy).
+The path of a change, one skill per step: `spec` → build → `self-review` → `validate` (ends by handing me the branch when staging needs manual tests) → `create-pr` → `follow-pr` (CI and review comments, until it's ready to merge) → I merge → `ship` (when I deploy, or when I merge a repo installed on this machine).
 
 Before opening a pull request, or pushing substantial changes to one, run the `self-review` skill and resolve what it confirms. A hook blocks `gh pr create` until a self-review is recorded for the exact current change.
 
