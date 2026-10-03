@@ -454,9 +454,12 @@ HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(?:(['\"])([^'\"\s]+)\1|\\([^\s;&|<>()]
 def heredoc_body_is_prose(line, m):
     """Whether bash only feeds this heredoc's body to cat or tee as text: a quoted delimiter, a cat or tee command
     that owns the <<, and nothing piped onward."""
-    receiver = line[max([0] + [s.end() for s in re.finditer(r"&&|\|\||[;|(]", line[:m.start()])]):m.start()]
-    onward = re.split(r"&&|\|\||;", line[m.end():], maxsplit=1)[0]
-    return not m.group(4) and bool(PROSE_HEREDOC_RECEIVER.match(receiver)) and "|" not in onward
+    receiver = line[max([0] + [s.end() for s in re.finditer(r"&&|\|\||[;|(&]", line[:m.start()])]):m.start()]
+    onward = re.split(r"&&|\|\||[;&]", line[m.end():], maxsplit=1)[0]
+    # Inside $(...) the text goes on to the enclosing command: prose only when that is a message, as in -m "$(cat <<'EOF'.
+    enclosing = line[:line.rfind("$(", 0, m.start())] if "$(" in line[:m.start()] else None
+    return (not m.group(4) and bool(PROSE_HEREDOC_RECEIVER.match(receiver)) and "|" not in onward
+            and (enclosing is None or bool(MESSAGE_COMMAND.match(enclosing))))
 
 
 def without_prose(command):
@@ -500,7 +503,7 @@ def without_prose(command):
     kinds = []
     for a, b in zip(starts, cuts[1::2]):
         segment = masked[a:b]
-        runs_inside = "$(" in segment or "`" in segment or "|" in segment
+        runs_inside = any(token in segment for token in ("$(", "`", "|", "<(", ">("))
         kinds.append(None if runs_inside else "message" if MESSAGE_COMMAND.match(segment)
                      else "printing" if PRINTING_COMMAND.match(segment) else None)
     out, last = [], 0

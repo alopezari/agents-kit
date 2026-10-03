@@ -1497,6 +1497,7 @@ def impeccable_guard_reads_prose_as_text(base):
             ("an echo to a log", "echo 'checked PRODUCT.md' >> /tmp/log.txt"),
             ("a quoted heredoc with $( after it", "cat > notes.txt <<'EOF'\nRun `impeccable detect`; never create PRODUCT.md.\n"
                                                     "EOF\nN=$(wc -l < notes.txt)"),
+            ("a commit message from a heredoc", "git commit -m \"$(cat <<'EOF'\nAsk before DESIGN.md\nEOF\n)\""),
             ("a delimiter with a dash", "cat > notes.txt <<'DOC-END'\nCreate PRODUCT.md here\nDOC-END\nN=$(pwd)")]:
         assert shell(command) == "allow", label
     os.makedirs(os.path.join(shared, "My App"))
@@ -1535,6 +1536,9 @@ def impeccable_guard_reads_prose_as_text(base):
                                      "--- /dev/null\n+++ b/PRODUCT.md\n@@ -0,0 +1 @@\n+x\nPATCH"),
             ("a heredoc after a comment mark", "cat /dev/null # <<':'\ntouch PRODUCT.md\n:\nN=$(pwd)"),
             ("a command named like echo", 'echo-file() { touch "$1"; }\necho-file "PRODUCT.md"'),
+            ("a process substitution after an echo", "echo text > >(tee 'PRODUCT.md')"),
+            ("a cat heredoc run by bash", "bash <<<$(cat <<'SCRIPT'\ntouch PRODUCT.md\nSCRIPT\n)"),
+            ("a heredoc after a background job", "cat build.log & python3 - <<'PY'\nopen('PRODUCT.md', 'w').write('x')\nPY\nN=$(pwd)"),
             ("$( inside double quotes", 'echo "$(touch PRODUCT.md) done"'),
             ("a heredoc into .gitignore", "cat >> .gitignore <<'EOF'\nPRODUCT.md\nEOF\nN=$(wc -l < .gitignore)"),
             ("a heredoc into the file", "cat > DESIGN.md <<'EOF'\n# Design\nEOF"),
