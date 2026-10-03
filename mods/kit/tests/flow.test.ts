@@ -512,7 +512,7 @@ test('Run verify that fails, is killed or cannot start is a failure with its rea
 })
 
 // Each settle while the stuck child waits costs about a second of real time.
-test('Run verify that never ends is stopped at its deadline as a failure, and a second press while it runs starts nothing', { timeout: 20_000 }, async ($, on) => {
+test('Run verify that never ends is stopped at its deadline as a failure, and a second press while it runs starts nothing', { timeoutMs: 20_000 }, async ($, on) => {
   const { clock } = stub(on, repo())
   let spawns = 0
   let release

@@ -1,0 +1,2 @@
+- A mod test that set its time limit with `timeout` kept the 5 s default, because `claude plugin test` only reads `timeoutMs`: the /flow pane's "Run verify that never ends" test now has its 20 s, and the suite's mods section fails on a `timeout:` option.
+- The stop hook test that checks it never waits for a profile's after-turn no longer fails when a busy machine makes one stop 0.9 s slower than the other: a stop that waited takes 15 s more, so its margin is now 5 s.
