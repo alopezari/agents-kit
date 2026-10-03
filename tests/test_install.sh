@@ -384,7 +384,7 @@ pi_links; ln -sfn "$home/elsewhere.ts" "$home/.pi/agent/extensions/mine.ts"; ech
 doctor=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor 2>&1)
 check "--doctor warns about the links an older install made for Pi, and leaves them" \
   'grep -q "warn  $home/.pi/agent/AGENTS.md is left from the kit.s Pi support" <<<"$doctor" \
-   && grep -q "warn  $home/.pi/agent/extensions/agents-kit.ts is left" <<<"$doctor" && [ -L "$home/.pi/agent/extensions/agents-kit.ts" ]'
+   && grep -q "warn  $home/.pi/agent/extensions/agents-kit.ts is left" <<<"$doctor" && [ -L "$home/.pi/agent/extensions/agents-kit.ts" ] && [ -L "$home/.pi/agent/AGENTS.md" ]'
 out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes 2>&1)
 check "install.sh removes the kit's Pi links and keeps the rest of ~/.pi" \
   '[ ! -L "$home/.pi/agent/AGENTS.md" ] && [ ! -L "$home/.pi/agent/extensions/agents-kit.ts" ] && [ -L "$home/.pi/agent/extensions/mine.ts" ] \
