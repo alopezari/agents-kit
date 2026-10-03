@@ -144,10 +144,10 @@ fail=0
 for n in "${!picked[@]}"; do
   i=${picked[$n]}
   wait "${pids[$n]}" || fail=1
+  unset "pids[$n]"  # reaped: an interrupt must not signal a pid the system may have reused
   printf '\n== %s\n' "${sections[$i]#*|}"
   cat "$out/$i"
 done
-pids=()  # all reaped: an interrupt from here on must not signal pids the system may have reused
 
 printf '\n== %s\n' "real hook log untouched"
 if ! logged=$(from_tests); then
