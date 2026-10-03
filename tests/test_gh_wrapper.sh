@@ -1,6 +1,7 @@
 #!/bin/bash
 # bin/gh passes git's per-host proxy to gh only for the host a call targets, and fails fast when it's down.
 # A fake gh prints the proxy it received, so no network or real gh is involved.
+. "$(dirname "$0")/kit_home.sh"
 set -uo pipefail
 t=$(mktemp -d "${TMPDIR:-/tmp}/agents-gh-XXXXXX")
 trap 'kill $listener 2>/dev/null; rm -rf "$t"' EXIT

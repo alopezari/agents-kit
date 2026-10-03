@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """bin/pr-validation: the pull request's validation section, from the branch's reports."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import os
 import shutil
 import subprocess

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """deps.txt is the complete list of programs the kit runs: a program the code calls must be declared there,
 and the kit's Python must parse as the oldest Python it declares."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import ast
 import os
 import re

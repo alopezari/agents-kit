@@ -1,6 +1,7 @@
 #!/bin/bash
 # A real install of the current kit into an empty HOME, as on a new machine, then --doctor on it.
 # Scheduled jobs are skipped: launchd labels are per user and would replace the real ones.
+. "$(dirname "$0")/kit_home.sh"
 set -uo pipefail
 home=$(mktemp -d "${TMPDIR:-/tmp}/agents-install-XXXXXX")
 trap 'rm -rf "$home"' EXIT

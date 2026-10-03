@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """bin/phase: each step of the flow, stepping back when the change moves, branch renames, and the cached fast path."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import concurrent.futures
 import json
 import os

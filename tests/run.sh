@@ -5,6 +5,19 @@
 #   ~/.agents/tests/run.sh --skip hooks install   all but those (CI's third job, so a new section lands there)
 # Sections run concurrently; each prints as one block, in this order, once it and every section above it have finished.
 cd "$(dirname "$0")" || exit 2
+# The tests reach the kit through ~/.agents. Run from another checkout, re-run under a HOME holding only .agents,
+# linked to it, as the verify overlay does. Its tests see no install outside .agents, so the doctor is skipped.
+if [ "$(cd .. && pwd -P)" != "$(cd "$HOME/.agents" 2>/dev/null && pwd -P)" ]; then
+  kit_home=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-home-XXXXXX") || exit 2
+  ln -s "$(cd .. && pwd -P)" "$kit_home/.agents" || { rmdir "$kit_home"; exit 2; }  # else the re-run would loop
+  # exec, so a signal reaches the suite's own handlers; it removes this HOME on exit.
+  HOME="$kit_home" AGENTS_SUITE_OWN_HOME="$kit_home" exec bash "$PWD/run.sh" "$@"
+fi
+remove_own_home() {  # the link first: rm never reaches the checkout
+  [ -n "${AGENTS_SUITE_OWN_HOME:-}" ] && rm -f "$AGENTS_SUITE_OWN_HOME/.agents" && rm -rf "$AGENTS_SUITE_OWN_HOME"
+  return 0
+}
+trap remove_own_home EXIT
 # A hook run by a test must log into the test's own place (its HOME, or AGENTS_LOG_DIR), never into the real log the
 # monthly job reads. A line counts as this run's when it carries the run's id (hooklog adds AGENTS_SUITE_RUN) or its cwd
 # is under the run's own temp root; sessions logging from elsewhere in the temp dir while the suite runs have neither.
@@ -34,7 +47,7 @@ sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wra
   "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes"
   "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
-  "doctor|install doctor")
+  "doctor|install doctor" "kit-home|every test refuses another checkout")
 names=("${sections[@]%%|*}")
 
 section_hooks() { local f=0; python3 test_hooks.py || f=1; python3 test_private_terms.py || f=1; return $f; }
@@ -91,7 +104,8 @@ section_docs() {
   return $f
 }
 section_site() {
-  if [ ! -d ~/.agents/site/node_modules ]; then echo "FAIL site dependencies missing: run install.sh"; return 1
+  if [ ! -d ~/.agents/site/node_modules ]; then
+    echo "FAIL site dependencies missing in $(cd ~/.agents && pwd -P)/site: run npm ci there (install.sh does it for ~/.agents)"; return 1
   elif node ~/.agents/site/build.mjs >/dev/null; then echo "ok   landing and docs build from the current sources"
   else return 1; fi
 }
@@ -109,8 +123,17 @@ section_version() {
   return $f
 }
 section_install() { bash test_install.sh; }
+section_kit_home() {
+  local missing
+  missing=$(grep -L -E '^import kit_home\b|^\. "\$\(dirname "\$0"\)/kit_home\.sh"|^import "\./kit_home\.mjs";' test_*.py test_*.sh test_*.mjs test_*.mts)
+  if [ -z "$missing" ]; then echo "ok   every test loads kit_home first"
+  else echo "FAIL these tests don't load kit_home, so run from a worktree they'd test ~/.agents:"; echo "$missing"; return 1; fi
+}
 section_doctor() {
   local doctor doctor_status warnings
+  if [ -n "${AGENTS_SUITE_OWN_HOME:-}" ]; then
+    echo "skipped: the doctor checks an installed HOME, and this run made its own; run it from ~/.agents"; return 0
+  fi
   doctor=$(~/.agents/install.sh --doctor 2>&1); doctor_status=$?
   warnings=$(grep "  warn " <<<"$doctor")
   if [ $doctor_status = 0 ] && [ -z "$warnings" ]; then echo "ok   no warnings"; return 0; fi
@@ -136,7 +159,7 @@ done
 [ ${#picked[@]} -gt 0 ] || { echo "no section left to run"; exit 2; }
 
 run_root=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-XXXXXX") || exit 2
-trap 'rm -rf "$run_root"' EXIT
+trap 'rm -rf "$run_root"; remove_own_home' EXIT
 out="$run_root/out" && mkdir "$out" "$run_root/tmp" || exit 2
 export TMPDIR="$run_root/tmp" AGENTS_SUITE_RUN="${run_root##*/}"
 # A script's background jobs ignore SIGINT, so a signal here ends each section's process tree. No set -m: a group per

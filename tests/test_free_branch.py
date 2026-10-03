@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """bin/free-branch: once the PR is open, the branch's worktree is removed (or detached, when the session runs in it)
 so the user can switch to the branch in the main checkout."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import os
 import shutil
 import subprocess

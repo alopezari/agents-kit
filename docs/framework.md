@@ -297,6 +297,7 @@ reports path <verify|review|validation|staging-guide|follow-pr>   where the stop
 reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 reports                                          print every report that exists, with its path, then list the evidence
 reports brief                                    the phase and one line per report, to pick a branch up in a new session
+reports --branch <name> …                        the same, for another branch of this repo (a merged PR's, from main)
 ```
 
 **`bin/triage`**: Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.

@@ -3,6 +3,7 @@
 
 Runs against a throwaway HOME and fake tools, so the real A/B log and browsers are never touched.
 """
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import json
 import os
 import shutil

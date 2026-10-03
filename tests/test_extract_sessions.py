@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """usage/extract_sessions.py: a Claude Code transcript split into phases of the flow, per branch."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import importlib.util
 import json
 import os
