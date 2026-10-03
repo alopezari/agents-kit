@@ -35,7 +35,8 @@ def setup(base):
     run(["git", "commit", "-q", "--allow-empty", "-m", "init"], main, None)
     worktree = os.path.join(base, "shop-worktree-session-xyz")
     run(["git", "worktree", "add", "-q", "-b", "feature/cart", worktree, "trunk"], main, None)
-    env = {k: v for k, v in os.environ.items() if k not in ("AGENTS_HARNESS", "CODEX_THREAD_ID", "CLAUDECODE")}
+    env = {k: v for k, v in os.environ.items() if k not in ("AGENTS_HARNESS", "CODEX_THREAD_ID", "CLAUDECODE",
+                                                       "PLAYWRIGHT_MCP_OUTPUT_DIR")}
     env.update(HOME=home, PATH=f"{tools}:{env['PATH']}", TMPDIR=os.path.join(base, "tmp"), CLAUDECODE="1")
     os.makedirs(env["TMPDIR"])
     return home, worktree, env
