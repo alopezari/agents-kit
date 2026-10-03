@@ -111,11 +111,11 @@ When the change needs manual tests on staging, `validate` ends by handing you th
 
 **`post_edit.py`**: PostToolUse hook for file edits, shared by Claude Code, Codex and Pi (via adapters/pi). Runs a fast syntax check on each edited file and records that the session edited files, so the Stop hook only runs its checks after real changes.
 
-**`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex, and Pi's input event (adapters/pi). Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards, writes to it are allowed until the user's next message. Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the service only to read from it approves writes for that turn too.
+**`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex, and Pi's input event (adapters/pi). Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards, writes to it are allowed until the user's next message. A DROP or TRUNCATE statement guard_bash.py refuses needs more than a mention: the message opens with the line `allow <statement>`. Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the service only to read from it approves writes for that turn too.
 
 **`stop_checks.py`**: Stop hook shared by Claude Code, Codex and Pi (via adapters/pi). After a turn that edited files since the last stop, looks at the lines the branch adds since the merge-base with the default branch (committed or not) and asks the agent to continue, once, for a skipped or focused test, a deleted test file, a debug leftover, a conflict marker, a possible secret, a new option read near a cache, a temporary compose override left behind, or a changed code file the spec's Change map doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read. Once a branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change with its context over NEW_CHANGE_NUDGE_TOKENS, tells the user, once, that a new session picks it up for less (Claude Code only: it reads the transcript). Every stop also starts each profile's `after-turn` in the background with the stop payload on stdin, and doesn't wait for it.
 
-Every block, and every approved or browser MCP call, is appended to `~/.agents/logs/hooks.jsonl`, which the weekly health check reads. Allowed shell commands are not logged.
+Every block, every approved or browser MCP call and every shell command a user's `allow` line or approval file let through is appended to `~/.agents/logs/hooks.jsonl`, which the weekly health check reads. Other allowed shell commands are not logged.
 
 ### What the shell guard blocks
 
@@ -132,7 +132,7 @@ Every block, and every approved or browser MCP call, is appended to `~/.agents/l
 - `gh release create|delete`: publishes or deletes a release.
 - `gh api -X DELETE`: deletes through the GitHub API.
 - `npm|pnpm|yarn publish`, `twine upload`, `gem push`, `docker push`: publishes a package or image.
-- `DROP DATABASE|TABLE|SCHEMA`, `TRUNCATE TABLE`: destroys database data.
+- `DROP DATABASE|TABLE|SCHEMA`, `TRUNCATE TABLE`: destroys database data. Instead of running it themselves, the user can allow one until their next message by starting it with the line `allow DROP DATABASE` (or the statement needed).
 - `wp db drop|reset|clean`, `wp site empty|delete`: destroys WordPress data.
 - `curl … | sh`: pipes a download straight into a shell.
 - `sudo`: runs with root privileges.

@@ -25,6 +25,9 @@ MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
 
 GIT = r"\bgit\s+(?:(?:-C|-c)\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
 PROTECTED_BRANCHES = r"(main|master|trunk|develop|production|release(/[\w.-]+)?)"
+DATABASE_STATEMENT = r"\bDROP{space}+(DATABASE|TABLE|SCHEMA)\b|\bTRUNCATE{space}+TABLE\b"
+DATABASE_DESTROY = "(?i:" + DATABASE_STATEMENT.format(space=r"\s") + ")"
+DATABASE_ALLOW_LINE = re.compile(r"allow[ \t]+(" + DATABASE_STATEMENT.format(space="[ \t]") + ")", re.I)
 
 RULES = [
     (GIT + r"push\b[^;&|]*\s(--force(?!-with-lease)\b|-f\b|\+\S)",
@@ -48,7 +51,9 @@ RULES = [
     (r"\bgh\s+api\b[^;&|]*(-X|--method)\s*DELETE\b", "`gh api -X DELETE`: deletes through the GitHub API."),
     (r"\b(npm|pnpm|yarn)\s+publish\b|\btwine\s+upload\b|\bgem\s+push\b|\bdocker\s+push\b",
      "`npm|pnpm|yarn publish`, `twine upload`, `gem push`, `docker push`: publishes a package or image."),
-    (r"(?i:\bDROP\s+(DATABASE|TABLE|SCHEMA)\b|\bTRUNCATE\s+TABLE\b)", "`DROP DATABASE|TABLE|SCHEMA`, `TRUNCATE TABLE`: destroys database data."),
+    (DATABASE_DESTROY, "`DROP DATABASE|TABLE|SCHEMA`, `TRUNCATE TABLE`: destroys database data. Instead of running it "
+                       "themselves, the user can allow one until their next message by starting it with the line "
+                       "`allow DROP DATABASE` (or the statement needed)."),
     (r"\bwp\s+(db\s+(drop|reset|clean)|site\s+(empty|delete))\b", "`wp db drop|reset|clean`, `wp site empty|delete`: destroys WordPress data."),
     (r"\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z)?sh\b", "`curl … | sh`: pipes a download straight into a shell."),
     (r"(^|[;&|]\s*)sudo\b", "`sudo`: runs with root privileges."),
@@ -519,6 +524,30 @@ def without_prose(command):
     return "".join(out) + text[last:]
 
 
+def database_grant(statement):
+    """The approval a DROP or TRUNCATE statement needs, the same for any case or spacing: `sql.drop-database`."""
+    return "sql." + "-".join(statement.lower().split())
+
+
+def database_approval_names(prompt):
+    """The approvals a user's message grants: the lines it opens with that read `allow DROP DATABASE` (or another
+    statement). Only there: questions, refusals, quotes, pasted dumps and code examples name them anywhere else."""
+    grants = set()
+    for line in prompt.splitlines():  # not lstrip(): an indented first line is a code example
+        allow = DATABASE_ALLOW_LINE.fullmatch(line.rstrip())
+        if not allow:
+            break
+        grants.add(database_grant(allow.group(1)))
+    return sorted(grants)
+
+
+def approved_database_grants(command, session):
+    """The approvals of the DROP or TRUNCATE statements in the command, when every one is approved by an `allow`
+    line in the user's message this turn or by the user's own approval file (guard_mcp.approved); else []."""
+    grants = sorted({database_grant(m.group()) for m in re.finditer(DATABASE_DESTROY, command)})
+    return grants if all(design_files.guard_mcp().approved(g, session) for g in grants) else []
+
+
 def impeccable_files(command, cwd, session):
     """Why a command needs the user first under design_files.py: it names PRODUCT.md, DESIGN.md or `.impeccable`
     where none exists yet, adds them to a .gitignore, or runs Impeccable's `live`, `hooks on`/`reset` or another
@@ -740,6 +769,7 @@ def main():
         return 0
     command = without_evidence_runner(command)
     cwd = payload.get("cwd") or ""
+    approved = []
     try:
         cwd = os.path.realpath(cwd or os.getcwd())  # getcwd raises when the directory was deleted
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
@@ -748,12 +778,18 @@ def main():
         if not reason:
             for pattern, why in RULES:
                 if re.search(pattern, command):
+                    if pattern == DATABASE_DESTROY:
+                        approved = approved_database_grants(command, payload.get("session_id"))
+                        if approved:
+                            continue
                     reason = why
                     break
     except Exception as error:  # every harness lets a command through when its hook crashes or times out
         reason = (f"The guard failed ({type(error).__name__}: {error}), so it can't tell whether this command is safe. "
                   "Tell the user: the error is in ~/.agents/logs/hooks.jsonl.")
     if not reason:
+        if approved:  # the grants, not the command: it can carry a password (PGPASSWORD=…)
+            log("guard_bash", "allow-approved", payload, ", ".join(approved))
         record_push(command, cwd, payload)
         return 0
 
