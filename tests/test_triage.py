@@ -228,10 +228,13 @@ print(f"{'ok  ' if ok else 'FAIL'} a file deleted after another change is still 
 
 # --lens-briefs: the kit:review-<key> agents are briefed from it, so every lens heading needs a key and keeps its text.
 LENSES = os.path.expanduser("~/.agents/skills/self-review/lenses.md")
+sys.dont_write_bytecode = True  # a bin/__pycache__ would be listed by bin/docs as a tool
 loader = importlib.machinery.SourceFileLoader("triage", TRIAGE)
 module = importlib.util.module_from_spec(importlib.util.spec_from_loader("triage", loader))
 loader.exec_module(module)
-selectable = {"correctness", "tests", "maintainability", "design", "ux-a11y-i18n", *module.LENS_SIGNALS}
+# Every key triage() can put in its lenses, read from its source rather than restated here.
+source = open(TRIAGE).read()
+selectable = {*re.findall(r'lenses(?:\[|\.setdefault\()"([\w-]+)"', source), *re.findall(r'"([\w-]+)": \["always"\]', source), *module.LENS_SIGNALS}
 out = subprocess.run([TRIAGE, "--lens-briefs"], capture_output=True, text=True)
 try:
     briefs = json.loads(out.stdout)
@@ -245,15 +248,26 @@ ok = ([b["title"] for b in briefs] == headings and selectable <= {b["key"] for b
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} --lens-briefs: every heading, every key triage selects, each brief as bundle.sh cuts it: "
       f"{out.stderr.strip() or [b['key'] for b in briefs]}")
-with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as kit:
-    os.makedirs(os.path.join(kit, "bin")); os.makedirs(os.path.join(kit, "skills", "self-review"))
-    shutil.copy(TRIAGE, os.path.join(kit, "bin", "triage"))
-    with open(os.path.join(kit, "skills", "self-review", "lenses.md"), "w") as f:
-        f.write(open(LENSES).read() + "\n## Haptics\n\nYou are reviewing vibrations.\n")
-    out = subprocess.run([os.path.join(kit, "bin", "triage"), "--lens-briefs"], capture_output=True, text=True)
-    ok = out.returncode != 0 and "Haptics" in out.stderr and not out.stdout
-    fail |= not ok
-    print(f"{'ok  ' if ok else 'FAIL'} --lens-briefs fails on a lens heading with no key: exit {out.returncode}, {out.stderr.strip()}")
+skill = open(os.path.expanduser("~/.agents/skills/self-review/SKILL.md")).read()
+named = set(re.findall(r"kit:review-([\w-]+)", skill)) - {"<lens>"} if "kit:review-" in skill else set()
+ok = bool(named) and named <= {b["key"] for b in briefs}
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} every kit:review-<key> the self-review skill names is a lens key: {sorted(named)}")
+lenses_text = open(LENSES).read()
+for case, text, expected in [
+    ("a lens heading with no key", lenses_text + "\n## Haptics\n\nYou are reviewing vibrations.\n", "no key in LENS_TITLES for Haptics"),
+    ("a key with no lens heading", lenses_text.replace("## Operability\n", "## Operating\n"), "no lens headed Operability"),
+    ("a lens headed twice", lenses_text + "\n## Security\n\nAgain.\n", "Security twice"),
+]:
+    with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as kit:
+        os.makedirs(os.path.join(kit, "bin")); os.makedirs(os.path.join(kit, "skills", "self-review"))
+        shutil.copy(TRIAGE, os.path.join(kit, "bin", "triage"))
+        with open(os.path.join(kit, "skills", "self-review", "lenses.md"), "w") as f:
+            f.write(text)
+        out = subprocess.run([os.path.join(kit, "bin", "triage"), "--lens-briefs"], capture_output=True, text=True)
+        ok = out.returncode != 0 and expected in out.stderr and not out.stdout
+        fail |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} --lens-briefs fails on {case}: exit {out.returncode}, {out.stderr.strip()}")
 
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected

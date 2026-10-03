@@ -197,7 +197,7 @@ def mod_features():
     """[(what the mod registers, description, [(capability, what Codex has instead)])] from mods/kit/hooks/features.js."""
     source = read(require("mods/kit/hooks/features.js"))
     value = source.split("export const FEATURES =", 1)[1]
-    return [(f"`/{f['command']}`" if "command" in f else f"`kit:{f['agents']}-<lens>` agents", f["description"],
+    return [(f"`/{f['command']}`" if "command" in f else f"`kit:{f['agentPrefix']}-<lens>` agents", f["description"],
              [(c["name"], c["codex"]) for c in f["capabilities"]]) for f in json.loads(value)]
 
 

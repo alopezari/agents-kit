@@ -21,9 +21,9 @@ const GATHER_ATTEMPTS = 2
 const NEEDS_ATTENTION = /couldn't read|^Couldn't|^CI: failed|^Run verify.* failed/
 
 // Each self-review lens becomes the agent type `kit:review-<key>`, briefed from what `bin/triage --lens-briefs` cuts
-// out of lenses.md. Withholding edits is a convenience for the reviewer, not a guard: the hooks run for subagents too.
+// out of lenses.md. No edit tools is a convenience for the reviewer, not a guard (Bash can still write): the hooks
+// run for subagents too.
 const REVIEWER_TOOLS = ['Read', 'Grep', 'Glob', 'Bash']
-const REVIEWER_DISALLOWED_TOOLS = ['Edit', 'Write', 'NotebookEdit']
 
 // What the pane draws. One gathering runs at a time: a request during one gathers again once it ends.
 let shown = null
@@ -308,6 +308,9 @@ async function registerReviewers($) {
   } catch (error) {
     return $.ui.log('kit: no review agents: bin/triage --lens-briefs printed something not JSON: ' + messageOf(error), { to: 'debug' })
   }
+  if (!Array.isArray(lenses)) {
+    return $.ui.log('kit: no review agents: bin/triage --lens-briefs printed JSON that is not a list of lenses', { to: 'debug' })
+  }
   for (const lens of lenses) {
     await $.agent
       .register({
@@ -316,7 +319,6 @@ async function registerReviewers($) {
           'the goal, the spec path and the evidence instruction.',
         prompt: reviewerPrompt(lens),
         tools: REVIEWER_TOOLS,
-        disallowedTools: REVIEWER_DISALLOWED_TOOLS,
         omitClaudeMd: true,
       })
       .catch((error) => $.ui.log(`kit: review-${lens.key} not registered: ` + messageOf(error), { to: 'debug' }))

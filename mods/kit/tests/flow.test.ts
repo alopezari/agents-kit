@@ -533,61 +533,54 @@ const LENSES = [
 // A session start with triage answering `triage`, and each agent.register answered by `answer`.
 async function startWithReviewers($, on, triage: Run, answer = (spec) => ({ value: { agent: 'kit:' + spec.name } })) {
   const registered = []
-  const logged: string[] = []
-  const clock = mock.clock(on)
-  on('env.get', () => ({ value: '/home' }))
-  on('command.register', () => ({ value: undefined }))
-  on('process.run', ($, e) => {
-    if (e.argv.join(' ') !== TRIAGE_ARGV) return { deny: 'unexpected command: ' + e.argv.join(' ') }
-    if ('deny' in triage) return triage
-    return { value: { exitCode: triage.exitCode, stdout: triage.stdout ?? '', stderr: triage.stderr ?? '' } }
-  })
+  const logged: { text: string; to: string }[] = []
+  const { cwds, timeouts, clock } = stub(on, { [TRIAGE_ARGV]: triage })
   on('agent.register', ($, e) => {
     registered.push(e)
     return answer(e)
   })
   on('ui.log', ($, e) => {
-    logged.push(e.text ?? e.message ?? JSON.stringify(e))
+    logged.push({ text: e.text, to: e.to })
     return undefined
   })
   on('session.start', () => ({ cwd: ROOT }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT })
   await clock.settle()
-  return { registered, logged }
+  return { registered, logged, cwds, timeouts }
 }
 
-test('session start registers one read-only reviewer per lens bin/triage prints, briefed with its text', async ($, on) => {
-  const { registered, logged } = await startWithReviewers($, on, { exitCode: 0, stdout: JSON.stringify(LENSES) })
+test('session start registers one reviewer per lens bin/triage prints, briefed with its text and without edit tools', async ($, on) => {
+  const { registered, logged, cwds, timeouts } = await startWithReviewers($, on, { exitCode: 0, stdout: JSON.stringify(LENSES) })
   expect(registered.map((spec) => spec.name)).toEqual(['review-correctness', 'review-ux-a11y-i18n'])
   for (const [spec, lens] of registered.map((spec, i) => [spec, LENSES[i]])) {
+    expect(spec.prompt).toContain('one lens: ' + lens.title)
     expect(spec.prompt).toContain(lens.brief)
     expect(spec.prompt).toContain('never edit')
     expect(spec.prompt).toContain('AGENTS.md')
     expect(spec.description).toContain(lens.title)
     expect(spec.tools).toEqual(['Read', 'Grep', 'Glob', 'Bash'])
-    expect(spec.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit'])
     expect(spec.omitClaudeMd).toBe(true)
   }
+  expect([cwds, timeouts]).toEqual([[KIT], [30_000]])
   expect(logged).toEqual([])
-})
-
-test('the reviewers are the ones features.js lists', async ($, on) => {
-  const { registered } = await startWithReviewers($, on, { exitCode: 0, stdout: JSON.stringify(LENSES) })
-  const agents = FEATURES.filter((feature) => feature.agents).map((feature) => feature.agents)
-  expect(agents).toEqual(['review'])
-  expect(registered.every((spec) => spec.name.startsWith(agents[0] + '-'))).toBe(true)
+  // Every agent the mod registers carries a prefix features.js lists.
+  const prefixes = FEATURES.filter((feature) => feature.agentPrefix).map((feature) => feature.agentPrefix + '-')
+  expect(prefixes).toEqual(['review-'])
+  expect(registered.every((spec) => prefixes.some((prefix) => spec.name.startsWith(prefix)))).toBe(true)
 })
 
 for (const [why, triage, cause] of [
-  ['triage fails', { exitCode: 1, stderr: 'triage: lenses.md has lenses with no key in LENS_TITLES: Haptics\n' }, /Haptics/],
+  ['triage fails', { exitCode: 1, stderr: "triage: lenses.md doesn't match LENS_TITLES: no key in LENS_TITLES for Haptics\n" }, /Haptics/],
   ['triage prints something other than JSON', { exitCode: 0, stdout: 'Risk: low\n' }, /not JSON/],
+  ['triage prints JSON that is not a list of lenses', { exitCode: 0, stdout: '{}' }, /not a list of lenses/],
   ['triage can not start', { deny: 'no python3' }, /no python3/],
 ] as const) {
   test(`when ${why}, no reviewer is registered and the session starts, with one debug line saying why`, async ($, on) => {
     const { registered, logged } = await startWithReviewers($, on, triage)
     expect(registered).toEqual([])
     expect(logged.length).toBe(1)
-    expect(logged[0]).toMatch(cause)
+    expect(logged[0].text).toMatch(cause)
+    expect(logged[0].to).toBe('debug')
   })
 }
 
@@ -596,13 +589,12 @@ test('a reviewer the host refuses is logged, and the next one is still registere
   const { registered, logged } = await startWithReviewers($, on, { exitCode: 0, stdout: JSON.stringify(LENSES) }, answer)
   expect(registered.map((spec) => spec.name)).toEqual(['review-correctness', 'review-ux-a11y-i18n'])
   expect(logged.length).toBe(1)
-  expect(logged[0]).toMatch(/review-correctness.*schema: bad name/)
+  expect(logged[0].text).toMatch(/review-correctness.*schema: bad name/)
+  expect(logged[0].to).toBe('debug')
 })
 
 test('session start does not wait for the reviewers: a triage that never answers holds nothing up', async ($, on) => {
-  on('env.get', () => ({ value: '/home' }))
-  on('command.register', () => ({ value: undefined }))
-  on('process.run', () => new Promise(() => {}))
+  stub(on, {}, { process: () => new Promise(() => {}) })
   on('session.start', () => ({ cwd: ROOT }))
   const started = await Promise.race([
     $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT }).then(() => 'started'),

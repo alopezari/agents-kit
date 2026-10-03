@@ -36,7 +36,7 @@ LENS_SIGNALS = {
     "data-privacy": r"CREATE TABLE|ALTER TABLE|DROP |dbDelta|DELETE FROM|->delete\(|wp_delete_|TRUNCATE|user_email"
                     r"|billing_|shipping_|\bemail\b|ip_address|personal|gdpr|tracks?_event|analytics|error_log",
 }
-# The lenses.md heading of each lens key this file selects, and the Claude Code mod's reviewers are named after.
+# The lenses.md heading of each lens key triage selects. The Claude Code mod names its reviewer agents by these keys.
 LENS_TITLES = {"correctness": "Correctness", "tests": "Tests", "maintainability": "Maintainability", "security": "Security",
                "performance": "Performance and scale", "compatibility": "Compatibility and rollout",
                "operability": "Operability", "data-privacy": "Data and privacy", "ux-a11y-i18n": "UX, accessibility and i18n",
@@ -368,10 +368,13 @@ def triage(rng=None):
 def lens_briefs():
     path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "skills", "self-review", "lenses.md")
     sections = re.split(r"^## (.+)$", open(path).read(), flags=re.M)[1:]
+    titles = sections[::2]
     key_of = {title: key for key, title in LENS_TITLES.items()}
-    unknown = [title for title in sections[::2] if title not in key_of]
-    if unknown:
-        sys.exit(f"triage: lenses.md has lenses with no key in LENS_TITLES: {', '.join(unknown)}")
+    problems = [f"no key in LENS_TITLES for {t}" for t in titles if t not in key_of]
+    problems += [f"no lens headed {t}" for t in LENS_TITLES.values() if t not in titles]
+    problems += [f"{t} twice" for t in sorted({t for t in titles if titles.count(t) > 1})]
+    if problems:
+        sys.exit(f"triage: lenses.md doesn't match LENS_TITLES: {'; '.join(problems)}")
     return [{"key": key_of[title], "title": title, "brief": body.strip()} for title, body in zip(sections[::2], sections[1::2])]
 
 

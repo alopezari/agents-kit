@@ -1,1 +1,1 @@
-- In Claude Code, each self-review lens is its own agent type, `kit:review-<lens>`, briefed from `lenses.md` with read-only tools and without the CLAUDE.md block; the self-review skill spawns it by name. Codex keeps giving a subagent the lens text.
+- In Claude Code, each self-review lens is its own agent type, `kit:review-<lens>`, briefed from `lenses.md` with no edit tools and without the CLAUDE.md block; the self-review skill spawns it by name. Codex keeps giving a subagent the lens text.

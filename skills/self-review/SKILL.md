@@ -35,7 +35,7 @@ Stay within triage's time budget. If a lens would need much longer, review the r
 
 Give each reviewer: the lens text, the base ref, the task or PR goal in one or two sentences, the spec's path when there is one (its Change map is where the Correctness tables start), and this instruction: *report every issue you suspect, each with file:line, the failing scenario, a severity and a confidence (high/medium/low); low-confidence findings are welcome, because step 3 verifies them.* Reviewers are read-only and never edit files.
 
-In Claude Code with the kit plugin, each lens is an agent type: spawn `kit:review-<lens>`, with triage's name for the lens (`kit:review-correctness`, `kit:review-ux-a11y-i18n`). It already holds the lens text, can't edit, and leaves out CLAUDE.md, so give it the rest of the list above. Where that type isn't listed (Codex, or the plugin off), give a general subagent the lens text too.
+In Claude Code with the kit plugin, each lens is an agent type: spawn `kit:review-<lens>`, with triage's name for the lens (`kit:review-correctness`, `kit:review-ux-a11y-i18n`). It already holds the lens text, has no edit tools and leaves out CLAUDE.md, so give it the rest of the list above. `bundle.sh` below takes the lens's heading instead (`Correctness`, `"Performance and scale"`). Where that type isn't listed (Codex, or the plugin off), give a general subagent the lens text too.
 
 The Correctness lens always runs, at every risk level, and its tables go into the final report. Also run the repo's personal checks when they exist, with `python3 ~/.agents/hooks/stop_checks.py verify`, which runs `~/.agents/repos/<repo>/verify` and stamps a pass.
 

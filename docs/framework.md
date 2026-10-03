@@ -226,7 +226,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | Context use | nothing (Codex shows its own) |
 |  | Run verify button, without a turn, on the checkout the session is in | `python3 ~/.agents/hooks/stop_checks.py verify` in a terminal |
 |  | Refresh button, and a refresh after each turn while the pane is open | running the commands above again |
-| `kit:review-<lens>` agents: One reviewer agent type per self-review lens | `kit:review-<lens>` for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, read-only tools, no CLAUDE.md block | a subagent given the lens text from `skills/self-review/lenses.md` |
+| `kit:review-<lens>` agents: One reviewer agent type per self-review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/self-review/lenses.md` |
 
 The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.
 

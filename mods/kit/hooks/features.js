@@ -17,10 +17,10 @@ export const FEATURES = [
     ]
   },
   {
-    "agents": "review",
+    "agentPrefix": "review",
     "description": "One reviewer agent type per self-review lens",
     "capabilities": [
-      {"name": "`kit:review-<lens>` for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, read-only tools, no CLAUDE.md block", "codex": "a subagent given the lens text from `skills/self-review/lenses.md`"}
+      {"name": "One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block", "codex": "a subagent given the lens text from `skills/self-review/lenses.md`"}
     ]
   }
 ]
