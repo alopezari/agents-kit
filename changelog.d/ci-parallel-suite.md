@@ -1,0 +1,1 @@
+- `tests/run.sh` runs its sections in parallel and takes section names (`tests/run.sh hooks`, `tests/run.sh --skip hooks install`); CI splits the suite across three macOS runners and cancels a pull request's older run when a new push arrives.

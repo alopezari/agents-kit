@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """bin/phase: each step of the flow, stepping back when the change moves, branch renames, and the cached fast path."""
+import concurrent.futures
 import json
 import os
 import shutil
@@ -375,24 +376,47 @@ def fast_path_serves_cache_and_refreshes(base):
     assert not os.path.exists(cache.replace(".json", ".lock")), "the refresh releases its lock"
 
 
-RESULTS = []
-for test in (status_line_names_the_branch, walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
-             red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
-             a_rename_log_that_cannot_be_written_leaves_the_spec_path,
-             slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,
-             fast_path_serves_cache_and_refreshes):
-    base = tempfile.mkdtemp(prefix="agents-test-phase-")
-    try:
-        test(base)
-        RESULTS.append((test.__name__, None))
-    except Exception as error:  # noqa: BLE001 - report every failure, keep running the rest
-        RESULTS.append((test.__name__, f"{type(error).__name__}: {error}"))
-    finally:
-        shutil.rmtree(base, ignore_errors=True)
+TESTS = (status_line_names_the_branch, walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
+         red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
+         a_rename_log_that_cannot_be_written_leaves_the_spec_path,
+         slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,
+         fast_path_serves_cache_and_refreshes)
 
+if sys.argv[1:]:
+    by_name = {t.__name__: t for t in TESTS}
+    RESULTS = []
+    for name in sys.argv[1:]:
+        base = tempfile.mkdtemp(prefix="agents-test-phase-")
+        try:
+            by_name[name](base)
+            RESULTS.append((name, None))
+        except Exception as error:  # noqa: BLE001 - report every failure, keep running the rest
+            RESULTS.append((name, f"{type(error).__name__}: {error}"))
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+    shutil.rmtree(os.environ["HOME"], ignore_errors=True)
+    for name, error in RESULTS:
+        print(f"{'FAIL' if error else 'ok  '} {name}")
+        if error:
+            print(f"     {error}")
+    sys.exit(1 if any(error for _, error in RESULTS) else 0)
+
+# Each test in a process of its own: the tests share this HOME's quality log, which renames append to.
+def run_alone(t):
+    done = subprocess.run([sys.executable, os.path.abspath(__file__), t.__name__], capture_output=True, text=True,
+                          errors="replace")
+    # Passed only when it says so and exits 0: a test that exits early, 0 or not, never reported.
+    passed = done.returncode == 0 and f"ok   {t.__name__}\n" in done.stdout
+    if passed:
+        return True, done.stdout
+    said = "" if f"FAIL {t.__name__}" in done.stdout else f"FAIL {t.__name__}\n     exit {done.returncode}, no result\n"
+    return False, said + done.stdout + done.stderr
+
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 2)) as pool:
+    outcomes = list(pool.map(run_alone, TESTS))
 shutil.rmtree(os.environ["HOME"], ignore_errors=True)
-for name, error in RESULTS:
-    print(f"{'FAIL' if error else 'ok  '} {name}")
-    if error:
-        print(f"     {error}")
-sys.exit(1 if any(error for _, error in RESULTS) else 0)
+print("".join(out for _, out in outcomes), end="")
+failed = sum(not passed for passed, _ in outcomes)
+print(f"{len(TESTS) - failed}/{len(TESTS)} passed")
+sys.exit(1 if failed else 0)
