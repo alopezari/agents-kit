@@ -1,0 +1,1 @@
+- A mod test that set its time limit with `timeout` kept the 5 s default, because `claude plugin test` only reads `timeoutMs`: the /flow pane's "Run verify that never ends" test now has its 20 s, and the suite's mods section fails on a `timeout:` option.

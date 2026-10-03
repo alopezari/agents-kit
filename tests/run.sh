@@ -91,6 +91,10 @@ section_mods() {
   local validated; validated=$(cd "$kit/mods/kit" && claude plugin validate --strict . 2>&1) && echo "ok   claude plugin validate --strict" \
     || { echo "FAIL claude plugin validate --strict:"; echo "$validated" | tail -8; f=1; }
   (cd "$kit/mods/kit" && claude plugin test) || f=1
+  # claude-code/testing reads timeoutMs and ignores timeout, so such a test keeps the 5 s default and fails on a slow runner.
+  local ignored; ignored=$(grep -rnE "\{ *timeout *:" "$kit/mods" --include='*.test.ts' --include='*.test.tsx' --exclude-dir=node_modules)
+  if [ -z "$ignored" ]; then echo "ok   every mod test's time limit uses timeoutMs"
+  else echo "FAIL claude plugin test ignores timeout (it reads timeoutMs), so these keep 5 s:"; echo "$ignored"; f=1; fi
   # The flow must work without the mod: nothing it runs on may depend on it. Only bin/docs (which documents it)
   # and bin/changelog (which sets its version) name it.
   local users dir dirs=()
