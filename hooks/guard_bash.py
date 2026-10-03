@@ -6,6 +6,7 @@ agent mistakes, not a security boundary: a determined command can evade
 regexes. Records the checkout of each allowed `git push`, so the stop hook
 can follow that commit's CI.
 """
+import bisect
 import json
 import os
 import re
@@ -439,6 +440,85 @@ LEADING = re.compile(r"-\S*|\w+=\S*|if|then|else|elif|do|while|until|\{|!|time|e
 WORD = re.compile(r"[^\s\"'<>;&|()]+")
 
 
+# Prose a command carries without running it, judged by the command that owns it: the message of git commit, tag,
+# merge or notes and of gh pr or issue; what a lone, unpiped echo or printf prints; and a quoted heredoc fed to cat or
+# tee. Everything else is read as before, however it might run.
+MESSAGE_FLAG = re.compile(r"(?:^|\s)(?:-[a-zA-Z]*m|--(?:message|title|body|notes|subject))(?:=|\s+)$")
+LEADING_ASSIGNMENTS = r"\s*(?:\w+=\S*\s+)*"
+MESSAGE_COMMAND = re.compile(LEADING_ASSIGNMENTS + r"(?:git\s+(?:-[Cc]\s+\S+\s+)*(?:commit|tag|merge|notes)|gh\s+(?:pr|issue))\s")
+PRINTING_COMMAND = re.compile(LEADING_ASSIGNMENTS + r"(?:echo|printf)(?:\s|$)")
+PROSE_HEREDOC_RECEIVER = re.compile(LEADING_ASSIGNMENTS + r"(?:cat|tee)(?:\s|$)")
+HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(?:(['\"])([^'\"\s]+)\1|\\([^\s;&|<>()]+)|([^\s;&|<>()'\"\\]+))")
+
+
+def heredoc_body_is_prose(line, m):
+    """Whether bash only feeds this heredoc's body to cat or tee as text: a quoted delimiter, a cat or tee command
+    that owns the <<, and nothing piped onward."""
+    receiver = line[max([0] + [s.end() for s in re.finditer(r"&&|\|\||[;|(&]", line[:m.start()])]):m.start()]
+    onward = re.split(r"&&|\|\||[;&]", line[m.end():], maxsplit=1)[0]
+    # Inside $(...) the text goes on to the enclosing command: prose only when that is a message, as in -m "$(cat <<'EOF'.
+    enclosing = line[:line.rfind("$(", 0, m.start())] if "$(" in line[:m.start()] else None
+    return (not m.group(4) and bool(PROSE_HEREDOC_RECEIVER.match(receiver)) and "|" not in onward
+            and (enclosing is None or bool(MESSAGE_COMMAND.match(enclosing))))
+
+
+def without_prose(command):
+    """The command with the prose it carries blanked, so a mention of PRODUCT.md, DESIGN.md or Impeccable in a commit
+    message or an echoed sentence isn't read as a write: impeccable_files() takes its targets from the command's own
+    text, quoted strings included, so a quoted path still counts. Whatever this can't read for sure, it leaves whole:
+    missing a write costs more than asking about a mention."""
+    kept, heredocs = [], []  # (delimiter, body is prose) of each heredoc still open, in order
+    for line in command.split("\n"):
+        if heredocs:
+            delimiter, prose = heredocs[0]
+            if line.lstrip("\t") == delimiter:
+                heredocs.pop(0)
+                kept.append(line)
+            elif prose:
+                kept.append("")
+            elif "$(" in line or "`" in line:
+                return command  # an unquoted body expands, quotes and all
+            else:
+                kept.append(line)
+            continue
+        kept.append(line)
+        comment = re.search(r"(?:^|\s)#", line)  # a << after it is text
+        heredocs = [(m.group(2) or m.group(3) or m.group(4), heredoc_body_is_prose(line, m))
+                    for m in HEREDOC.finditer(line) if not comment or m.start() < comment.start()]
+        if heredocs and line.endswith("\\"):
+            return command  # the header goes on, redirects and all, on the next line
+    text = "\n".join(kept)
+    if heredocs or RUNS_QUOTED_TEXT.search(text):
+        return command  # a heredoc that never ends was only a mention of one
+
+    spans = quoted_spans(text)
+    masked = list(text)
+    for start, end in spans:
+        masked[start:end] = "q" * (end - start)
+    masked = "".join(masked)
+    # Each command judged once: per string, its slice of a long command would make this quadratic. No cut at a
+    # parenthesis: what an echo prints inside $(...) or <(...) is fed to another command.
+    cuts = [0] + [i for m in re.finditer(r"&&|\|\||[;&\n]", masked) for i in m.span()] + [len(masked)]
+    starts = cuts[::2]
+    kinds = []
+    for a, b in zip(starts, cuts[1::2]):
+        segment = masked[a:b]
+        runs_inside = any(token in segment for token in ("$(", "`", "|", "<(", ">("))
+        kinds.append(None if runs_inside else "message" if MESSAGE_COMMAND.match(segment)
+                     else "printing" if PRINTING_COMMAND.match(segment) else None)
+    out, last = [], 0
+    for start, end in spans:
+        quoted, before = text[start:end], masked[max(0, start - 40):start]
+        kind = kinds[bisect.bisect_right(starts, start) - 1]
+        whole_word = (start == 0 or masked[start - 1] in " \t=") and (end == len(masked) or masked[end] in " \t\n;&|)")
+        if not kind or not whole_word or (quoted[0] == '"' and ("$" in quoted or "`" in quoted)):
+            continue
+        if MESSAGE_FLAG.search(before) if kind == "message" else not re.search(r"[<>]\s*$", before):
+            out += [text[last:start], "''"]
+            last = end
+    return "".join(out) + text[last:]
+
+
 def impeccable_files(command, cwd, session):
     """Why a command needs the user first under design_files.py: it names PRODUCT.md, DESIGN.md or `.impeccable`
     where none exists yet, adds them to a .gitignore, or runs Impeccable's `live`, `hooks on`/`reset` or another
@@ -449,7 +529,8 @@ def impeccable_files(command, cwd, session):
     else's repository."""
     if not re.search(r"product\.md|design\.md|impeccable", command, re.I):
         return None  # most commands: no git call
-    code = shell_code(command)
+    text = without_prose(command)
+    code = shell_code(text)
     # A newline inside quotes is part of an argument (sed's a\ text), not the end of a command.
     joined = re.sub(r"'[x\n]*'|\"[x\n]*\"", lambda m: m.group().replace("\n", "x"), code)
     cuts = [(0, 0)] + [m.span() for m in re.finditer(r"&&|\|\||(?<![<>&])&(?![>&])|(?<!>)\||[;\n()]", joined)]
@@ -460,7 +541,7 @@ def impeccable_files(command, cwd, session):
     for (_, start), (boundary, _) in zip(cuts, cuts[1:] + [(len(code), len(code))]):
         if re.fullmatch(r"\s*x*\s*", code[start:boundary]):  # a heredoc body line, not a command
             continue
-        segment = command[start:boundary]
+        segment = text[start:boundary]
         cd = re.match(r"\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)", segment)
         if cd:
             folders.append(cd_into(folders[-1], cd.group(1)))

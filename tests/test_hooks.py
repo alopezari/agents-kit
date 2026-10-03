@@ -1507,13 +1507,87 @@ def impeccable_guard_edge_cases(base):
         fh.write('[remote "x"\n')  # git can't parse its config: that's no proof of a personal repository
     assert "say-so" in shell("touch DESIGN.md"), "a failing git counts as shared"
 
+def impeccable_guard_reads_prose_as_text(base):
+    profiles = os.path.join(base, "profiles")
+    os.makedirs(profiles)
+    env = {"HOME": base, "AGENTS_PROFILES_DIR": profiles}
+    shared = new_repo(base, "shared")
+    git(shared, "remote", "add", "origin", "git@github.com:someone/app.git")
+
+    def shell(command):
+        got = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": shared, "session_id": "p1"}, env=env)
+        return (got or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", "allow")
+
+    # The rule took its targets from the command's own text, so a mention in prose read as a write.
+    for label, command in [
+            ("a commit message", "git commit -m 'Ask before PRODUCT.md and .impeccable/ in shared repos'"),
+            ("a double-quoted one", 'git commit -m "Keep DESIGN.md out; impeccable live is gated"'),
+            ("an echo to a log", "echo 'checked PRODUCT.md' >> /tmp/log.txt"),
+            ("a quoted heredoc with $( after it", "cat > notes.txt <<'EOF'\nRun `impeccable detect`; never create PRODUCT.md.\n"
+                                                    "EOF\nN=$(wc -l < notes.txt)"),
+            ("a commit message from a heredoc", "git commit -m \"$(cat <<'EOF'\nAsk before DESIGN.md\nEOF\n)\""),
+            ("a delimiter with a dash", "cat > notes.txt <<'DOC-END'\nCreate PRODUCT.md here\nDOC-END\nN=$(pwd)")]:
+        assert shell(command) == "allow", label
+    os.makedirs(os.path.join(shared, "My App"))
+    for label, command in [
+            ("python -c with spaces", "python3 -c \"open('PRODUCT.md', 'w').write('x')\""),
+            ("a quoted path", 'echo x > "DESIGN.md"'),
+            ("a quoted path with a space", 'echo x > "My App/PRODUCT.md"'),
+            ("a quoted folder with a space", "mkdir -p '.impeccable/design notes'"),
+            ("a script on stdin", "N=$(pwd)\npython3 - <<'PY'\nopen('PRODUCT.md', 'w').write('x')\nPY"),
+            ("a here-string", "sh <<< 'touch PRODUCT.md'"),
+            ("a pipe into sh", "printf '%s\\n' 'touch PRODUCT.md' | sh"),
+            ("quotes in an unquoted heredoc", "cat > notes.txt <<EOF\n'$(touch PRODUCT.md)'\nEOF"),
+            ("a heredoc only mentioned", "# Use <<'EOF' for literal text\ntouch PRODUCT.md"),
+            ("a heredoc header that goes on", "cat <<'EOF' \\\n> PRODUCT.md\ncontent\nEOF"),
+            ("a partly quoted delimiter", "cat <<'EOF'x\nnotes\nEOFx\ntouch PRODUCT.md"),
+            ("an unquoted heredoc first", "cat <<A <<'B'\n$(touch PRODUCT.md)\nA\nnotes\nB"),
+            ("a versioned python", "python3.12 -c \"open('PRODUCT.md', 'w').write('x')\""),
+            ("python flags with values", "python3 -W ignore -c \"open('PRODUCT.md', 'w').write('x')\""),
+            ("long shell flags", "bash --noprofile --norc -c 'touch PRODUCT.md'"),
+            ("node long flags", "node --input-type=module -e \"import fs from 'fs'; fs.writeFileSync('PRODUCT.md', 'x')\""),
+            ("python behind command", "command python3 -c \"open('PRODUCT.md', 'w').write('x')\""),
+            ("python behind env", "env MODE=test python3 -c \"open('PRODUCT.md', 'w').write('x')\""),
+            ("python in an if", "if python3 -c \"open('PRODUCT.md', 'w').write('x')\"; then :; fi"),
+            ("awk", "awk 'BEGIN { print \"text\" > \"PRODUCT.md\" }'"),
+            ("a process substitution", "source <(printf '%s\\n' 'touch PRODUCT.md')"),
+            ("a heredoc example in a comment, closed later", "# Example <<'EOF'\ntouch PRODUCT.md\nEOF\nN=$(pwd)"),
+            ("a dashed unquoted delimiter", "cat <<DOC-END\nDOC\n'$(touch PRODUCT.md)'\nDOC-END"),
+            ("apostrophes in comments", "# Don't forget the file\ntouch PRODUCT.md\n# It's done"),
+            ("escaped quotes", "echo \\'start; touch PRODUCT.md; echo \\'end"),
+            ("a quoted .gitignore with a space", "N=$(pwd); echo PRODUCT.md >> 'My App/.gitignore'"),
+            ("an echo around a substitution", "echo $(touch 'PRODUCT.md')"),
+            ("a quoted part of a redirect target", 'echo text > ./"PRODUCT.md"'),
+            ("a -m that isn't a message", "git checkout -m 'PRODUCT.md'"),
+            ("a heredoc owned by a later command", "cat /dev/null; python3 - <<'PY'\nopen('PRODUCT.md', 'w').write('x')\nPY\nN=$(pwd)"),
+            ("a patch in a heredoc", "N=$(pwd)\ngit apply <<'PATCH'\ndiff --git a/PRODUCT.md b/PRODUCT.md\nnew file mode 100644\n"
+                                     "--- /dev/null\n+++ b/PRODUCT.md\n@@ -0,0 +1 @@\n+x\nPATCH"),
+            ("a heredoc after a comment mark", "cat /dev/null # <<':'\ntouch PRODUCT.md\n:\nN=$(pwd)"),
+            ("a command named like echo", 'echo-file() { touch "$1"; }\necho-file "PRODUCT.md"'),
+            ("a process substitution after an echo", "echo text > >(tee 'PRODUCT.md')"),
+            ("a cat heredoc run by bash", "bash <<<$(cat <<'SCRIPT'\ntouch PRODUCT.md\nSCRIPT\n)"),
+            ("a heredoc after a background job", "cat build.log & python3 - <<'PY'\nopen('PRODUCT.md', 'w').write('x')\nPY\nN=$(pwd)"),
+            ("$( inside double quotes", 'echo "$(touch PRODUCT.md) done"'),
+            ("a heredoc into .gitignore", "cat >> .gitignore <<'EOF'\nPRODUCT.md\nEOF\nN=$(wc -l < .gitignore)"),
+            ("a heredoc into the file", "cat > DESIGN.md <<'EOF'\n# Design\nEOF"),
+            ("sh -c with spaces", "sh -c 'cd . && touch PRODUCT.md'")]:
+        assert "say-so" in shell(command), label
+    # Backtracking regexes took seconds on each of these.
+    for label, command in [("a long unclosed quote", "echo PRODUCT.md '" + "a " * 100000),
+                           ("a run of separators", "echo PRODUCT.md " + ";" * 100000),
+                           ("escaped quotes", "echo PRODUCT.md " + '\\"a ' * 20000 + "; touch DESIGN.md"),
+                           ("many short strings", "N=$(pwd); echo " + "'a b' " * 20000)]:
+        started = time.time()
+        shell(command)
+        assert time.time() - started < 2, f"{time.time() - started:.1f}s on {label}"
+
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
           stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, stop_suggests_a_fresh_session_for_the_next_change, guard_records_the_pushed_checkout,
-          post_edit_syntax_feedback, impeccable_files_in_a_shared_repo_need_the_user_first, impeccable_guard_edge_cases]
+          post_edit_syntax_feedback, impeccable_files_in_a_shared_repo_need_the_user_first, impeccable_guard_edge_cases, impeccable_guard_reads_prose_as_text]
 
 if sys.argv[1:]:
     by_name = {t.__name__: t for t in TESTS}

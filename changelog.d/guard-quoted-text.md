@@ -1,0 +1,1 @@
+- The design-files guard no longer asks about PRODUCT.md, DESIGN.md or Impeccable when they only appear in a git or gh message, a sentence a lone `echo` or `printf` prints, or a quoted heredoc fed to `cat` or `tee`. Everything else, quoted paths included, is still read in full.
