@@ -95,6 +95,8 @@ DEPENDENCY_CASES = [  # (case, before, after, names that must appear, names that
      {"deps.txt": "required  jq  brew:jq  the scripts\noptional  ffmpeg  brew:ffmpeg  video checks\n"}, ["ffmpeg"], ["jq"]),
     ("a manifest moved, nothing else", {"old/package.json": MOVED},
      {"old/package.json": None, "new/package.json": MOVED}, [], ["react"]),
+    ("a manifest renamed to another format", {"composer.json": '{"require": {"php": ">=8.1"}, "dependencies": {"react": "18"}}'},
+     {"composer.json": None, "package.json": '{"require": {"php": ">=8.1"}, "dependencies": {"react": "18"}}'}, ["react"], []),
     ("a manifest moved and edited", {"old/package.json": MOVED},
      {"old/package.json": None, "new/package.json": MOVED.replace('"1"}', '"1", "lodash": "4"}')}, ["lodash"], ["react"]),
 ]

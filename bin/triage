@@ -253,7 +253,9 @@ def new_dependencies(files, renamed_from, rng):
         if after_text is None:
             continue
         try:
-            added = dependency_names(path, after_text) - (dependency_names(path, before.stdout) if before.returncode == 0 else set())
+            source = renamed_from.get(path, path)
+            declared = dependency_names(source, before.stdout) if before.returncode == 0 and MANIFEST.search(source) else set()
+            added = dependency_names(path, after_text) - declared
         except ValueError:
             found.append(f"{path} can't be read at one end of the change: check its dependencies by hand")
             continue
