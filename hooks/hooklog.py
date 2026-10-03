@@ -25,7 +25,7 @@ def log(hook, decision, payload, detail):
                 "cwd": payload.get("cwd"),
                 "harness": harness(payload),
                 "detail": detail[:500],
-                **({"suite": os.environ["AGENTS_SUITE_RUN"]} if os.environ.get("AGENTS_SUITE_RUN") else {}),
+                **({"suite_run": os.environ["AGENTS_SUITE_RUN"]} if os.environ.get("AGENTS_SUITE_RUN") else {}),
             }) + "\n")
     except Exception:
         pass

@@ -40,7 +40,8 @@ def run_hook(script, payload, cwd=None, env=None):
 
 
 def child_cpu():
-    """CPU seconds of the finished hook processes: a guard's speed, without the wait a loaded runner adds."""
+    """CPU seconds of every child process reaped so far; the difference around one hook call is its speed without the
+    wait a loaded runner adds."""
     times = os.times()
     return times.children_user + times.children_system
 
@@ -885,7 +886,7 @@ def stop_never_waits_for_profile_after_turn(base):
     done = os.path.join(env["AGENTS_PROFILES_DIR"], "slow", "done")
     decision, secs = timed_stop(RUN + "at2b", env)
     assert decision == without and "Debug leftover" in decision.get("reason", ""), (decision, without)
-    assert secs < plain_secs + 5 and not os.path.exists(done), f"the stop hook waited: {secs:.2f}s vs {plain_secs:.2f}s"
+    assert secs < plain_secs + 0.5 and not os.path.exists(done), f"the stop hook waited: {secs:.2f}s vs {plain_secs:.2f}s"
     assert wait_for(done, 25), "the after-turn keeps running after the stop hook returns"
 
 
@@ -1514,6 +1515,19 @@ def impeccable_guard_edge_cases(base):
         fh.write('[remote "x"\n')  # git can't parse its config: that's no proof of a personal repository
     assert "say-so" in shell("touch DESIGN.md"), "a failing git counts as shared"
 
+def hook_log_names_the_suite_run_only_inside_one(base):
+    # run.sh counts a leaked line by this field when its cwd is a fixed path like /tmp.
+    def logged(**env):
+        log_dir = tempfile.mkdtemp(dir=base)
+        code = f"import sys; sys.path.insert(0, {H!r}); import hooklog; hooklog.log('t', 'allow', {{'cwd': '/tmp'}}, '')"
+        outside = {k: v for k, v in os.environ.items() if k != "AGENTS_SUITE_RUN"}
+        subprocess.run(["python3", "-c", code], env={**outside, "AGENTS_LOG_DIR": log_dir, **env}, check=True)
+        return json.loads(open(os.path.join(log_dir, "hooks.jsonl")).read())
+    assert logged(AGENTS_SUITE_RUN="kit-suite-abc").get("suite_run") == "kit-suite-abc"
+    assert "suite_run" not in logged(), "a hook outside the suite logs no suite_run"
+    assert "suite_run" not in logged(AGENTS_SUITE_RUN=""), "an empty id is no id"
+
+
 def impeccable_guard_reads_prose_as_text(base):
     profiles = os.path.join(base, "profiles")
     os.makedirs(profiles)
@@ -1589,7 +1603,7 @@ def impeccable_guard_reads_prose_as_text(base):
         assert child_cpu() - started < 2, f"{child_cpu() - started:.1f}s of CPU on {label}"
 
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

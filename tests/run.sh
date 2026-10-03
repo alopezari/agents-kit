@@ -7,7 +7,7 @@
 cd "$(dirname "$0")" || exit 2
 # A hook run by a test must log into the test's own place (its HOME, or AGENTS_LOG_DIR), never into the real log the
 # monthly job reads. A line counts as this run's when it carries the run's id (hooklog adds AGENTS_SUITE_RUN) or its cwd
-# is under the run's own temp root: other sessions log from the system temp dir while the suite runs.
+# is under the run's own temp root; sessions logging from elsewhere in the temp dir while the suite runs have neither.
 hook_log="$HOME/.agents/logs/hooks.jsonl"
 from_tests() { python3 - "$hook_log" "$run_root" "$AGENTS_SUITE_RUN" <<'PY'
 import json, os, sys
@@ -21,7 +21,7 @@ for line in lines:
         cwd = os.path.realpath(str(entry.get("cwd") or ""))
     except (ValueError, AttributeError):
         continue  # a line cut by a crash, or still being appended
-    count += entry.get("suite") == run or os.path.commonpath([cwd, root]) == root
+    count += entry.get("suite_run") == run or os.path.commonpath([cwd, root]) == root
 print(count)
 PY
 }
@@ -147,6 +147,7 @@ for n in "${!picked[@]}"; do
   printf '\n== %s\n' "${sections[$i]#*|}"
   cat "$out/$i"
 done
+pids=()  # all reaped: an interrupt from here on must not signal pids the system may have reused
 
 printf '\n== %s\n' "real hook log untouched"
 if ! logged=$(from_tests); then
