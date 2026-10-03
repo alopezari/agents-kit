@@ -80,6 +80,10 @@ def staging_lines(text, evidence):
     # The latest round before the merge, up to the next section: ship appends the production results after it.
     rounds = list(re.finditer(r"^## Results(?! after the deploy)([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S))
     if not rounds:
+        before = re.search(r"^## Before the merge\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+        if re.search(r"^## After the merge", text, re.M) and not (before and re.search(r"^### S\d", before.group(1), re.M)):
+            after = ", ".join(re.findall(r"^### (P\d+)\b", text, re.M)) or "none"
+            return [f"- Staging: none before the merge; after it: {after}."]
         return ["- Staging: no results yet."]
     heading, latest = rounds[-1].group(1), rounds[-1].group(2)
     when = re.search(r"\(([^)]*)\)", heading)

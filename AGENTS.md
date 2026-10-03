@@ -82,7 +82,7 @@ Drawn from an analysis of ~2,700 human code-review comments. Write changes that 
 
 ## Pull requests
 
-The path of a change, one skill per step: `spec` → build → `self-review` → `validate` (ends by handing me the branch when staging needs manual tests) → `create-pr` → `follow-pr` (CI and review comments, until it's ready to merge) → I merge → `ship` (when I deploy).
+The path of a change, one skill per step: `spec` → build → `self-review` → `validate` (ends by handing me the branch when staging needs manual tests) → `create-pr` → `follow-pr` (CI and review comments, until it's ready to merge) → I merge → `ship` (when I deploy, or when I merge a repo installed on this machine).
 
 Before opening a pull request, or pushing substantial changes to one, run the `self-review` skill and resolve what it confirms. A hook blocks `gh pr create` until a self-review is recorded for the exact current change.
 

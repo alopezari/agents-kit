@@ -13,7 +13,7 @@ gh pr view <n> --json number,url,state,mergedAt,mergeCommit,headRefName
 
 It must be merged. If it isn't, say so and stop: `follow-pr` is the step before.
 
-**A repo installed on this machine** (a personal tool or profile whose deploy is a pull and an install here; the repo notes say so) has no production for the user to reach: pull, install and run the guide's "After the merge" steps marked as yours, through `~/.agents/bin/evidence` as written, then record the results as in section 3. On the default branch `bin/reports` finds that branch's reports, not the merged PR's: read the guide at `$(git rev-parse --path-format=absolute --git-common-dir)/agents/staging-guide-<repo>-<branch key>.md` (the PR's head branch, `/` written `~`), and set `EVIDENCE_DIR` to the `evidence-<repo>-<branch key>` directory beside it. Ask first only when a step runs something real the user didn't plan for (a paid or long run, a write to data outside a copy). Rollback and closing the loop are as below.
+Whatever the deploy, the guide's "After the merge" steps marked as yours are yours to run once it's done. **A repo installed on this machine** (a personal tool or profile whose deploy is a pull and an install here; the repo notes say so) has no production for the user to reach: pull, install and run those steps, through `~/.agents/bin/evidence` as written, then record the results as in section 3. On the default branch `bin/reports` finds that branch's reports, not the merged PR's: read the guide at `$(git rev-parse --path-format=absolute --git-common-dir)/agents/staging-guide-<repo>-<branch key>.md` (the PR's head branch, `/` written `~`), and set `EVIDENCE_DIR` to the `evidence-<repo>-<branch key>` directory beside it. Ask first only when a step runs something real the user didn't plan for (a paid or long run, a write to data outside a copy). Rollback and closing the loop are as below.
 
 ## 1. Deploy and verification guide
 
@@ -34,7 +34,7 @@ Before the user deploys, give the rollback in the same format:
 
 ## 3. Close the loop
 
-When the user says the deploy is done, read the verification steps' evidence and append a `## Results after the deploy (<date>)` table to the staging guide, in validate's step 7 shape (`| Step | Result | Evidence |`, P1, P2…). When every step passed:
+When the user says the deploy is done, or you ran it, read the verification steps' evidence and append a `## Results after the deploy (<date>)` table to the staging guide, in validate's step 7 shape (`| Step | Result | Evidence |`, P1, P2…). When every step passed:
 
 - **Issue:** draft the update (what shipped, the PR link, how it was verified in production). Writing to a tracker needs the user's approval; the MCP guard enforces it.
 - **Repo notes:** a trap that cost time in this change (a flaky check, a missing setup step, a deploy surprise) goes into `~/.agents/repos/<repo>/notes.md`, or better, into a check.
