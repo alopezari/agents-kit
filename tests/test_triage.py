@@ -60,6 +60,7 @@ def maintainability(result):
 
 
 PACKAGE = {"name": "shop", "version": "1.0.0", "scripts": {"build": "vite"}, "dependencies": {"react": "^18.0.0"}}
+MOVED = '{"dependencies": {"react": "18", "vue": "3", "svelte": "4", "preact": "10", "solid-js": "1"}}\n'
 DEPENDENCY_CASES = [  # (case, before, after, names that must appear, names that must not)
     ("package.json dependency", {"package.json": json.dumps(PACKAGE)},
      {"package.json": json.dumps({**PACKAGE, "dependencies": {"react": "^18.0.0", "left-pad": "^1.3.0"}})}, ["left-pad"], ["react"]),
@@ -92,6 +93,12 @@ DEPENDENCY_CASES = [  # (case, before, after, names that must appear, names that
      {"Cargo.toml": '[dependencies]\n"rand" = "0.8"\nserde.workspace = true\n'}, ["rand", "serde"], []),
     ("deps.txt line", {"deps.txt": "required  jq  brew:jq  the scripts\n"},
      {"deps.txt": "required  jq  brew:jq  the scripts\noptional  ffmpeg  brew:ffmpeg  video checks\n"}, ["ffmpeg"], ["jq"]),
+    ("a manifest moved, nothing else", {"old/package.json": MOVED},
+     {"old/package.json": None, "new/package.json": MOVED}, [], ["react"]),
+    ("a manifest renamed to another format", {"composer.json": '{"require": {"php": ">=8.1"}, "dependencies": {"react": "18"}}'},
+     {"composer.json": None, "package.json": '{"require": {"php": ">=8.1"}, "dependencies": {"react": "18"}}'}, ["react"], []),
+    ("a manifest moved and edited", {"old/package.json": MOVED},
+     {"old/package.json": None, "new/package.json": MOVED.replace('"1"}', '"1", "lodash": "4"}')}, ["lodash"], ["react"]),
 ]
 
 fail = 0
@@ -179,6 +186,38 @@ for label, after, ui in [("a component", {"src/Card.tsx": "export const Card = (
     ok = (lens == ui and test == ui) if ui else (lens is None and test is None)
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} {'design checks' if ui else 'no design checks'} for {label} ({result['tier']}): {lens}")
+
+page = "---\ntitle: Pricing\n---\n<h1>Pricing</h1>\n"
+for label, old, new in [("a rename alone is a change to the renamed file", "src/pages/old.astro", "src/pages/pricing.astro"),
+                        ("a renamed file keeps its non-ASCII name", "src/pages/old.astro", "src/pages/précios.astro"),
+                        ("a renamed file keeps its name when git quotes it", "src/pages/old.astro", 'src/pages/page"name.astro'),
+                        ("a UI file moved out of a UI folder still gets design checks", "src/components/Card.php", "src/helpers/Card.php")]:
+    renamed = triage_change({old: page}, {old: None, new: page})
+    ok = (new if new.endswith(".astro") else old) in renamed["lenses"].get("design", [])
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {label}: {renamed['lenses'].get('design')}")
+crashed = []
+for label, before, after in [("a deleted line that looks like a quoted header", {"a.sql": '-- "unterminated\n', "b.py": "x = 1\n"},
+                              {"a.sql": None, "b.py": "x = 2\n"}),
+                             ("a renamed path with a line separator in it", {"src/pages/old.astro": page},
+                              {"src/pages/old.astro": None, "src/pages/new\u2028page.astro": page})]:
+    try:
+        result = triage_change(before, after)
+    except json.JSONDecodeError:
+        result = None
+    ok = result is not None and (not label.startswith("a renamed") or
+                                 "src/pages/new\u2028page.astro" in result["lenses"].get("design", []))
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {label}: {result and result['lenses'].get('design')}")
+styles = "".join(f".rule-{i} {{ color: red; }}\n" for i in range(20))
+edited = triage_change({"src/old page.css": styles}, {"src/old page.css": None, "src/new page.css": styles + ".x { }\n"})
+ok = edited["files"] == 2
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} a renamed file with a space in its name counts once per path: {edited['files']} files")
+removed = triage_change({"a.py": "x = 1\n", "src/Old.tsx": "export const Old = 1\n"}, {"a.py": "x = 2\n", "src/Old.tsx": None})
+ok = "src/Old.tsx" in removed["lenses"].get("design", []) and "design" in removed["lenses"]
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} a file deleted after another change is still counted: {removed['lenses'].get('design')}")
 
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected

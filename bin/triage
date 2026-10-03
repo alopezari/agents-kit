@@ -8,6 +8,7 @@
 The self-review and validate skills run the lenses and tests this selects. Every rule is a regex
 over changed paths or added lines, so a selection can always be traced back to its signal.
 """
+import ast
 import json
 import os
 import re
@@ -105,7 +106,7 @@ BUDGET = {"low": "< 5 min", "standard": "<= 20 min", "high": "<= 45 min"}
 
 
 def git(*args, cwd=None):
-    return subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd).stdout
+    return subprocess.run(["git", *args], capture_output=True, text=True, errors="replace", cwd=cwd).stdout
 
 
 def base_ref():
@@ -117,26 +118,50 @@ def base_ref():
     return "HEAD"
 
 
+def diff_path(field):
+    """A path as git prints it in a diff: C-quoted when it holds a quote, a backslash or a control character, and
+    followed by a tab in ---/+++ lines when it holds a space."""
+    field = field.rstrip("\t")
+    return ast.literal_eval(field) if field.startswith('"') else field
+
+
 def collect(rng):
     if rng:
-        diff = git("diff", "--unified=0", "--no-color", rng)
+        diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", rng)
         untracked = []
     else:
         merge_base = git("merge-base", "HEAD", base_ref()).strip() or "HEAD"
-        diff = git("diff", "--unified=0", "--no-color", merge_base)
-        untracked = git("ls-files", "--others", "--exclude-standard").splitlines()
-    files, added, removed, path = {}, [], 0, None
-    for line in diff.splitlines():
-        if line.startswith("+++ "):
-            path = line[6:] if line.startswith("+++ b/") else None
+        diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", merge_base)
+        untracked = [p for p in git("ls-files", "-z", "--others", "--exclude-standard").split("\0") if p]
+    files, added, removed, renamed_from = {}, [], 0, {}
+    path, header, source = None, False, None
+    for line in diff.split("\n"):  # not splitlines(): an unquoted path may hold U+2028
+        if line.startswith("diff --git "):
+            path, header = None, True
+        elif line.startswith("@@"):
+            header = False
+        elif header and line.startswith("rename from "):  # a pure rename has no ---/+++ lines at all
+            source = diff_path(line[len("rename from "):])
+            files.setdefault(source, 0)
+        elif header and line.startswith("rename to "):
+            target = diff_path(line[len("rename to "):])
+            renamed_from[target] = source
+            files.setdefault(target, 0)
+        elif header and line.startswith("+++ "):
+            new = diff_path(line[4:])
+            path = new[2:] if new.startswith("b/") else None
             if path:
                 files.setdefault(path, 0)
-        elif line.startswith("--- a/") and path is None:
-            files.setdefault(line[6:], 0)
-        elif path and line.startswith("+") and not line.startswith("+++"):
+        elif header and line.startswith("--- "):
+            old = diff_path(line[4:])
+            if old.startswith("a/"):
+                files.setdefault(old[2:], 0)
+        elif header:
+            continue
+        elif path and line.startswith("+"):
             files[path] += 1
             added.append((path, line[1:]))
-        elif line.startswith("-") and not line.startswith("---"):
+        elif line.startswith("-"):
             removed += 1
     for p in untracked:
         try:
@@ -145,7 +170,7 @@ def collect(rng):
             continue
         files[p] = len(lines)
         added += [(p, l) for l in lines]
-    return files, added, removed
+    return files, added, removed, renamed_from
 
 
 # Files that declare dependencies, by name. deps.txt is the kit's own list of programs.
@@ -203,7 +228,7 @@ def dependency_names(path, text):
     return names
 
 
-def new_dependencies(files, rng):
+def new_dependencies(files, renamed_from, rng):
     """'new dependency: <name> (<manifest>)' for each name a changed manifest gains, and a line for each it can't read."""
     # The same ends git diff compares: A...B from their merge-base, A..B, and a lone ref against the working tree.
     if rng and "..." in rng:
@@ -217,9 +242,10 @@ def new_dependencies(files, rng):
     root = git("rev-parse", "--show-toplevel").strip()
     found = []
     for path in (p for p in files if MANIFEST.search(p)):
-        before = subprocess.run(["git", "show", f"{before_ref}:{path}"], capture_output=True, text=True)
+        before = subprocess.run(["git", "show", f"{before_ref}:{renamed_from.get(path, path)}"], capture_output=True,
+                                text=True, errors="replace")
         if after_ref:
-            after = subprocess.run(["git", "show", f"{after_ref}:{path}"], capture_output=True, text=True)
+            after = subprocess.run(["git", "show", f"{after_ref}:{path}"], capture_output=True, text=True, errors="replace")
             after_text = after.stdout if after.returncode == 0 else None
         else:
             full = os.path.join(root, path)
@@ -227,7 +253,9 @@ def new_dependencies(files, rng):
         if after_text is None:
             continue
         try:
-            added = dependency_names(path, after_text) - (dependency_names(path, before.stdout) if before.returncode == 0 else set())
+            source = renamed_from.get(path, path)
+            declared = dependency_names(source, before.stdout) if before.returncode == 0 and MANIFEST.search(source) else set()
+            added = dependency_names(path, after_text) - declared
         except ValueError:
             found.append(f"{path} can't be read at one end of the change: check its dependencies by hand")
             continue
@@ -250,7 +278,7 @@ def php_min():
 
 
 def triage(rng=None):
-    files, added, removed = collect(rng)
+    files, added, removed, renamed_from = collect(rng)
     changed_lines = sum(files.values()) + removed
     behavior = [p for p in files if not TEST_OR_DOC.search(p)]
     style_only = bool(behavior) and all(STYLE_FILE.search(p) for p in behavior)
@@ -298,7 +326,7 @@ def triage(rng=None):
                 lenses[lens] = h
         if ui:
             lenses["ux-a11y-i18n"] = ui[:3]
-    dependencies = new_dependencies(files, rng)
+    dependencies = new_dependencies(files, renamed_from, rng)
     if dependencies:
         lenses.setdefault("maintainability", []).extend(dependencies)
 
