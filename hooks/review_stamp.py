@@ -202,11 +202,20 @@ def quality_log():
     """The main checkout's logs/quality.jsonl, even when ~/.agents links to a kit worktree: rows kept in a worktree are
     lost when it is removed. Under the suite (AGENTS_KIT_UNDER_TEST) they stay in the HOME it made."""
     kit = os.path.realpath(os.path.expanduser("~/.agents"))
-    if not os.environ.get("AGENTS_KIT_UNDER_TEST"):
-        common = subprocess.run(["git", "-C", kit, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                                capture_output=True, text=True)
-        if common.returncode == 0:  # else the kit isn't a git checkout, and ~/.agents is the only place
-            kit = os.path.dirname(common.stdout.strip())
+    try:
+        with open(os.path.join(kit, ".git")) as fh:
+            linked = "/worktrees/" in fh.read()
+    except OSError:  # a directory (the main checkout) or none (not a checkout, maybe inside a dotfiles repo)
+        linked = False
+    if not linked or os.environ.get("AGENTS_KIT_UNDER_TEST"):
+        return os.path.join(kit, "logs", "quality.jsonl")
+    listed = subprocess.run(["git", "-C", kit, "worktree", "list", "--porcelain"], capture_output=True, text=True)
+    main = listed.stdout.partition("\n")[0].removeprefix("worktree ") if listed.returncode == 0 else ""
+    # git lists the git dir, not a checkout, for a repository made with --separate-git-dir.
+    if main and os.path.exists(os.path.join(main, ".git")):
+        return os.path.join(main, "logs", "quality.jsonl")
+    print(f"quality log: couldn't find the kit's main checkout ({listed.stderr.strip() or main}), so this row goes to "
+          f"{kit}, a worktree whose removal loses it", file=sys.stderr)
     return os.path.join(kit, "logs", "quality.jsonl")
 
 
