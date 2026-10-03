@@ -1,0 +1,1 @@
+- The suite's "real hook log untouched" check counts only its own run's lines, so a session running from a temp dir at the same time no longer fails it; test_hooks' guard speed checks measure CPU time, so a loaded machine doesn't fail them.

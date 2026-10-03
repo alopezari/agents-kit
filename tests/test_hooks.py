@@ -39,6 +39,12 @@ def run_hook(script, payload, cwd=None, env=None):
     return json.loads(out) if out.strip() else None
 
 
+def child_cpu():
+    """CPU seconds of the finished hook processes: a guard's speed, without the wait a loaded runner adds."""
+    times = os.times()
+    return times.children_user + times.children_system
+
+
 def git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
 
@@ -120,8 +126,8 @@ def guard_blocks_irreversible(base):
     # cds the tracking can't follow (a pipeline, a skipped one, popd) must not make a delete look safer than from cwd
     for cmd in ["cd /tmp | cat; rm -rf ../tmp/x", "false && cd /tmp; rm -rf ../tmp/x", "pushd /tmp; popd; rm -rf ../tmp/x"]:
         assert guard(cmd, cwd="/usr/lib") == "deny", f"never less safe than judging from cwd: {cmd}"
-    started = time.time()
-    assert guard(";" * 60000 + "x/" * 30000) == "allow" and time.time() - started < 3, "a long line must not stall the guard"
+    started = child_cpu()
+    assert guard(";" * 60000 + "x/" * 30000) == "allow" and child_cpu() - started < 3, "a long line must not stall the guard"
     # An edit chained before a blocked step was lost without a word: the agent took it as done.
     d = run_hook("guard_bash.py", {"tool_input": {"command": "sed -i '' s/a/b/ notes.md && git push --force origin x"},
                                    "cwd": "/tmp", "session_id": "test"})
@@ -257,8 +263,8 @@ def pr_gate_review_and_validation(base):
     for command in inert:
         assert guard(command, repo) == "allow", f"nothing runs gh here: {command!r}"
     long_env = "env " + " ".join(f'V{i}="a"' for i in range(22)) + " true"
-    started = time.time()
-    assert guard(long_env, repo) == "allow" and time.time() - started < 3, "a long env line must not stall the guard"
+    started = child_cpu()
+    assert guard(long_env, repo) == "allow" and child_cpu() - started < 3, "a long env line must not stall the guard"
     write_stamp(repo, "review")
     assert guard("gh pr create --fill", repo) == "deny", "behavior change needs validation too"
     assert guard(f"cd {repo} && ~/.agents/bin/evidence A1 gh pr create --fill", repo) == "deny", "the PR gate sees through the runner"
@@ -873,13 +879,14 @@ def stop_never_waits_for_profile_after_turn(base):
         decision = run_hook("stop_checks.py", {**payload, "session_id": session}, env=env)
         return decision, time.time() - started
     without, plain_secs = timed_stop(RUN + "at2a", {"AGENTS_PROFILES_DIR": os.path.join(base, "no-profiles")})
-    env = profiles_with_after_turn(base, {"slow": '#!/bin/sh\nyes noise | head -c 2000000\nsleep 3\n'
+    # The after-turn outlasts a stop hook slowed by a loaded machine (4.9 s once), so "done" only exists if the hook waited.
+    env = profiles_with_after_turn(base, {"slow": '#!/bin/sh\nyes noise | head -c 2000000\nsleep 15\n'
                                                     'touch "$(dirname "$0")/done"\nexit 1\n'})
     done = os.path.join(env["AGENTS_PROFILES_DIR"], "slow", "done")
     decision, secs = timed_stop(RUN + "at2b", env)
     assert decision == without and "Debug leftover" in decision.get("reason", ""), (decision, without)
-    assert secs < plain_secs + 0.5 and not os.path.exists(done), f"the stop hook waited: {secs:.2f}s vs {plain_secs:.2f}s"
-    assert wait_for(done), "the after-turn keeps running after the stop hook returns"
+    assert secs < plain_secs + 5 and not os.path.exists(done), f"the stop hook waited: {secs:.2f}s vs {plain_secs:.2f}s"
+    assert wait_for(done, 25), "the after-turn keeps running after the stop hook returns"
 
 
 def stop_logs_an_after_turn_that_cannot_start(base):
@@ -1577,9 +1584,9 @@ def impeccable_guard_reads_prose_as_text(base):
                            ("a run of separators", "echo PRODUCT.md " + ";" * 100000),
                            ("escaped quotes", "echo PRODUCT.md " + '\\"a ' * 20000 + "; touch DESIGN.md"),
                            ("many short strings", "N=$(pwd); echo " + "'a b' " * 20000)]:
-        started = time.time()
+        started = child_cpu()
         shell(command)
-        assert time.time() - started < 2, f"{time.time() - started:.1f}s on {label}"
+        assert child_cpu() - started < 2, f"{child_cpu() - started:.1f}s of CPU on {label}"
 
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, stop_catches_committed_leftover,
