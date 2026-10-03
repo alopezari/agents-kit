@@ -311,6 +311,45 @@ if [ "$(command -v launchctl)" != "$home/fakes/launchd/launchctl" ]; then echo "
 unset AGENTS_SKIP_LAUNCHD  # CI sets it; the fake launchctl above is what keeps the real jobs safe here
 mkdir -p "$home/.claude" "$home/.codex"  # wired by their directories when the harnesses aren't installed (CI)
 wired=$(HOME="$home" "$kit/install.sh" --yes 2>&1)
+# Jobs name the node they run, taken from the shell's PATH: a shell on another nvm version mustn't make the doctor warn
+# while that node is still installed. Every job counts as loaded here, so only the plists decide.
+node_dir() { mkdir -p "$home/fakes/$1" && printf '#!/bin/sh\n' > "$home/fakes/$1/node" && chmod +x "$home/fakes/$1/node"; }
+node_dir node-a; node_dir node-b
+ls "$home/Library/LaunchAgents" | sed 's/\.plist$//' > "$home/stuck"
+jobs=$(wc -l < "$home/stuck" | tr -d " ")
+warned() { grep -c "not installed or out of date" <<<"$doctor"; }
+plists() { cksum "$home"/Library/LaunchAgents/*.plist; }
+PATH="$home/fakes/node-a:$PATH" HOME="$home" "$kit/install.sh" --yes >/dev/null 2>&1
+before=$(plists); : > "$home/launchctl.log"
+doctor=$(PATH="$home/fakes/node-b:$PATH" HOME="$home" "$kit/install.sh" --doctor 2>&1)
+check "--doctor accepts jobs that run another node still installed, and names it" \
+  '[ "$(warned)" = 0 ] && [ "$(grep -c "  ok    com\..*(node from $home/fakes/node-a)" <<<"$doctor")" = "$jobs" ]'
+check "--doctor changes neither the plists nor what launchd loaded" \
+  '[ "$(plists)" = "$before" ] && ! grep -qE "^(bootstrap|bootout)" "$home/launchctl.log"'
+grep -vx "$(head -1 "$home/stuck")" "$home/stuck" > "$home/stuck.new"; mv "$home/stuck" "$home/stuck.all"; mv "$home/stuck.new" "$home/stuck"
+doctor=$(PATH="$home/fakes/node-b:$PATH" HOME="$home" "$kit/install.sh" --doctor 2>&1)
+check "--doctor warns about a job on another node that isn't loaded" \
+  '[ "$(warned)" = 1 ] && grep -q "$(head -1 "$home/stuck.all") is not installed" <<<"$doctor"'
+mv "$home/stuck.all" "$home/stuck"
+: > "$home/launchctl.log"
+PATH="$home/fakes/node-b:$PATH" HOME="$home" "$kit/install.sh" --yes >/dev/null 2>&1
+check "install.sh renders the jobs again for the node on PATH, and reloads them" \
+  '[ "$(grep -l "fakes/node-b:" "$home"/Library/LaunchAgents/*.plist | wc -l | tr -d " ")" = "$jobs" ] \
+   && ! grep -q "fakes/node-a:" "$home"/Library/LaunchAgents/*.plist && [ "$(grep -c "^bootstrap" "$home/launchctl.log")" = "$jobs" ]'
+rm "$home/fakes/node-b/node"
+doctor=$(PATH="$home/fakes/node-a:$PATH" HOME="$home" "$kit/install.sh" --doctor 2>&1)
+check "--doctor warns once the node the jobs run is gone" '[ "$(warned)" = "$jobs" ]'
+node_dir node-b
+first_job=$(ls "$home"/Library/LaunchAgents/*.plist | head -1)
+sed -i '' 's#monitors/state#monitors/elsewhere#' "$first_job"
+second_job=$(ls "$home"/Library/LaunchAgents/*.plist | sed -n 2p)
+sed -i '' 's#:/opt/homebrew/bin:#:/opt/elsewhere/bin:#' "$second_job"
+third_job=$(ls "$home"/Library/LaunchAgents/*.plist | sed -n 3p); rm "$third_job"
+doctor=$(PATH="$home/fakes/node-a:$PATH" HOME="$home" "$kit/install.sh" --doctor 2>&1)
+check "--doctor warns about a job that differs in more than node, even beside it in PATH, or is missing" \
+  '[ "$(warned)" = 3 ] && grep -qx "Done." <<<"$doctor"'
+HOME="$home" "$kit/install.sh" --yes >/dev/null 2>&1  # back to the jobs the rest of the test expects
+rm "$home/stuck"
 S="$home/.claude/settings.json"
 jq '.hooks.Stop += [{matcher: "", hooks: [{type: "command", command: "my-own-hook"}]}] | .hooks.Notification = [{matcher: "x", hooks: []}]' \
   "$S" > "$S.tmp" && mv "$S.tmp" "$S"

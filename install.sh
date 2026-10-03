@@ -320,12 +320,21 @@ echo "Scheduled jobs"
 nodebin=$(dirname "$(command -v node 2>/dev/null || echo /usr/local/bin/node)")
 # Job labels are per user, not per HOME: a test install must not replace the real jobs.
 [ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && ok "skipped (AGENTS_SKIP_LAUNCHD is set)"
+render() { sed -e "s#__HOME__#$HOME#g" -e "s#__NODEBIN__#$1#g" -e "s#__LABEL__#$label#g" "$tpl"; }
 for tpl in "$KIT"/launchd/*.plist; do
   [ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && break
   label="com.$(id -un).$(basename "$tpl" .plist)"; dest="$HOME/Library/LaunchAgents/$label.plist"
-  rendered=$(sed -e "s#__HOME__#$HOME#g" -e "s#__NODEBIN__#$nodebin#g" -e "s#__LABEL__#$label#g" "$tpl")
+  if [ $DOCTOR = 1 ]; then
+    # A job is fine while the node it names is installed, even when the shell runs another nvm version.
+    node_line=$(render __NODEBIN__ | grep -F -m1 __NODEBIN__ || true)
+    before_node=${node_line%%__NODEBIN__*} after_node=${node_line#*__NODEBIN__}
+    job_node=$(grep -F -- "$before_node" "$dest" 2>/dev/null | head -1 || true); job_node=${job_node#"$before_node"}; job_node=${job_node%"$after_node"}
+    if [ -n "$job_node" ] && [ -x "$job_node/node" ] && [ "$(render "$job_node")" = "$(cat "$dest")" ] \
+      && launchctl list "$label" >/dev/null 2>&1; then ok "$label (node from $job_node)"; continue; fi
+    warn "$label is not installed or out of date"; continue
+  fi
+  rendered=$(render "$nodebin")
   if [ "$rendered" = "$(cat "$dest" 2>/dev/null)" ] && launchctl list "$label" >/dev/null 2>&1; then ok "$label"; continue; fi
-  if [ $DOCTOR = 1 ]; then warn "$label is not installed or out of date"; continue; fi
   mkdir -p "$KIT/monitors/state" "$(dirname "$dest")"; backup "$dest"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   echo "$rendered" > "$dest"
