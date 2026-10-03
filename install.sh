@@ -348,6 +348,7 @@ fi
 # The kit no longer supports Pi. Links an older install made go, or Pi would load an extension that is gone.
 for path in "$HOME/.pi/agent/AGENTS.md" "$HOME/.pi/agent/extensions/agents-kit.ts"; do
   case "$(readlink "$path" 2>/dev/null)" in
+    */../*) ;;  # leaves the kit: the user's
     "$KIT"/*)
       if [ $DOCTOR = 1 ]; then warn "$path is left from the kit's Pi support: install.sh removes it"
       elif rm "$path" 2>/dev/null; then fix "removed $path (the kit no longer supports Pi)"

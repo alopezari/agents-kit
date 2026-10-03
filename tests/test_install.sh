@@ -390,10 +390,10 @@ check "install.sh removes the kit's Pi links and keeps the rest of ~/.pi" \
   '[ ! -L "$home/.pi/agent/AGENTS.md" ] && [ ! -L "$home/.pi/agent/extensions/agents-kit.ts" ] && [ -L "$home/.pi/agent/extensions/mine.ts" ] \
    && [ "$(cat "$home/.pi/agent/settings.json")" = "{\"theme\":\"dark\"}" ] && grep -q "fix   removed $home/.pi/agent/AGENTS.md" <<<"$out"'
 check "and a second run says nothing about Pi" '! HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes 2>&1 | grep -q "\.pi/"'
-echo "my own Pi instructions" > "$home/.pi/agent/AGENTS.md"; ln -sfn "$home/elsewhere.ts" "$home/.pi/agent/extensions/agents-kit.ts"
+echo "my own Pi instructions" > "$home/.pi/agent/AGENTS.md"; ln -sfn "$kit/../elsewhere.ts" "$home/.pi/agent/extensions/agents-kit.ts"
 HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes >/dev/null 2>&1
-check "a file or a link elsewhere at those paths is the user's, and stays" \
-  '[ "$(cat "$home/.pi/agent/AGENTS.md")" = "my own Pi instructions" ] && [ "$(readlink "$home/.pi/agent/extensions/agents-kit.ts")" = "$home/elsewhere.ts" ]'
+check "a file, or a link out of the kit through .., at those paths is the user's, and stays" \
+  '[ "$(cat "$home/.pi/agent/AGENTS.md")" = "my own Pi instructions" ] && [ "$(readlink "$home/.pi/agent/extensions/agents-kit.ts")" = "$kit/../elsewhere.ts" ]'
 rm "$home/.pi/agent/AGENTS.md"; pi_links; chmod 555 "$home/.pi/agent/extensions"
 out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes 2>&1)
 chmod 755 "$home/.pi/agent/extensions"
