@@ -66,6 +66,11 @@ def removes_merged_and_keeps_the_rest_with_reasons(base):
     sh(main, "git", "worktree", "lock", locked)
     busy = worktree(base, main, "busy")
     sleeper = subprocess.Popen(["sleep", "30"], cwd=busy)
+    hidden = worktree(base, main, "hidden")
+    open(os.path.join(hidden, ".gitignore"), "a").write("")  # tracked, edited after git was told to stop looking
+    sh(hidden, "git", "update-index", "--assume-unchanged", ".gitignore")
+    open(os.path.join(hidden, ".gitignore"), "a").write("local edit\n")
+    sh(main, "git", "symbolic-ref", "refs/heads/alias", "refs/heads/trunk")  # deleting it must not delete trunk
     sh(main, "git", "branch", "old", "trunk~1")  # merged long ago, checked out nowhere
     sh(main, "git", "switch", "-q", "-c", "unmerged-branch")
     commit(main, "not merged")
@@ -83,11 +88,12 @@ def removes_merged_and_keeps_the_rest_with_reasons(base):
     assert not os.path.exists(done) and "done" not in branches(main), out.stdout
     assert "old" not in branches(main), "a merged branch checked out nowhere goes"
     for path, reason in ((dirty, "changes"), (secret, ".env"), (wip, "not in origin/trunk"), (locked, "locked"),
-                         (busy, "in use")):
+                         (busy, "in use"), (hidden, "assume-unchanged")):
         assert os.path.isdir(path), f"{path} must stay: {out.stdout}"
         line = next((line for line in out.stdout.splitlines() if path in line), "")
         assert line.startswith("kept") and reason in line, (reason, out.stdout)
-    assert {"trunk", "unmerged-branch", "wip", "dirty", "secret", "locked", "busy"} <= branches(main), branches(main)
+    assert {"trunk", "alias", "unmerged-branch", "wip", "dirty", "secret", "locked", "busy", "hidden"} <= branches(main), \
+        branches(main)
 
 
 def keeps_the_worktree_it_runs_in(base):

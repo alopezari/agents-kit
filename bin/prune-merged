@@ -68,6 +68,9 @@ def keep_reason(path, locked, default, here, cwds):
     changes = git(path, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none").strip()
     if changes:
         return "has changes: " + ", ".join(line[3:] for line in changes.splitlines()[:5])
+    hidden = [line[2:] for line in git(path, "ls-files", "-v").splitlines() if line[:1].islower() or line[:1] == "S"]
+    if hidden:  # assume-unchanged or skip-worktree: status can't see edits there
+        return "has files git status doesn't check (assume-unchanged or skip-worktree): " + ", ".join(hidden[:5])
     ignored = [p for p in git(path, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
                .split("\0") if p and not REGENERATED.search(p)]
     if ignored:
@@ -94,7 +97,7 @@ def main():
         here = os.path.realpath(os.getcwd())
         cwds = process_cwds()
         failed = False
-        removed_branches = set()
+        gone = set()  # worktrees removed, or that --dry-run would remove
         for path, branch, locked in worktrees(root)[1:]:
             try:
                 reason = keep_reason(path, locked, default, here, cwds)
@@ -104,26 +107,30 @@ def main():
                 print(f"kept {path}: {reason}")
             elif dry:
                 print(f"would remove {path}")
-                removed_branches.add(branch)
+                gone.add(path)
             else:
                 try:
                     git(root, "worktree", "remove", path)  # no --force: git checks again that nothing changed since
                     print(f"removed {path}")
+                    gone.add(path)
                 except GitFailed as error:
                     print(f"kept {path}: removal failed: {error}")
                     failed = True
-        checked_out = {branch for _, branch, _ in worktrees(root) if branch} - removed_branches
         local_default = default.removeprefix("origin/")
-        for line in git(root, "branch", "--merged", default, "--format=%(objectname) %(refname:short)").splitlines():
-            oid, branch = line.split(" ", 1)
-            if branch == local_default or branch in checked_out:
+        merged = git(root, "for-each-ref", "--merged", default, "--format=%(objectname) %(symref) %(refname)", "refs/heads")
+        for line in merged.splitlines():
+            oid, symref, ref = line.split(" ")
+            branch = ref.removeprefix("refs/heads/")
+            # Read again for each branch: another session may have checked one out since.
+            checked_out = {b for p, b, _ in worktrees(root) if b and p not in gone}
+            if symref or branch == local_default or branch in checked_out:
                 continue
             if dry:
                 print(f"would delete branch {branch}")
                 continue
             try:
                 # Only if it still points where --merged saw it: a branch moved since keeps its new commits.
-                git(root, "update-ref", "-d", f"refs/heads/{branch}", oid)
+                git(root, "update-ref", "--no-deref", "-d", ref, oid)
                 print(f"deleted branch {branch}")
             except GitFailed as error:
                 print(f"kept branch {branch}: {error}")
