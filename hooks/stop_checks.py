@@ -583,8 +583,11 @@ def run_snapshot(overlay, root):
             snapshot.write(source.read())
         snapshot.flush()
         os.chmod(snapshot.name, 0o700)
-        return subprocess.run([snapshot.name], cwd=root, capture_output=True, text=True, errors="replace",
-                              timeout=VERIFY_TIMEOUT)
+        result = subprocess.run([snapshot.name], cwd=root, capture_output=True, text=True, errors="replace",
+                                timeout=VERIFY_TIMEOUT)
+    # A syntax error names the file bash ran: name the overlay the user edits instead.
+    result.stdout, result.stderr = (out.replace(snapshot.name, overlay) for out in (result.stdout, result.stderr))
+    return result
 
 
 def run_verify(root):

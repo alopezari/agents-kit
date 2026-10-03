@@ -925,6 +925,11 @@ def overlay_edited_while_it_runs_still_runs_as_it_started(base):
         editor.join()
         assert os.path.exists(started) and "exit 7" in open(overlay).read(), "the overlay was edited mid-run"
         assert "failed" not in result.get("reason", ""), result
+        open(overlay, "w").write("#!/bin/bash\nif then\n")
+        open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
+        reason = stop(RUN + "s13", repo, [os.path.join(repo, "app.py")]).get("reason", "")
+        assert f"{overlay}: line 2" in reason and ".verify-run-" not in reason, "errors name the overlay, not its copy"
+        assert not [f for f in os.listdir(vdir) if f.startswith(".verify-run-")], "the copy is gone"
     finally:
         shutil.rmtree(vdir, ignore_errors=True)
 
