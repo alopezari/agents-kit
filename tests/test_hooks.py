@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 
@@ -900,6 +901,34 @@ def overlay_found_from_worktree_with_another_name(base):
         shutil.rmtree(vdir, ignore_errors=True)
 
 
+def overlay_edited_while_it_runs_still_runs_as_it_started(base):
+    """bash reads a script as it runs it: another session editing the overlay mid-run made it fail half-way."""
+    repo = new_repo(base, "zz-agents-overlay-edited")
+    vdir = os.path.expanduser("~/.agents/repos/zz-agents-overlay-edited")
+    os.makedirs(vdir, exist_ok=True)
+    overlay, started = os.path.join(vdir, "verify"), os.path.join(base, "started")
+    script = f"#!/bin/bash\ntouch {started}\nsleep 2\necho ran: overlay verify\nexit 0\n"
+
+    def edit_once_started():
+        for _ in range(200):
+            if os.path.exists(started):
+                open(overlay, "w").write(script.replace("exit 0", "exit 7"))  # same length: bash reads on from here
+                return
+            time.sleep(0.05)
+    try:
+        open(overlay, "w").write(script)
+        os.chmod(overlay, 0o755)
+        open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+        editor = threading.Thread(target=edit_once_started)
+        editor.start()
+        result = stop(RUN + "s12", repo, [os.path.join(repo, "app.py")])
+        editor.join()
+        assert os.path.exists(started) and "exit 7" in open(overlay).read(), "the overlay was edited mid-run"
+        assert "failed" not in result.get("reason", ""), result
+    finally:
+        shutil.rmtree(vdir, ignore_errors=True)
+
+
 def stop_catches_leftovers_in_worktree(base):
     main = new_repo(base, "main")
     wt = os.path.join(base, "wt")
@@ -1696,7 +1725,7 @@ def impeccable_guard_reads_prose_as_text(base):
         assert child_cpu() - started < 2, f"{child_cpu() - started:.1f}s of CPU on {label}"
 
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

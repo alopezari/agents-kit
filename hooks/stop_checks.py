@@ -575,6 +575,18 @@ def check_checkout(root, session, payload):
     return problems, verify_failed
 
 
+def run_snapshot(overlay, root):
+    """Run a copy of the overlay, beside it so paths relative to it still work: bash reads a script as it runs it,
+    and another session editing the overlay mid-run made this one fail half-way."""
+    with tempfile.NamedTemporaryFile(prefix=".verify-run-", dir=os.path.dirname(overlay)) as snapshot:
+        with open(overlay, "rb") as source:
+            snapshot.write(source.read())
+        snapshot.flush()
+        os.chmod(snapshot.name, 0o700)
+        return subprocess.run([snapshot.name], cwd=root, capture_output=True, text=True, errors="replace",
+                              timeout=VERIFY_TIMEOUT)
+
+
 def run_verify(root):
     """Run the repo's verify in root, save its report and leave only this run's stamp: the only path to a verify
     stamp. Returns (problems, failed, output, whether it checked anything, stamp error or None)."""
@@ -592,7 +604,8 @@ def run_verify(root):
         # An earlier run's stamp must not outlive a run that couldn't check anything.
         return [f"Couldn't fingerprint the change, so verify can't stamp it: {error}"], True, "", False, record_verify(root, None, "")
     try:
-        result = subprocess.run([verify], cwd=root, capture_output=True, text=True, errors="replace", timeout=VERIFY_TIMEOUT)
+        result = run_snapshot(verify, root) if verify != AUTO_VERIFY else subprocess.run(
+            [verify], cwd=root, capture_output=True, text=True, errors="replace", timeout=VERIFY_TIMEOUT)
     except subprocess.TimeoutExpired as timeout:
         # On POSIX the partial output comes back as bytes even with text=True.
         output = "".join(part.decode(errors="replace") if isinstance(part, bytes) else part or ""

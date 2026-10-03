@@ -1,0 +1,1 @@
+- The stop hook runs a copy of the repo's verify overlay, so another session editing it mid-run no longer fails the run half-way with a syntax error.
