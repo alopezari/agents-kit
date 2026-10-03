@@ -440,17 +440,30 @@ LEADING = re.compile(r"-\S*|\w+=\S*|if|then|else|elif|do|while|until|\{|!|time|e
 WORD = re.compile(r"[^\s\"'<>;&|()]+")
 
 
-# Prose a command carries without running it: a message flag's argument, what an unpiped echo or printf prints, and a
-# quoted heredoc fed to one of these commands. Everything else is read as before, however it might run.
+# Prose a command carries without running it, judged by the command that owns it: the message of git commit, tag,
+# merge or notes and of gh pr or issue; what a lone, unpiped echo or printf prints; and a quoted heredoc fed to cat or
+# tee. Everything else is read as before, however it might run.
 MESSAGE_FLAG = re.compile(r"(?:^|\s)(?:-[a-zA-Z]*m|--(?:message|title|body|notes|subject))(?:=|\s+)$")
-PROSE_HEREDOC_COMMANDS = ("cat", "tee", "git", "gh")
+LEADING_ASSIGNMENTS = r"\s*(?:\w+=\S*\s+)*"
+MESSAGE_COMMAND = re.compile(LEADING_ASSIGNMENTS + r"(?:git\s+(?:-[Cc]\s+\S+\s+)*(?:commit|tag|merge|notes)|gh\s+(?:pr|issue))\s")
+PRINTING_COMMAND = re.compile(LEADING_ASSIGNMENTS + r"(?:echo|printf)(?:\s|$)")
+PROSE_HEREDOC_RECEIVER = re.compile(LEADING_ASSIGNMENTS + r"(?:cat|tee)(?:\s|$)")
 HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(?:(['\"])([^'\"\s]+)\1|\\([^\s;&|<>()]+)|([^\s;&|<>()'\"\\]+))")
 
 
+def heredoc_body_is_prose(line, m):
+    """Whether bash only feeds this heredoc's body to cat or tee as text: a quoted delimiter, a cat or tee command
+    that owns the <<, and nothing piped onward."""
+    receiver = line[max([0] + [s.end() for s in re.finditer(r"&&|\|\||[;|(]", line[:m.start()])]):m.start()]
+    onward = re.split(r"&&|\|\||;", line[m.end():], maxsplit=1)[0]
+    return not m.group(4) and bool(PROSE_HEREDOC_RECEIVER.match(receiver)) and "|" not in onward
+
+
 def without_prose(command):
-    """The command with the prose it carries blanked, so a mention of PRODUCT.md, DESIGN.md or Impeccable there isn't
-    read as a write: shell_code() reads everything as code once a $( appears anywhere. Whatever this can't read for
-    sure, it leaves whole: missing a write costs more than asking about a mention."""
+    """The command with the prose it carries blanked, so a mention of PRODUCT.md, DESIGN.md or Impeccable in a commit
+    message or an echoed sentence isn't read as a write: impeccable_files() takes its targets from the command's own
+    text, quoted strings included, so a quoted path still counts. Whatever this can't read for sure, it leaves whole:
+    missing a write costs more than asking about a mention."""
     kept, heredocs = [], []  # (delimiter, body is prose) of each heredoc still open, in order
     for line in command.split("\n"):
         if heredocs:
@@ -466,9 +479,9 @@ def without_prose(command):
                 kept.append(line)
             continue
         kept.append(line)
-        words = line.split()
-        prose = bool(words) and words[0] in PROSE_HEREDOC_COMMANDS and not re.search(r"(?<!\|)\|(?!\|)", line)
-        heredocs = [(m.group(2) or m.group(3) or m.group(4), prose and not m.group(4)) for m in HEREDOC.finditer(line)]
+        comment = re.search(r"(?:^|\s)#", line)  # a << after it is text
+        heredocs = [(m.group(2) or m.group(3) or m.group(4), heredoc_body_is_prose(line, m))
+                    for m in HEREDOC.finditer(line) if not comment or m.start() < comment.start()]
         if heredocs and line.endswith("\\"):
             return command  # the header goes on, redirects and all, on the next line
     text = "\n".join(kept)
@@ -480,19 +493,24 @@ def without_prose(command):
     for start, end in spans:
         masked[start:end] = "q" * (end - start)
     masked = "".join(masked)
-    # Each pipeline judged once: per string, its slice of a long command would make this quadratic. No cut at a
+    # Each command judged once: per string, its slice of a long command would make this quadratic. No cut at a
     # parenthesis: what an echo prints inside $(...) or <(...) is fed to another command.
     cuts = [0] + [i for m in re.finditer(r"&&|\|\||[;&\n]", masked) for i in m.span()] + [len(masked)]
     starts = cuts[::2]
-    printing = [bool(re.match(r"\s*(?:echo|printf)\b", masked[a:b])) and "|" not in masked[a:b]
-                for a, b in zip(starts, cuts[1::2])]
+    kinds = []
+    for a, b in zip(starts, cuts[1::2]):
+        segment = masked[a:b]
+        runs_inside = "$(" in segment or "`" in segment or "|" in segment
+        kinds.append(None if runs_inside else "message" if MESSAGE_COMMAND.match(segment)
+                     else "printing" if PRINTING_COMMAND.match(segment) else None)
     out, last = [], 0
     for start, end in spans:
         quoted, before = text[start:end], masked[max(0, start - 40):start]
-        if quoted[0] == '"' and ("$" in quoted or "`" in quoted):
+        kind = kinds[bisect.bisect_right(starts, start) - 1]
+        whole_word = (start == 0 or masked[start - 1] in " \t=") and (end == len(masked) or masked[end] in " \t\n;&|)")
+        if not kind or not whole_word or (quoted[0] == '"' and ("$" in quoted or "`" in quoted)):
             continue
-        prints = printing[bisect.bisect_right(starts, start) - 1] and not re.search(r"[<>]\s*$", before)
-        if MESSAGE_FLAG.search(before) or prints:
+        if MESSAGE_FLAG.search(before) if kind == "message" else not re.search(r"[<>]\s*$", before):
             out += [text[last:start], "''"]
             last = end
     return "".join(out) + text[last:]

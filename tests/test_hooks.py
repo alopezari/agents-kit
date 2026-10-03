@@ -1490,7 +1490,7 @@ def impeccable_guard_reads_prose_as_text(base):
         got = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": shared, "session_id": "p1"}, env=env)
         return (got or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", "allow")
 
-    # A $( anywhere used to make the guard read every heredoc body and quoted string as commands.
+    # The rule took its targets from the command's own text, so a mention in prose read as a write.
     for label, command in [
             ("a commit message", "git commit -m 'Ask before PRODUCT.md and .impeccable/ in shared repos'"),
             ("a double-quoted one", 'git commit -m "Keep DESIGN.md out; impeccable live is gated"'),
@@ -1527,6 +1527,14 @@ def impeccable_guard_reads_prose_as_text(base):
             ("apostrophes in comments", "# Don't forget the file\ntouch PRODUCT.md\n# It's done"),
             ("escaped quotes", "echo \\'start; touch PRODUCT.md; echo \\'end"),
             ("a quoted .gitignore with a space", "N=$(pwd); echo PRODUCT.md >> 'My App/.gitignore'"),
+            ("an echo around a substitution", "echo $(touch 'PRODUCT.md')"),
+            ("a quoted part of a redirect target", 'echo text > ./"PRODUCT.md"'),
+            ("a -m that isn't a message", "git checkout -m 'PRODUCT.md'"),
+            ("a heredoc owned by a later command", "cat /dev/null; python3 - <<'PY'\nopen('PRODUCT.md', 'w').write('x')\nPY\nN=$(pwd)"),
+            ("a patch in a heredoc", "N=$(pwd)\ngit apply <<'PATCH'\ndiff --git a/PRODUCT.md b/PRODUCT.md\nnew file mode 100644\n"
+                                     "--- /dev/null\n+++ b/PRODUCT.md\n@@ -0,0 +1 @@\n+x\nPATCH"),
+            ("a heredoc after a comment mark", "cat /dev/null # <<':'\ntouch PRODUCT.md\n:\nN=$(pwd)"),
+            ("a command named like echo", 'echo-file() { touch "$1"; }\necho-file "PRODUCT.md"'),
             ("$( inside double quotes", 'echo "$(touch PRODUCT.md) done"'),
             ("a heredoc into .gitignore", "cat >> .gitignore <<'EOF'\nPRODUCT.md\nEOF\nN=$(wc -l < .gitignore)"),
             ("a heredoc into the file", "cat > DESIGN.md <<'EOF'\n# Design\nEOF"),
