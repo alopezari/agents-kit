@@ -3,7 +3,7 @@ import os
 import sys
 
 CHECKOUT = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-INSTALLED = os.path.realpath(os.path.expanduser("~/.agents"))
+INSTALLED = os.path.realpath(os.path.expanduser("~/.agents")) if os.path.exists(os.path.expanduser("~/.agents")) else "missing"
 # A test that re-runs itself under a HOME of its own (test_hooks' workers) was checked by the run that started it.
 if os.environ.get("AGENTS_KIT_UNDER_TEST") != CHECKOUT:
     if CHECKOUT != INSTALLED:

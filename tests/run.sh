@@ -10,10 +10,14 @@ cd "$(dirname "$0")" || exit 2
 if [ "$(cd .. && pwd -P)" != "$(cd "$HOME/.agents" 2>/dev/null && pwd -P)" ]; then
   kit_home=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-home-XXXXXX") || exit 2
   ln -s "$(cd .. && pwd -P)" "$kit_home/.agents" || { rmdir "$kit_home"; exit 2; }  # else the re-run would loop
-  HOME="$kit_home" AGENTS_SUITE_OWN_HOME=1 bash "$PWD/run.sh" "$@"; status=$?
-  rm -f "$kit_home/.agents" && rm -rf "$kit_home"  # the link first: rm never reaches the checkout
-  exit $status
+  # exec, so a signal reaches the suite's own handlers; it removes this HOME on exit.
+  HOME="$kit_home" AGENTS_SUITE_OWN_HOME="$kit_home" exec bash "$PWD/run.sh" "$@"
 fi
+remove_own_home() {  # the link first: rm never reaches the checkout
+  [ -n "${AGENTS_SUITE_OWN_HOME:-}" ] && rm -f "$AGENTS_SUITE_OWN_HOME/.agents" && rm -rf "$AGENTS_SUITE_OWN_HOME"
+  return 0
+}
+trap remove_own_home EXIT
 # A hook run by a test must log into the test's own place (its HOME, or AGENTS_LOG_DIR), never into the real log the
 # monthly job reads. A line counts as this run's when it carries the run's id (hooklog adds AGENTS_SUITE_RUN) or its cwd
 # is under the run's own temp root; sessions logging from elsewhere in the temp dir while the suite runs have neither.
@@ -138,7 +142,7 @@ done
 [ ${#picked[@]} -gt 0 ] || { echo "no section left to run"; exit 2; }
 
 run_root=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-XXXXXX") || exit 2
-trap 'rm -rf "$run_root"' EXIT
+trap 'rm -rf "$run_root"; remove_own_home' EXIT
 out="$run_root/out" && mkdir "$out" "$run_root/tmp" || exit 2
 export TMPDIR="$run_root/tmp" AGENTS_SUITE_RUN="${run_root##*/}"
 # A script's background jobs ignore SIGINT, so a signal here ends each section's process tree. No set -m: a group per
