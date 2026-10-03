@@ -349,6 +349,7 @@ doctor=$(PATH="$home/fakes/node-a:$PATH" HOME="$home" "$kit/install.sh" --doctor
 check "--doctor warns about a job that differs in more than node, even beside it in PATH, or is missing" \
   '[ "$(warned)" = 3 ] && grep -qx "Done." <<<"$doctor"'
 HOME="$home" "$kit/install.sh" --yes >/dev/null 2>&1  # back to the jobs the rest of the test expects
+rm "$home/stuck"
 S="$home/.claude/settings.json"
 jq '.hooks.Stop += [{matcher: "", hooks: [{type: "command", command: "my-own-hook"}]}] | .hooks.Notification = [{matcher: "x", hooks: []}]' \
   "$S" > "$S.tmp" && mv "$S.tmp" "$S"

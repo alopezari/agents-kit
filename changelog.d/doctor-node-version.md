@@ -1,1 +1,1 @@
-- `install.sh --doctor` no longer warns about scheduled jobs rendered for another node version while that node is still installed: it reports them ok and names the node they run. It still warns once that node is gone, or when the job differs in anything else.
+- `install.sh --doctor` no longer warns about scheduled jobs rendered for another node version while that node is still installed: it reports them ok and names the node they run. It still warns once that node is gone, when the job isn't loaded, or when it differs in anything else.

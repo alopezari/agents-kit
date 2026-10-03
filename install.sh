@@ -328,7 +328,7 @@ for tpl in "$KIT"/launchd/*.plist; do
   if [ "$rendered" = "$(cat "$dest" 2>/dev/null)" ] && launchctl list "$label" >/dev/null 2>&1; then ok "$label"; continue; fi
   if [ $DOCTOR = 1 ]; then
     # A job rendered from a shell on another nvm version is still fine while that node is installed.
-    node_line=$(grep -F __NODEBIN__ "$tpl" | head -1 | sed -e "s#__HOME__#$HOME#g" -e "s#__LABEL__#$label#g")
+    node_line=$(render __NODEBIN__ | grep -F -m1 __NODEBIN__ || true)
     before_node=${node_line%%__NODEBIN__*} after_node=${node_line#*__NODEBIN__}
     job_node=$(grep -F -- "$before_node" "$dest" 2>/dev/null | head -1 || true); job_node=${job_node#"$before_node"}; job_node=${job_node%"$after_node"}
     if [ -n "$job_node" ] && [ -x "$job_node/node" ] && [ "$(render "$job_node")" = "$(cat "$dest")" ] \
