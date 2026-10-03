@@ -35,11 +35,13 @@ Stay within triage's time budget. If a lens would need much longer, review the r
 
 Give each reviewer: the lens text, the base ref, the task or PR goal in one or two sentences, the spec's path when there is one (its Change map is where the Correctness tables start), and this instruction: *report every issue you suspect, each with file:line, the failing scenario, a severity and a confidence (high/medium/low); low-confidence findings are welcome, because step 3 verifies them.* Reviewers are read-only and never edit files.
 
+In Claude Code with the kit plugin, each lens is an agent type: spawn `kit:review-<lens>`, with triage's name for the lens (`kit:review-correctness`, `kit:review-ux-a11y-i18n`). It already holds the lens text, has no edit tools and leaves out CLAUDE.md, so give it the rest of the list above. `bundle.sh` below takes the lens's heading instead (`Correctness`, `"Performance and scale"`). Where that type isn't listed (Codex, or the plugin off), give a general subagent the lens text too.
+
 The Correctness lens always runs, at every risk level, and its tables go into the final report. Also run the repo's personal checks when they exist, with `python3 ~/.agents/hooks/stop_checks.py verify`, which runs `~/.agents/repos/<repo>/verify` and stamps a pass.
 
 ### Cross-model reviewer
 
-Use the other model family from the model you're running on. The harness doesn't decide it; Pi, for example, can run either family.
+Use the other model family from the model you're running on.
 
 - **Running on a Claude model →** Codex. Pass the whole change in the prompt; Codex's own command runner can fail in non-interactive runs, and a reviewer that can't read the code returns nothing. A pass takes about ten minutes, so start it as a background command (in Claude Code, `run_in_background`) as soon as the diff is ready, and run the same-model lenses meanwhile; for behavior changes, start validate's local checks too. When it finishes, read only its `## Found` section (its tables and findings); the rest is its working, and every line read stays in context. No section means the pass failed: read the error file and report it as a failed reviewer, not as no findings:
   ```bash
@@ -49,7 +51,7 @@ Use the other model family from the model you're running on. The harness doesn't
   awk '/^## Found$/ { section = "" } { section = section $0 "\n" } END { if (section ~ /^## Found/) printf "%s", section }' "$out"
   ```
   Run it once per lens you send cross-model. For a very large diff, split it by directory and review the riskiest parts.
-- **Running on an OpenAI model (Codex, or Pi on GPT) →** Claude:
+- **Running on an OpenAI model (Codex) →** Claude:
   ```bash
   claude -p "<lens text + goal + evidence instruction>. Review: git diff <merge-base>" \
     --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)" \
