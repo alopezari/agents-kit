@@ -140,7 +140,7 @@ section_version() {
 section_install() { bash test_install.sh; }
 section_kit_home() {
   local missing
-  missing=$(grep -L -E '^import kit_home\b|^\. "\$\(dirname "\$0"\)/kit_home\.sh"|^import "\./kit_home\.mjs";' test_*.py test_*.sh test_*.mjs test_*.mts)
+  missing=$(grep -L -E '^import kit_home\b|^\. "\$\(dirname "\$0"\)/kit_home\.sh"' test_*.py test_*.sh)
   if [ -z "$missing" ]; then echo "ok   every test loads kit_home first"
   else echo "FAIL these tests don't load kit_home, so run from a worktree they'd test ~/.agents:"; echo "$missing"; return 1; fi
 }

@@ -1,0 +1,1 @@
+- The suite's kit-home section no longer prints `grep: test_*.mjs: No such file or directory`: the node guard it looked for went with the Pi tests, and so does its pattern.
