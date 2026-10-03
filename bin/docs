@@ -334,8 +334,9 @@ def render():
     w("")
     for script in sorted({s for *_, s, _ in hooks}):
         w(f"**`{script}`**: {summary_and_detail(docstring('hooks/' + script))}\n")
-    w("Every block, and every approved or browser MCP call, is appended to `~/.agents/logs/hooks.jsonl`, "
-      "which the weekly health check reads. Allowed shell commands are not logged.\n")
+    w("Every block, every approved or browser MCP call and every shell command a user's `allow` line or approval file let through is "
+      "appended to `~/.agents/logs/hooks.jsonl`, which the weekly health check reads. Other allowed shell "
+      "commands are not logged.\n")
 
     w("### What the shell guard blocks\n")
     for reason in guard_rules():

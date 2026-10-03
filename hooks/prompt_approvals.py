@@ -3,7 +3,8 @@
 
 Asking for a write is approving it: when the user's message names a service guard_mcp.py guards
 (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards,
-writes to it are allowed until the user's next message.
+writes to it are allowed until the user's next message. A DROP or TRUNCATE statement guard_bash.py refuses
+needs more than a mention: the message opens with the line `allow <statement>`.
 Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the
 service only to read from it approves writes for that turn too.
 """
@@ -42,6 +43,8 @@ def main():
     prompt = str(payload.get("prompt") or "")
     named = sorted(s for s in guard_mcp.guarded_services() if re.search(rf"(?<!\w){re.escape(s)}(?!\w)", prompt, re.I))
     named += design_files.approval_names(prompt)
+    import guard_bash  # after the clearing: if it fails to load, the last turn's approvals are already gone
+    named += guard_bash.database_approval_names(prompt)
     if named:
         os.makedirs(os.path.join(guard_mcp.TURN_APPROVALS, session))
         for service in named:
