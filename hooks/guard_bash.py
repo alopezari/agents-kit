@@ -63,24 +63,45 @@ RULES = [
      "`make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production."),
     (r"\bchmod\s+(-R\s+)?777\b", "`chmod 777`: world-writable permissions."),
     (r"\.agents/approvals", "Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent."),
-    (r"(?<![\w-])approve['\"]?\s+['\"]?grant\b", "`bin/approve grant`: an approval comes from the user, in their message or "
-     "in the dialog Claude Code shows when a guard blocks a call, not from the agent."),
 ]
 
-STAGING_MARK = re.compile(r"(?<![\w-])staging['\"]?\s+mark\b")
+# Before splitting words: whether a word may hold a command worth reading again. `\` and a newline is a continuation.
+STAGING_MARK = re.compile(r"(?<![\w-])staging['\"]?(\s|\\\n)+['\"]?mark\b")
 MARKS_AS_USER = ("`bin/staging mark --by user`: a step marked as the user's comes from their own action, the Pass or Fail "
                  "button in /flow or the command in their terminal. Record your own verdict with `--by agent`.")
+APPROVE_GRANT = re.compile(r"(?<![\w-])approve\b[\s\S]*\bgrant\b")
+GRANTS_APPROVAL = ("`bin/approve grant`: an approval comes from the user, in their message or in the dialog Claude Code "
+                   "shows when a guard blocks a call, not from the agent.")
 
 
-def marks_as_user(command):
-    """`bin/staging mark … --by user` in the command, read as the shell splits its words: a quoted note can hold
-    `;`, `|` or a newline. A word that is a command itself (`bash -c '…'`) is read the same way."""
+def shell_words(command):
+    """The command's words as the shell splits them: a quoted note can hold `;`, `|` or a newline, and a line
+    continuation joins the words around it."""
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>")
         lexer.whitespace_split = True
-        words = list(lexer)
+        return [word for word in lexer if word != "\n"]  # shlex keeps a continuation's newline as a word
     except ValueError:  # an unclosed quote: no shell would run it, so read its plain words
-        words = [word.strip("'\"") for word in command.split()]
+        return [word.strip("'\"") for word in command.split()]
+
+
+def without_redirects(words):
+    """The words from the first one a redirect doesn't take: `> /dev/null`, `2> log`, `>&2` can stand between a
+    command and its arguments."""
+    while words:
+        if re.fullmatch(r"\d*", words[0]) and words[1:2] and re.fullmatch(r"[<>]+&?", words[1]):
+            words = words[1:]  # the fd number before `>`
+        elif re.fullmatch(r"[<>]+&?", words[0]):
+            words = words[2:]
+        else:
+            break
+    return words
+
+
+def marks_as_user(command):
+    """`bin/staging mark … --by user` in the command. A word that is a command itself (`bash -c '…'`) is read the
+    same way."""
+    words = shell_words(command)
     for i, word in enumerate(words):
         if re.search(r"(?<![\w-])staging$", word) and words[i + 1:i + 2] == ["mark"]:
             args = list(itertools.takewhile(lambda arg: not set(arg) <= set(";&|()"), words[i + 2:]))
@@ -89,6 +110,20 @@ def marks_as_user(command):
         elif word != command and STAGING_MARK.search(word) and marks_as_user(word):
             return MARKS_AS_USER
     return None
+
+
+def grants_approval(command):
+    """`bin/approve grant` in the command, read as marks_as_user reads it: only the mod's dialog runs it."""
+    if not APPROVE_GRANT.search(command):
+        return None
+    words = shell_words(command)
+    for i, word in enumerate(words):
+        if re.search(r"(?<![\w-])approve$", word) and without_redirects(words[i + 1:])[:1] == ["grant"]:
+            return GRANTS_APPROVAL
+        if word != command and APPROVE_GRANT.search(word) and grants_approval(word):
+            return GRANTS_APPROVAL
+    return None
+
 
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 
@@ -880,7 +915,8 @@ def main():
         cwd = os.path.realpath(cwd or os.getcwd())  # getcwd raises when the directory was deleted
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
                   or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd)
-                  or impeccable_files(command, cwd, payload.get("session_id")) or marks_as_user(command))
+                  or impeccable_files(command, cwd, payload.get("session_id")) or marks_as_user(command)
+                  or grants_approval(command))
         if not reason:
             for pattern, why in RULES:
                 if re.search(pattern, command):

@@ -399,8 +399,8 @@ async function registerReviewers($) {
   }
 }
 
-// A kit hook's PreToolUse deny, as next(e) hands it back: the call never ran. Only the start counts, so a tool's
-// own error that quotes a deny is never run again.
+// A kit hook's PreToolUse deny as Claude Code words it when next(e) hands it back: the call never ran. Only the
+// start counts, so a tool's own error that quotes a deny is never run again.
 const KIT_BLOCK = /^PreToolUse:\S+ hook error: Blocked by ~\/\.agents\/hooks\//
 const ALLOW_ONCE = 'Allow once'
 const KEEP_BLOCKED = 'Keep it blocked'
@@ -417,7 +417,7 @@ async function approveHelper($, kit, args, stdin = '') {
 }
 
 function previewOf(tool, input) {
-  const call = tool === 'Bash' ? String(input.command) : tool + ' ' + JSON.stringify(input)
+  const call = tool === 'Bash' ? String(input.command) : tool + ' ' + JSON.stringify(input, null, 2)
   if (call.length <= PREVIEW_CHARS) return call
   return call.slice(0, PREVIEW_CHARS) + `… (${call.length - PREVIEW_CHARS} more characters not shown)`
 }
@@ -426,11 +426,11 @@ function previewOf(tool, input) {
 async function askToLiftBlock($, e, next) {
   const blocked = await next(e)
   if (!blocked.isError || !KIT_BLOCK.test(String(blocked.text ?? ''))) return blocked
-  const { tool, tool_use_id, ...input } = e
+  const { tool, tool_use_id, agentId, ...input } = e
   const kit = await kitDir($)
   const session = await $.session.id()
   const asked = await approveHelper($, kit, ['needed'],
-    JSON.stringify({ tool_name: tool, tool_input: input, session_id: session, cwd: await $.session.cwd() }))
+    JSON.stringify({ tool_name: tool, tool_input: input, session_id: session, cwd: await $.session.cwd(), deny: blocked.text }))
   let needed = null
   try {
     needed = asked.failure ? null : JSON.parse(asked.stdout)
@@ -439,8 +439,7 @@ async function askToLiftBlock($, e, next) {
   }
   if (asked.failure) $.ui.log('kit: approve needed: ' + asked.failure, { to: 'debug' })
   if (!needed?.names?.length) return blocked
-  const names = needed.names.join(', ')
-  const allowTurn = `Allow ${names} for this turn`
+  const allowTurn = `Allow ${needed.scope} until my next message`
   const answer = await $.ui
     .ask(`A kit guard blocked this call: ${needed.what}.\n\n${previewOf(tool, input)}\n\nAllow it?`,
       { header: 'Approval', options: [ALLOW_ONCE, allowTurn, KEEP_BLOCKED] })
@@ -452,7 +451,7 @@ async function askToLiftBlock($, e, next) {
   }
   const granted = await approveHelper($, kit, ['grant', session, ...needed.names])
   if (granted.failure) {
-    $.ui.log('kit: approve grant: ' + granted.failure, { to: 'debug' })
+    $.ui.log("kit: couldn't record your approval, so the call stays blocked: " + granted.failure)
     return blocked
   }
   try {
@@ -460,7 +459,7 @@ async function askToLiftBlock($, e, next) {
   } finally {
     if (answer === ALLOW_ONCE) {
       const revoked = await approveHelper($, kit, ['revoke', session, ...needed.names])
-      if (revoked.failure) $.ui.log(`kit: couldn't take back the one-time approval of ${names}, so it lasts until your next message: ` + revoked.failure)
+      if (revoked.failure) $.ui.log(`kit: couldn't take back the one-time approval of ${needed.scope}, so it lasts until your next message: ` + revoked.failure)
     }
   }
 }

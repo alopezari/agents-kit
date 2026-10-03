@@ -109,6 +109,7 @@ def only_the_user_marks_a_staging_step_as_theirs(base):
                 "bash -c '~/.agents/bin/staging mark S1 PASS --note \"x;y\" --by user'",
                 "bash -c \"bin/staging mark S1 PASS --note '200; cached | twice' --by user\"",
                 'bin/staging mark S1 PASS "--by" "user"', "(bin/staging mark S1 PASS --by user)",
+                "bin/staging \\\n  mark S1 PASS --by user", "bash -c 'bin/staging \\\n mark S1 PASS --by user'",
                 "bin/staging mark S1 PASS --by=user>/dev/null"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     for cmd in ["~/.agents/bin/staging mark S1 PASS --by agent --note 'the user said S1 passed'",
@@ -122,10 +123,14 @@ def only_the_user_grants_an_approval_in_a_dialog(base):
     for cmd in ["~/.agents/bin/approve grant s1 sql.drop-table", "bin/approve grant s1 linear",
                 '"/Users/me/.agents/bin/approve" grant s1 linear', "bin/approve  'grant' s1 linear",
                 "bash -c '~/.agents/bin/approve grant s1 linear'", "cd /x && python3 ~/.agents/bin/approve grant s1 x",
-                "~/.agents/bin/evidence A1 ~/.agents/bin/approve grant s1 linear", "(bin/approve grant s1 x)"]:
+                "~/.agents/bin/evidence A1 ~/.agents/bin/approve grant s1 linear", "(bin/approve grant s1 x)",
+                "bin/approve \\\n  grant s1 linear", "bin/approve \\\n  'grant' s1 linear",
+                "bash -c 'bin/approve \\\n grant s1 linear'", "bin/approve > /dev/null grant s1 linear",
+                "bin/approve 2>/dev/null grant s1 x", "bin/approve >&2 grant s1 x"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     for cmd in ["~/.agents/bin/approve needed < payload.json", "~/.agents/bin/approve revoke s1 sql.drop-table",
-                "git log --grep 'grant'", "echo approved grants"]:
+                "git log --grep 'grant'", "echo approved grants", "bin/auto-approve grant s1 x",
+                "bin/approve revoke s1 x \\\n  && echo grant"]:
         assert guard(cmd) == "allow", f"should allow: {cmd}"
 
 

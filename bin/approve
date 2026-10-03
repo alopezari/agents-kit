@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """The approvals a guard's block needs, and the turn approvals the user's answer in a dialog writes.
 
-  approve needed < payload.json        {names, what}: the approvals this call's approvable rules still need, and the write
+  approve needed < payload.json        {names, what, scope}: the approvals the rule that blocked this call needs
   approve grant <session> <name>...    write them as turn approvals, as the user's message would, until their next one
   approve revoke <session> <name>...   remove them
 
-`needed` reads a PreToolUse payload: a guarded MCP service's write, or the sql.* grant of each DROP/TRUNCATE
-statement in a shell command, not granted yet this turn. Granting them lifts those rules only, not another block on
-the same call (a `sudo`); names is empty for anything else.
+`needed` reads a PreToolUse payload with the block's text as `deny`. When guard_mcp blocked a write, or guard_bash's
+DROP/TRUNCATE rule a command, it names the service, or the sql.* grant of each statement not granted yet this turn;
+`what` shows them and `scope` says what a turn approval covers. A later rule can still block the same call (a `sudo`
+after the statement). Names is empty for anything else.
 
-`grant` is the user's own answer (the Claude Code mod's dialog); the shell guard refuses it from an agent.
-Exits 2, writing nothing, on a missing payload or a session or name that isn't a plain word.
+`grant` is the user's own answer (the Claude Code mod's dialog); the shell guard refuses it from an agent. It writes
+every name or none. Exits 2, writing nothing, on a missing payload or a session or name that isn't a plain word.
 """
 import json
 import os
@@ -23,25 +24,38 @@ from hooklog import log  # noqa: E402
 
 SESSION = re.compile(r"[\w-]+")  # what guard_mcp.approved keeps of a session id
 NAME = re.compile(r"\w[\w.-]*")
+NOTHING = {"names": [], "what": "", "scope": ""}
 
 
 def needed(payload):
     session = payload.get("session_id")
     tool_input = payload.get("tool_input") or {}
+    deny = str(payload.get("deny") or "")
     if payload.get("tool_name") == "Bash":
         import guard_bash  # only here: it loads the whole shell guard
+        # Another rule blocked it (a force push before the statement): granting the statement would change nothing.
+        if "Blocked by ~/.agents/hooks/guard_bash.py: " + dict(guard_bash.RULES)[guard_bash.DATABASE_DESTROY] not in deny:
+            return NOTHING
         command = str(tool_input.get("command") or "")
-        statements = {}
+        verbs, shown = {}, []
         for match in re.finditer(guard_bash.DATABASE_DESTROY, command):
-            statements.setdefault(guard_bash.database_grant(match.group()), " ".join(match.group().upper().split()))
-        names = sorted(name for name in statements if not guard_mcp.approved(name, session))
-        what = ", ".join(f"`{statements[name]}`" for name in names) + " destroys database data"
-        return {"names": names, "what": what if names else ""}
+            name = guard_bash.database_grant(match.group())
+            if guard_mcp.approved(name, session):
+                continue
+            verbs[name] = " ".join(match.group().upper().split())
+            target = re.match(r"[^;'\"\n]{0,60}", command[match.end():]).group().rstrip()
+            shown.append(f"`{verbs[name]}{target}`")
+        if not verbs:
+            return NOTHING
+        shown = list(dict.fromkeys(shown))
+        return {"names": sorted(verbs), "what": f"{', '.join(shown)} {'destroys' if len(shown) == 1 else 'destroy'} "
+                "database data", "scope": "any " + " or ".join(sorted(set(verbs.values())))}
     tool_name = str(payload.get("tool_name") or "")
     hit = None if guard_mcp.BROWSER_MCP.match(tool_name) else guard_mcp.classify(tool_name, tool_input)
-    if not hit or guard_mcp.approved(hit[0], session):
-        return {"names": [], "what": ""}
-    return {"names": [hit[0]], "what": f"`{hit[1]}` writes to {hit[0]}, which other people see"}
+    if not hit or "Blocked by ~/.agents/hooks/guard_mcp.py: " not in deny or guard_mcp.approved(hit[0], session):
+        return NOTHING
+    return {"names": [hit[0]], "what": f"`{hit[1]}` writes to {hit[0]}, which other people see",
+            "scope": f"every {hit[0]} write"}
 
 
 def refuse(why):
@@ -69,9 +83,19 @@ def main(argv):
         return refuse(f"not an approval name: {bad[0]!r}")
     folder = os.path.join(guard_mcp.TURN_APPROVALS, session)
     if command == "grant":
-        os.makedirs(folder, exist_ok=True)
-        for name in names:
-            open(os.path.join(folder, name), "w").close()
+        written = []
+        try:
+            os.makedirs(folder, exist_ok=True)
+            for name in names:
+                path = os.path.join(folder, name)
+                if not os.path.exists(path):
+                    open(path, "x").close()
+                    written.append(path)
+        except OSError as error:  # all or nothing: a grant cut short would outlive the "Allow once" it was for
+            for path in written:
+                os.remove(path)
+            print(f"approve: couldn't write the approval: {error}", file=sys.stderr)
+            return 1
         log("approve", "approve-dialog", {"session_id": session}, ",".join(sorted(names)))
         return 0
     for name in names:

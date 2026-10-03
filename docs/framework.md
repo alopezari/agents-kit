@@ -7,7 +7,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 ## At a glance
 
 - **2 harnesses** share one `AGENTS.md`, 9 skills and 6 hook scripts.
-- **23 guard rules** block irreversible or outward-facing shell commands before they run.
+- **22 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
@@ -130,12 +130,11 @@ Every block, every approved or browser MCP call and every shell command a user's
 - `make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production.
 - `chmod 777`: world-writable permissions.
 - Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent.
-- `bin/approve grant`: an approval comes from the user, in their message or in the dialog Claude Code shows when a guard blocks a call, not from the agent.
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
 
-It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them (`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in `personal-repos.txt`. In Claude Code, the kit's mod asks you right away instead, in a dialog that shows the blocked MCP write or `DROP`/`TRUNCATE` command: allowing it writes the same approval your message would, once or for the turn (`bin/approve`, which the shell guard refuses from the agent).
+It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them (`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in `personal-repos.txt`. For MCP writes and `DROP`/`TRUNCATE` commands, Claude Code's mod asks you right away instead, in a dialog that shows the blocked call: allowing it writes the approval your message would, for that one call or until your next message (`bin/approve`, which the shell guard refuses from the agent).
 
 ## Verify: checking the change at the end of every turn
 
@@ -222,7 +221,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | The staging guide's steps before the merge, each with its latest result, who gave it, and its evidence files | `bin/staging steps --json` |
 |  | Pass button on each step before the merge, recorded as the user's verdict | `bin/staging mark <step> PASS --by user` in a terminal (the shell guard refuses it from the agent) |
 |  | Fail button on each step before the merge, recorded as the user's verdict | `bin/staging mark <step> FAIL --by user` in a terminal |
-| `tool.call` hook: Ask the user in a dialog when a kit guard blocks a call they could approve | A blocked MCP write or `DROP`/`TRUNCATE` command shown in a dialog: allowed once, for the turn, or kept blocked | the user's next message naming the service or opening with `allow <statement>`, or `touch ~/.agents/approvals/<service>` |
+| `tool.call` hook: Ask the user in a dialog when a kit guard blocks a call they could approve | A blocked MCP write or `DROP`/`TRUNCATE` command shown in a dialog: allowed once, until the user's next message, or kept blocked | the user's next message naming the service or opening with `allow <statement>`, or `touch ~/.agents/approvals/<service>` |
 | `kit:review-<lens>` agents: One reviewer agent type per self-review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/self-review/lenses.md` |
 
 The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.
@@ -234,7 +233,7 @@ The rules every mod follows are in the README (Mods contract). `install.sh` inst
 **`bin/approve`**: The approvals a guard's block needs, and the turn approvals the user's answer in a dialog writes.
 
 ```
-approve needed < payload.json        {names, what}: the approvals this call's approvable rules still need, and the write
+approve needed < payload.json        {names, what, scope}: the approvals the rule that blocked this call needs
 approve grant <session> <name>...    write them as turn approvals, as the user's message would, until their next one
 approve revoke <session> <name>...   remove them
 ```

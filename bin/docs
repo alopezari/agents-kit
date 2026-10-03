@@ -341,9 +341,9 @@ def render():
       "In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding "
       "them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them "
       "(`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in "
-      "`personal-repos.txt`. In Claude Code, the kit's mod asks you right away instead, in a dialog that shows the "
-      "blocked MCP write or `DROP`/`TRUNCATE` command: allowing it writes the same approval your message would, once or "
-      "for the turn (`bin/approve`, which the shell guard refuses from the agent).\n")
+      "`personal-repos.txt`. For MCP writes and `DROP`/`TRUNCATE` commands, Claude Code's mod asks you right away instead, "
+      "in a dialog that shows the blocked call: allowing it writes the approval your message would, for that one call or "
+      "until your next message (`bin/approve`, which the shell guard refuses from the agent).\n")
 
     w("## Verify: checking the change at the end of every turn\n")
     w("\"The change\" is everything the branch adds since it left the default branch, committed or not, plus untracked files: "

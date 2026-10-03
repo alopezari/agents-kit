@@ -21,8 +21,10 @@ def new_home(base):
                              "writes": {"tracker": ["create-issue"]}}],
                "direct": {"playwright": "^browser_type$"}},  # guard_mcp lets browser tools through anyway
               open(os.path.join(base, "profiles", "work", "mcp-writes.json"), "w"))
-    return {**os.environ, "HOME": base, "AGENTS_PROFILES_DIR": os.path.join(base, "profiles"), "AGENTS_TEST": "1",
-            "AGENTS_STATE_DIR": os.path.join(base, "state")}
+    env = {**os.environ, "HOME": base, "AGENTS_PROFILES_DIR": os.path.join(base, "profiles"), "AGENTS_TEST": "1",
+           "AGENTS_STATE_DIR": os.path.join(base, "state")}
+    env.pop("AGENTS_LOG_DIR", None)  # the tests read the hook log in their own HOME
+    return env
 
 
 def run(env, *args, payload=None):
@@ -31,7 +33,12 @@ def run(env, *args, payload=None):
 
 
 def needed(env, payload):
-    done = run(env, "needed", payload=payload)
+    """What bin/approve needs for the call, given the block the real guard gives it."""
+    script = "guard_bash.py" if payload["tool_name"] == "Bash" else "guard_mcp.py"
+    done = subprocess.run(["python3", os.path.join(KIT, "hooks", script)], input=json.dumps(payload),
+                          capture_output=True, text=True, env=env)
+    deny = json.loads(done.stdout)["hookSpecificOutput"]["permissionDecisionReason"] if done.stdout.strip() else ""
+    done = run(env, "needed", payload={**payload, "deny": "PreToolUse:Bash hook error: " + deny if deny else ""})
     assert done.returncode == 0 and not done.stderr, done
     return json.loads(done.stdout)
 
@@ -54,11 +61,19 @@ def guard(env, script, payload):
 def names_the_approvals_that_would_lift_a_block(base):
     env = new_home(base)
     got = needed(env, bash("psql -c 'DROP TABLE runs'"))
-    assert got["names"] == ["sql.drop-table"] and "DROP TABLE" in got["what"], got
+    assert got == {"names": ["sql.drop-table"], "what": "`DROP TABLE runs` destroys database data",
+                   "scope": "any DROP TABLE"}, got
     got = needed(env, bash("psql -c 'truncate  table runs; DROP DATABASE x; drop table y'"))
     assert got["names"] == ["sql.drop-database", "sql.drop-table", "sql.truncate-table"], got
+    assert got["what"] == "`TRUNCATE TABLE runs`, `DROP DATABASE x`, `DROP TABLE y` destroy database data", got
+    assert got["scope"] == "any DROP DATABASE or DROP TABLE or TRUNCATE TABLE", got
     got = needed(env, mcp("mcp__linear__save_issue", {"title": "Fix it"}))
-    assert got["names"] == ["linear"] and "save_issue" in got["what"] and "linear" in got["what"], got
+    assert got == {"names": ["linear"], "what": "`save_issue` writes to linear, which other people see",
+                   "scope": "every linear write"}, got
+    assert needed(env, bash("git push --force origin x && psql -c 'DROP TABLE runs'"))["names"] == [], \
+        "another rule blocked it: allowing the statement would change nothing"
+    assert run(env, "needed", payload={**bash("psql -c 'DROP TABLE runs'"), "deny": ""}).stdout.startswith(
+        '{"names": []'), "no block, nothing to approve"
     got = needed(env, mcp("mcp__plugin_gateway__execute", {"provider": "tracker", "subtool": "create-issue"}))
     assert got["names"] == ["tracker"], "a service a profile declares too"
     assert needed(env, bash("sudo psql -c 'DROP TABLE runs'"))["names"] == ["sql.drop-table"], \
@@ -68,9 +83,11 @@ def names_the_approvals_that_would_lift_a_block(base):
                     mcp("mcp__plugin_gateway__execute", {"provider": "tracker", "subtool": "list-issues"}),
                     {"tool_name": "Write", "tool_input": {"file_path": "/x/DESIGN.md"}, "session_id": "s1"}]:
         assert needed(env, payload)["names"] == [], f"nothing the dialog can approve: {payload}"
-    assert run(env, "grant", "s1", "sql.drop-table").returncode == 0
+    assert run(env, "grant", "s1", "sql.drop-table", "linear").returncode == 0
     got = needed(env, bash("psql -c 'DROP TABLE runs; DROP SCHEMA s'"))
-    assert got["names"] == ["sql.drop-schema"], "an approval the turn already has isn't asked for again"
+    assert got["names"] == ["sql.drop-schema"] and got["what"] == "`DROP SCHEMA s` destroys database data", \
+        "an approval the turn already has isn't asked for again"
+    assert needed(env, mcp("mcp__linear__save_issue"))["names"] == [], "nor a service's"
     assert needed(env, bash("psql -c 'DROP TABLE runs'", session="s2"))["names"] == ["sql.drop-table"], \
         "another session's approval counts for nothing here"
     assert run(env, "needed").returncode == 2, "no payload"
@@ -93,12 +110,21 @@ def a_grant_is_the_turn_approval_a_message_would_write(base):
     subprocess.run(["python3", os.path.join(KIT, "hooks", "prompt_approvals.py")], env=env, capture_output=True,
                    input=json.dumps({"prompt": "thanks", "session_id": "s1", "cwd": "/tmp"}), text=True)
     assert guard(env, "guard_mcp.py", issue) == "deny", "a dialog's approval ends with the user's next message too"
-    turn = os.path.join(base, ".agents", "approvals", "turn")
+    approvals = os.path.join(base, ".agents", "approvals")
+    assert run(env, "grant", "s1", "linear").returncode == 0
+    before = sorted(os.path.relpath(os.path.join(d, f), base) for d, _, fs in os.walk(base) for f in fs)
     for args in [("grant", "s1"), ("grant", "../s1", "linear"), ("grant", "s1", "../../evil"), ("grant", "", "linear"),
-                 ("grant", "s1", "linear", "a/b"), ("revoke", "s1", ".."), ("grant",), ("allow", "s1", "linear")]:
+                 ("grant", "..", "linear"), ("grant", "s1", "x", "a/b"), ("revoke", "s1", "linear", ".."),
+                 ("grant", "s1", ""), ("grant",), ("allow", "s1", "linear")]:
         done = run(env, *args)
         assert done.returncode == 2 and done.stderr.startswith("approve:"), (args, done)
-    assert os.listdir(turn) == [], "a refused grant writes nothing"
+    after = sorted(os.path.relpath(os.path.join(d, f), base) for d, _, fs in os.walk(base) for f in fs)
+    assert after == before, f"a refused call writes and removes nothing: {set(before) ^ set(after)}"
+    os.symlink("/nonexistent", os.path.join(approvals, "turn", "s1", "sql.drop-table"))
+    done = run(env, "grant", "s1", "sql.drop-schema", "sql.drop-table")
+    assert done.returncode == 1 and "couldn't write the approval" in done.stderr, done
+    assert not os.path.exists(os.path.join(approvals, "turn", "s1", "sql.drop-schema")), \
+        "a grant cut short takes back the names it wrote"
 
 
 for test in (names_the_approvals_that_would_lift_a_block, a_grant_is_the_turn_approval_a_message_would_write):
