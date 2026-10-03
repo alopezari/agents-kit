@@ -13,7 +13,7 @@ gh pr view <n> --json number,url,state,mergedAt,mergeCommit,headRefName
 
 It must be merged. If it isn't, say so and stop: `follow-pr` is the step before.
 
-**A repo installed on this machine** (a personal tool or profile whose deploy is a pull and an install here; the repo notes say so) has no production for the user to reach: pull, install and run the guide's "After the merge" steps marked as yours, through `~/.agents/bin/evidence` as written, then record the results as in section 3. Ask first only when a step runs something real the user didn't plan for (a paid or long run, a write to data outside a copy). Rollback and closing the loop are as below.
+**A repo installed on this machine** (a personal tool or profile whose deploy is a pull and an install here; the repo notes say so) has no production for the user to reach: pull, install and run the guide's "After the merge" steps marked as yours, through `~/.agents/bin/evidence` as written, then record the results as in section 3. On the default branch `bin/reports` finds that branch's reports, not the merged PR's: read the guide at `$(git rev-parse --path-format=absolute --git-common-dir)/agents/staging-guide-<repo>-<branch key>.md` (the PR's head branch, `/` written `~`), and set `EVIDENCE_DIR` to the `evidence-<repo>-<branch key>` directory beside it. Ask first only when a step runs something real the user didn't plan for (a paid or long run, a write to data outside a copy). Rollback and closing the loop are as below.
 
 ## 1. Deploy and verification guide
 
