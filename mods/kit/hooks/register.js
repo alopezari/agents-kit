@@ -310,30 +310,30 @@ export function register(on) {
     const { Box, Text, Button } = $.ui.resolve(e)
     const line = (text) => Text({ bold: NEEDS_ATTENTION.test(text), wrap: 'wrap', children: [clip(text)] })
     const refreshing = shown && gathering ? ' · refreshing…' : ''
-    const body = !shown
+    const top = !shown
       ? [Text({ children: ['Gathering…'] })]
       : shown.none
         ? [line(shown.none + refreshing)]
-        : [
-            Text({ bold: true, children: [clip(shown.heading + refreshing)] }),
-            ...shown.sections.flatMap(([title, lines]) => [
-              Text({ children: [' '] }),
-              Text({ dimColor: true, children: [title] }),
-              ...lines.map((text, i) => (title === 'Flow' && i === 0 ? Text({ bold: true, children: [clip(text)] }) : line(text))),
-            ]),
-          ]
+        : [Text({ bold: true, children: [clip(shown.heading + refreshing)] })]
+    const sections = (shown?.sections ?? []).flatMap(([title, lines]) => [
+      Text({ children: [' '] }),
+      Text({ dimColor: true, children: [title] }),
+      ...lines.map((text, i) => (title === 'Flow' && i === 0 ? Text({ bold: true, children: [clip(text)] }) : line(text))),
+    ])
+    // A press starts the work and returns: Claude Code skips a hook still running after 10 s.
     // Run verify only where there is a change: elsewhere a press would do nothing.
     const buttons = [
-      ...(shown?.root ? [Button({ key: 'run-verify', label: 'Run verify', hotkey: 'v', plain: true, onPress: () => runVerify($) })] : []),
-      Button({ key: 'refresh', label: 'Refresh', hotkey: 'r', plain: true, onPress: () => gather($) }),
+      ...(shown?.root ? [Button({ key: 'run-verify', label: 'Run verify', hotkey: 'v', plain: true, onPress: () => void runVerify($) })] : []),
+      Button({ key: 'refresh', label: 'Refresh', hotkey: 'r', plain: true, onPress: () => void gather($) }),
     ]
+    // The buttons and the run they started come first: a long report scrolls the bottom of the pane away.
     return Box({
       flexDirection: 'column',
       children: [
-        ...body,
-        ...(verifyRun.state === 'idle' ? [] : [Text({ children: [' '] }), ...verifyLines().map(line)]),
-        Text({ children: [' '] }),
+        ...top,
         Box({ flexDirection: 'row', columnGap: 2, children: buttons }),
+        ...verifyLines().map(line),
+        ...sections,
       ],
     })
   })

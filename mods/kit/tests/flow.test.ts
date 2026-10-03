@@ -488,7 +488,8 @@ test('Run verify that fails, is killed or cannot start is a failure with its rea
   expect(await pressed()).toMatch(/: passed$/m)
 })
 
-test('Run verify that never ends is stopped at its deadline as a failure, and a second press while it runs starts nothing', async ($, on) => {
+// Each settle while the stuck child waits costs about a second of real time.
+test('Run verify that never ends is stopped at its deadline as a failure, and a second press while it runs starts nothing', { timeout: 20_000 }, async ($, on) => {
   const { clock } = stub(on, repo())
   let spawns = 0
   let release
@@ -499,13 +500,12 @@ test('Run verify that never ends is stopped at its deadline as a failure, and a 
     return { value: { code: 0, signal: null } }
   })
   const ui = await openPane($, clock)
-  // A press resolves once its handler finishes, and the first one waits for verify: don't await it yet.
-  const first = ui.press({ key: 'run-verify' })
+  // A press returns while verify runs: Claude Code skips a press hook still running after 10 s.
+  await ui.press({ key: 'run-verify' })
   await clock.settle()
   await ui.press({ key: 'run-verify' })
   expect(await texts(ui)).toMatch(/Run verify: running/)
   await clock.advance(660_000)
-  await first
   await clock.settle()
   expect(spawns).toBe(1)
   let shown = await texts(ui)
