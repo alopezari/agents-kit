@@ -12,7 +12,7 @@ if [ "${1:-}" = "--branch" ]; then
   dir="$(git rev-parse --path-format=absolute --git-common-dir)/agents"
   tilde='~'  # review_stamp.branch_key: / becomes ~
   suffix="$("$HOME/.agents/bin/repo-name")-${2//\//$tilde}"
-  other_branch=1 branch_arg=" --branch $2"
+  other_branch=1 branch_arg=" --branch $(printf %q "$2")"  # a branch name may hold quotes or $
   shift 2
 else
   spec="$("$HOME/.agents/skills/spec/path.sh")"
