@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """review-mining/outcomes.py and the escape log it reads: per-PR metrics, follow-up candidates, and the joins
 to follow-pr's escapes and to agent sessions. GitHub is replaced by canned GraphQL answers."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import importlib.util
 import json
 import os

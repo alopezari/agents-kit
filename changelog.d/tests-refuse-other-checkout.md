@@ -1,0 +1,1 @@
+- A kit test run by hand from a worktree now stops with exit 2 and says how to run it, instead of silently testing the main checkout through `~/.agents`; `tests/run.sh` run from a worktree sets up a HOME pointing at that worktree by itself, as CI and verify do.

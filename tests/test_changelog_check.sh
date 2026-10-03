@@ -1,5 +1,6 @@
 #!/bin/bash
 # .github/changelog-check and bin/changelog release against throwaway repos.
+. "$(dirname "$0")/kit_home.sh"
 set -uo pipefail
 repo=$(mktemp -d "${TMPDIR:-/tmp}/agents-changelog-XXXXXX")
 trap 'rm -rf "$repo"' EXIT

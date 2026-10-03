@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """bin/quality-log: well-formed entries are written, malformed ones refused without touching the log."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import json
 import os
 import shutil

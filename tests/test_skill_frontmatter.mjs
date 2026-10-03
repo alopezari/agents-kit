@@ -1,6 +1,7 @@
 // Every skill's frontmatter must parse as strict YAML. Pi silently drops a skill whose frontmatter
 // doesn't (follow-pr's unquoted "run: CI failures" did), while Codex and Claude Code load it anyway.
 // Uses the yaml package Pi itself ships, so the check matches what Pi accepts.
+import "./kit_home.mjs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFileSync, readdirSync, existsSync, realpathSync } from "node:fs";
