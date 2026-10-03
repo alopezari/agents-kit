@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 
+sys.dont_write_bytecode = True  # loading free-branch would leave bin/__pycache__ behind
 _loader = importlib.machinery.SourceFileLoader(
     "free_branch", os.path.join(os.path.dirname(os.path.realpath(__file__)), "free-branch"))
 _spec = importlib.util.spec_from_loader("free_branch", _loader)
