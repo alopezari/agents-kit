@@ -101,9 +101,13 @@ def test(fn):
 # --- guard_bash ------------------------------------------------------------------------------
 def only_the_user_marks_a_staging_step_as_theirs(base):
     for cmd in ["~/.agents/bin/staging mark S1 PASS --by user", "bin/staging mark S2 FAIL --by=user",
-                "cd /x && $HOME/.agents/bin/staging mark S1 PASS --note ok --by 'user'", "staging mark S1 PASS --by user"]:
+                "cd /x && $HOME/.agents/bin/staging mark S1 PASS --note ok --by 'user'", "staging mark S1 PASS --by user",
+                "~/.agents/bin/staging mark S1 PASS --note '200; cached | twice' --by user",
+                "~/.agents/bin/staging mark S1 PASS \\\n  --by user", '"/Users/me/.agents/bin/staging" mark S1 PASS --by user',
+                "~/.agents/bin/evidence S1 bash -c '~/.agents/bin/staging mark S1 PASS --by user'"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     for cmd in ["~/.agents/bin/staging mark S1 PASS --by agent --note 'the user said S1 passed'",
+                "~/.agents/bin/staging mark S1 FAIL --by agent --note '200; cached | user saw it'",
                 "~/.agents/bin/staging steps --json", "git switch staging && git log --by-user"]:
         assert guard(cmd) == "allow", f"should allow: {cmd}"
 

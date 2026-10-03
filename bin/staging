@@ -28,6 +28,9 @@ HEADER = ["Step", "Result", "By", "Evidence"]
 ROUND = re.compile(r"^## Results(?! after the deploy)\b.*$", re.M)  # ship's table holds the steps after the merge
 
 
+PIPE = re.compile(r"(?<!\\)\|")
+
+
 def cells_of(line):
     # Markdown tables: outer pipes optional, \| is a pipe inside a cell.
     return [c.strip() for c in re.split(r"(?<!\\)\|", re.sub(r"^\s*\||(?<!\\)\|\s*$", "", line))]
@@ -35,7 +38,7 @@ def cells_of(line):
 
 def before_merge_steps(text):
     section = re.search(r"^## Before the merge\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
-    return re.findall(r"^### (S\d+)\b[.:]?\s*(.*)$", section.group(1), re.M) if section else []
+    return re.findall(r"^### (S\d+)\b[.:]?[ \t]*(.*)$", section.group(1), re.M) if section else []
 
 
 def latest_round(text):
@@ -47,18 +50,46 @@ def latest_round(text):
     return starts[-1], (starts[-1] + 1 + following.start()) if following else len(text)
 
 
-def round_table(lines):
-    """(first line, last line + 1, {step: {column: cell}}) of the round's table with Result and Evidence, or None."""
-    for i, line in enumerate(lines):
-        if "|" in line and {"Result", "Evidence"} <= set(cells_of(line)):
-            names, end, rows = cells_of(line), i + 1, {}
-            while end < len(lines) and "|" in lines[end]:
-                cells = cells_of(lines[end])
-                if not set("".join(cells)) <= set("-: "):
-                    rows[cells[0]] = dict(zip(names, cells))
-                end += 1
-            return i, end, rows
-    return None
+def round_tables(lines):
+    """The round's results tables, in order: (header line, end line, column names, {step: [its row lines]})."""
+    tables, i = [], 0
+    while i < len(lines):
+        names = [c.strip("*_") for c in cells_of(lines[i])] if PIPE.search(lines[i]) else []
+        if not {"Result", "Evidence"} <= set(names):
+            i += 1
+            continue
+        rows, end = {}, i + 1
+        while end < len(lines) and PIPE.search(lines[end]):
+            cells = cells_of(lines[end])
+            if not set("".join(cells)) <= set("-: "):
+                rows.setdefault(cells[0].strip("*_"), []).append(end)
+            end += 1
+        tables.append((i, end, names, rows))
+        i = end
+    return tables
+
+
+def recorded(lines):
+    """{step: {column: cell}}, the last row for a step winning, as review_stamp reads the round."""
+    rows = {}
+    for _, _, names, at in round_tables(lines):
+        for step, found in at.items():
+            rows[step] = dict(zip(names, cells_of(lines[found[-1]])))
+    return rows
+
+
+def with_cell(line, after, value):
+    """The table line with a cell holding value inserted after its cell number `after`, the rest left as written."""
+    pipes = [m.start() for m in PIPE.finditer(line)]
+    lead = 1 if line.lstrip().startswith("|") else 0
+    if after + lead < len(pipes):
+        at = pipes[after + lead] + 1
+        return line[:at] + f" {value} |" + line[at:]
+    return line.rstrip() + ("" if line.rstrip().endswith("|") else " |") + f" {value} |"
+
+
+def row_line(cells):
+    return "| " + " | ".join(cells) + " |"
 
 
 def evidence_files(evidence, step):
@@ -66,13 +97,14 @@ def evidence_files(evidence, step):
         return []
     named = re.compile(rf"^{step}(?:[a-z]?\.txt|-.+\.png)$")
     return [os.path.join(evidence, name) for name in sorted(os.listdir(evidence))
-            if named.match(name) and os.path.getsize(os.path.join(evidence, name)) > 0]
+            if named.match(name) and os.path.isfile(os.path.join(evidence, name))
+            and os.path.getsize(os.path.join(evidence, name)) > 0]
 
 
 def guide_and_evidence():
     guide, evidence = review_stamp.report_paths("staging-guide", "evidence")
-    if not guide:
-        sys.exit("staging: bin/reports didn't name this branch's staging guide")
+    if not guide or not evidence:
+        sys.exit("staging: bin/reports didn't name this branch's staging guide and evidence directory")
     return guide, evidence
 
 
@@ -87,25 +119,31 @@ def read_guide(guide):
 def steps(guide, evidence):
     text = read_guide(guide) or ""
     bounds = latest_round(text)
-    table = round_table(text[bounds[0]:bounds[1]].splitlines()) if bounds else None
-    rows = table[2] if table else {}
+    rows = recorded(text[bounds[0]:bounds[1]].split("\n")) if bounds else {}
     return [{"id": step, "title": title.strip(), "result": re.sub(r"[*_]", "", rows.get(step, {}).get("Result", "")),
-             "by": rows.get(step, {}).get("By", ""), "evidence": evidence_files(evidence, step)}
+             "by": rows.get(step, {}).get("By", "").strip("*_"), "evidence": evidence_files(evidence, step)}
             for step, title in before_merge_steps(text)]
 
 
+def elsewhere(branch):
+    """Why the checkout isn't on `branch`, or None (and None when no branch is asked for)."""
+    current = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
+    return f"staging: the checkout is on {current or 'a detached HEAD'}, not {branch}: nothing marked" \
+        if branch and current != branch else None
+
+
 def mark(guide, evidence, step, result, by, note, branch):
-    if branch:
-        current = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
-        if current != branch:
-            print(f"staging: the checkout is on {current or 'a detached HEAD'}, not {branch}: nothing marked", file=sys.stderr)
-            return 2
-    if not os.path.isfile(guide):
-        print(f"staging: no staging guide at {guide}", file=sys.stderr)
+    refused = elsewhere(branch) or (None if os.path.isfile(guide) else f"staging: no staging guide at {guide}")
+    if refused:
+        print(refused, file=sys.stderr)
         return 2
     # Read, change and replace under one lock: the pane's button and an agent's mark can land at the same moment.
     with open(os.path.join(os.path.dirname(guide), "." + os.path.basename(guide) + ".lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        refused = elsewhere(branch)  # again: the checkout can move while a mark waits for the lock
+        if refused:
+            print(refused, file=sys.stderr)
+            return 2
         return mark_locked(guide, evidence, step, result, by, note)
 
 
@@ -127,27 +165,44 @@ def mark_locked(guide, evidence, step, result, by, note):
     if step not in [s for s, _ in before_merge_steps(text)]:
         print(f"staging: no step {step} before the merge in {guide}", file=sys.stderr)
         return 2
-    files = evidence_files(evidence, step)
-    links = ", ".join(f"[{os.path.basename(f)}]({f})" for f in files) or "no saved evidence"
     bounds = latest_round(text)
     if not bounds:
-        text = text.rstrip("\n") + f"\n\n## Results ({datetime.date.today().isoformat()})\n\n"
+        text = text.rstrip("\n") + f"\n\n## Results ({datetime.date.today().isoformat()})\n"
         bounds = (text.rindex("## Results"), len(text))
-    lines = text[bounds[0]:bounds[1]].rstrip("\n").split("\n")
-    table = round_table(lines)
-    start, end, rows = table if table else (len(lines), len(lines), {})
-    if not table:
-        lines += [""] if lines[-1] else []
-        start = end = len(lines)
-    earlier = rows.get(step, {})
-    replaced = [f"was {re.sub(r'[*_]', '', earlier['Result'])} by {earlier['By']}"] if earlier.get("By") not in ("", None, by) else []
-    told = [note.replace("|", "\\|")] if note else []
-    rows[step] = {"Step": step, "Result": result, "By": by, "Evidence": "; ".join(replaced + told + [links])}
-    rendered = ["| " + " | ".join(HEADER) + " |", "|" + "---|" * len(HEADER)]
-    rendered += ["| " + " | ".join(cells.get(name, "") for name in HEADER) + " |" for cells in rows.values()]
-    lines[start:end] = rendered
-    updated = text[:bounds[0]] + "\n".join(lines) + "\n" + ("\n" + text[bounds[1]:].lstrip("\n") if text[bounds[1]:].strip() else "")
-    replace_guide(guide, updated)
+    lines = text[bounds[0]:bounds[1]].split("\n")
+    earlier = recorded(lines).get(step, {})
+    if not round_tables(lines):
+        k = len(lines)
+        while k > 1 and not lines[k - 1].strip():
+            k -= 1
+        lines[k:k] = ["", row_line(HEADER), "|" + "---|" * len(HEADER)]
+    head, end, names, at = round_tables(lines)[-1]
+    if "By" not in names:
+        after = names.index("Result")
+        for k in range(head, end):
+            filler = "By" if k == head else "---" if set("".join(cells_of(lines[k]))) <= set("-: ") else ""
+            lines[k] = with_cell(lines[k], after, filler)
+        names = names[:after + 1] + ["By"] + names[after + 1:]
+    # One "was" at most: the verdict this one overrides, or the one an earlier override already kept.
+    was = re.match(r"was [^;]*", earlier.get("Evidence", ""))
+    if earlier.get("Result") and earlier.get("By", "").strip("*_") != by:
+        who = earlier.get("By", "").strip("*_")
+        was = f"was {re.sub(r'[*_]', '', earlier['Result'])}" + (f" by {who}" if who else "")
+    else:
+        was = was.group(0) if was else ""
+    files = evidence_files(evidence, step)
+    links = ", ".join(f"[{os.path.basename(f)}]({f})".replace("|", "\\|") for f in files) or "no saved evidence"
+    told = " ".join(note.split()).replace("|", "\\|")
+    cells = dict(zip(names, cells_of(lines[at[step][0]]))) if step in at else {}
+    cells.update({names[0]: step, "Result": result, "By": by, "Evidence": "; ".join(c for c in (was, told, links) if c)})
+    row = row_line([cells.get(name, "") for name in names])
+    if step in at:
+        lines[at[step][0]] = row
+        for k in reversed(at[step][1:]):
+            del lines[k]
+    else:
+        lines[end:end] = [row]
+    replace_guide(guide, text[:bounds[0]] + "\n".join(lines) + text[bounds[1]:])
     print(f"{step}: {result} (by {by})")
     return 0
 

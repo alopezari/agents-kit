@@ -30,6 +30,8 @@ const STEPS = [
   { id: 'S2', title: 'Refund it', result: '', by: '', evidence: [] },
 ]
 const MARK_S2 = KIT + '/bin/staging mark S2 PASS --by user --branch feature'
+// `git worktree list --porcelain` with the main checkout at `main` and the session's, detached, at ROOT.
+const WORKTREES = (main: string) => `worktree ${main}\nHEAD ${HEAD}\nbranch refs/heads/feature\n\nworktree ${ROOT}\nHEAD ${HEAD}\ndetached\n\n`
 
 type Run = { exitCode: number; stdout?: string; stderr?: string } | { deny: string }
 
@@ -247,12 +249,17 @@ test('each kind of no change to follow says which, and a failed read is never on
     [{ 'git rev-parse --show-toplevel': { exitCode: 128, stderr: 'fatal: detected dubious ownership' } }, /^Couldn't read the repository: exit 128: fatal: detected dubious ownership$/m],
     [{ 'git rev-parse HEAD': { exitCode: 128, stderr: "fatal: ambiguous argument 'HEAD'" } }, /^Couldn't read HEAD: exit 128: fatal: ambiguous argument 'HEAD'$/m],
     [{ 'git branch --show-current': { deny: 'git hung' } }, /^Couldn't read the branch: .*git hung$/m],
-    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' }, 'git rev-parse --path-format=absolute --git-common-dir': { exitCode: 0, stdout: ROOT + '/.git\n' } },
+    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' }, 'git worktree list --porcelain': { exitCode: 0, stdout: WORKTREES(ROOT) } },
       /^Detached HEAD: no change to follow\.$/m],
-    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' }, 'git rev-parse --path-format=absolute --git-common-dir': { exitCode: 0, stdout: '/main/.git\n' } },
+    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' }, 'git worktree list --porcelain': { exitCode: 0, stdout: WORKTREES('/main') } },
       /^Detached HEAD: no change to follow\.$/m],
-    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' }, 'git rev-parse --path-format=absolute --git-common-dir': { deny: 'git hung' } },
+    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' }, 'git worktree list --porcelain': { exitCode: 0, stdout: 'worktree /main.git\nbare\n\n' } },
+      /^Detached HEAD: no change to follow\.$/m],
+    [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' }, 'git worktree list --porcelain': { deny: 'git hung' } },
       /^Detached HEAD, and couldn't find the main checkout: .*git hung$/m],
+    [{ [ROOT + ': git branch --show-current']: { exitCode: 0, stdout: '\n' }, 'git worktree list --porcelain': { exitCode: 0, stdout: WORKTREES('/main') },
+       ['/main: ' + KIT + '/bin/reports brief']: { exitCode: 0, stdout: 'phase: \n' } },
+      /^Detached HEAD, and the main checkout is on the default branch: no change to follow\.$/m],
     [{ [KIT + '/bin/reports brief']: { exitCode: 0, stdout: 'phase: \n' } }, /^On the default branch: no change to follow\.$/m],
   ]
   let runs = repo()
@@ -648,15 +655,21 @@ test('the pane lists the steps before the merge, each with Pass and Fail buttons
 test('once the session is detached, the pane follows the branch the user took in the main checkout', async ($, on) => {
   const { clock, ran, cwds } = stub(on, repo({
     [ROOT + ': git branch --show-current']: { exitCode: 0, stdout: '\n' },
-    'git rev-parse --path-format=absolute --git-common-dir': { exitCode: 0, stdout: '/main/.git\n' },
+    'git worktree list --porcelain': { exitCode: 0, stdout: WORKTREES('/main') },
+    ['/main: python3 /home/.agents/hooks/review_stamp.py check --kind validate']: { exitCode: 0 },
     [MARK_S2]: { exitCode: 0, stdout: 'S2: PASS (by user)\n' },
   }))
+  const spawned = stubVerify(on, () => ({ output: 'ran: tests/a.py\n' }))
   const ui = await openPane($, clock)
-  expect(await texts(ui)).toMatch(/^feature @ [0-9a-f]{7} in the main checkout \/main · gathered/m)
-  expect(cwds[ran.indexOf(KIT + '/bin/staging steps --json')]).toBe('/main')
+  expect(await texts(ui)).toMatch(/^feature @ [0-9a-f]{7} in the main checkout · gathered/m)
+  expect(await texts(ui)).toMatch(/^validate: current$/m)
   await ui.press({ key: 'staging-S2-PASS' })
+  await ui.press({ key: 'run-verify' })
   await clock.settle()
+  const sessionReads = ['git rev-parse --show-toplevel', 'git branch --show-current', 'git rev-parse HEAD', 'git worktree list --porcelain']
+  expect(ran.filter((key, i) => cwds[i] === ROOT && !sessionReads.includes(key))).toEqual([])
   expect(cwds[ran.indexOf(MARK_S2)]).toBe('/main')
+  expect(spawned.map((e) => e.cwd ?? e.init?.cwd)).toEqual(['/main'])
 })
 
 test("Pass marks the step as the user's in the session's checkout, then gathers again", async ($, on) => {
@@ -670,12 +683,84 @@ test("Pass marks the step as the user's in the session's checkout, then gathers 
 })
 
 test('a mark that fails says why, in bold, until the next mark', async ($, on) => {
-  const { clock } = stub(on, repo({ [MARK_S2]: { exitCode: 2, stderr: 'staging: no step S2 before the merge in /g.md\n' } }))
+  const { clock } = stub(on, repo({
+    [MARK_S2]: { exitCode: 2, stderr: 'staging: no step S2 before the merge in /g.md\n' },
+    [KIT + '/bin/staging mark S1 PASS --by user --branch feature']: { exitCode: 0, stdout: 'S1: PASS (by user)\n' },
+  }))
   const ui = await openPane($, clock)
   await ui.press({ key: 'staging-S2-PASS' })
   await clock.settle()
-  expect(await texts(ui)).toContain("Couldn't mark S2 PASS: exit 2: staging: no step S2 before the merge in /g.md")
+  expect(await texts(ui)).toContain("Couldn't mark S2 Pass: exit 2: staging: no step S2 before the merge in /g.md")
   expect(await isBold(ui, /^Couldn't mark S2/)).toEqual([true])
+  await ui.press({ key: 'staging-S1-PASS' })
+  await clock.settle()
+  expect(await texts(ui)).not.toContain("Couldn't mark")
+})
+
+test('a mark shows as pending until it lands, then the pane shows the new verdict, a FAIL in bold', async ($, on) => {
+  let release
+  const runs = repo()
+  const { clock } = stub(on, runs, {
+    process: async ($, e) => {
+      const key = e.argv.join(' ')
+      if (key === KIT + '/bin/staging mark S2 FAIL --by user --branch feature') {
+        await new Promise((resolve) => (release = resolve))
+        runs[KIT + '/bin/staging steps --json'] = { exitCode: 0, stdout: JSON.stringify([STEPS[0], { ...STEPS[1], result: 'FAIL', by: '' }]) }
+        return { value: { exitCode: 0, stdout: '', stderr: '' } }
+      }
+      const answer = runs[key]
+      return 'deny' in answer ? answer : { value: { exitCode: answer.exitCode, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' } }
+    },
+  })
+  const ui = await openPane($, clock)
+  await ui.press({ key: 'staging-S2-FAIL' })
+  await clock.settle()
+  expect(await texts(ui)).toMatch(/^Marking S2 Fail…$/m)
+  release()
+  await clock.settle()
+  expect(await texts(ui)).not.toMatch(/^Marking/m)
+  expect(await texts(ui)).toMatch(/^S2 Refund it · FAIL · no evidence yet$/m)
+  expect(await isBold(ui, /^S\d /)).toEqual([false, true])
+})
+
+test('a mark keeps the checkout its button showed, even when the pane moves before its turn', async ($, on) => {
+  let release
+  let runs = repo()
+  const marks: [string, string][] = []
+  const { clock } = stub(on, new Proxy({}, { get: (target, key) => runs[key] }), {
+    process: async ($, e) => {
+      const key = e.argv.join(' ')
+      if (key.startsWith(KIT + '/bin/staging mark')) {
+        marks.push([key, e.init?.cwd])
+        if (marks.length === 1) {
+          await new Promise((resolve) => (release = resolve))
+          runs = repo({ 'git rev-parse --show-toplevel': { exitCode: 0, stdout: '/other\n' }, 'git branch --show-current': { exitCode: 0, stdout: 'other\n' } })
+        }
+        return { value: { exitCode: 0, stdout: '', stderr: '' } }
+      }
+      const answer = runs[key]
+      return 'deny' in answer ? answer : { value: { exitCode: answer.exitCode, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' } }
+    },
+  })
+  const ui = await openPane($, clock)
+  await ui.press({ key: 'staging-S1-FAIL' })
+  await ui.press({ key: 'staging-S2-PASS' })
+  await clock.settle()
+  release()
+  await clock.settle()
+  expect(await texts(ui)).toMatch(/^other @/m)
+  expect(marks).toEqual([[KIT + '/bin/staging mark S1 FAIL --by user --branch feature', ROOT], [MARK_S2, ROOT]])
+})
+
+test('a mark that fails stays in sight when the steps are gone', async ($, on) => {
+  const runs = repo({ [MARK_S2]: { exitCode: 2, stderr: 'staging: no staging guide at /g.md\n' } })
+  const { clock } = stub(on, runs)
+  const ui = await openPane($, clock)
+  runs[KIT + '/bin/staging steps --json'] = { exitCode: 0, stdout: '[]' }
+  await ui.press({ key: 'staging-S2-PASS' })
+  await clock.settle()
+  expect(await texts(ui)).toContain("Couldn't mark S2 Pass: exit 2: staging: no staging guide at /g.md")
+  expect(await buttons(ui)).toEqual(['Run verify', 'Refresh'])
 })
 
 test('two quick presses mark one after the other, never at once', async ($, on) => {

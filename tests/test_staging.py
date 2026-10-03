@@ -2,6 +2,8 @@
 """bin/staging: the steps before the merge, and the PASS/FAIL row each one gets, as review_stamp reads them."""
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import datetime
+import fcntl
+import importlib.machinery
 import json
 import os
 import re
@@ -9,6 +11,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import types
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 REPORTS = os.path.join(KIT, "bin", "reports")
@@ -176,7 +180,8 @@ def mark_leaves_ships_table_and_keeps_whose_verdict_it_replaced(base):
     assert text.endswith(ship), "ship's table stays as it was, last"
     assert f"| S1 | FAIL | agent | was PASS by user; S1.txt shows a 500; [S1.txt]({evidence}/S1.txt) |" in text, text
     assert sh(repo, STAGING, "mark", "S1", "FAIL", "--by", "agent").returncode == 0
-    assert f"| S1 | FAIL | agent | [S1.txt]({evidence}/S1.txt) |" in read(guide), "the same writer again: nothing to keep"
+    assert f"| S1 | FAIL | agent | was PASS by user; [S1.txt]({evidence}/S1.txt) |" in read(guide), \
+        "the same writer again keeps the verdict it overrode"
     save(guide, GUIDE + ship)
     assert sh(repo, STAGING, "mark", "S2", "PASS", "--by", "user").returncode == 0
     text = read(guide)
@@ -207,11 +212,137 @@ def marks_at_the_same_time_all_land(base):
     assert [f for f in os.listdir(os.path.dirname(guide)) if f.startswith(".") and "tmp" in f] == [], "no temp file left"
 
 
+def mark_changes_only_its_row_of_the_latest_rounds_last_table(base):
+    repo = new_repo(base)
+    guide, evidence = paths(repo)
+    older = "\n## Results (2026-09-30)\n\n| Step | Result | By | Evidence |\n|---|---|---|---|\n| S1 | PASS | user | x |\n"
+    first = "\n## Results (2026-10-01)\n\n|Step|Result|By|Evidence|\n|-|-|-|-|\n|S1|FAIL|agent|S1 was 500|\n"
+    second = "\nRe-run after the fix:\n\n| Step | Result | By | Evidence |\n|:--|:--|:--|:--|\n| S2  |  PASS | user |  ok  |\n"
+    tail = "\n\n\nS3 waits for the deploy.  \n\n\n" + "## Results after the deploy (2026-10-02)\n\n| Step | Result | Evidence |\n|---|---|---|\n| P1 | FAIL | y |\n"
+    save(guide, GUIDE + older + first + second + tail)
+    save(os.path.join(evidence, "S1.txt"), "200")
+    assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "user").returncode == 0
+    row = f"| S1 | PASS | user | was FAIL by agent; [S1.txt]({evidence}/S1.txt) |"
+    assert read(guide) == GUIDE + older + first + second + row + "\n" + tail, read(guide)
+    latest = read(guide).split("## Results (2026-10-01)")[1].split("## Results after")[0].splitlines()
+    assert [(r[1], r[3]) for r in review_stamp.result_rows(latest, evidence) if r[0] == "S1"][-1] == ("PASS", True), \
+        "review_stamp reads the row mark wrote as S1's"
+    assert [(x["result"], x["by"]) for x in steps(repo)] == [("PASS", "user"), ("PASS", "user"), ("", "")], steps(repo)
+
+
+def mark_reads_bold_headers_and_keeps_columns_it_doesnt_know(base):
+    repo = new_repo(base)
+    guide, evidence = paths(repo)
+    save(guide, GUIDE + "\n## Results (2026-10-01)\n\n| **Step** | **Result** | **Evidence** | Notes |\n|---|---|---|---|\n"
+                        "| S2 | **FAIL** | refund 500 | ask ops |\n| S3 | PASS | none needed | keep me |\n")
+    assert [(x["result"], x["by"]) for x in steps(repo)][1:] == [("FAIL", ""), ("PASS", "")], steps(repo)
+    note = "refund shows\nin the admin | twice"
+    assert sh(repo, STAGING, "mark", "S2", "PASS", "--by", "agent", "--note", note).returncode == 0
+    lines = read(guide).split("## Results (2026-10-01)\n\n")[1].splitlines()
+    assert lines == ["| **Step** | **Result** | By | **Evidence** | Notes |", "|---|---| --- |---|---|",
+                     "| S2 | PASS | agent | was FAIL; refund shows in the admin \\| twice; no saved evidence | ask ops |",
+                     "| S3 | PASS |  | none needed | keep me |"], lines
+    assert read(guide).count("| Step") + read(guide).count("| **Step") == 1, "no second table"
+
+
+def mark_links_every_evidence_file_of_the_step(base):
+    repo = new_repo(base)
+    guide, evidence = paths(repo)
+    save(guide, GUIDE)
+    for name in ("S1.txt", "S1b.txt", "S1-receipt.png", "S10-x.png", "S1.png"):
+        save(os.path.join(evidence, name), "x")
+    os.makedirs(os.path.join(evidence, "S1c.txt"))
+    assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "user").returncode == 0
+    links = ", ".join(f"[{n}]({evidence}/{n})" for n in ("S1-receipt.png", "S1.txt", "S1b.txt"))
+    assert f"| S1 | PASS | user | {links} |" in read(guide), read(guide)
+
+
+def an_interrupted_mark_leaves_the_earlier_guide(base):
+    repo = new_repo(base)
+    guide, evidence = paths(repo)
+    save(guide, GUIDE)
+    os.chmod(guide, 0o640)
+    loader = importlib.machinery.SourceFileLoader("staging_tool", STAGING)
+    tool = types.ModuleType(loader.name)
+    tool.__file__ = STAGING
+    loader.exec_module(tool)
+    replace = tool.os.replace
+    tool.os.replace = lambda *_: (_ for _ in ()).throw(OSError("disk full"))
+    try:
+        tool.mark_locked(guide, evidence, "S1", "PASS", "agent", "")
+        raise AssertionError("the failed rename should surface")
+    except OSError:
+        pass
+    finally:
+        tool.os.replace = replace
+    left = [n for n in os.listdir(os.path.dirname(guide)) if n.endswith(".tmp")]
+    assert read(guide) == GUIDE and left == [], left
+    assert tool.mark_locked(guide, evidence, "S1", "PASS", "agent", "") == 0
+    assert oct(os.stat(guide).st_mode & 0o777) == oct(0o640), "the guide keeps its mode"
+
+
+def a_mark_waits_for_the_lock(base):
+    repo = new_repo(base)
+    guide, _ = paths(repo)
+    save(guide, GUIDE)
+    with open(os.path.join(os.path.dirname(guide), "." + os.path.basename(guide) + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        waiting = subprocess.Popen([STAGING, "mark", "S1", "PASS", "--by", "agent"], cwd=repo, stdout=subprocess.DEVNULL)
+        try:
+            time.sleep(0.5)
+            assert waiting.poll() is None and read(guide) == GUIDE, "it writes only once the lock is free"
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+    assert waiting.wait(timeout=10) == 0 and "| S1 | PASS | agent |" in read(guide)
+    with open(os.path.join(os.path.dirname(guide), "." + os.path.basename(guide) + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        waiting = subprocess.Popen([STAGING, "mark", "S2", "PASS", "--by", "user", "--branch", "feature/cart"], cwd=repo,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        try:
+            time.sleep(0.5)
+            sh(repo, "git", "switch", "-q", "-c", "feature/other")
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+    assert waiting.wait(timeout=10) == 2 and "not feature/cart" in waiting.stderr.read(), "the checkout moved while it waited"
+    assert "| S2 |" not in read(guide)
+
+
+def marks_alone_dont_pass_the_staging_gate(base):
+    repo = new_repo(base)
+    sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start")
+    guide, evidence = paths(repo)
+    save(guide, GUIDE)
+    for step in ("S1", "S2", "S3"):
+        save(os.path.join(evidence, step + ".txt"), "done")
+        assert sh(repo, STAGING, "mark", step, "PASS", "--by", "user").returncode == 0
+    gate = sh(repo, sys.executable, os.path.join(KIT, "hooks", "review_stamp.py"), "staging")
+    assert gate.returncode != 0 and "never stamped" in gate.stdout, gate
+    sh(repo, "git", "switch", "-q", "--detach")
+    out = sh(repo, STAGING, "mark", "S1", "FAIL", "--by", "user", "--branch", "feature/cart")
+    assert out.returncode == 2 and "on a detached HEAD, not feature/cart" in out.stderr, out
+
+
+def a_step_without_a_title_and_a_branch_with_a_pipe(base):
+    repo = os.path.join(base, "shop")
+    os.makedirs(repo)
+    sh(repo, "git", "init", "-q", "-b", "feature|cart")
+    guide, evidence = paths(repo)
+    save(guide, "# Guide\n\n## Before the merge\n\n### S1\n\n- **Why:** checkout works.\n\n## After the merge\n")
+    save(os.path.join(evidence, "S1.txt"), "paid")
+    assert steps(repo)[0]["title"] == "", "the next line isn't the title"
+    assert sh(repo, STAGING, "mark", "S1", "PASS", "--by", "user").returncode == 0
+    assert evidence.replace("|", "\\|") in read(guide), read(guide)
+    assert [r[1:4:2] for r in review_stamp.result_rows(read(guide).splitlines(), evidence)] == [("PASS", True)], read(guide)
+
+
 for test in (lists_the_steps_before_the_merge_with_their_latest_result_and_evidence,
              prints_nothing_without_steps_before_the_merge, mark_writes_one_row_per_step_into_the_latest_round,
              mark_keeps_a_hand_written_round_and_adds_the_by_column, refuses_what_it_cant_record_and_changes_nothing,
              review_stamp_reads_what_mark_writes, mark_leaves_ships_table_and_keeps_whose_verdict_it_replaced,
-             mark_refuses_a_branch_other_than_the_one_shown, marks_at_the_same_time_all_land):
+             mark_refuses_a_branch_other_than_the_one_shown, marks_at_the_same_time_all_land,
+             mark_changes_only_its_row_of_the_latest_rounds_last_table, mark_reads_bold_headers_and_keeps_columns_it_doesnt_know,
+             mark_links_every_evidence_file_of_the_step, an_interrupted_mark_leaves_the_earlier_guide, a_mark_waits_for_the_lock,
+             marks_alone_dont_pass_the_staging_gate, a_step_without_a_title_and_a_branch_with_a_pipe):
     base = tempfile.mkdtemp(prefix="agents-test-staging-")
     try:
         test(base)

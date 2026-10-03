@@ -156,7 +156,7 @@ Give the user the hand-off in chat, with real values:
 
 1. `cd <main checkout> && git status --short`. **Expected:** nothing. If it lists files, commit or stash them first.
 2. `git switch <branch> && git pull --ff-only`.
-3. `~/.agents/bin/reports` prints the staging guide at the end. Follow its "Before the merge" part from step 0, and tell me when you're done, or at the first step whose output doesn't match its Expected. Each step saves its own evidence, so you don't need to copy outputs. In Claude Code, `/flow` lists the steps with a Pass and a Fail button each.
+3. `~/.agents/bin/reports` prints the staging guide at the end. Follow its "Before the merge" part from step 0, and tell me when you're done, or at the first step whose output doesn't match its Expected. Each step saves its own evidence, so you don't need to copy outputs. In Claude Code, `/flow` lists the steps with a Pass and a Fail button each; elsewhere, `~/.agents/bin/staging mark S1 PASS --by user` records the same.
 
 From here the user owns the checkout. Propose fixes instead of editing it, unless they ask you to.
 

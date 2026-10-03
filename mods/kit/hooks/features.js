@@ -8,7 +8,7 @@ export const FEATURES = [
     "description": "Show where this branch is in the kit's flow, and run verify without a turn",
     "capabilities": [
       {"name": "Phase and reports", "codex": "`bin/reports brief`"},
-      {"name": "Once the session's own checkout is detached (validate frees the branch that way), the branch in the main checkout", "codex": "the commands of this list, run from the main checkout"},
+      {"name": "Follows the branch into the main checkout once validate detaches the session's own", "codex": "the commands of this list, run from the main checkout"},
       {"name": "Stamps (verify, self-review, validate, staging), current or not, and a verify that checked nothing", "codex": "`python3 ~/.agents/hooks/review_stamp.py check --kind <kind>`"},
       {"name": "The last verify report's ran/skipped/warning/error lines", "codex": "`cat \"$(~/.agents/bin/reports path verify)\"`"},
       {"name": "CI of the pushed HEAD", "codex": "`bin/ci-wait --once --no-log`"},

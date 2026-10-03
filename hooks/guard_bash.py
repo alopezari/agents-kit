@@ -61,10 +61,26 @@ RULES = [
      "`make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production."),
     (r"\bchmod\s+(-R\s+)?777\b", "`chmod 777`: world-writable permissions."),
     (r"\.agents/approvals", "Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent."),
-    (r"(?<![\w-])staging\s+mark\b[^;&|\n]*--by(\s+|=)['\"]?user\b",
-     "`bin/staging mark --by user`: a step marked as the user's comes from their own action, the Pass or Fail "
-     "button in /flow or the command in their terminal. Record your own judgement with `--by agent`."),
 ]
+
+STAGING_MARK = re.compile(r"(?<![\w-])staging['\"]?\s+mark\b")
+MARKS_AS_USER = ("`bin/staging mark --by user`: a step marked as the user's comes from their own action, the Pass or Fail "
+                 "button in /flow or the command in their terminal. Record your own verdict with `--by agent`.")
+
+
+def marks_as_user(command):
+    """`bin/staging mark … --by user` in the command: read past a quoted note's `;` or `|` and line continuations, and
+    inside `bash -c '…'` too."""
+    joined = re.sub(r"\\\n", "  ", command)  # same length as shell_code's, so offsets in one read the other
+    code = shell_code(joined)
+    for mark in STAGING_MARK.finditer(joined):
+        stop = re.compile(r"[;&|\n]").search(code, mark.end())
+        for by in re.compile(r"--by(?:\s+|=)").finditer(code, mark.end(), stop.start() if stop else len(code)):
+            if re.match(r"['\"]?user\b", joined[by.end():]):
+                return MARKS_AS_USER
+    if re.search(r"(?<![\w-])staging['\"]?\s+mark\b[^;&|\n]*--by(\s+|=)['\"]?user\b", joined):
+        return MARKS_AS_USER
+    return None
 
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 
@@ -777,7 +793,7 @@ def main():
         cwd = os.path.realpath(cwd or os.getcwd())  # getcwd raises when the directory was deleted
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
                   or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd)
-                  or impeccable_files(command, cwd, payload.get("session_id")))
+                  or impeccable_files(command, cwd, payload.get("session_id")) or marks_as_user(command))
         if not reason:
             for pattern, why in RULES:
                 if re.search(pattern, command):

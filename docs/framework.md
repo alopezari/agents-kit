@@ -7,7 +7,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 ## At a glance
 
 - **2 harnesses** share one `AGENTS.md`, 9 skills and 6 hook scripts.
-- **23 guard rules** block irreversible or outward-facing shell commands before they run.
+- **22 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
@@ -130,7 +130,6 @@ Every block, every approved or browser MCP call and every shell command a user's
 - `make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production.
 - `chmod 777`: world-writable permissions.
 - Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent.
-- `bin/staging mark --by user`: a step marked as the user's comes from their own action, the Pass or Fail button in /flow or the command in their terminal. Record your own judgement with `--by agent`.
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
@@ -212,7 +211,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 | Command or agent | Capability | Codex has instead |
 |---|---|---|
 | `/flow`: Show where this branch is in the kit's flow, and run verify without a turn | Phase and reports | `bin/reports brief` |
-|  | Once the session's own checkout is detached (validate frees the branch that way), the branch in the main checkout | the commands of this list, run from the main checkout |
+|  | Follows the branch into the main checkout once validate detaches the session's own | the commands of this list, run from the main checkout |
 |  | Stamps (verify, self-review, validate, staging), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
 |  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
 |  | CI of the pushed HEAD | `bin/ci-wait --once --no-log` |
