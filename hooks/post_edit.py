@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse hook for file edits, shared by Claude Code, Codex and Pi (via adapters/pi).
+"""PostToolUse hook for file edits, shared by Claude Code and Codex.
 
 Runs a fast syntax check on each edited file and records that the session
 edited files, so the Stop hook only runs its checks after real changes.

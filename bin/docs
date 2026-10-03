@@ -4,8 +4,7 @@
   docs            regenerate docs/framework.md
   docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the pre-commit hook)
 
-Everything below is read from the files that implement it: hook wiring from install.sh and the
-Pi adapter, rules from guard_bash.py and the semgrep file, skills from their frontmatter, tools
+Everything below is read from the files that implement it: hook wiring from install.sh, rules from guard_bash.py and the semgrep file, skills from their frontmatter, tools
 from their headers, schedules from the launchd templates. Profile content (symlinked repos and
 skills) is left out, so the output is the same on every machine. A section that points at
 something missing fails the run instead of describing it.
@@ -34,7 +33,7 @@ LAYOUT = {
     "examples/": "A sample profile with one of each extension point, to copy as the start of your own.",
     "install.sh": "Wires the kit into each installed harness; `--doctor` reports without changing anything.",
     "uninstall.sh": "Removes what install.sh wired in that still points at the kit; your own hooks and settings stay.",
-    "adapters/": "Per-harness glue: the Pi extension, the Claude Code status line, Codex profiles.",
+    "adapters/": "Per-harness glue: the Claude Code status line, Codex profiles.",
     "hooks/": "The hook scripts all harnesses share (one JSON contract: stdin in, decision out).",
     "skills/": "Skills linked into every harness; third-party ones are listed in `skills.external`.",
     "skills.external": "Third-party skills install.sh fetches from their source, some pinned to a commit in `vendor/`.",
@@ -134,20 +133,11 @@ def cell(text):
 
 # --- sources ---------------------------------------------------------------------------------
 def harness_hooks():
-    """[(harness, event, matcher, script, timeout)] from install.sh and the Pi adapter."""
+    """[(harness, event, matcher, script, timeout)] from install.sh."""
     rows = []
     for var, event, matcher, script, timeout in re.findall(
             r'^\s*hook "\$(\w)"\s+(\w+)\s+"([^"]*)"\s+(\S+)\s+(\d+)', read("install.sh"), re.M):
         rows.append((HARNESS_OF_SETTINGS[var], event, matcher or "(every stop)", require(f"hooks/{script}")[6:], timeout))
-    adapter = read("adapters/pi/agents-kit.ts")
-    for chunk in adapter.split("pi.on(")[1:]:
-        event = re.match(r'"(\w+)"', chunk).group(1)
-        timeout = re.search(r"timeout: ([\d_]+)", adapter).group(1).replace("_", "")
-        # Each runHook takes the tool names tested since the previous one: `toolName !== "x"` guards, `=== "x"` branches.
-        for before, script in re.findall(r'(.*?)runHook\("([\w.]+)"', chunk, re.S):
-            tools = re.findall(r'toolName [!=]== "(\w+)"', before)
-            every = "(every message)" if event == "input" else "(every settle)"
-            rows.append(("Pi", event, "|".join(tools) or every, require(f"hooks/{script}")[6:], str(int(timeout) // 1000)))
     return rows
 
 
@@ -261,8 +251,7 @@ def render():
       f"{', '.join(harnesses[:-1])} and {harnesses[-1]} on macOS, and it works on any repository: repository-specific "
       "knowledge lives in overlays and private profiles, never in the repositories themselves.\n")
     w("## At a glance\n")
-    w(f"- **{len(harnesses)} harnesses** share one `AGENTS.md`, {len(skill_rows)} skills and {len({s for *_, s, _ in hooks})} hook scripts "
-      "(Pi has no MCP, so it runs all but `guard_mcp.py`).")
+    w(f"- **{len(harnesses)} harnesses** share one `AGENTS.md`, {len(skill_rows)} skills and {len({s for *_, s, _ in hooks})} hook scripts.")
     w(f"- **{len(guard_rules()) + 2} guard rules** block irreversible or outward-facing shell commands before they run.")
     w("- **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), "
       "files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the "
@@ -279,13 +268,11 @@ def render():
         w(f"  A --> X{i}[{harness}]\n  S --> X{i}\n  H --> X{i}")
     w("  R --> H\n  M[scheduled jobs] --> F[research/ reports and proposals]\n  F -.->|\"you review\"| A\n```\n")
     w("`install.sh` links the instructions and skills into each harness's own location and registers the hooks in "
-      "its settings, so editing a file in `~/.agents` changes every harness at once. Pi has no hook config; "
-      "the adapter in `adapters/pi/` translates its extension events into the same hook calls.\n")
+      "its settings, so editing a file in `~/.agents` changes every harness at once.\n")
     w("It also adds the kit's baseline settings where a key is missing, never overwriting one you set:\n")
     w("| Harness | File | Baseline |\n|---|---|---|")
     for harness, target, source in (("Claude Code", "~/.claude/settings.json", "adapters/claude/settings.baseline.json"),
-                                    ("Codex", "~/.codex/config.toml", "adapters/codex/config.baseline.toml"),
-                                    ("Pi", "~/.pi/agent/settings.json", "adapters/pi/settings.baseline.json")):
+                                    ("Codex", "~/.codex/config.toml", "adapters/codex/config.baseline.toml")):
         text = read(require(source))
         if source.endswith(".json"):
             settings = [f"`{k}={json.dumps(v)}`" for k, v in flatten(json.loads(text))]
@@ -449,7 +436,7 @@ def render():
     w("| `private-terms.txt` | case-insensitive regexes, one per line, that must never reach the public kit: its commits and pull requests are refused when they match |")
     w("| `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |\n")
     w("| `after-turn` | an executable the Stop hook starts in the background after every turn, with its JSON on stdin "
-      "(`transcript_path` in Claude Code and Codex, not Pi); it doesn't wait for it or read its output, so the script "
+      "(with `transcript_path`); it doesn't wait for it or read its output, so the script "
       "handles its own overlap, rate limits and logging. Its environment has `AGENTS_AFTER_TURN=1`, and the stops of a "
       "session it starts (`codex exec`, `claude -p`) start no after-turn. A script that can't start is logged as "
       "`profile-after-turn-failed` |\n")
@@ -478,7 +465,7 @@ def render():
             program = program.replace(">=", " ≥ ")
             w(f"| {tier} | `{program}` | {cell(how)} | {cell(purpose)} |")
     w("")
-    w("- `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, the Pi adapter, triage, "
+    w("- `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, triage, "
       "a real install into an empty HOME, the install doctor, and this reference (up to date, and every diagram parses as GitHub renders it).")
     w("- After changing the kit, commit as usual: the pre-commit hook regenerates this file.\n")
 

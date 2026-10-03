@@ -345,13 +345,15 @@ if command -v codex >/dev/null || [ -d "$HOME/.codex" ]; then
   fi
 fi
 
-if command -v pi >/dev/null || [ -d "$HOME/.pi" ]; then
-  echo "Pi"
-  link "$KIT/AGENTS.md" "$HOME/.pi/agent/AGENTS.md"
-  ok "skills: Pi loads ~/.agents/skills natively"
-  link "$KIT/adapters/pi/agents-kit.ts" "$HOME/.pi/agent/extensions/agents-kit.ts"
-  baseline "$HOME/.pi/agent/settings.json" "$KIT/adapters/pi/settings.baseline.json"
-fi
+# The kit no longer supports Pi. Links an older install made go, or Pi would load an extension that is gone.
+for path in "$HOME/.pi/agent/AGENTS.md" "$HOME/.pi/agent/extensions/agents-kit.ts"; do
+  case "$(readlink "$path" 2>/dev/null)" in
+    "$KIT"/*)
+      if [ $DOCTOR = 1 ]; then warn "$path is left from the kit's Pi support: install.sh removes it"
+      elif rm "$path" 2>/dev/null; then fix "removed $path (the kit no longer supports Pi)"
+      else warn "couldn't remove $path, a link to the kit left from its Pi support"; fi ;;
+  esac
+done
 
 echo "Scheduled jobs"
 # launchd needs real files with absolute paths, so the kit keeps templates and renders them here.

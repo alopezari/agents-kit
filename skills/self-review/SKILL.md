@@ -39,7 +39,7 @@ The Correctness lens always runs, at every risk level, and its tables go into th
 
 ### Cross-model reviewer
 
-Use the other model family from the model you're running on. The harness doesn't decide it; Pi, for example, can run either family.
+Use the other model family from the model you're running on.
 
 - **Running on a Claude model →** Codex. Pass the whole change in the prompt; Codex's own command runner can fail in non-interactive runs, and a reviewer that can't read the code returns nothing. A pass takes about ten minutes, so start it as a background command (in Claude Code, `run_in_background`) as soon as the diff is ready, and run the same-model lenses meanwhile; for behavior changes, start validate's local checks too. When it finishes, read only its `## Found` section (its tables and findings); the rest is its working, and every line read stays in context. No section means the pass failed: read the error file and report it as a failed reviewer, not as no findings:
   ```bash
@@ -49,7 +49,7 @@ Use the other model family from the model you're running on. The harness doesn't
   awk '/^## Found$/ { section = "" } { section = section $0 "\n" } END { if (section ~ /^## Found/) printf "%s", section }' "$out"
   ```
   Run it once per lens you send cross-model. For a very large diff, split it by directory and review the riskiest parts.
-- **Running on an OpenAI model (Codex, or Pi on GPT) →** Claude:
+- **Running on an OpenAI model (Codex) →** Claude:
   ```bash
   claude -p "<lens text + goal + evidence instruction>. Review: git diff <merge-base>" \
     --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)" \

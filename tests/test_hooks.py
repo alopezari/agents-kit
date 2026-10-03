@@ -833,7 +833,7 @@ def stop_suggests_a_fresh_session_for_the_next_change(base):
     git(repo, "switch", "-q", "feat/a2")
     assert not stop_with("nc-codex", 200_000, transcript=False)
     git(repo, "switch", "-q", "feat/b")
-    assert not stop_with("nc-codex", 200_000, transcript=False), "no transcript (Codex, Pi): no context to measure"
+    assert not stop_with("nc-codex", 200_000, transcript=False), "no transcript (Codex): no context to measure"
     git(repo, "switch", "-q", "-c", "feat/d")
     phase = os.path.join(repo, ".git", "agents", "phase", "feat~d.json")
     os.makedirs(os.path.dirname(phase), exist_ok=True)
