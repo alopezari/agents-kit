@@ -193,8 +193,8 @@ async function gather($) {
     return
   }
   gathering = true
-  $.ui.invalidate('ui.render')
   try {
+    $.ui.invalidate('ui.render')
     do {
       gatherAgain = false
       shown = await collectOrSayWhy($)
