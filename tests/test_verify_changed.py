@@ -4,6 +4,7 @@ config excludes every changed file isn't a failure, and the red check's copy kee
 
 Runs against throwaway repos with fake phpcs, phpstan and phpunit.
 """
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import os
 import shutil
 import subprocess

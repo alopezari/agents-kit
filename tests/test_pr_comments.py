@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """bin/pr-comments: the pull request's comments the follow-pr report doesn't list yet, with a fake gh."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import json
 import os
 import shutil

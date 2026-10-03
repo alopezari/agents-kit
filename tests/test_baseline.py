@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """adapters/apply_baseline.py adds missing settings and never changes one the user set."""
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import json
 import os
 import subprocess

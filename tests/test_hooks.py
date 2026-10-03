@@ -4,6 +4,7 @@
 Run: python3 ~/.agents/tests/test_hooks.py          every test, each in its own process (exit 1 on any failure)
      python3 ~/.agents/tests/test_hooks.py <name>...  only those, one after another in this process
 """
+import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import concurrent.futures
 import json
 import os

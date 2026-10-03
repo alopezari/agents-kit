@@ -5,6 +5,15 @@
 #   ~/.agents/tests/run.sh --skip hooks install   all but those (CI's third job, so a new section lands there)
 # Sections run concurrently; each prints as one block, in this order, once it and every section above it have finished.
 cd "$(dirname "$0")" || exit 2
+# The tests reach the kit through ~/.agents. Run from another checkout, re-run under a HOME holding only .agents,
+# linked to it, as CI and the verify overlay do.
+if [ "$(cd .. && pwd -P)" != "$(cd "$HOME/.agents" 2>/dev/null && pwd -P)" ]; then
+  kit_home=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-home-XXXXXX") || exit 2
+  ln -s "$(cd .. && pwd -P)" "$kit_home/.agents"
+  HOME="$kit_home" bash "$PWD/run.sh" "$@"; status=$?
+  rm -f "$kit_home/.agents" && rm -rf "$kit_home"  # the link first: rm never reaches the checkout
+  exit $status
+fi
 # A hook run by a test must log into the test's own place (its HOME, or AGENTS_LOG_DIR), never into the real log the
 # monthly job reads. A line counts as this run's when it carries the run's id (hooklog adds AGENTS_SUITE_RUN) or its cwd
 # is under the run's own temp root; sessions logging from elsewhere in the temp dir while the suite runs have neither.
@@ -34,7 +43,7 @@ sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wra
   "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes"
   "sessions|sessions and phases" "frontmatter|skill frontmatter" "pi|pi adapter" "triage|triage" "ci-wait|CI wait"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
-  "doctor|install doctor")
+  "doctor|install doctor" "kit-home|every test refuses another checkout")
 names=("${sections[@]%%|*}")
 
 section_hooks() { local f=0; python3 test_hooks.py || f=1; python3 test_private_terms.py || f=1; return $f; }
@@ -92,6 +101,12 @@ section_version() {
   return $f
 }
 section_install() { bash test_install.sh; }
+section_kit_home() {
+  local missing
+  missing=$(grep -L -E '^import kit_home\b|^\. "\$\(dirname "\$0"\)/kit_home\.sh"|^import "\./kit_home\.mjs";' test_*.py test_*.sh test_*.mjs test_*.mts)
+  if [ -z "$missing" ]; then echo "ok   every test loads kit_home first"
+  else echo "FAIL these tests don't load kit_home, so run from a worktree they'd test ~/.agents:"; echo "$missing"; return 1; fi
+}
 section_doctor() {
   local doctor doctor_status warnings
   doctor=$(~/.agents/install.sh --doctor 2>&1); doctor_status=$?

@@ -1,4 +1,5 @@
 // Simulates Pi's extension host to exercise ~/.agents/adapters/pi/agents-kit.ts.
+import "./kit_home.mjs";
 import { execSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
