@@ -92,8 +92,11 @@ def a_session_on_a_worktree_logs_to_the_main_checkout(base):
         path = os.path.join(checkout, "logs", "quality.jsonl")
         return [json.loads(line)["kind"] for line in open(path)] if os.path.exists(path) else []
 
-    write(session)
-    assert (rows(kit), rows(worktree)) == (["test", "rename"], []), (rows(kit), rows(worktree))
+    # A GIT_DIR inherited from the caller names another repository; -C alone doesn't override it.
+    other = os.path.join(base, "other")
+    subprocess.run([*git, "init", "-q", other], check=True)
+    write({**session, "GIT_DIR": os.path.join(other, ".git")})
+    assert (rows(kit), rows(worktree), rows(other)) == (["test", "rename"], [], []), (rows(kit), rows(worktree), rows(other))
     # Under the suite (AGENTS_KIT_UNDER_TEST), rows stay in the HOME it made, never in the real log.
     write(os.environ)
     assert (rows(kit), rows(worktree)) == (["test", "rename"], ["test", "rename"]), (rows(kit), rows(worktree))

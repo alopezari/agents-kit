@@ -209,8 +209,10 @@ def quality_log():
         linked = False
     if not linked or os.environ.get("AGENTS_KIT_UNDER_TEST"):
         return os.path.join(kit, "logs", "quality.jsonl")
-    listed = subprocess.run(["git", "-C", kit, "worktree", "list", "--porcelain"], capture_output=True, text=True)
-    main = listed.stdout.partition("\n")[0].removeprefix("worktree ") if listed.returncode == 0 else ""
+    # -C doesn't override a GIT_DIR the caller exported, which would name another repository.
+    listed = subprocess.run(["git", "-C", kit, "worktree", "list", "--porcelain", "-z"], capture_output=True, text=True,
+                            env={key: value for key, value in os.environ.items() if not key.startswith("GIT_")})
+    main = listed.stdout.partition("\0")[0].removeprefix("worktree ") if listed.returncode == 0 else ""
     # git lists the git dir, not a checkout, for a repository made with --separate-git-dir.
     if main and os.path.exists(os.path.join(main, ".git")):
         return os.path.join(main, "logs", "quality.jsonl")
