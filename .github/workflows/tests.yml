@@ -8,11 +8,29 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request replaces its older run; every push to main gets a group of its own, so none is
+# cancelled or replaced while queued.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   suite:
     # The kit targets macOS: launchd, BSD tools, Homebrew.
     runs-on: macos-latest
     timeout-minutes: 30
+    # The two slowest sections get a runner each; rest is everything else, so a new section runs without editing this.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: hooks
+            sections: hooks
+          - part: install
+            sections: install
+          - part: rest
+            sections: --skip hooks install
+    name: suite (${{ matrix.part }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,4 +49,5 @@ jobs:
       - name: Test
         env:
           AGENTS_SKIP_LAUNCHD: 1
-        run: ~/.agents/tests/run.sh
+          SECTIONS: ${{ matrix.sections }}
+        run: ~/.agents/tests/run.sh $SECTIONS

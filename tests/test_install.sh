@@ -4,8 +4,9 @@
 set -uo pipefail
 home=$(mktemp -d "${TMPDIR:-/tmp}/agents-install-XXXXXX")
 trap 'rm -rf "$home"' EXIT
+# site/dist is left out because run.sh's site build deletes and rewrites it while this copies.
 rsync -a --exclude node_modules --exclude /logs --exclude /backups --exclude /research --exclude /profiles \
-  --exclude /approvals --exclude /monitors/state "$HOME/.agents/" "$home/.agents/"
+  --exclude /approvals --exclude /monitors/state --exclude /site/dist "$HOME/.agents/" "$home/.agents/"
 # Dependencies are linked, not reinstalled: the test is about install.sh, not npm.
 for dir in "$HOME"/.agents/tools/*/ "$HOME"/.agents/site/; do
   rel=${dir#"$HOME"/.agents/}

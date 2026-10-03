@@ -5,7 +5,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 
 TRIAGE = os.path.expanduser("~/.agents/bin/triage")
 GIT_SENSE = ["cwd = pr_checkout(command, cwd)", "git checkout -b fix", "- uses: actions/checkout@v4",
@@ -160,12 +159,16 @@ for line, expected in [(r'PREFIXES = r"(?:\w+=\S*\s+|env\s+(?:-\S*\s+)*)*gh"', T
     ok = got == expected and (not expected or "nested quantifier" in " ".join(result["lenses"].get("performance", [])))
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} {'regex timing' if expected else 'no regex timing'}: {line}")
-started = time.time()
+# CPU time of the git and triage processes, not wall time: run.sh runs every section at once, and a loaded CI runner
+# took 3.7 s of wall time for well under a second of work.
+started = os.times()
 triage_change({}, {"code.py": "x = '(" + "+" * 30000 + "'\n", "b.py": 'P = re.compile(r"(a+' + "b{1}" * 30 + ')$")\n',
                    "c.py": "".join('D = "' + "=/[" * 650 + '"\n' for _ in range(300))})
-ok = time.time() - started < 3
+ended = os.times()
+cpu = ended.children_user + ended.children_system - started.children_user - started.children_system
+ok = cpu < 3
 fail |= not ok
-print(f"{'ok  ' if ok else 'FAIL'} the regex scan stays fast on a long line ({time.time() - started:.1f}s)")
+print(f"{'ok  ' if ok else 'FAIL'} the regex scan stays fast on a long line ({cpu:.1f}s of CPU)")
 long_line = 'L = re.compile(r"' + "a" * 180 + '(b+)+$")'
 result = triage_change({}, {"code.py": "".join(f'P{c} = re.compile(r"^({c}+)+$")\n' for c in "wxyz") + long_line + "\n"})
 timing = result["tests"].get("regex worst-case timing", [])
