@@ -1,0 +1,1 @@
+- `install.sh --doctor` says when no profile has `personal-repos.txt`, since until one does, the design-files guard treats every repository with a remote as shared.

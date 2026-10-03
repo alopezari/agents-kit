@@ -107,6 +107,9 @@ for profile in "$KIT"/profiles/*/; do
   for doc in "$profile"/research/*; do [ -e "$doc" ] && link_profile_entry "$name" "$doc" "$KIT/research/$(basename "$doc")"; done
 done
 [ -d "$KIT/profiles" ] || ok "no profiles (add one with --profile <dir>)"
+# Until a profile names the user's own owners, design_files.py asks before Impeccable's files in every repository.
+if compgen -G "$KIT/profiles/*/personal-repos.txt" >/dev/null; then ok "personal repositories listed (personal-repos.txt)"
+else info "no profile has personal-repos.txt: every repository with a remote counts as shared, and Impeccable's PRODUCT.md, DESIGN.md and .impeccable/ wait for your say-so in all of them"; fi
 # guard_mcp.py merges every profile's direct MCP servers into one table, so a later profile replaces earlier rules.
 python3 - "$KIT" <<'PY' | while read -r line; do warn "$line"; done
 import glob, json, os, sys

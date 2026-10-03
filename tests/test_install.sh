@@ -61,6 +61,15 @@ if echo "$before" | grep -q "  info  impeccable not installed" && echo "$after" 
   && [ "$(ls "$home/.impeccable/bin")" = "$(basename "$engine")" ] && [ ! -e "$home/downloaded" ]; then
   echo "ok   --doctor reports Impeccable's engine from its cache, without fetching it"
 else echo "FAIL Impeccable engine: before: $(echo "$before" | grep impeccable) after: $(echo "$after" | grep impeccable)"; fail=1; fi
+# Without a personal-repos.txt every repository counts as shared: the doctor says so until a profile lists one.
+without=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
+echo "github.com/someone" > "$home/.agents/profiles/work/personal-repos.txt"
+with=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
+rm "$home/.agents/profiles/work/personal-repos.txt"
+if echo "$without" | grep -q "  info  no profile has personal-repos.txt" && echo "$with" | grep -q "  ok    personal repositories listed" \
+  && ! echo "$with" | grep -q "no profile has personal-repos.txt"; then
+  echo "ok   --doctor says when no profile lists personal repositories"
+else echo "FAIL personal-repos.txt: without: $(echo "$without" | grep personal) with: $(echo "$with" | grep personal)"; fail=1; fi
 # Trusting Codex hooks is done in Codex itself, so a new machine legitimately warns about it.
 warnings=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1 | grep "  warn " | grep -v "codex hook not trusted")
 if [ -z "$warnings" ]; then echo "ok   --doctor is clean after installing"
