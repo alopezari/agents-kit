@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **18 command-line tools**: a11y-check, browse, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, staging, triage, wp-query-profile.
+- **19 command-line tools**: a11y-check, approve, browse, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, staging, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -98,7 +98,7 @@ When the change needs manual tests on staging, `validate` ends by handing you th
 
 **`guard_files.py`**: PreToolUse guard for file tools (Claude Code Edit/Write/MultiEdit/NotebookEdit, Codex apply_patch/Edit/Write): Impeccable's project files in a shared repository need the user first (design_files.py).
 
-**`guard_mcp.py`**: PreToolUse guard for MCP tools that write to shared systems. Reads pass. Writes are allowed when the user's current message names the service (prompt_approvals.py), or the user approved it in the last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves. The shell guard (guard_bash.py) never lets agents create either.
+**`guard_mcp.py`**: PreToolUse guard for MCP tools that write to shared systems. Reads pass. Writes are allowed when the user's current message names the service (prompt_approvals.py) or they allowed it in Claude Code's dialog (bin/approve), or the user approved it in the last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves. The shell guard (guard_bash.py) never lets agents create any of them.
 
 **`post_edit.py`**: PostToolUse hook for file edits, shared by Claude Code and Codex. Runs a fast syntax check on each edited file and records that the session edited files, so the Stop hook only runs its checks after real changes.
 
@@ -134,7 +134,7 @@ Every block, every approved or browser MCP call and every shell command a user's
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
 
-It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them (`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in `personal-repos.txt`.
+It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them (`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in `personal-repos.txt`. For MCP writes and `DROP`/`TRUNCATE` commands, Claude Code's mod asks you right away instead, in a dialog that shows the blocked call: allowing it writes the approval your message would, for that one call or until your next message (`bin/approve`, which the shell guard refuses from the agent).
 
 ## Verify: checking the change at the end of every turn
 
@@ -206,9 +206,9 @@ Harnesses pick a skill by its description; you can also call one by name (`/spec
 
 ## Claude Code mod
 
-Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code, defines the self-review's reviewer agents and runs the kit's tools without a turn. It owns no state and no safety: it shows and runs what the rest of the kit does, so Codex, and a session without the mod, get the same flow. Each capability names what Codex has instead.
+Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code, defines the self-review's reviewer agents, runs the kit's tools without a turn and asks you about a blocked call you could approve. It owns no state and no safety: it shows and runs what the rest of the kit does, and the hooks still decide what is blocked, so Codex, and a session without the mod, get the same flow. Each capability names what Codex has instead.
 
-| Command or agent | Capability | Codex has instead |
+| Command, hook or agent | Capability | Codex has instead |
 |---|---|---|
 | `/flow`: Show where this branch is in the kit's flow, and run verify without a turn | Phase and reports | `bin/reports brief` |
 |  | Follows the branch into the main checkout once validate detaches the session's own | the commands of this list, run from the main checkout |
@@ -221,6 +221,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | The staging guide's steps before the merge, each with its latest result, who gave it, and its evidence files | `bin/staging steps --json` |
 |  | Pass button on each step before the merge, recorded as the user's verdict | `bin/staging mark <step> PASS --by user` in a terminal (the shell guard refuses it from the agent) |
 |  | Fail button on each step before the merge, recorded as the user's verdict | `bin/staging mark <step> FAIL --by user` in a terminal |
+| `tool.call` hook: Ask the user in a dialog when a kit guard blocks a call they could approve | A blocked MCP write or `DROP`/`TRUNCATE` command shown in a dialog: allowed once, until the user's next message, or kept blocked | the user's next message naming the service or opening with `allow <statement>`, or `touch ~/.agents/approvals/<service>` |
 | `kit:review-<lens>` agents: One reviewer agent type per self-review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/self-review/lenses.md` |
 
 The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.
@@ -228,6 +229,15 @@ The rules every mod follows are in the README (Mods contract). `install.sh` inst
 ## Command-line tools
 
 **`bin/a11y-check`**: Accessibility check (axe-core) of the given URLs. See ~/.agents/tools/a11y/check.mjs.
+
+**`bin/approve`**: The approvals a guard's block needs, and the turn approvals the user's answer in a dialog writes.
+
+```
+approve needed < payload.json        {names, what, scope}: the approvals the rule that blocked this call needs
+approve grant <session> <name>...    write them as turn approvals, as the user's message would, until their next one
+approve once <session> <name>...     write them for one call, unless the turn has them
+approve revoke <session> <name>...   remove the ones `once` wrote; a turn approval stays
+```
 
 **`bin/browse`**: A/B harness for browser tooling in the validate skill: Playwright CLI vs agent-browser.
 

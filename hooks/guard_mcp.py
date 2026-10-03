@@ -2,9 +2,9 @@
 """PreToolUse guard for MCP tools that write to shared systems.
 
 Reads pass. Writes are allowed when the user's current message names the service
-(prompt_approvals.py), or the user approved it in the last APPROVAL_MINUTES by
-creating ~/.agents/approvals/<service> themselves. The shell guard (guard_bash.py)
-never lets agents create either.
+(prompt_approvals.py) or they allowed it in Claude Code's dialog (bin/approve), or the user approved it in the
+last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves. The shell guard (guard_bash.py)
+never lets agents create any of them.
 
 Browser MCP calls (Playwright, Chrome DevTools, Claude in Chrome) are logged and never blocked, so the
 monthly job can tell validation runs that went around the browser A/B (bin/browse) from runs with no UI.

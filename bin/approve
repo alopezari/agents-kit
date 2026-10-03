@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""The approvals a guard's block needs, and the turn approvals the user's answer in a dialog writes.
+
+  approve needed < payload.json        {names, what, scope}: the approvals the rule that blocked this call needs
+  approve grant <session> <name>...    write them as turn approvals, as the user's message would, until their next one
+  approve once <session> <name>...     write them for one call, unless the turn has them
+  approve revoke <session> <name>...   remove the ones `once` wrote; a turn approval stays
+
+`needed` reads a PreToolUse payload with the block's text as `deny`. When guard_mcp blocked a write, or guard_bash's
+DROP/TRUNCATE rule a command, it names the service, or the sql.* grant of each statement not granted yet this turn;
+`what` shows them and `scope` says what a turn approval covers. A later rule can still block the same call (a `sudo`
+after the statement). Names is empty for anything else.
+
+`grant` and `once` are the user's own answer (the Claude Code mod's dialog); the shell guard refuses them from an agent.
+They write every name or none, and exit 1 when they can't. Exits 2, writing nothing, on a missing payload or a
+session or name that isn't a plain word.
+"""
+import contextlib
+import json
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
+import guard_mcp  # noqa: E402
+from hooklog import log  # noqa: E402
+
+SESSION = re.compile(r"[\w-]+")  # what guard_mcp.approved keeps of a session id
+NAME = re.compile(r"\w[\w.-]*")
+NOTHING = {"names": [], "what": "", "scope": ""}
+ONCE = "once\n"  # what a one-call approval's file holds; a turn approval's is empty, as prompt_approvals writes it
+
+
+def read(path):
+    try:
+        with open(path) as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+def needed(payload):
+    session = payload.get("session_id")
+    tool_input = payload.get("tool_input") or {}
+    deny = str(payload.get("deny") or "")
+    if payload.get("tool_name") == "Bash":
+        import guard_bash  # only here: it loads the whole shell guard
+        # Another rule blocked it (a force push before the statement): granting the statement would change nothing.
+        if "Blocked by ~/.agents/hooks/guard_bash.py: " + dict(guard_bash.RULES)[guard_bash.DATABASE_DESTROY] not in deny:
+            return NOTHING
+        command = str(tool_input.get("command") or "")
+        verbs, shown = {}, []
+        for match in re.finditer(guard_bash.DATABASE_DESTROY, command):
+            name = guard_bash.database_grant(match.group())
+            if guard_mcp.approved(name, session):
+                continue
+            verbs[name] = " ".join(match.group().upper().split())
+            # The object, up to where the statement or the shell's quoting ends: `"users"` keeps its quotes, and the
+            # closing quote of `psql -c "… runs" 2>&1` goes, with the redirect's fd.
+            target = re.match(r"\s*([^;'\n<>|&]{0,60})", command[match.end():]).group(1).replace('\\"', '"').rstrip()
+            target = re.sub(r"\s+\d$", "", target)
+            if target.count('"') % 2 and target.endswith('"'):
+                target = target[:-1].rstrip()
+            shown.append(f"`{verbs[name]}{' ' + target if target else ''}`")
+        if not verbs:
+            return NOTHING
+        shown = list(dict.fromkeys(shown))
+        return {"names": sorted(verbs), "what": f"{', '.join(shown)} {'destroys' if len(shown) == 1 else 'destroy'} "
+                "database data", "scope": "any " + " or ".join(sorted(set(verbs.values())))}
+    tool_name = str(payload.get("tool_name") or "")
+    hit = None if guard_mcp.BROWSER_MCP.match(tool_name) else guard_mcp.classify(tool_name, tool_input)
+    if not hit or "Blocked by ~/.agents/hooks/guard_mcp.py: " not in deny or guard_mcp.approved(hit[0], session):
+        return NOTHING
+    return {"names": [hit[0]], "what": f"`{hit[1]}` writes to {hit[0]}, which other people see",
+            "scope": f"every {hit[0]} write"}
+
+
+def refuse(why):
+    print(f"approve: {why}", file=sys.stderr)
+    return 2
+
+
+def main(argv):
+    if argv[:1] == ["needed"] and len(argv) == 1:
+        try:
+            payload = json.loads(sys.stdin.read())
+        except ValueError:
+            return refuse("needed reads a PreToolUse payload as JSON on stdin")
+        if not isinstance(payload, dict):
+            return refuse("needed reads a PreToolUse payload as JSON on stdin")
+        print(json.dumps(needed(payload)))
+        return 0
+    if argv[:1] not in (["grant"], ["once"], ["revoke"]) or len(argv) < 3:
+        return refuse("usage: approve needed < payload.json | approve grant|once|revoke <session> <name>...")
+    command, session, names = argv[0], argv[1], list(dict.fromkeys(argv[2:]))  # a repeat would spoil the rollback
+    if not SESSION.fullmatch(session):
+        return refuse(f"not a session id: {session!r}")
+    bad = [name for name in names if not NAME.fullmatch(name)]
+    if bad:
+        return refuse(f"not an approval name: {bad[0]!r}")
+    folder = os.path.join(guard_mcp.TURN_APPROVALS, session)
+    if command == "revoke":
+        revoked = []
+        for name in names:
+            if read(os.path.join(folder, name)) == ONCE:  # never a turn approval, the user's message's or a dialog's
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(os.path.join(folder, name))
+                    revoked.append(name)
+        log("approve", "revoke-once", {"session_id": session}, ",".join(sorted(revoked)))
+        return 0
+    before = {}
+    try:
+        os.makedirs(folder, exist_ok=True)
+        for name in names:
+            path = os.path.join(folder, name)
+            if command == "once" and os.path.exists(path):
+                continue  # a turn approval already covers it
+            before[path] = read(path)
+            with open(path, "w") as fh:  # a turn approval over a once one: its revoke then leaves it
+                fh.write(ONCE if command == "once" else "")
+    except OSError as error:  # all or nothing: a grant cut short would outlive the answer it was for
+        for path, content in before.items():
+            with contextlib.suppress(OSError):
+                if content is None:
+                    os.remove(path)
+                else:
+                    with open(path, "w") as fh:
+                        fh.write(content)
+        print(f"approve: couldn't write the approval: {error}", file=sys.stderr)
+        return 1
+    log("approve", "approve-dialog" if command == "grant" else "approve-once", {"session_id": session},
+        ",".join(sorted(names)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
