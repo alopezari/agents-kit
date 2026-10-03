@@ -99,6 +99,8 @@ def release(version):
         sys.exit(f"changelog: can't read {PLUGIN_MANIFEST}, whose version the release sets: {error}")
     if not isinstance(manifest, dict):
         sys.exit(f"changelog: {PLUGIN_MANIFEST} is not a JSON object, so the release can't set its version")
+    if not os.access(PLUGIN_MANIFEST, os.W_OK):
+        sys.exit(f"changelog: can't write {PLUGIN_MANIFEST}, whose version the release sets")
     today = datetime.date.today().isoformat()
     body = f"## [Unreleased]\n\n## [{version}] - {today}\n\n" + "\n".join(lines) + "\n\n"
     with open("CHANGELOG.md", "w") as fh:

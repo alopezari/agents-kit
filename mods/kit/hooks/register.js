@@ -18,7 +18,7 @@ const VERIFY_DEADLINE_MS = 660_000
 const CHECKED_NOTHING = 'verify passed, but it checked nothing'
 // A gathering whose branch or HEAD moved while it ran is gathered again, this many times in all.
 const GATHER_ATTEMPTS = 2
-const NEEDS_ATTENTION = /couldn't|failed/
+const NEEDS_ATTENTION = /couldn't|failed/i
 
 // What the pane draws. One gathering runs at a time: a request during one gathers again once it ends.
 let shown = null
@@ -133,20 +133,23 @@ async function checkout($, cwd) {
 }
 
 function clip(text) {
-  return text.length > LINE_CHARS ? text.slice(0, LINE_CHARS) + '…' : text
+  return text.length > LINE_CHARS ? text.slice(0, LINE_CHARS - 1) + '…' : text
 }
 
 function nameOf(at) {
   return at.branch + ' @ ' + at.head.slice(0, 7)
 }
 
+function sameCheckout(a, b) {
+  return !a.none && !b.none && a.root === b.root && a.branch === b.branch && a.head === b.head
+}
+
 // The facts for the change the session is on: { none } when there is no change to follow, otherwise a
 // heading naming the branch and HEAD they describe, and one list of lines per section.
 async function collect($) {
   const kit = await kitDir($)
-  const cwd = await $.session.cwd()
   for (let attempt = 1; ; attempt++) {
-    const at = await checkout($, cwd)
+    const at = await checkout($, await $.session.cwd())
     if (at.none) return at
     // The brief comes first: on the default branch it is the only answer, and CI can take ninety seconds.
     const brief = await run($, [kit + '/bin/reports', 'brief'], at.root)
@@ -163,8 +166,8 @@ async function collect($) {
       contextLine($),
       $.clock.now(),
     ])
-    const after = await checkout($, cwd)
-    const moved = after.none !== undefined || nameOf(after) !== nameOf(at)
+    // Read again from the session's directory: Claude Code's /cd can move it while this gathers.
+    const moved = !sameCheckout(at, await checkout($, await $.session.cwd()))
     if (moved && attempt < GATHER_ATTEMPTS) continue
     return {
       root: at.root,
@@ -309,7 +312,7 @@ export function register(on) {
       : shown.none
         ? [line(shown.none + refreshing)]
         : [
-            Text({ bold: true, children: [clip(shown.heading) + refreshing] }),
+            Text({ bold: true, children: [clip(shown.heading + refreshing)] }),
             ...shown.sections.flatMap(([title, lines]) => [
               Text({ children: [' '] }),
               Text({ dimColor: true, children: [title] }),

@@ -56,11 +56,12 @@ const REPORT_TEXT = '# Verify: PASS\n\n```\nran: tests/a.py\nskipped: ruff: not 
 // Stubs everything the mod reaches outside itself; returns the argv and options of every process it ran.
 function stub(on, runs: Record<string, Run>, { surfaces = ['terminal'], report = REPORT_TEXT, process = null, panes = () => ['flow'], cwd = { value: SESSION_CWD } } = {}) {
   const ran: string[] = []
+  const cwds: string[] = []
   const timeouts: number[] = []
   const opened: object[] = []
   const clock = mock.clock(on)
   on('env.get', () => ({ value: '/home' }))
-  on('session.cwd', () => cwd)
+  on('session.cwd', () => (typeof cwd === 'function' ? cwd() : cwd))
   on('session.surfaces', () => ({ value: surfaces }))
   on('session.usage', () => ({ value: { context: { window: 200000, tokens: 50000, percent: 25 } } }))
   on('command.register', () => ({ value: undefined }))
@@ -78,13 +79,14 @@ function stub(on, runs: Record<string, Run>, { surfaces = ['terminal'], report =
   on('process.run', process ?? (($, e) => {
     const key = e.argv.join(' ')
     ran.push(key)
+    cwds.push(e.init?.cwd)
     timeouts.push(e.init?.timeoutMs)
     const answer = runs[key]
     if (!answer) return { deny: 'unexpected command: ' + key }
     if ('deny' in answer) return answer
     return { value: { exitCode: answer.exitCode, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' } }
   }))
-  return { ran, timeouts, opened, clock }
+  return { ran, cwds, timeouts, opened, clock }
 }
 
 async function openPane($, clock) {
@@ -111,6 +113,11 @@ const texts = async (ui) =>
 
 const buttons = async (ui) => nodes(await ui.find({ type: 'Box' }), 'Button').map((node) => node.props?.label ?? node.label)
 
+const isBold = async (ui, pattern) =>
+  nodes(await ui.find({ type: 'Box' }), 'Text')
+    .filter((node) => pattern.test((node.children ?? []).join('')))
+    .map((node) => node.props?.bold ?? node.bold)
+
 test('the mod registers exactly the commands features.js describes, each to run without a turn', async ($, on) => {
   const registered = []
   on('command.register', ($, e) => {
@@ -126,9 +133,8 @@ test('the mod registers exactly the commands features.js describes, each to run 
 test('every button the pane draws is a capability features.js lists', async ($, on) => {
   const { clock } = stub(on, repo())
   const labels = await buttons(await openPane($, clock))
-  expect(labels.sort()).toEqual(['Refresh', 'Run verify'])
-  const names = FEATURES.flatMap((f) => f.capabilities.map((c) => c.name))
-  for (const label of labels) expect(names.some((name) => name.startsWith(label + ' button'))).toBe(true)
+  const declared = FEATURES.flatMap((f) => f.capabilities.map((c) => c.name.match(/^(.+) button\b/)?.[1]).filter(Boolean))
+  expect(labels.sort()).toEqual(declared.sort())
 })
 
 test('the pane shows the phase, stamps, verify lines, CI and context for the branch it names', async ($, on) => {
@@ -273,9 +279,11 @@ test('a source that fails says why, and the other sections still show', async ($
 
 test('a gathering the host fails to answer says so instead of gathering forever', async ($, on) => {
   const { clock } = stub(on, repo(), { cwd: { deny: 'no session' } })
-  const shown = await texts(await openPane($, clock))
+  const ui = await openPane($, clock)
+  const shown = await texts(ui)
   expect(shown).toMatch(/^Couldn't gather the flow: .*no session$/m)
   expect(shown).not.toContain('Gathering…')
+  expect(await isBold(ui, /^Couldn't gather/)).toEqual([true])
 })
 
 test('no verify report yet says so', async ($, on) => {
@@ -287,7 +295,7 @@ test('a line longer than Claude Code draws is clipped', async ($, on) => {
   const { clock } = stub(on, repo(), { report: '# Verify: FAIL\n\nerror: ' + 'x'.repeat(20_000) + '\n' })
   const lines = (await texts(await openPane($, clock))).split('\n')
   const error = lines.find((line) => line.startsWith('error: '))
-  expect(error.length).toBeLessThanOrEqual(501)
+  expect(error.length).toBe(500)
   expect(error.endsWith('…')).toBe(true)
 })
 
@@ -308,6 +316,25 @@ test('a checkout that moves while gathering is gathered again, and says so when 
   await clock.settle()
   shown = await texts(ui)
   expect(shown).toMatch(/^feature @ 3333333 · .*the checkout moved while gathering: Refresh$/m)
+})
+
+test('a session that moves to another checkout while gathering is gathered there', async ($, on) => {
+  const OTHER = '/work/other'
+  let cwdReads = 0
+  const runs = repo()
+  const roots: string[] = []
+  const { clock } = stub(on, runs, {
+    cwd: () => ({ value: ++cwdReads === 1 ? SESSION_CWD : OTHER }),
+    process: ($, e) => {
+      const key = e.argv.join(' ')
+      if (key === KIT + '/bin/reports brief') roots.push(e.init?.cwd)
+      if (key === 'git rev-parse --show-toplevel') return { value: { exitCode: 0, stdout: (e.init?.cwd === OTHER ? OTHER : ROOT) + '\n', stderr: '' } }
+      const answer = runs[key]
+      return { value: { exitCode: answer.exitCode, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' } }
+    },
+  })
+  await openPane($, clock)
+  expect(roots).toEqual([ROOT, OTHER])
 })
 
 test('a Refresh during a gathering gathers again after it, and the newer facts stay', async ($, on) => {

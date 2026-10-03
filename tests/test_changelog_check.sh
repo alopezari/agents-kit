@@ -87,6 +87,13 @@ out=$("$changelog" release 0.3.0 2>&1); code=$?
 ok "a release whose kit plugin manifest isn't a JSON object fails" "$code" 1
 ok "and names it" "$(echo "$out" | grep -c "mods/kit/.claude-plugin/plugin.json is not a JSON object")" 1
 ok "and changes nothing" "$(cat CHANGELOG.md VERSION mods/kit/.claude-plugin/plugin.json changelog.d/*)" "$before"
+printf '{"name": "kit", "version": "0.2.1"}\n' > mods/kit/.claude-plugin/plugin.json && commit "a manifest again" && chmod 444 mods/kit/.claude-plugin/plugin.json
+before=$(cat CHANGELOG.md VERSION mods/kit/.claude-plugin/plugin.json changelog.d/*)
+out=$("$changelog" release 0.3.0 2>&1); code=$?
+chmod 644 mods/kit/.claude-plugin/plugin.json
+ok "a release that can't write the kit plugin's manifest fails" "$code" 1
+ok "and names it" "$(echo "$out" | grep -c "can't write mods/kit/.claude-plugin/plugin.json")" 1
+ok "and changes nothing" "$(cat CHANGELOG.md VERSION mods/kit/.claude-plugin/plugin.json changelog.d/*)" "$before"
 git rm -q mods/kit/.claude-plugin/plugin.json && commit "drop the plugin manifest"
 before=$(cat CHANGELOG.md VERSION changelog.d/*)
 out=$("$changelog" release 0.3.0 2>&1); code=$?
