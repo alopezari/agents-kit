@@ -1,5 +1,6 @@
-// What each command of the mod offers, and what Codex has instead: bin/docs prints it in docs/framework.md,
-// and tests/flow.test.ts fails when the mod registers a command, or draws a button, this list doesn't name.
+// What each command and agent type of the mod offers, and what Codex has instead: bin/docs prints it in
+// docs/framework.md, and tests/flow.test.ts fails when the mod registers a command or agent, or draws a button,
+// this list doesn't name.
 // Kept as one JSON value after the `=`, which bin/docs reads without running JavaScript.
 export const FEATURES = [
   {
@@ -13,6 +14,13 @@ export const FEATURES = [
       {"name": "Context use", "codex": "nothing (Codex shows its own)"},
       {"name": "Run verify button, without a turn, on the checkout the session is in", "codex": "`python3 ~/.agents/hooks/stop_checks.py verify` in a terminal"},
       {"name": "Refresh button, and a refresh after each turn while the pane is open", "codex": "running the commands above again"}
+    ]
+  },
+  {
+    "agents": "review",
+    "description": "One reviewer agent type per self-review lens",
+    "capabilities": [
+      {"name": "`kit:review-<lens>` for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, read-only tools, no CLAUDE.md block", "codex": "a subagent given the lens text from `skills/self-review/lenses.md`"}
     ]
   }
 ]

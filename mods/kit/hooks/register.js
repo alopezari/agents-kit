@@ -20,6 +20,11 @@ const CHECKED_NOTHING = 'verify passed, but it checked nothing'
 const GATHER_ATTEMPTS = 2
 const NEEDS_ATTENTION = /couldn't read|^Couldn't|^CI: failed|^Run verify.* failed/
 
+// Each self-review lens becomes the agent type `kit:review-<key>`, briefed from what `bin/triage --lens-briefs` cuts
+// out of lenses.md. Withholding edits is a convenience for the reviewer, not a guard: the hooks run for subagents too.
+const REVIEWER_TOOLS = ['Read', 'Grep', 'Glob', 'Bash']
+const REVIEWER_DISALLOWED_TOOLS = ['Edit', 'Write', 'NotebookEdit']
+
 // What the pane draws. One gathering runs at a time: a request during one gathers again once it ends.
 let shown = null
 let gathering = false
@@ -280,11 +285,52 @@ async function runVerify($) {
   await gather($)
 }
 
+function reviewerPrompt(lens) {
+  return [
+    `You are one reviewer in the kit's self-review, with one lens: ${lens.title}. You read files and run read-only`,
+    'commands; you never edit files. The spawn prompt gives the base ref, the goal, the spec when there is one, and how',
+    "to report. The repository's own AGENTS.md or CLAUDE.md, when it has one, holds its conventions: read it when a",
+    'finding depends on them.',
+    '',
+    lens.brief,
+  ].join('\n')
+}
+
+async function registerReviewers($) {
+  const kit = await kitDir($)
+  const briefs = await run($, [kit + '/bin/triage', '--lens-briefs'], kit)
+  if (briefs.failure || briefs.exitCode !== 0) {
+    return $.ui.log('kit: no review agents: bin/triage --lens-briefs: ' + failureOf(briefs), { to: 'debug' })
+  }
+  let lenses
+  try {
+    lenses = JSON.parse(briefs.stdout)
+  } catch (error) {
+    return $.ui.log('kit: no review agents: bin/triage --lens-briefs printed something not JSON: ' + messageOf(error), { to: 'debug' })
+  }
+  for (const lens of lenses) {
+    await $.agent
+      .register({
+        name: 'review-' + lens.key,
+        description: `The self-review's ${lens.title} lens: a read-only reviewer of a change. Give it the base ref, ` +
+          'the goal, the spec path and the evidence instruction.',
+        prompt: reviewerPrompt(lens),
+        tools: REVIEWER_TOOLS,
+        disallowedTools: REVIEWER_DISALLOWED_TOOLS,
+        omitClaudeMd: true,
+      })
+      .catch((error) => $.ui.log(`kit: review-${lens.key} not registered: ` + messageOf(error), { to: 'debug' }))
+  }
+}
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
     const flow = FEATURES.find((feature) => feature.command === 'flow')
     await $.command.register({ name: 'flow', description: flow.description, immediate: true })
-    return next(e)
+    const started = await next(e)
+    // After the start, which every session waits on; the agents are there from the next turn either way.
+    void registerReviewers($).catch((error) => $.ui.log('kit: review agents: ' + messageOf(error), { to: 'debug' }))
+    return started
   })
 
   on('command.run', { command: 'flow' }, async ($) => {

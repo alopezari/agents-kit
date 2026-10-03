@@ -4,6 +4,7 @@
   triage                  change vs the merge-base with the default branch (committed + uncommitted + untracked)
   triage --range A..B     a commit range instead (for calibration on past changes)
   triage --json           machine-readable output
+  triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/self-review/lenses.md
 
 The self-review and validate skills run the lenses and tests this selects. Every rule is a regex
 over changed paths or added lines, so a selection can always be traced back to its signal.
@@ -35,6 +36,11 @@ LENS_SIGNALS = {
     "data-privacy": r"CREATE TABLE|ALTER TABLE|DROP |dbDelta|DELETE FROM|->delete\(|wp_delete_|TRUNCATE|user_email"
                     r"|billing_|shipping_|\bemail\b|ip_address|personal|gdpr|tracks?_event|analytics|error_log",
 }
+# The lenses.md heading of each lens key this file selects, and the Claude Code mod's reviewers are named after.
+LENS_TITLES = {"correctness": "Correctness", "tests": "Tests", "maintainability": "Maintainability", "security": "Security",
+               "performance": "Performance and scale", "compatibility": "Compatibility and rollout",
+               "operability": "Operability", "data-privacy": "Data and privacy", "ux-a11y-i18n": "UX, accessibility and i18n",
+               "design": "Design"}
 HIGH_RISK = {
     "auth or permissions": r"current_user_can|permission_callback|wp_verify_nonce|check_ajax_referer|login|capabilit",
     "payments or orders": r"stripe|payment|checkout|refund|subscription|invoice|wc_get_order|->get_total\(",
@@ -359,8 +365,21 @@ def triage(rng=None):
             "cross_model": "per lens" if tier == "high" else ("correctness" if tier == "standard" else "none")}
 
 
+def lens_briefs():
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "skills", "self-review", "lenses.md")
+    sections = re.split(r"^## (.+)$", open(path).read(), flags=re.M)[1:]
+    key_of = {title: key for key, title in LENS_TITLES.items()}
+    unknown = [title for title in sections[::2] if title not in key_of]
+    if unknown:
+        sys.exit(f"triage: lenses.md has lenses with no key in LENS_TITLES: {', '.join(unknown)}")
+    return [{"key": key_of[title], "title": title, "brief": body.strip()} for title, body in zip(sections[::2], sections[1::2])]
+
+
 def main():
     args = sys.argv[1:]
+    if "--lens-briefs" in args:
+        print(json.dumps(lens_briefs()))
+        return 0
     rng = args[args.index("--range") + 1] if "--range" in args else None
     result = triage(rng)
     if "--json" in args:
