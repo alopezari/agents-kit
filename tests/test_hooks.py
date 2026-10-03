@@ -1479,13 +1479,43 @@ def impeccable_guard_edge_cases(base):
         fh.write('[remote "x"\n')  # git can't parse its config: that's no proof of a personal repository
     assert "say-so" in shell("touch DESIGN.md"), "a failing git counts as shared"
 
+def impeccable_guard_reads_prose_as_text(base):
+    profiles = os.path.join(base, "profiles")
+    os.makedirs(profiles)
+    env = {"HOME": base, "AGENTS_PROFILES_DIR": profiles}
+    shared = new_repo(base, "shared")
+    git(shared, "remote", "add", "origin", "git@github.com:someone/app.git")
+
+    def shell(command):
+        got = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": shared, "session_id": "p1"}, env=env)
+        return (got or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", "allow")
+
+    # A $( anywhere used to make the guard read every heredoc body and quoted string as commands.
+    for label, command in [
+            ("a commit message", "git commit -m 'Ask before PRODUCT.md and .impeccable/ in shared repos'"),
+            ("a double-quoted one", 'git commit -m "Keep DESIGN.md out; impeccable live is gated"'),
+            ("an echo to a log", "echo 'checked PRODUCT.md' >> /tmp/log.txt"),
+            ("a quoted heredoc with $( after it", "cat > notes.txt <<'EOF'\nRun `impeccable detect`; never create PRODUCT.md.\n"
+                                                    "EOF\nN=$(wc -l < notes.txt)"),
+            ("a Python string in a heredoc", "python3 - <<'EOF'\ns = '''v=$(x)  # an impeccable on PATH may download'''\n"
+                                              "EOF\nH=$(cat /tmp/h)")]:
+        assert shell(command) == "allow", label
+    for label, command in [
+            ("python -c with spaces", "python3 -c \"open('PRODUCT.md', 'w').write('x')\""),
+            ("a quoted path", 'echo x > "DESIGN.md"'),
+            ("$( inside double quotes", 'echo "$(touch PRODUCT.md) done"'),
+            ("a heredoc into .gitignore", "cat >> .gitignore <<'EOF'\nPRODUCT.md\nEOF\nN=$(wc -l < .gitignore)"),
+            ("a heredoc into the file", "cat > DESIGN.md <<'EOF'\n# Design\nEOF"),
+            ("sh -c with spaces", "sh -c 'cd . && touch PRODUCT.md'")]:
+        assert "say-so" in shell(command), label
+
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
           stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, stop_suggests_a_fresh_session_for_the_next_change, guard_records_the_pushed_checkout,
-          post_edit_syntax_feedback, impeccable_files_in_a_shared_repo_need_the_user_first, impeccable_guard_edge_cases]
+          post_edit_syntax_feedback, impeccable_files_in_a_shared_repo_need_the_user_first, impeccable_guard_edge_cases, impeccable_guard_reads_prose_as_text]
 
 if sys.argv[1:]:
     by_name = {t.__name__: t for t in TESTS}

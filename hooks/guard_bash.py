@@ -439,6 +439,31 @@ LEADING = re.compile(r"-\S*|\w+=\S*|if|then|else|elif|do|while|until|\{|!|time|e
 WORD = re.compile(r"[^\s\"'<>;&|()]+")
 
 
+RUNS_QUOTED_CODE = re.compile(RUNS_QUOTED_TEXT.pattern + r"|\b(?:python3?|node|perl|ruby)\s+(?:-\w+\s+)*-\w*[ce]\b")
+
+
+def without_prose(command):
+    """The command with what bash never runs as a command blanked: quoted-delimiter heredoc bodies, and quoted text
+    with spaces in it (a commit message, an echo), unless the command runs quoted text as code. shell_code() reads
+    everything as code once a $( appears anywhere, which here would turn every mention into a write."""
+    lines, kept, delimiters = command.split("\n"), [], []
+    for line in lines:
+        if delimiters:
+            if line.lstrip("\t") == delimiters[0]:
+                delimiters.pop(0)
+                kept.append(line)
+            else:
+                kept.append("")
+            continue
+        kept.append(line)
+        delimiters = [m.group(2) or m.group(3) for m in re.finditer(r"<<-?\s*(?:(['\"])(\w+)\1|\\(\w+))", line)]
+    text = "\n".join(kept)
+    if RUNS_QUOTED_CODE.search(text):
+        return text
+    return re.sub(r"'[^']*\s[^']*'|\"(?:[^\"\\$`]|\\.)*\s(?:[^\"\\$`]|\\.)*\"",
+                  lambda m: m.group() if re.search(r"\bcd\s+$", text[:m.start()]) else "''", text)  # "My App" is a folder
+
+
 def impeccable_files(command, cwd, session):
     """Why a command needs the user first under design_files.py: it names PRODUCT.md, DESIGN.md or `.impeccable`
     where none exists yet, adds them to a .gitignore, or runs Impeccable's `live`, `hooks on`/`reset` or another
@@ -449,7 +474,8 @@ def impeccable_files(command, cwd, session):
     else's repository."""
     if not re.search(r"product\.md|design\.md|impeccable", command, re.I):
         return None  # most commands: no git call
-    code = shell_code(command)
+    text = without_prose(command)
+    code = shell_code(text)
     # A newline inside quotes is part of an argument (sed's a\ text), not the end of a command.
     joined = re.sub(r"'[x\n]*'|\"[x\n]*\"", lambda m: m.group().replace("\n", "x"), code)
     cuts = [(0, 0)] + [m.span() for m in re.finditer(r"&&|\|\||(?<![<>&])&(?![>&])|(?<!>)\||[;\n()]", joined)]
@@ -460,7 +486,7 @@ def impeccable_files(command, cwd, session):
     for (_, start), (boundary, _) in zip(cuts, cuts[1:] + [(len(code), len(code))]):
         if re.fullmatch(r"\s*x*\s*", code[start:boundary]):  # a heredoc body line, not a command
             continue
-        segment = command[start:boundary]
+        segment = text[start:boundary]
         cd = re.match(r"\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)", segment)
         if cd:
             folders.append(cd_into(folders[-1], cd.group(1)))

@@ -1,0 +1,1 @@
+- The design-files guard no longer asks about PRODUCT.md, DESIGN.md or Impeccable when they only appear in a commit message, an echoed sentence or a quoted heredoc, even when the command also has a `$(...)`.
