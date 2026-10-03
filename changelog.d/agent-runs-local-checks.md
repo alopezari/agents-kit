@@ -1,0 +1,1 @@
+- Checks that run on your own machine after the merge, such as loading a scheduled job or one full run of a local tool, are now the agent's: validate lists them as its own steps instead of handing you a staging guide, and ship runs them for a repo installed on this machine. A repo with no staging environment no longer gets a staging part.

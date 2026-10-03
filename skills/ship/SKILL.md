@@ -1,6 +1,6 @@
 ---
 name: ship
-description: See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, prepares the rollback, and closes the loop (issue update, repo notes, local branch). Use when the user is about to deploy a merged PR or says it is deployed.
+description: See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, or, for a repo installed on this machine, deploys and runs the checks itself; prepares the rollback, and closes the loop (issue update, repo notes, local branch). Use when the user is about to deploy a merged PR, says it is deployed, or says a PR of a repo installed on this machine is merged.
 ---
 
 # Ship
@@ -12,6 +12,8 @@ gh pr view <n> --json number,url,state,mergedAt,mergeCommit,headRefName
 ```
 
 It must be merged. If it isn't, say so and stop: `follow-pr` is the step before.
+
+**A repo installed on this machine** (a personal tool or profile whose deploy is a pull and an install here; the repo notes say so) has no production for the user to reach: pull, install and run the guide's "After the merge" steps marked as yours, through `~/.agents/bin/evidence` as written, then record the results as in section 3. Ask first only when a step runs something real the user didn't plan for (a paid or long run, a write to data outside a copy). Rollback and closing the loop are as below.
 
 ## 1. Deploy and verification guide
 
