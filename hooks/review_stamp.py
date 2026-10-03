@@ -31,7 +31,6 @@ import sys
 import tempfile
 import time
 
-QUALITY_LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
 # Where path.sh keeps a spec and its reports while a sandbox makes .git read-only.
 TMP_SPECS = os.path.join(os.environ.get("TMPDIR") or "/tmp", "agents-specs")
 NOT_BEHAVIOR = re.compile(
@@ -199,11 +198,24 @@ def relink_evidence(report, old_dir, new_dir):
             fh.write(text.replace(old_dir, new_dir))
 
 
+def quality_log():
+    """The main checkout's logs/quality.jsonl, even when ~/.agents links to a kit worktree: rows kept in a worktree are
+    lost when it is removed. Under the suite (AGENTS_KIT_UNDER_TEST) they stay in the HOME it made."""
+    kit = os.path.realpath(os.path.expanduser("~/.agents"))
+    if not os.environ.get("AGENTS_KIT_UNDER_TEST"):
+        common = subprocess.run(["git", "-C", kit, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                capture_output=True, text=True)
+        if common.returncode == 0:  # else the kit isn't a git checkout, and ~/.agents is the only place
+            kit = os.path.dirname(common.stdout.strip())
+    return os.path.join(kit, "logs", "quality.jsonl")
+
+
 def log_rename(repo, old, new):
     """Lens runs are logged under the branch's name at the time, and the monthly job joins them to the PR's branch."""
     try:
-        os.makedirs(os.path.dirname(QUALITY_LOG), exist_ok=True)
-        with open(QUALITY_LOG, "a") as fh:
+        path = quality_log()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as fh:
             fh.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": "rename", "repo": repo,
                                  "name": old, "to": new}) + "\n")
     except OSError as error:  # a sandbox that can't write ~/.agents/logs must still get its spec path

@@ -9,6 +9,7 @@ import tempfile
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 RESULTS = []
+KIT_FILES = ("bin/quality-log", "bin/repo-name", "review-mining/taxonomy.md", "hooks/review_stamp.py")
 
 
 def setup(base):
@@ -16,7 +17,8 @@ def setup(base):
     home = os.path.join(base, "home")
     os.makedirs(os.path.join(home, ".agents", "bin"))
     os.makedirs(os.path.join(home, ".agents", "review-mining"))
-    for rel in ("bin/quality-log", "bin/repo-name", "review-mining/taxonomy.md"):
+    for rel in KIT_FILES:
+        os.makedirs(os.path.dirname(os.path.join(home, ".agents", rel)), exist_ok=True)
         shutil.copy(os.path.join(KIT, rel), os.path.join(home, ".agents", rel))
     return home
 
@@ -64,7 +66,40 @@ def refuses_malformed_entries(base):
     assert entries(home) == [], "nothing was written"
 
 
-for test in (writes_well_formed_entries, refuses_malformed_entries):
+def a_session_on_a_worktree_logs_to_the_main_checkout(base):
+    """A session whose ~/.agents links to a kit worktree kept its rows there, and lost them when the worktree went."""
+    kit, worktree, home = (os.path.join(base, name) for name in ("kit", "worktree", "home"))
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q", kit], check=True)
+    subprocess.run([*git, "-C", kit, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    subprocess.run([*git, "-C", kit, "worktree", "add", "-q", "-b", "feature", worktree], check=True)
+    for rel in KIT_FILES:
+        os.makedirs(os.path.dirname(os.path.join(worktree, rel)), exist_ok=True)
+        shutil.copy(os.path.join(KIT, rel), os.path.join(worktree, rel))
+    os.makedirs(home)
+    os.symlink(worktree, os.path.join(home, ".agents"))
+    session = {key: value for key, value in os.environ.items() if key != "AGENTS_KIT_UNDER_TEST"}
+    rename = ["python3", "-c", f"import sys; sys.path.insert(0, {os.path.join(worktree, 'hooks')!r}); import review_stamp; "
+              "review_stamp.log_rename('repo', 'session-x', 'feature/x')"]
+
+    def write(env):
+        env = {**env, "HOME": home}
+        assert subprocess.run([os.path.join(home, ".agents", "bin", "quality-log"), "test", "e2e", "--issues", "0"], cwd=home,
+                              env=env, capture_output=True).returncode == 0
+        assert subprocess.run(rename, env=env, capture_output=True).returncode == 0
+
+    def rows(checkout):
+        path = os.path.join(checkout, "logs", "quality.jsonl")
+        return [json.loads(line)["kind"] for line in open(path)] if os.path.exists(path) else []
+
+    write(session)
+    assert (rows(kit), rows(worktree)) == (["test", "rename"], []), (rows(kit), rows(worktree))
+    # Under the suite (AGENTS_KIT_UNDER_TEST), rows stay in the HOME it made, never in the real log.
+    write(os.environ)
+    assert (rows(kit), rows(worktree)) == (["test", "rename"], ["test", "rename"]), (rows(kit), rows(worktree))
+
+
+for test in (writes_well_formed_entries, refuses_malformed_entries, a_session_on_a_worktree_logs_to_the_main_checkout):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)
