@@ -60,11 +60,11 @@ Every hook is a small program with one contract: a JSON payload on stdin, a JSON
 
 ## Mods contract
 
-Claude Code also loads the kit as a plugin, `mods/kit/`, whose [mod](https://code.claude.com/docs/en/plugins/mods/overview) runs inside Claude Code: it can draw panes and run commands without a turn. Mods exist only in Claude Code, so the kit keeps working the same with or without them. Every mod follows these rules:
+Claude Code also loads the kit as a plugin, `mods/kit/`, whose [mod](https://code.claude.com/docs/en/plugins/mods/overview) runs inside Claude Code: it can draw panes, run commands without a turn and define agent types. Mods exist only in Claude Code, so the kit keeps working the same with or without them. Every mod follows these rules:
 
 1. **It owns no workflow state.** Specs, stamps, reports and evidence stay where the kit's tools keep them (`.git/agents/`, or a temporary directory when `.git` can't be written) and go through `bin/` and `hooks/review_stamp.py`, so a change started in Claude Code can be finished in Codex, and the other way round. What those tools cache or migrate follows their own rules.
 2. **It owns no safety.** The Python hooks decide what is blocked, in every harness. A mod can only add to that in Claude Code. A disabled or failed mod leaves the behavior as it was without it, which is what Codex has.
-3. **Every capability names what Codex has instead**, or says it has nothing. They are listed in `mods/kit/hooks/features.js`, which `docs/framework.md` prints, and the mod's tests fail when the commands it registers, or the buttons it draws, differ from the list.
+3. **Every capability names what Codex has instead**, or says it has nothing. They are listed in `mods/kit/hooks/features.js`, which `docs/framework.md` prints, and the mod's tests fail when the commands or agents it registers, or the buttons it draws, differ from the list.
 4. **The flow works fully with the mod disabled or failed.** `claude --safe-mode` turns off the kit's settings hooks too, so it isn't a supported way to run the kit.
 5. **Guarantees go by tier.** A capability that gives Claude Code a stronger guarantee than Codex has records where each fact came from, such as a step the user marked with a button versus one the agent wrote down. A record without that provenance counts as the weaker tier.
 6. **It calls the kit's Python instead of reimplementing it**, so one rule never has two implementations that drift apart.

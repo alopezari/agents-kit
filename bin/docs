@@ -184,10 +184,11 @@ def readable_source(source):
 
 
 def mod_features():
-    """[(command, description, [(capability, what Codex has instead)])] from mods/kit/hooks/features.js."""
+    """[(what the mod registers, description, [(capability, what Codex has instead)])] from mods/kit/hooks/features.js."""
     source = read(require("mods/kit/hooks/features.js"))
     value = source.split("export const FEATURES =", 1)[1]
-    return [(f["command"], f["description"], [(c["name"], c["codex"]) for c in f["capabilities"]]) for f in json.loads(value)]
+    return [(f"`/{f['command']}`" if "command" in f else f"`kit:{f['agentPrefix']}-<lens>` agents", f["description"],
+             [(c["name"], c["codex"]) for c in f["capabilities"]]) for f in json.loads(value)]
 
 
 def skills():
@@ -378,13 +379,13 @@ def render():
     w("\nHarnesses pick a skill by its description; you can also call one by name (`/spec` in Claude Code).\n")
 
     w("## Claude Code mod\n")
-    w("Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code and runs the kit's tools "
+    w("Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code, defines the self-review's reviewer agents and runs the kit's tools "
       "without a turn. It owns no state and no safety: it shows and runs what the rest of the kit does, so Codex, "
       "and a session without the mod, get the same flow. Each capability names what Codex has instead.\n")
-    w("| Command | Capability | Codex has instead |\n|---|---|---|")
-    for command, description, capabilities in mod_features():
+    w("| Command or agent | Capability | Codex has instead |\n|---|---|---|")
+    for registered, description, capabilities in mod_features():
         for i, (capability, codex) in enumerate(capabilities):
-            w(f"| {f'`/{command}`: {cell(description)}' if i == 0 else ''} | {cell(capability)} | {cell(codex)} |")
+            w(f"| {f'{registered}: {cell(description)}' if i == 0 else ''} | {cell(capability)} | {cell(codex)} |")
     minimum = re.search(r"^\w+\s+claude>=(\S+)", read("deps.txt"), re.M).group(1)
     w("\nThe rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code "
       f"{minimum} or later is installed.\n")

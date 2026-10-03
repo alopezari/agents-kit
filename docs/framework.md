@@ -206,9 +206,9 @@ Harnesses pick a skill by its description; you can also call one by name (`/spec
 
 ## Claude Code mod
 
-Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code and runs the kit's tools without a turn. It owns no state and no safety: it shows and runs what the rest of the kit does, so Codex, and a session without the mod, get the same flow. Each capability names what Codex has instead.
+Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code, defines the self-review's reviewer agents and runs the kit's tools without a turn. It owns no state and no safety: it shows and runs what the rest of the kit does, so Codex, and a session without the mod, get the same flow. Each capability names what Codex has instead.
 
-| Command | Capability | Codex has instead |
+| Command or agent | Capability | Codex has instead |
 |---|---|---|
 | `/flow`: Show where this branch is in the kit's flow, and run verify without a turn | Phase and reports | `bin/reports brief` |
 |  | Stamps (verify, self-review, validate, staging), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
@@ -217,6 +217,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | Context use | nothing (Codex shows its own) |
 |  | Run verify button, without a turn, on the checkout the session is in | `python3 ~/.agents/hooks/stop_checks.py verify` in a terminal |
 |  | Refresh button, and a refresh after each turn while the pane is open | running the commands above again |
+| `kit:review-<lens>` agents: One reviewer agent type per self-review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/self-review/lenses.md` |
 
 The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.
 
@@ -306,6 +307,7 @@ reports --branch <name> …                        the same, for another branch 
 triage                  change vs the merge-base with the default branch (committed + uncommitted + untracked)
 triage --range A..B     a commit range instead (for calibration on past changes)
 triage --json           machine-readable output
+triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/self-review/lenses.md
 ```
 
 **`bin/wp-query-profile`**: Count the SQL queries a REST route or PHP snippet runs inside the local WordPress, and flag N+1 patterns.
