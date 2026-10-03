@@ -2,5 +2,7 @@
   "name": "kit",
   "version": "0.5.0",
   "description": "The agents kit inside Claude Code: the /flow pane",
-  "author": { "name": "agents-kit" }
+  "author": {
+    "name": "agents-kit"
+  }
 }

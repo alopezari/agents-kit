@@ -18,7 +18,7 @@ const VERIFY_DEADLINE_MS = 660_000
 const CHECKED_NOTHING = 'verify passed, but it checked nothing'
 // A gathering whose branch or HEAD moved while it ran is gathered again, this many times in all.
 const GATHER_ATTEMPTS = 2
-const NEEDS_ATTENTION = /couldn't|failed/i
+const NEEDS_ATTENTION = /couldn't read|^Couldn't|^CI: failed|^Run verify.* failed/
 
 // What the pane draws. One gathering runs at a time: a request during one gathers again once it ends.
 let shown = null
@@ -167,7 +167,9 @@ async function collect($) {
       $.clock.now(),
     ])
     // Read again from the session's directory: Claude Code's /cd can move it while this gathers.
-    const moved = !sameCheckout(at, await checkout($, await $.session.cwd()))
+    const after = await checkout($, await $.session.cwd())
+    if (after.none) return after
+    const moved = !sameCheckout(at, after)
     if (moved && attempt < GATHER_ATTEMPTS) continue
     return {
       root: at.root,
@@ -205,14 +207,14 @@ async function gather($) {
 }
 
 function asText(facts) {
-  if (facts.none) return facts.none
-  return [facts.heading, ...facts.sections.flatMap(([title, lines]) => ['', title + ':', ...lines.map((l) => '  ' + l)])].join('\n')
+  if (facts.none) return clip(facts.none)
+  return [clip(facts.heading), ...facts.sections.flatMap(([title, lines]) => ['', title + ':', ...lines.map((l) => '  ' + clip(l))])].join('\n')
 }
 
 function verifyLines() {
   if (verifyRun.state === 'idle') return []
   if (verifyRun.state === 'running') return ['Run verify: running…']
-  return ['Run verify ' + verifyRun.verdict, ...verifyRun.tail]
+  return ['Run verify ' + verifyRun.verdict, ...(verifyStopping ? ['stopping it: the button works again once it has ended'] : []), ...verifyRun.tail]
 }
 
 // One verify on the checkout the session is in now: its verdict and the last lines of its own output.
@@ -225,8 +227,9 @@ async function verifyHere($) {
   const tail = []
   const partial = { stdout: '', stderr: '' }
   let checkedNothing = false
-  const keep = (line) => {
-    if (line.startsWith(CHECKED_NOTHING)) checkedNothing = true
+  // The marker is stop_checks.py's own, on stderr; the repo's verify output reaches stdout.
+  const keep = (line, stream) => {
+    if (stream === 'stderr' && line.startsWith(CHECKED_NOTHING)) checkedNothing = true
     if (!line.trim()) return
     tail.push(line)
     if (tail.length > VERIFY_TAIL_LINES) tail.shift()
@@ -246,11 +249,11 @@ async function verifyHere($) {
             verifyStopping = false
             $.ui.invalidate('ui.render')
           })
-        return named('failed (no result after ' + VERIFY_DEADLINE_MS / 1000 + ' s, stopped)')
+        return named('failed (no result after ' + VERIFY_DEADLINE_MS / 1000 + ' s)')
       }
       if (step.done) {
-        keep(partial.stdout)
-        keep(partial.stderr)
+        keep(partial.stdout, 'stdout')
+        keep(partial.stderr, 'stderr')
         const { code, signal } = step.value
         if (code !== 0) return named('failed (' + (signal ? 'killed by ' + signal : 'exit ' + code) + ')')
         return named(checkedNothing ? 'passed, but it checked nothing' : 'passed')
@@ -258,7 +261,7 @@ async function verifyHere($) {
       const stream = step.value.stream === 'stderr' ? 'stderr' : 'stdout'
       const lines = (partial[stream] + step.value.text).split('\n')
       partial[stream] = lines.pop().slice(0, LINE_CHARS + 1)
-      lines.forEach(keep)
+      lines.forEach((line) => keep(line, stream))
     }
   } finally {
     timer.abort()

@@ -51,7 +51,7 @@ function repo(overrides: Record<string, Run> = {}): Record<string, Run> {
   }
 }
 
-const REPORT_TEXT = '# Verify: PASS\n\n```\nran: tests/a.py\nskipped: ruff: not installed\nwarning: slow\nerror: none\n```\n'
+const REPORT_TEXT = '# Verify: PASS\n\n```\nran: tests/a.py\nran: tests/test_failed_login.py\nskipped: ruff: not installed\nwarning: slow\nerror: none\n```\n'
 
 // Stubs everything the mod reaches outside itself; returns the argv and options of every process it ran.
 function stub(on, runs: Record<string, Run>, { surfaces = ['terminal'], report = REPORT_TEXT, process = null, panes = () => ['flow'], cwd = { value: SESSION_CWD } } = {}) {
@@ -153,6 +153,7 @@ test('the pane shows the phase, stamps, verify lines, CI and context for the bra
   for (const line of ['ran: tests/a.py', 'skipped: ruff: not installed', 'warning: slow', 'error: none']) expect(shown).toContain(line)
   expect(shown).toMatch(/^CI: passed$/m)
   expect(shown).toMatch(/context: 25%/)
+  expect(await isBold(ui, /test_failed_login/)).toEqual([false])
   // Escape hands the keys back without closing the pane, so it keeps refreshing after each turn.
   expect(opened).toEqual([{ id: 'flow', title: 'flow', focus: true }])
   expect(timeouts.length).toBeGreaterThan(10)
@@ -284,6 +285,7 @@ test('a gathering the host fails to answer says so instead of gathering forever'
   expect(shown).toMatch(/^Couldn't gather the flow: .*no session$/m)
   expect(shown).not.toContain('Gathering…')
   expect(await isBold(ui, /^Couldn't gather/)).toEqual([true])
+  expect(await isBold(ui, /^Run verify/)).toEqual([])
 })
 
 test('no verify report yet says so', async ($, on) => {
@@ -335,6 +337,17 @@ test('a session that moves to another checkout while gathering is gathered there
   })
   await openPane($, clock)
   expect(roots).toEqual([ROOT, OTHER])
+})
+
+test('a HEAD that can no longer be read once gathered says so, never that the checkout moved', async ($, on) => {
+  let headReads = 0
+  const runs = repo()
+  const { clock } = stub(on, new Proxy(runs, {
+    get: (target, key) => (key === 'git rev-parse HEAD' && ++headReads % 2 === 0 ? { exitCode: 128, stderr: 'fatal: bad object HEAD' } : target[key]),
+  }))
+  const shown = await texts(await openPane($, clock))
+  expect(shown).toMatch(/^Couldn't read HEAD: exit 128: fatal: bad object HEAD$/m)
+  expect(shown).not.toMatch(/moved/)
 })
 
 test('a Refresh during a gathering gathers again after it, and the newer facts stay', async ($, on) => {
@@ -427,8 +440,8 @@ test("Run verify's checked nothing comes from its own run, never from a stamp an
   const { clock } = stub(on, new Proxy(runs, {
     get: (target, key) => key === 'python3 /home/.agents/hooks/review_stamp.py check --kind verify-empty' ? { exitCode: empty } : target[key],
   }))
-  let output = 'ran: nothing to check: no changed files\n' + CHECKED_NOTHING
-  let chunks
+  let output = 'ran: nothing to check: no changed files\n'
+  let chunks = [['stdout', output], ['stderr', CHECKED_NOTHING]]
   stubVerify(on, () => ({ output, chunks }))
   const ui = await openPane($, clock)
   await ui.press({ key: 'run-verify' })
@@ -436,7 +449,8 @@ test("Run verify's checked nothing comes from its own run, never from a stamp an
   expect(await texts(ui)).toMatch(/^Run verify on feature @ abc1234 at .*: passed, but it checked nothing$/m)
   // A terminal verify that checked nothing stamps the change: this run checked something.
   empty = 0
-  output = 'ran: tests/a.py\n'
+  // The repo's own output can say anything: only stop_checks.py's stderr line decides.
+  chunks = [['stdout', 'ran: tests/a.py\n' + CHECKED_NOTHING]]
   await ui.press({ key: 'run-verify' })
   await clock.settle()
   expect(await texts(ui)).toMatch(/^Run verify on feature @ abc1234 at .*: passed$/m)
@@ -494,13 +508,16 @@ test('Run verify that never ends is stopped at its deadline as a failure, and a 
   await first
   await clock.settle()
   expect(spawns).toBe(1)
-  expect(await texts(ui)).toMatch(/: failed \(no result after 660 s, stopped\)$/m)
+  let shown = await texts(ui)
+  expect(shown).toMatch(/: failed \(no result after 660 s\)$/m)
+  expect(shown).toContain('stopping it: the button works again once it has ended')
   // Until the stopped child is gone, a press starts nothing: two verifies would write one report.
   await ui.press({ key: 'run-verify' })
   await clock.settle()
   expect(spawns).toBe(1)
   release()
   await clock.settle()
+  expect(await texts(ui)).not.toContain('stopping it')
   await ui.press({ key: 'run-verify' })
   await clock.settle()
   expect(spawns).toBe(2)
