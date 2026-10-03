@@ -110,12 +110,32 @@ def only_the_user_marks_a_staging_step_as_theirs(base):
                 "bash -c '~/.agents/bin/staging mark S1 PASS --note \"x;y\" --by user'",
                 "bash -c \"bin/staging mark S1 PASS --note '200; cached | twice' --by user\"",
                 'bin/staging mark S1 PASS "--by" "user"', "(bin/staging mark S1 PASS --by user)",
+                "bin/staging \\\n  mark S1 PASS --by user", "bash -c 'bin/staging \\\n mark S1 PASS --by user'",
+                "bin/staging >/dev/null mark S1 PASS --by user", "bin/staging mark S1 PASS --by >/dev/null user",
+                "bin/staging ma\\\nrk S1 PASS --by user",
                 "bin/staging mark S1 PASS --by=user>/dev/null"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     for cmd in ["~/.agents/bin/staging mark S1 PASS --by agent --note 'the user said S1 passed'",
                 "~/.agents/bin/staging mark S1 FAIL --by agent --note '200; cached | user saw it'",
                 "~/.agents/bin/staging mark S1 FAIL --by agent --note 'agrees with --by user'",
                 "~/.agents/bin/staging steps --json", "git switch staging && git log --by-user"]:
+        assert guard(cmd) == "allow", f"should allow: {cmd}"
+
+
+def only_the_user_grants_an_approval_in_a_dialog(base):
+    for cmd in ["~/.agents/bin/approve grant s1 sql.drop-table", "bin/approve grant s1 linear",
+                '"/Users/me/.agents/bin/approve" grant s1 linear', "bin/approve  'grant' s1 linear",
+                "bash -c '~/.agents/bin/approve grant s1 linear'", "cd /x && python3 ~/.agents/bin/approve grant s1 x",
+                "~/.agents/bin/evidence A1 ~/.agents/bin/approve grant s1 linear", "(bin/approve grant s1 x)",
+                "bin/approve \\\n  grant s1 linear", "bin/approve \\\n  'grant' s1 linear",
+                "bash -c 'bin/approve \\\n grant s1 linear'", "bin/approve > /dev/null grant s1 linear",
+                "bin/approve 2>/dev/null grant s1 x", "bin/approve >&2 grant s1 x", "bin/approve &>/dev/null grant s1 x",
+                "bin/approve >|/dev/null grant s1 x", "bin/approve &>>log grant s1 x", "bin/approve g\\\nrant s1 x",
+                "bin/approve once s1 linear", "bash -c 'bin/approve once s1 x'"]:
+        assert guard(cmd) == "deny", f"should deny: {cmd}"
+    for cmd in ["~/.agents/bin/approve needed < payload.json", "~/.agents/bin/approve revoke s1 sql.drop-table",
+                "git log --grep 'grant'", "echo approved grants", "bin/auto-approve grant s1 x",
+                "bin/approve revoke s1 x \\\n  && echo grant", "bin/approve revoke s1 x > /dev/null 2>&1"]:
         assert guard(cmd) == "allow", f"should allow: {cmd}"
 
 
@@ -1853,7 +1873,8 @@ def impeccable_guard_reads_prose_as_text(base):
         shell(command)
         assert child_cpu() - started < 2, f"{child_cpu() - started:.1f}s of CPU on {label}"
 
-TESTS = [guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn,
+TESTS = [guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
+         guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
