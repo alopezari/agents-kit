@@ -12,7 +12,7 @@ if [ "${1:-}" = "--branch" ]; then
   dir="$(git rev-parse --path-format=absolute --git-common-dir)/agents"
   tilde='~'  # review_stamp.branch_key: / becomes ~
   suffix="$("$HOME/.agents/bin/repo-name")-${2//\//$tilde}"
-  other_branch=1
+  other_branch=1 branch_arg=" --branch $2"
   shift 2
 else
   spec="$("$HOME/.agents/skills/spec/path.sh")"
@@ -55,7 +55,7 @@ PY
     esac
     printf '%-14s %s\n               %s\n' "$kind" "$line" "$f"
   done
-  echo "Read one in full with cat <path>, or all of them with: ~/.agents/bin/reports"
+  echo "Read one in full with cat <path>, or all of them with: ~/.agents/bin/reports${branch_arg:-}"
   exit 0
 fi
 

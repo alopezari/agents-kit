@@ -724,7 +724,8 @@ def reports_reads_another_branch(base):
         shown = run("--branch", "feat/ship", cwd=cwd).stdout
         assert "# Checks after the merge" in shown and "P1.txt" in shown, shown
         brief = run("--branch", "feat/ship", "brief", cwd=cwd)
-        assert brief.returncode == 0 and on_branch["staging-guide"] in brief.stdout and "phase:" not in brief.stdout, brief
+        assert brief.returncode == 0 and on_branch["staging-guide"] in brief.stdout and "phase:" not in brief.stdout \
+            and "bin/reports --branch feat/ship" in brief.stdout, brief
     assert "# Checks after the merge" not in run().stdout, "without --branch it reads the current branch"
     assert run("--branch").returncode == 2, "--branch needs a name"
 
