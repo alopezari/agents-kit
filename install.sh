@@ -324,10 +324,8 @@ render() { sed -e "s#__HOME__#$HOME#g" -e "s#__NODEBIN__#$1#g" -e "s#__LABEL__#$
 for tpl in "$KIT"/launchd/*.plist; do
   [ -n "${AGENTS_SKIP_LAUNCHD:-}" ] && break
   label="com.$(id -un).$(basename "$tpl" .plist)"; dest="$HOME/Library/LaunchAgents/$label.plist"
-  rendered=$(render "$nodebin")
-  if [ "$rendered" = "$(cat "$dest" 2>/dev/null)" ] && launchctl list "$label" >/dev/null 2>&1; then ok "$label"; continue; fi
   if [ $DOCTOR = 1 ]; then
-    # A job rendered from a shell on another nvm version is still fine while that node is installed.
+    # A job is fine while the node it names is installed, even when the shell runs another nvm version.
     node_line=$(render __NODEBIN__ | grep -F -m1 __NODEBIN__ || true)
     before_node=${node_line%%__NODEBIN__*} after_node=${node_line#*__NODEBIN__}
     job_node=$(grep -F -- "$before_node" "$dest" 2>/dev/null | head -1 || true); job_node=${job_node#"$before_node"}; job_node=${job_node%"$after_node"}
@@ -335,6 +333,8 @@ for tpl in "$KIT"/launchd/*.plist; do
       && launchctl list "$label" >/dev/null 2>&1; then ok "$label (node from $job_node)"; continue; fi
     warn "$label is not installed or out of date"; continue
   fi
+  rendered=$(render "$nodebin")
+  if [ "$rendered" = "$(cat "$dest" 2>/dev/null)" ] && launchctl list "$label" >/dev/null 2>&1; then ok "$label"; continue; fi
   mkdir -p "$KIT/monitors/state" "$(dirname "$dest")"; backup "$dest"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   echo "$rendered" > "$dest"
