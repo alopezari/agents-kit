@@ -68,7 +68,10 @@ function stub(on, runs: Record<string, Run>, { surfaces = ['terminal'], report =
     opened.push(e)
     return { value: { isPlaced: true } }
   })
-  on('ui.panes', () => ({ value: panes().map((id) => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }))
+  on('ui.panes', () => {
+    const ids = panes()
+    return ids ? { value: ids.map((id) => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) } : { deny: 'no panes here' }
+  })
   on('fs.exists', ($, e) => ({ value: report !== '' && e.path === REPORT }))
   on('fs.stat', () => ({ value: { kind: 'file', size: report.length, mtimeMs: REPORT_MTIME } }))
   on('fs.read', () => ({ value: report }))
@@ -227,6 +230,7 @@ test('each kind of no change to follow says which, and a failed read is never on
   const cases: [Record<string, Run>, RegExp][] = [
     [{ 'git rev-parse --show-toplevel': { exitCode: 128, stderr: 'not a git repository' } }, /^Not in a git repository: no change to follow\.$/m],
     [{ 'git rev-parse --show-toplevel': { deny: 'git hung' } }, /^Couldn't read the repository: .*git hung$/m],
+    [{ 'git rev-parse --show-toplevel': { exitCode: 128, stderr: 'fatal: detected dubious ownership' } }, /^Couldn't read the repository: exit 128: fatal: detected dubious ownership$/m],
     [{ 'git rev-parse HEAD': { exitCode: 128, stderr: "fatal: ambiguous argument 'HEAD'" } }, /^Couldn't read HEAD: exit 128: fatal: ambiguous argument 'HEAD'$/m],
     [{ 'git branch --show-current': { deny: 'git hung' } }, /^Couldn't read the branch: .*git hung$/m],
     [{ 'git branch --show-current': { exitCode: 0, stdout: '\n' } }, /^Detached HEAD: no change to follow\.$/m],
@@ -357,17 +361,22 @@ test('a main-session turn refreshes the open pane; a subagent turn, or a closed 
   await $.turn.complete({ turnId: 't3', reason: 'answer', answer: '', durationMs: 1, isAborted: false })
   await clock.settle()
   expect(briefs()).toBe(2)
+  // A host that can't list its panes still completes the turn.
+  panes = null
+  expect(await $.turn.complete({ turnId: 't4', reason: 'answer', answer: '', durationMs: 1, isAborted: false })).toEqual({ text: '' })
 })
 
 // The button's verify run, answered by a stubbed spawn that writes `output` and exits with `code`.
-function stubVerify(on, outcome: () => { code?: number | null; signal?: string; output?: string; reject?: string }) {
+type Outcome = { code?: number | null; signal?: string; output?: string; chunks?: [string, string][]; reject?: string }
+
+function stubVerify(on, outcome: () => Outcome) {
   const spawned = []
   on('process.spawn', async function* ($, e) {
     spawned.push(e)
-    const { code = 0, signal = null, output = '', reject } = outcome()
+    const { code = 0, signal = null, output = '', chunks = [['stdout', output]], reject } = outcome()
     // A deny makes the mod's call reject, as a program that can't start does.
     if (reject) return { deny: reject }
-    yield { stream: 'stdout', text: output }
+    for (const [stream, text] of chunks) yield { stream, text }
     return { value: { code, signal } }
   })
   return spawned
@@ -392,7 +401,8 @@ test("Run verify's checked nothing comes from its own run, never from a stamp an
     get: (target, key) => key === 'python3 /home/.agents/hooks/review_stamp.py check --kind verify-empty' ? { exitCode: empty } : target[key],
   }))
   let output = 'ran: nothing to check: no changed files\n' + CHECKED_NOTHING
-  stubVerify(on, () => ({ output }))
+  let chunks
+  stubVerify(on, () => ({ output, chunks }))
   const ui = await openPane($, clock)
   await ui.press({ key: 'run-verify' })
   await clock.settle()
@@ -403,11 +413,18 @@ test("Run verify's checked nothing comes from its own run, never from a stamp an
   await ui.press({ key: 'run-verify' })
   await clock.settle()
   expect(await texts(ui)).toMatch(/^Run verify on feature @ abc1234 at .*: passed$/m)
+  // stdout's half line and stderr's line arrive interleaved: each stream keeps its own.
+  chunks = [['stdout', 'ran: nothing to'], ['stderr', CHECKED_NOTHING], ['stdout', ' check: no changed files\n']]
+  await ui.press({ key: 'run-verify' })
+  await clock.settle()
+  const shown = await texts(ui)
+  expect(shown).toMatch(/: passed, but it checked nothing$/m)
+  expect(shown).toContain('ran: nothing to check: no changed files')
 })
 
 test('Run verify that fails, is killed or cannot start is a failure with its reason, and the button works again', async ($, on) => {
   const { clock } = stub(on, repo())
-  let outcome: { code?: number | null; signal?: string; output?: string; reject?: string } = { code: 1, output: 'error: tests/a.py failed\n' }
+  let outcome: Outcome = { code: 1, output: 'error: tests/a.py failed\n' }
   stubVerify(on, () => outcome)
   const ui = await openPane($, clock)
   const pressed = async () => {
@@ -451,7 +468,12 @@ test('Run verify that never ends is stopped at its deadline as a failure, and a 
   await clock.settle()
   expect(spawns).toBe(1)
   expect(await texts(ui)).toMatch(/: failed \(no result after 660 s, stopped\)$/m)
+  // Until the stopped child is gone, a press starts nothing: two verifies would write one report.
+  await ui.press({ key: 'run-verify' })
+  await clock.settle()
+  expect(spawns).toBe(1)
   release()
+  await clock.settle()
   await ui.press({ key: 'run-verify' })
   await clock.settle()
   expect(spawns).toBe(2)

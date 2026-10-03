@@ -25,6 +25,8 @@ let shown = null
 let gathering = false
 let gatherAgain = false
 let verifyRun = { state: 'idle' }
+// A verify stopped at its deadline holds the button until its child is gone, so two never write one report.
+let verifyStopping = false
 
 async function run($, argv, cwd, timeoutMs = PROCESS_TIMEOUT_MS) {
   try {
@@ -116,7 +118,9 @@ function dateTimeOf(ms) {
 async function checkout($, cwd) {
   const top = await run($, ['git', 'rev-parse', '--show-toplevel'], cwd)
   if (top.failure) return { none: "Couldn't read the repository: " + top.failure }
-  if (top.exitCode !== 0) return { none: 'Not in a git repository: no change to follow.' }
+  // git exits 128 for "not a git repository", and for a refused or broken one too.
+  if (top.exitCode !== 0 && /not a git repository/.test(top.stderr)) return { none: 'Not in a git repository: no change to follow.' }
+  if (top.exitCode !== 0) return { none: "Couldn't read the repository: " + failureOf(top) }
   const root = top.stdout.trim()
   const [branch, head] = await Promise.all([
     run($, ['git', 'branch', '--show-current'], root),
@@ -216,7 +220,7 @@ async function verifyHere($) {
   const startedAt = await $.clock.now()
   const named = (verdict) => ({ verdict: 'on ' + nameOf(at) + ' at ' + timeOf(startedAt) + ': ' + verdict, tail })
   const tail = []
-  let partial = ''
+  const partial = { stdout: '', stderr: '' }
   let checkedNothing = false
   const keep = (line) => {
     if (line.startsWith(CHECKED_NOTHING)) checkedNothing = true
@@ -232,17 +236,25 @@ async function verifyHere($) {
       const step = await Promise.race([child.next(), deadline])
       if (step === 'deadline') {
         // Not awaited: a child stuck mid-step finishes its return only after that step.
-        child.return().catch((error) => $.ui.log('flow: stopping verify: ' + messageOf(error), { to: 'debug' }))
+        verifyStopping = true
+        child.return()
+          .catch((error) => $.ui.log('flow: stopping verify: ' + messageOf(error), { to: 'debug' }))
+          .finally(() => {
+            verifyStopping = false
+            $.ui.invalidate('ui.render')
+          })
         return named('failed (no result after ' + VERIFY_DEADLINE_MS / 1000 + ' s, stopped)')
       }
       if (step.done) {
-        keep(partial)
+        keep(partial.stdout)
+        keep(partial.stderr)
         const { code, signal } = step.value
         if (code !== 0) return named('failed (' + (signal ? 'killed by ' + signal : 'exit ' + code) + ')')
         return named(checkedNothing ? 'passed, but it checked nothing' : 'passed')
       }
-      const lines = (partial + step.value.text).split('\n')
-      partial = lines.pop().slice(0, LINE_CHARS + 1)
+      const stream = step.value.stream === 'stderr' ? 'stderr' : 'stdout'
+      const lines = (partial[stream] + step.value.text).split('\n')
+      partial[stream] = lines.pop().slice(0, LINE_CHARS + 1)
       lines.forEach(keep)
     }
   } finally {
@@ -251,7 +263,7 @@ async function verifyHere($) {
 }
 
 async function runVerify($) {
-  if (verifyRun.state === 'running') return
+  if (verifyRun.state === 'running' || verifyStopping) return
   verifyRun = { state: 'running' }
   $.ui.invalidate('ui.render')
   try {
@@ -279,7 +291,11 @@ export function register(on) {
 
   on('turn.complete', async ($, e, next) => {
     // Asked each time: a pane whose drawing threw is dropped without a ui.close this mod hears.
-    if (!e.agentId && (await $.ui.panes()).some((pane) => pane.id === PANE)) void gather($)
+    if (!e.agentId) {
+      $.ui.panes()
+        .then((panes) => panes.some((pane) => pane.id === PANE) && gather($))
+        .catch((error) => $.ui.log('flow: refresh after the turn: ' + messageOf(error), { to: 'debug' }))
+    }
     return next(e)
   })
 
@@ -293,7 +309,7 @@ export function register(on) {
       : shown.none
         ? [line(shown.none + refreshing)]
         : [
-            Text({ bold: true, children: [shown.heading + refreshing] }),
+            Text({ bold: true, children: [clip(shown.heading) + refreshing] }),
             ...shown.sections.flatMap(([title, lines]) => [
               Text({ children: [' '] }),
               Text({ dimColor: true, children: [title] }),
