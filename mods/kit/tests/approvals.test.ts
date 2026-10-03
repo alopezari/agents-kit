@@ -114,6 +114,14 @@ test('a dismissed dialog, or a run with no one to ask, leaves the block as it wa
   expect(argvs()).toEqual([APPROVE + ' needed'])
 })
 
+test('an empty answer is a dismissed dialog, not words the user typed', async ($, on) => {
+  const { argvs } = stub(on, { answer: '' })
+  const result = await bash($)
+  expect(result.text).toBe(BLOCKED)
+  expect(result.deny).toBeUndefined()
+  expect(argvs()).toEqual([APPROVE + ' needed'])
+})
+
 for (const [why, needed] of [['nothing to approve', { exitCode: 0, stdout: '{"names": [], "what": "", "scope": ""}' }],
   ['bin/approve failing', { exitCode: 1, stdout: '', stderr: 'boom' }], ['bin/approve printing no JSON', { exitCode: 0, stdout: 'not json' }],
   ['bin/approve not starting', { deny: 'no process here' }]] as const) {

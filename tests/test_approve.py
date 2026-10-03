@@ -72,6 +72,8 @@ def names_the_approvals_that_would_lift_a_block(base):
     assert needed(env, bash("echo DROP TABLE x > out.sql"))["what"] == "`DROP TABLE x` destroys database data"
     assert needed(env, bash('psql -c \'DROP TABLE "users"\''))["what"] == '`DROP TABLE "users"` destroys database data'
     assert needed(env, bash('psql -c "DROP TABLE runs"'))["what"] == "`DROP TABLE runs` destroys database data"
+    assert needed(env, bash('psql -c "DROP TABLE \\"users\\""'))["what"] == '`DROP TABLE "users"` destroys database data'
+    assert needed(env, bash('mysql -e "DROP DATABASE x" 2>&1'))["what"] == "`DROP DATABASE x` destroys database data"
     assert needed(env, bash("psql <<'SQL'\nDROP TABLE\n  runs;\nSQL"))["what"] == "`DROP TABLE runs` destroys database data"
     got = needed(env, mcp("mcp__linear__save_issue", {"title": "Fix it"}))
     assert got == {"names": ["linear"], "what": "`save_issue` writes to linear, which other people see",
@@ -123,6 +125,9 @@ def a_grant_is_the_turn_approval_a_message_would_write(base):
     assert run(env, "revoke", "s1", "sql.drop-schema").returncode == 0
     assert guard(env, "guard_bash.py", schema) == "allow", "a one-call flow ending never takes back a turn approval"
     assert run(env, "revoke", "s1", "sql.truncate-table").returncode == 0, "revoking what isn't there is fine"
+    with open(os.path.join(base, ".agents", "logs", "hooks.jsonl")) as fh:
+        logged = [json.loads(line)["detail"] for line in fh if '"revoke-once"' in line]
+    assert logged == ["", "sql.drop-schema", "", ""], f"the log names only what a revoke took back: {logged}"
     subprocess.run(["python3", os.path.join(KIT, "hooks", "prompt_approvals.py")], env=env, capture_output=True,
                    input=json.dumps({"prompt": "thanks", "session_id": "s1", "cwd": "/tmp"}), text=True)
     assert guard(env, "guard_mcp.py", issue) == "deny" and guard(env, "guard_bash.py", schema) == "deny", \

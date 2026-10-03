@@ -56,10 +56,11 @@ def needed(payload):
                 continue
             verbs[name] = " ".join(match.group().upper().split())
             # The object, up to where the statement or the shell's quoting ends: `"users"` keeps its quotes, and the
-            # closing quote of `psql -c "… runs"` goes.
-            target = re.match(r"\s*([^;'\n<>|&]{0,60})", command[match.end():]).group(1).rstrip()
-            if target.count('"') % 2:
-                target = target.rstrip('"').rstrip()
+            # closing quote of `psql -c "… runs" 2>&1` goes, with the redirect's fd.
+            target = re.match(r"\s*([^;'\n<>|&]{0,60})", command[match.end():]).group(1).replace('\\"', '"').rstrip()
+            target = re.sub(r"\s+\d$", "", target)
+            if target.count('"') % 2 and target.endswith('"'):
+                target = target[:-1].rstrip()
             shown.append(f"`{verbs[name]}{' ' + target if target else ''}`")
         if not verbs:
             return NOTHING
@@ -99,11 +100,13 @@ def main(argv):
         return refuse(f"not an approval name: {bad[0]!r}")
     folder = os.path.join(guard_mcp.TURN_APPROVALS, session)
     if command == "revoke":
+        revoked = []
         for name in names:
             if read(os.path.join(folder, name)) == ONCE:  # never a turn approval, the user's message's or a dialog's
                 with contextlib.suppress(FileNotFoundError):
                     os.remove(os.path.join(folder, name))
-        log("approve", "revoke-once", {"session_id": session}, ",".join(sorted(names)))
+                    revoked.append(name)
+        log("approve", "revoke-once", {"session_id": session}, ",".join(sorted(revoked)))
         return 0
     before = {}
     try:

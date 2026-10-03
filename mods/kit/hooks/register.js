@@ -443,6 +443,7 @@ async function askToLiftBlock($, e, next) {
   const answer = await $.ui
     .ask(`A kit guard blocked this call: ${needed.what}.\n\n${previewOf(tool, input)}\n\nAllow it?`,
       { header: 'Approval', options: [ALLOW_ONCE, allowTurn, KEEP_BLOCKED] })
+    .then((given) => given || null)
     .catch(() => null)  // dismissed, interrupted, or a -p run with no one to ask: the block stands, as without the mod
   const outcome = answer === null ? 'dismissed, or no one to ask' : [ALLOW_ONCE, allowTurn, KEEP_BLOCKED].includes(answer) ? answer : 'answered in their own words'
   $.ui.log(`kit: approval dialog for ${needed.names.join(', ')}: ${outcome}`, { to: 'debug' })
