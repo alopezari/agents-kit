@@ -92,7 +92,7 @@ def main(argv):
         return 0
     if argv[:1] not in (["grant"], ["once"], ["revoke"]) or len(argv) < 3:
         return refuse("usage: approve needed < payload.json | approve grant|once|revoke <session> <name>...")
-    command, session, names = argv[0], argv[1], argv[2:]
+    command, session, names = argv[0], argv[1], list(dict.fromkeys(argv[2:]))  # a repeat would spoil the rollback
     if not SESSION.fullmatch(session):
         return refuse(f"not a session id: {session!r}")
     bad = [name for name in names if not NAME.fullmatch(name)]

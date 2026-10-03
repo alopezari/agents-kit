@@ -144,7 +144,7 @@ def a_grant_is_the_turn_approval_a_message_would_write(base):
     assert after == before, f"a refused call writes and removes nothing: {set(before) ^ set(after)}"
     for verb in ("grant", "once"):
         os.symlink("/nonexistent", os.path.join(approvals, "turn", "s1", "sql.drop-table"))  # a name it can't write
-        done = run(env, verb, "s1", "sql.drop-schema", "sql.drop-table")
+        done = run(env, verb, "s1", "sql.drop-schema", "sql.drop-schema", "sql.drop-table")
         assert done.returncode == 1 and "couldn't write the approval" in done.stderr, (verb, done)
         assert not os.path.exists(os.path.join(approvals, "turn", "s1", "sql.drop-schema")), \
             f"{verb} cut short takes back the names it wrote"
