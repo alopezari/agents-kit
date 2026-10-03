@@ -78,7 +78,9 @@ section_mods() {
   (cd "$kit/mods/kit" && claude plugin test) || f=1
   # The flow must work without the mod: nothing it runs on may depend on it. Only bin/docs (which documents it)
   # and bin/changelog (which sets its version) name it.
-  local users; users=$(grep -rlE "mods/kit|features\.js" "$kit/hooks" "$kit/skills" "$kit/bin" "$kit/repos/_shared" 2>/dev/null \
+  local users dir dirs=()
+  for dir in hooks skills bin repos/_shared adapters monitors launchd tools review-mining; do dirs+=("$kit/$dir"); done
+  users=$(grep -rlE "kit@agents-kit|mods/kit|features\.js|hooks/register\.js" "${dirs[@]}" --exclude-dir=node_modules 2>/dev/null \
     | grep -vxE "$kit/bin/(docs|changelog)")
   if [ -z "$users" ]; then echo "ok   no hook, skill or tool depends on the mod"
   else echo "FAIL these depend on the mod, so the flow would break without it:"; echo "$users"; f=1; fi

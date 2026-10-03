@@ -1,5 +1,5 @@
 // What each command of the mod offers, and what Codex has instead: bin/docs prints it in docs/framework.md,
-// and tests/flow.test.ts fails when the mod registers a command this list doesn't name.
+// and tests/flow.test.ts fails when the mod registers a command, or draws a button, this list doesn't name.
 // Kept as one JSON value after the `=`, which bin/docs reads without running JavaScript.
 export const FEATURES = [
   {
@@ -11,7 +11,8 @@ export const FEATURES = [
       {"name": "The last verify report's ran/skipped/warning/error lines", "codex": "`cat \"$(~/.agents/bin/reports path verify)\"`"},
       {"name": "CI of the pushed HEAD", "codex": "`bin/ci-wait --once --no-log`"},
       {"name": "Context use", "codex": "nothing (Codex shows its own)"},
-      {"name": "Run verify button, without a turn", "codex": "`python3 ~/.agents/hooks/stop_checks.py verify` in a terminal"}
+      {"name": "Run verify button, without a turn, on the checkout the session is in", "codex": "`python3 ~/.agents/hooks/stop_checks.py verify` in a terminal"},
+      {"name": "Refresh button, and a refresh after each turn while the pane is open", "codex": "running the commands above again"}
     ]
   }
 ]

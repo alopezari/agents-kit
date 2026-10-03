@@ -26,18 +26,19 @@ The kit must live at `~/.agents`. The installer:
 - registers the hooks next to any hooks already there;
 - fetches the third-party skills in `skills.external`, a pinned one at its commit into `vendor/`, and installs the Node dependencies of `tools/` and `site/`;
 - sets the Claude Code status line and enables the kit's git hooks (they keep `docs/framework.md` current);
+- registers the kit as a Claude Code plugin marketplace and installs its plugin, the `/flow` mod (see [Mods contract](#mods-contract));
 - installs the scheduled jobs;
 - when git uses a per-host proxy, offers to link `bin/gh` into `/usr/local/bin` (asks for your password).
 
 It also adds the kit's baseline harness settings (no fast mode, effort defaults) wherever a key is missing, without overwriting one you set. Files it replaces are backed up under `backups/`.
 
-To remove it, `~/.agents/uninstall.sh` lists every link, hook, status line and scheduled job that still points at the kit, asks, and removes them (`--yes` skips the question). Your own hooks and settings stay, and so do the baseline settings and the programs installed through Homebrew. It backs up the settings files it edits to `~/.agents-uninstall-backups/`, and leaves `~/.agents` itself for you to delete.
+To remove it, `~/.agents/uninstall.sh` lists every link, hook, status line, scheduled job and the kit's Claude Code plugin that still point at the kit, asks, and removes them (`--yes` skips the question). Your own hooks and settings stay, and so do the baseline settings and the programs installed through Homebrew. It backs up the settings files it edits to `~/.agents-uninstall-backups/`, and leaves `~/.agents` itself for you to delete.
 
 What it doesn't do, on a new machine:
 
 1. Install or log in to the harnesses (`claude`, `codex`, `pi`) and `gh`. Install them before running `install.sh`, which only wires the harnesses it finds.
 2. Trust the Codex hooks. Open Codex once and approve them; `install.sh --doctor` warns until you do.
-3. Install harness plugins or MCP servers. Add the ones you use yourself, or keep their setup in a profile.
+3. Install harness plugins, other than the kit's own, or MCP servers. Add the ones you use yourself, or keep their setup in a profile.
 
 Requirements: [`deps.txt`](deps.txt) lists every program the kit runs. `install.sh` offers to install the missing required ones (`python3`, `git`, `jq`, `node`, `gh`) and recommended ones (`semgrep`, `gitleaks`, `php`) through Homebrew, and says how to install the optional ones, each needed by one feature. `install.sh --doctor` reports what is missing, and `tests/run.sh` expects it to report nothing.
 
@@ -61,9 +62,9 @@ Every hook is a small program with one contract: a JSON payload on stdin, a JSON
 
 Claude Code also loads the kit as a plugin, `mods/kit/`, whose [mod](https://code.claude.com/docs/en/plugins/mods/overview) runs inside Claude Code: it can draw panes and run commands without a turn. Mods exist only in Claude Code, so the kit keeps working the same with or without them. Every mod follows these rules:
 
-1. **It owns no workflow state.** Specs, stamps, reports and evidence stay in `.git/agents/` and go through `bin/` and `hooks/review_stamp.py`, so a change started in Claude Code can be finished in Codex, and the other way round. What those tools cache or migrate follows their own rules.
+1. **It owns no workflow state.** Specs, stamps, reports and evidence stay where the kit's tools keep them (`.git/agents/`, or a temporary directory when `.git` can't be written) and go through `bin/` and `hooks/review_stamp.py`, so a change started in Claude Code can be finished in Codex, and the other way round. What those tools cache or migrate follows their own rules.
 2. **It owns no safety.** The Python hooks decide what is blocked, in every harness. A mod can only add to that in Claude Code. A disabled or failed mod leaves the behavior as it was without it, which is what Codex has.
-3. **Every capability names what Codex has instead**, or says it has nothing. They are listed in `mods/kit/hooks/features.js`, which `docs/framework.md` prints, and the mod's tests fail when it registers a command the list doesn't name.
+3. **Every capability names what Codex has instead**, or says it has nothing. They are listed in `mods/kit/hooks/features.js`, which `docs/framework.md` prints, and the mod's tests fail when the commands it registers, or the buttons it draws, differ from the list.
 4. **The flow works fully with the mod disabled or failed.** `claude --safe-mode` turns off the kit's settings hooks too, so it isn't a supported way to run the kit.
 5. **Guarantees go by tier.** A capability that gives Claude Code a stronger guarantee than Codex has records where each fact came from, such as a step the user marked with a button versus one the agent wrote down. A record without that provenance counts as the weaker tier.
 6. **It calls the kit's Python instead of reimplementing it**, so one rule never has two implementations that drift apart.

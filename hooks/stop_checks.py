@@ -650,6 +650,8 @@ def verify_here():
     print(output, end="")
     for problem in problems + [stamp_error] * bool(stamp_error):
         print(problem.splitlines()[0], file=sys.stderr)
+    if not failed and not checked_something(output):
+        print("verify passed, but it checked nothing: no check printed a ran: line", file=sys.stderr)
     return 1 if failed or stamp_error else 0
 
 

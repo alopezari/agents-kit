@@ -224,7 +224,8 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
 |  | CI of the pushed HEAD | `bin/ci-wait --once --no-log` |
 |  | Context use | nothing (Codex shows its own) |
-|  | Run verify button, without a turn | `python3 ~/.agents/hooks/stop_checks.py verify` in a terminal |
+|  | Run verify button, without a turn, on the checkout the session is in | `python3 ~/.agents/hooks/stop_checks.py verify` in a terminal |
+|  | Refresh button, and a refresh after each turn while the pane is open | running the commands above again |
 
 The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.
 
@@ -406,7 +407,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | recommended | `semgrep` | brew install semgrep | verify's semgrep rules; tests/run.sh |
 | recommended | `gitleaks` | brew install gitleaks | the secrets check at the end of each turn |
 | recommended | `php` | brew install php | the generic verify's PHP checks; tests/run.sh |
-| optional | `claude ≥ 2.1.287` | https://claude.com/claude-code | the scheduled jobs (they run `claude -p`) and the kit plugin (mods) |
+| optional | `claude ≥ 2.1.287` | https://claude.com/claude-code | the kit plugin (mods, from this version on) and the scheduled jobs (they run `claude -p`) |
 | optional | `playwright-cli` | npm install -g @playwright/cli | browser checks in the validate skill (bin/browse) |
 | optional | `agent-browser` | npm install -g agent-browser | browser checks in the validate skill (bin/browse) |
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |

@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 GIT_TIMEOUT = 30
-# The kit's Claude Code plugin carries the kit's version: Claude Code warns about a plugin without one.
+# The kit's Claude Code plugin carries the kit's version: `claude plugin validate --strict` fails without one.
 PLUGIN_MANIFEST = "mods/kit/.claude-plugin/plugin.json"
 
 
@@ -91,12 +91,14 @@ def release(version):
     lines = unreleased + [line for _, entry_lines, _ in sorted(released) for line in entry_lines]
     if not lines:
         sys.exit("changelog: nothing to release: no line under Unreleased and no entry in changelog.d/")
-    # Read before writing anything, so a missing manifest stops the release with nothing half done.
+    # Read before writing anything, so a missing or malformed manifest stops the release with nothing half done.
     try:
         with open(PLUGIN_MANIFEST) as fh:
             manifest = json.load(fh)
     except (OSError, ValueError) as error:
         sys.exit(f"changelog: can't read {PLUGIN_MANIFEST}, whose version the release sets: {error}")
+    if not isinstance(manifest, dict):
+        sys.exit(f"changelog: {PLUGIN_MANIFEST} is not a JSON object, so the release can't set its version")
     today = datetime.date.today().isoformat()
     body = f"## [Unreleased]\n\n## [{version}] - {today}\n\n" + "\n".join(lines) + "\n\n"
     with open("CHANGELOG.md", "w") as fh:

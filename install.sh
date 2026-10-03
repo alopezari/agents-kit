@@ -177,40 +177,6 @@ else git -C "$KIT" config core.hooksPath .githooks && fix "git hooks (.githooks)
 
 echo "Requirements"
 # deps.txt lists every program the kit runs, and profiles add theirs. Missing required and recommended
-# kit_plugin: register ~/.agents as the agents-kit marketplace and install its kit plugin, the Claude Code mod.
-# It loads in place from mods/kit, so a pull reaches it at the next session start or /reload-plugins.
-# deps.txt's minimum for claude is the first version that runs mods.
-KIT_PLUGIN_MIN_CLAUDE=$(awk '$2 ~ /^claude>=/ { sub(/^claude>=/, "", $2); print $2 }' "$KIT/deps.txt")
-kit_plugin() {
-  local version market plugin
-  if ! command -v claude >/dev/null; then info "kit plugin: claude is not installed, so the /flow mod is not wired"; return; fi
-  version=$(claude --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1) || true
-  if [ -z "$version" ] || older_than "$version" $KIT_PLUGIN_MIN_CLAUDE; then
-    warn "kit plugin: Claude Code ${version:-of unknown version} is older than $KIT_PLUGIN_MIN_CLAUDE, the first to run mods: update it"; return
-  fi
-  if ! market=$(claude plugin marketplace list --json 2>/dev/null | jq -er '[.[] | select(.name == "agents-kit") | .path // .source] | first // ""'); then
-    warn "kit plugin: claude plugin marketplace list --json failed"; return
-  fi
-  if [ -z "$market" ]; then
-    if [ $DOCTOR = 1 ]; then warn "kit plugin: the agents-kit marketplace ($KIT) is not registered"; return; fi
-    claude plugin marketplace add "$KIT" >/dev/null 2>&1 || { warn "kit plugin: claude plugin marketplace add $KIT failed"; return; }
-    fix "marketplace agents-kit -> $KIT"
-  elif [ "$(cd "$market" 2>/dev/null && pwd -P)" != "$(cd "$KIT" && pwd -P)" ]; then
-    warn "kit plugin: a marketplace named agents-kit already points at $market, not $KIT; left alone"; return
-  else ok "marketplace agents-kit -> $KIT"; fi
-  if ! plugin=$(claude plugin list --json 2>/dev/null | jq -er '[.[] | select(.id == "kit@agents-kit") | .enabled | tostring] | first // ""'); then
-    warn "kit plugin: claude plugin list --json failed"; return
-  fi
-  case $plugin in
-    true) ok "kit plugin (the /flow mod)" ;;
-    false) info "kit plugin is disabled, as you left it; claude plugin enable kit@agents-kit turns it on" ;;
-    *)
-      if [ $DOCTOR = 1 ]; then warn "kit plugin (the /flow mod) is not installed"
-      elif claude plugin install kit@agents-kit >/dev/null 2>&1; then fix "kit plugin installed (the /flow mod)"
-      else warn "kit plugin: claude plugin install kit@agents-kit failed"; fi ;;
-  esac
-}
-
 # programs are installed through Homebrew once the person running this agrees (or passed --yes); optional
 # ones serve a single feature, so they are only reported.
 installed() {
@@ -279,6 +245,43 @@ if git config --global --get-regexp '^http\..+\.proxy$' >/dev/null 2>&1; then
     $wrapper_cmd && fix "gh applies git's per-host proxies (/usr/local/bin/gh -> bin/gh)" || warn "not linked; run: $wrapper_cmd"
   fi
 fi
+
+# kit_plugin: register ~/.agents as the agents-kit marketplace and install its kit plugin, the Claude Code mod.
+# It loads in place from mods/kit, so a pull reaches it at the next session start or /reload-plugins.
+# deps.txt's minimum for claude is the first version that runs mods.
+KIT_PLUGIN_MIN_CLAUDE=$(awk '$2 ~ /^claude>=/ { sub(/^claude>=/, "", $2); print $2 }' "$KIT/deps.txt")
+kit_plugin() {
+  local version market plugin
+  if ! command -v claude >/dev/null; then info "kit plugin: claude is not installed, so the /flow mod is not wired"; return; fi
+  version=$(claude --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1) || true
+  if [ -z "$version" ]; then warn "kit plugin: couldn't read the version of claude (claude --version)"; return; fi
+  if older_than "$version" $KIT_PLUGIN_MIN_CLAUDE; then
+    warn "kit plugin: Claude Code $version is older than $KIT_PLUGIN_MIN_CLAUDE, the first to run mods: update it"; return
+  fi
+  if ! market=$(claude plugin marketplace list --json 2>/dev/null | jq -er '[.[] | select(.name == "agents-kit") | .path // .source] | first // ""'); then
+    warn "kit plugin: claude plugin marketplace list --json failed"; return
+  fi
+  if [ -z "$market" ]; then
+    if [ $DOCTOR = 1 ]; then warn "kit plugin: the agents-kit marketplace ($KIT) is not registered"; return; fi
+    claude plugin marketplace add "$KIT" >/dev/null 2>&1 || { warn "kit plugin: claude plugin marketplace add $KIT failed"; return; }
+    fix "marketplace agents-kit -> $KIT"
+  elif [ "$(cd "$market" 2>/dev/null && pwd -P)" != "$(cd "$KIT" && pwd -P)" ]; then
+    warn "kit plugin: a marketplace named agents-kit already points at $market, not $KIT; left alone"; return
+  else ok "marketplace agents-kit -> $KIT"; fi
+  if ! plugin=$(claude plugin list --json 2>/dev/null | jq -er '[.[] | select(.id == "kit@agents-kit" and .scope == "user") | .enabled | tostring] | first // ""'); then
+    warn "kit plugin: claude plugin list --json failed"; return
+  fi
+  # Installing enables the plugin, so a false the user set before any install is honoured here.
+  [ -z "$plugin" ] && [ "$(jq -r '.enabledPlugins["kit@agents-kit"]' "$HOME/.claude/settings.json" 2>/dev/null)" = false ] && plugin=false
+  case $plugin in
+    true) ok "kit plugin (the /flow mod)" ;;
+    false) info "kit plugin is disabled, as you left it; claude plugin enable kit@agents-kit turns it on" ;;
+    *)
+      if [ $DOCTOR = 1 ]; then warn "kit plugin (the /flow mod) is not installed"
+      elif claude plugin install kit@agents-kit >/dev/null 2>&1; then fix "kit plugin installed (the /flow mod)"
+      else warn "kit plugin: claude plugin install kit@agents-kit failed"; fi ;;
+  esac
+}
 
 if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
   echo "Claude Code"
