@@ -1127,13 +1127,14 @@ def stop_never_waits_for_profile_after_turn(base):
         decision = run_hook("stop_checks.py", {**payload, "session_id": session}, env=env)
         return decision, time.time() - started
     without, plain_secs = timed_stop(RUN + "at2a", {"AGENTS_PROFILES_DIR": os.path.join(base, "no-profiles")})
-    # The after-turn outlasts a stop hook slowed by a loaded machine (4.9 s once), so "done" only exists if the hook waited.
+    # The after-turn outlasts a stop hook slowed by a loaded machine (4.9 s once), so "done" only exists if the hook waited,
+    # and a hook that waited takes 15 s more: two stops on a busy machine differed by 0.9 s, so the margin is 5 s.
     env = profiles_with_after_turn(base, {"slow": '#!/bin/sh\nyes noise | head -c 2000000\nsleep 15\n'
                                                     'touch "$(dirname "$0")/done"\nexit 1\n'})
     done = os.path.join(env["AGENTS_PROFILES_DIR"], "slow", "done")
     decision, secs = timed_stop(RUN + "at2b", env)
     assert decision == without and "Debug leftover" in decision.get("reason", ""), (decision, without)
-    assert secs < plain_secs + 0.5 and not os.path.exists(done), f"the stop hook waited: {secs:.2f}s vs {plain_secs:.2f}s"
+    assert secs < plain_secs + 5 and not os.path.exists(done), f"the stop hook waited: {secs:.2f}s vs {plain_secs:.2f}s"
     assert wait_for(done, 25), "the after-turn keeps running after the stop hook returns"
 
 
