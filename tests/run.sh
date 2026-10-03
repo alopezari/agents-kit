@@ -11,7 +11,9 @@ if [ "$(cd .. && pwd -P)" != "$(cd "$HOME/.agents" 2>/dev/null && pwd -P)" ]; th
   kit_home=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-home-XXXXXX") || exit 2
   ln -s "$(cd .. && pwd -P)" "$kit_home/.agents" || { rmdir "$kit_home"; exit 2; }  # else the re-run would loop
   # exec, so a signal reaches the suite's own handlers; it removes this HOME on exit.
-  HOME="$kit_home" AGENTS_SUITE_OWN_HOME="$kit_home" exec bash "$PWD/run.sh" "$@"
+  # npm's cache stays the user's: node_deps installs a worktree's dependencies from it.
+  npm_config_cache=${npm_config_cache:-$(npm config get cache 2>/dev/null)} \
+    HOME="$kit_home" AGENTS_SUITE_OWN_HOME="$kit_home" exec bash "$PWD/run.sh" "$@"
 fi
 remove_own_home() {  # the link first: rm never reaches the checkout
   [ -n "${AGENTS_SUITE_OWN_HOME:-}" ] && rm -f "$AGENTS_SUITE_OWN_HOME/.agents" && rm -rf "$AGENTS_SUITE_OWN_HOME"
