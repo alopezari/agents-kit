@@ -315,8 +315,24 @@ clash="$home/zz-jobs"; mkdir -p "$clash/launchd"
 for name in agents-health sample-weekly; do
   printf '<plist><string>__PROFILE__/x.sh</string><string>__LABEL__</string></plist>\n' > "$clash/launchd/$name.plist"
 done
-out=$(HOME="$home" "$kit/install.sh" --yes --profile "$clash" 2>&1)
+odd="$home/client#1"; mkdir -p "$odd/launchd"
+printf '<plist><string>__PROFILE__/x.sh</string></plist>\n' > "$odd/launchd/odd-weekly.plist"
+HOME="$home" "$kit/install.sh" --yes --profile "$odd" >/dev/null 2>&1
+out=$(HOME="$home" "$kit/install.sh" --yes --profile "$clash" 2>&1); status=$?
 job="$home/Library/LaunchAgents/com.$(id -un).sample-weekly.plist"
+printf '<plist><string>__PROFILE__/x.sh</string></plist>\n' > "$clash/launchd/weekly brief.plist"
+printf '<plist><string>__LABEL__</string><string>__PROFILE__/x.sh</string></plist>\n' > "$clash/launchd/plain-weekly.plist"
+check "a profile path or job name a plist can't hold is skipped with a warning, and the install goes on" \
+  '[ $status = 0 ] && grep -q "warn  launchd/odd-weekly.plist in profile client#1 skipped" <<<"$out" \
+   && [ ! -e "$home/Library/LaunchAgents/com.$(id -un).odd-weekly.plist" ]'
+out=$(HOME="$home" "$kit/install.sh" --yes 2>&1)
+check "and one whose file name has a space" \
+  'grep -q "warn  launchd/weekly brief.plist in profile zz-jobs skipped" <<<"$out" && [ ! -e "$home/Library/LaunchAgents/com.$(id -un).weekly brief.plist" ]'
+echo "com.$(id -un).plain-weekly" > "$home/stuck"  # the fake launchctl reports it loaded
+doctor=$(HOME="$home" "$kit/install.sh" --doctor 2>&1)
+check "the doctor accepts a loaded profile job that runs no node" 'grep -q "ok    com.$(id -un).plain-weekly$" <<<"$doctor"'
+rm "$home/stuck" "$home/Library/LaunchAgents/com.$(id -un).plain-weekly.plist" "$clash/launchd/plain-weekly.plist" "$clash/launchd/weekly brief.plist"
+rm "$kit/profiles/client#1"
 check "a profile's job is rendered with every placeholder filled and loaded" \
   '[ -f "$job" ] && ! grep -q "__[A-Z]*__" "$job" && grep -qF "$kit/profiles/sample-profile/weekly.sh" "$job" \
    && grep -qF "bootstrap gui/$(id -u) $job" "$home/launchctl.log"'

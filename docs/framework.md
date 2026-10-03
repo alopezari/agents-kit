@@ -339,7 +339,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `review-mining/repos.txt` | repositories the monthly review mining reads |
 | `review-mining/hosts.txt` | GitHub hosts beyond github.com (an Enterprise server) the monthly outcomes read |
 | `PROFILE.md` | work context for the trends scan |
-| `launchd/*.plist` | scheduled jobs `install.sh` renders and loads like the kit's, with `__PROFILE__` for the profile's directory; a job named like one of the kit's, or an earlier profile's, is skipped |
+| `launchd/*.plist` | scheduled jobs `install.sh` renders and loads like the kit's, with `__PROFILE__` for the profile's directory; a job named like one of the kit's, or an earlier profile's, is skipped, as is one whose path has a space or one of `& # \ < >`. `uninstall.sh` removes a job that runs something under `__PROFILE__`, like the kit's that run something in the kit |
 | `deps.txt` | more programs to install and check, in the core's format; a program in both takes the stricter tier |
 | `private-terms.txt` | case-insensitive regexes, one per line, that must never reach the public kit: its commits and pull requests are refused when they match |
 | `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |

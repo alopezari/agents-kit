@@ -332,6 +332,7 @@ for profile in "$KIT"/profiles/*/; do
   for tpl in "$profile"launchd/*.plist; do
     [ -e "$tpl" ] || continue
     job=$(basename "$tpl"); name=$(basename "$profile")
+    case "${tpl#"$KIT"/}" in *[[:space:]\&\#\\\<\>]*) warn "launchd/$job in profile $name skipped: its path has a space or a character a plist can't hold as is"; continue ;; esac
     owner=$(lookup="$job" awk -F'\t' '$1 == ENVIRON["lookup"] { print $2; exit }' <<<"$job_owners")
     if [ -e "$KIT/launchd/$job" ]; then warn "launchd/$job in profile $name has the name of the kit's own; skipped"; continue; fi
     if [ -n "$owner" ]; then warn "launchd/$job is in profiles $owner and $name; using $owner's"; continue; fi
@@ -346,6 +347,11 @@ for i in "${!templates[@]}"; do
   if [ $DOCTOR = 1 ]; then
     # A job is fine while the node it names is installed, even when the shell runs another nvm version.
     node_line=$(render __NODEBIN__ | grep -F -m1 __NODEBIN__ || true)
+    if [ -z "$node_line" ]; then  # a profile job that runs no node
+      if [ "$(render "$nodebin")" = "$(cat "$dest" 2>/dev/null)" ] && launchctl list "$label" >/dev/null 2>&1; then ok "$label"
+      else warn "$label is not installed or out of date"; fi
+      continue
+    fi
     before_node=${node_line%%__NODEBIN__*} after_node=${node_line#*__NODEBIN__}
     job_node=$(grep -F -- "$before_node" "$dest" 2>/dev/null | head -1 || true); job_node=${job_node#"$before_node"}; job_node=${job_node%"$after_node"}
     if [ -n "$job_node" ] && [ -x "$job_node/node" ] && [ "$(render "$job_node")" = "$(cat "$dest")" ] \

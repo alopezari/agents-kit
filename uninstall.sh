@@ -88,6 +88,7 @@ unwire() {
     seen=" "
     for tpl in "$KIT"/launchd/*.plist "$KIT"/profiles/*/launchd/*.plist; do
       [ -e "$tpl" ] || continue
+      case "${tpl#"$KIT"/}" in *[[:space:]\&\#\\\<\>]*) continue ;; esac  # install.sh skips these
       label="com.$(id -un).$(basename "$tpl" .plist)"; dest="$HOME/Library/LaunchAgents/$label.plist"
       case "$seen" in *" $label "*) continue ;; esac  # two profiles naming a job alike installed one of them
       seen+="$label "
