@@ -1,1 +1,1 @@
-- The design-files guard no longer asks about PRODUCT.md, DESIGN.md or Impeccable when they only appear in a commit message, an echoed sentence or a quoted heredoc, even when the command also has a `$(...)`.
+- The design-files guard no longer asks about PRODUCT.md, DESIGN.md or Impeccable when they only appear in a commit message, an echoed sentence or a quoted heredoc, even when the command also has a `$(...)`. Commands that run a shell or interpreter, and quoted paths to those files, are still read in full.

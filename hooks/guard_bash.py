@@ -439,33 +439,50 @@ LEADING = re.compile(r"-\S*|\w+=\S*|if|then|else|elif|do|while|until|\{|!|time|e
 WORD = re.compile(r"[^\s\"'<>;&|()]+")
 
 
-RUNS_QUOTED_CODE = re.compile(RUNS_QUOTED_TEXT.pattern + r"|\b(?:python3?|node|perl|ruby)\s+(?:-\w+\s+)*-\w*[ce]\b")
+# Text that may run as code however it arrives: eval or sh -c, a here-string, or a shell or interpreter wherever a
+# command starts, since its script can come from a quoted argument, a heredoc or a pipe.
+RUNS_QUOTED_CODE = re.compile(RUNS_QUOTED_TEXT.pattern + r"|<<<|(?:^|[|;&\n(`]|\$\()\s*(?:\w+=\S*\s+)*"
+                              r"(?:(?:sudo|env|exec|xargs|nohup|time)\s+(?:-\S+\s+)*)*(?:[^\s/;&|()`]*/)*"
+                              r"(?:(?:ba|z|da|k|fi)?sh|python[\d.]*|node|perl|ruby|php|deno|bun|osascript)\b")
+HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(?:(['\"])([^'\"\s]+)\1|\\(\w+)|(\w+))")
+QUOTED_TARGET_PATH = re.compile(r"(?:^.|/)(?:product\.md|design\.md|\.impeccable)(?:/|.$)", re.I)  # .$: the quote
 
 
 def without_prose(command):
     """The command with what bash never runs as a command blanked: quoted-delimiter heredoc bodies, and quoted text
     with spaces in it (a commit message, an echo), unless the command runs quoted text as code. shell_code() reads
-    everything as code once a $( appears anywhere, which here would turn every mention into a write."""
-    lines, kept, delimiters = command.split("\n"), [], []
-    for line in lines:
+    everything as code once a $( appears anywhere, which here would turn every mention into a write. Whatever this
+    can't read for sure, it leaves whole: missing a write costs more than asking about a mention."""
+    kept, delimiters = [], []  # (word, quoted) of each heredoc still open, in order
+    for line in command.split("\n"):
         if delimiters:
-            if line.lstrip("\t") == delimiters[0]:
+            word, quoted = delimiters[0]
+            if line.lstrip("\t") == word:
                 delimiters.pop(0)
                 kept.append(line)
-            else:
+            elif quoted:
                 kept.append("")
+            elif "$(" in line or "`" in line:
+                return command  # bash expands it, quotes and all
+            else:
+                kept.append(line)
             continue
         kept.append(line)
-        delimiters = [m.group(2) or m.group(3) for m in re.finditer(r"<<-?\s*(?:(['\"])(\w+)\1|\\(\w+))", line)]
+        delimiters = [(m.group(2) or m.group(3) or m.group(4), not m.group(4)) for m in HEREDOC.finditer(line)]
+        if delimiters and line.endswith("\\"):
+            return command  # the header goes on, redirects and all, on the next line
+    if delimiters:
+        return command  # a heredoc that never ends was a mention of one, in a comment or a message
     text = "\n".join(kept)
     if RUNS_QUOTED_CODE.search(text):
-        return text
+        return command  # python3 - <<'PY' runs its heredoc body too
 
     def prose(m):  # whole strings, judged here: a regex that looks for the space itself backtracks quadratically
         quoted = m.group()
         runs = quoted[0] == '"' and ("$" in quoted or "`" in quoted)
         is_cd_target = re.search(r"\bcd\s+$", text[max(0, m.start() - 20):m.start()])  # "My App" is a folder
-        return "''" if re.search(r"\s", quoted) and not runs and not is_cd_target else quoted
+        is_prose = re.search(r"\s", quoted) and not QUOTED_TARGET_PATH.search(quoted)
+        return "''" if is_prose and not runs and not is_cd_target else quoted
     return re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", prose, text)
 
 

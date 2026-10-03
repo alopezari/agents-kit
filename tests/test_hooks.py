@@ -1497,20 +1497,37 @@ def impeccable_guard_reads_prose_as_text(base):
             ("an echo to a log", "echo 'checked PRODUCT.md' >> /tmp/log.txt"),
             ("a quoted heredoc with $( after it", "cat > notes.txt <<'EOF'\nRun `impeccable detect`; never create PRODUCT.md.\n"
                                                     "EOF\nN=$(wc -l < notes.txt)"),
-            ("a Python string in a heredoc", "python3 - <<'EOF'\ns = '''v=$(x)  # an impeccable on PATH may download'''\n"
-                                              "EOF\nH=$(cat /tmp/h)")]:
+            ("a delimiter with a dash", "cat > notes.txt <<'DOC-END'\nCreate PRODUCT.md here\nDOC-END\nN=$(pwd)")]:
         assert shell(command) == "allow", label
+    os.makedirs(os.path.join(shared, "My App"))
     for label, command in [
             ("python -c with spaces", "python3 -c \"open('PRODUCT.md', 'w').write('x')\""),
             ("a quoted path", 'echo x > "DESIGN.md"'),
+            ("a quoted path with a space", 'echo x > "My App/PRODUCT.md"'),
+            ("a quoted folder with a space", "mkdir -p '.impeccable/design notes'"),
+            ("a script on stdin", "N=$(pwd)\npython3 - <<'PY'\nopen('PRODUCT.md', 'w').write('x')\nPY"),
+            ("a here-string", "sh <<< 'touch PRODUCT.md'"),
+            ("a pipe into sh", "printf '%s\\n' 'touch PRODUCT.md' | sh"),
+            ("quotes in an unquoted heredoc", "cat > notes.txt <<EOF\n'$(touch PRODUCT.md)'\nEOF"),
+            ("a heredoc only mentioned", "# Use <<'EOF' for literal text\ntouch PRODUCT.md"),
+            ("a heredoc header that goes on", "cat <<'EOF' \\\n> PRODUCT.md\ncontent\nEOF"),
+            ("a partly quoted delimiter", "cat <<'EOF'x\nnotes\nEOFx\ntouch PRODUCT.md"),
+            ("an unquoted heredoc first", "cat <<A <<'B'\n$(touch PRODUCT.md)\nA\nnotes\nB"),
+            ("a versioned python", "python3.12 -c \"open('PRODUCT.md', 'w').write('x')\""),
+            ("python flags with values", "python3 -W ignore -c \"open('PRODUCT.md', 'w').write('x')\""),
+            ("long shell flags", "bash --noprofile --norc -c 'touch PRODUCT.md'"),
+            ("node long flags", "node --input-type=module -e \"import fs from 'fs'; fs.writeFileSync('PRODUCT.md', 'x')\""),
             ("$( inside double quotes", 'echo "$(touch PRODUCT.md) done"'),
             ("a heredoc into .gitignore", "cat >> .gitignore <<'EOF'\nPRODUCT.md\nEOF\nN=$(wc -l < .gitignore)"),
             ("a heredoc into the file", "cat > DESIGN.md <<'EOF'\n# Design\nEOF"),
             ("sh -c with spaces", "sh -c 'cd . && touch PRODUCT.md'")]:
         assert "say-so" in shell(command), label
-    started = time.time()
-    shell("echo PRODUCT.md '" + "a " * 100000)  # an unclosed quote: a backtracking regex took seconds here
-    assert time.time() - started < 2, f"{time.time() - started:.1f}s on a long unclosed quote"
+    # Backtracking regexes took seconds on each of these.
+    for label, command in [("a long unclosed quote", "echo PRODUCT.md '" + "a " * 100000),
+                           ("a run of separators", "echo PRODUCT.md " + ";" * 100000)]:
+        started = time.time()
+        shell(command)
+        assert time.time() - started < 2, f"{time.time() - started:.1f}s on {label}"
 
 TESTS = [guard_blocks_irreversible, guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, overlay_found_from_worktree_with_another_name, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, stop_catches_committed_leftover,
