@@ -961,9 +961,10 @@ def stop_suggests_a_fresh_session_once_the_pr_is_open(base):
     assert first and "300K" in first.get("systemMessage", "") and "bin/reports brief" in first["systemMessage"] \
         and "decision" not in first, first
     assert stop_with("big", "PR open", 310_000) is None, "once per session and branch"
-    assert stop_with("small", "PR open", 200_000) is None, "a small context needs no new session"
+    assert stop_with("small", "PR open", 100_000) is None, "a small context needs no new session"
     assert stop_with("early", "self-review", 300_000) is None, "mid-change a new session would re-read everything"
-    assert stop_with("edge", "PR open", 250_000) is None, "over 250K, not at it"
+    assert stop_with("edge", "PR open", 150_000) is None, "over 150K, not at it"
+    assert stop_with("below-window", "PR open", 160_000), "compaction at a 200K window comes before any higher threshold"
     merged = stop_with("merged", "ship", 300_000)
     assert merged and "is merged" in merged["systemMessage"], merged
 

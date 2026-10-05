@@ -62,7 +62,8 @@ settings_file() {
 # baseline <settings file> <kit baseline>: add the kit's recommended settings where a key is missing.
 baseline() {
   local check=""; [ $DOCTOR = 1 ] && check=--check
-  local out; out=$(python3 "$KIT/adapters/apply_baseline.py" "$1" "$2" $check)
+  # --check exits 1 when it lists missing keys; only a failure that printed nothing stops the install.
+  local out; out=$(python3 "$KIT/adapters/apply_baseline.py" "$1" "$2" $check) || [ -n "$out" ]
   if [ -z "$out" ]; then ok "$(basename "$1") has the kit's baseline settings"; return; fi
   [ $DOCTOR = 1 ] || backup "$1"
   while read -r line; do if [ $DOCTOR = 1 ]; then warn "$(basename "$1") $line"; else fix "$(basename "$1") $line"; fi; done <<<"$out"
