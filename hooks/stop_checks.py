@@ -436,7 +436,11 @@ def ci_after_push(session, payload):
             continue
         if not os.path.isdir(root):
             continue  # the worktree was removed after the push
-        if "ci" in phase_switches.phases_off_or_error(root)[0]:
+        off, unreadable = phase_switches.phases_off_or_error(root)
+        if unreadable:
+            log("stop_checks", "phase-switches", payload, unreadable)
+        if "ci" in off:
+            followed[root] = at  # still followed: switched back on, the push is asked about
             continue
         sha = git(["rev-parse", "--verify", "--quiet", "@{upstream}"], root).strip()
         if not sha:
@@ -550,7 +554,9 @@ def leftover_overrides():
 def check_checkout(root, session, payload):
     """Return (problems, verify_failed) for one checkout."""
     off, unreadable = phase_switches.phases_off_or_error(root)
-    problems = [f"{unreadable}, so every phase counts as on: tell the user."] if unreadable else []
+    if unreadable:  # not a problem to block on: the agent can't fix the user's store; the gates and status line say it
+        log("stop_checks", "phase-switches", payload, unreadable)
+    problems = []
     unmapped = [] if "spec" in off else unmapped_files(root, session)
     if unmapped:  # first, so the cap on listed problems never hides a file it has marked as asked
         problems.append("Changed code files the spec's Change map doesn't name: " + ", ".join(f"`{p}`" for p in unmapped)

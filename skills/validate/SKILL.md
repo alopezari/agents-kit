@@ -8,7 +8,7 @@ effort: high
 
 Unit tests prove the pieces. This skill proves the behavior: the change does what the spec says in a running system, and fails safely when it should fail. It ends with evidence, not with "should work".
 
-When `~/.agents/bin/phase switches` lists `validate`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name. With `staging` listed, skip the staging hand-off in step 7; with `verify` listed, skip step 0 and name the tests you ran instead.
+When `~/.agents/bin/phase switches` lists `validate`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name. With `staging` listed, skip the staging hand-off in step 7. With `verify` listed, skip step 0, and run the whole unit suite in step 3 yourself: no verify stamp covers it. With `self-review` listed, don't wait for it or re-run it (step 0 and step 5). With `audit` listed, leave out the Impeccable audit in the design checks.
 
 ## 0. Start from a green verify
 

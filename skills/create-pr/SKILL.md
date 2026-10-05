@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change, pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly.
+description: Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly.
 ---
 
 # Create PR
@@ -56,7 +56,7 @@ Unless `~/.agents/bin/phase switches` lists `follow-pr` (then tell the user the 
 
 ## 6. Free the branch
 
-When the branch is checked out in a linked worktree (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir` there), free it once that first follow-pr run is over, so the user can switch to it without removing the worktree by hand. Run it with the session's own directory (the one it started in) as the working directory, since that decides what happens:
+When the branch is checked out in a linked worktree (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir` there), free it once that first follow-pr run is over (at once when `follow-pr` is switched off), so the user can switch to it without removing the worktree by hand. Run it with the session's own directory (the one it started in) as the working directory, since that decides what happens:
 
 ```bash
 cd <the session's directory> && ~/.agents/bin/free-branch <worktree path>

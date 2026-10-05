@@ -21,7 +21,6 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import design_files  # noqa: E402
 import guard_mcp  # noqa: E402
-import phase_switches  # noqa: E402
 from hooklog import log  # noqa: E402
 
 STALE_SECONDS = 24 * 3600
@@ -32,11 +31,6 @@ def main():
         payload = json.load(sys.stdin)
     except ValueError:
         return 0
-    prompt = str(payload.get("prompt") or "")
-    switched = phase_switches.apply_phase_line(prompt, payload.get("cwd") or os.getcwd())
-    if switched:
-        log("prompt_approvals", "phase-switch", payload, switched)
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": switched}}))
     session = re.sub(r"[^\w-]", "", str(payload.get("session_id") or ""))
     if not session:
         return 0
@@ -49,6 +43,7 @@ def main():
                 shutil.rmtree(path, ignore_errors=True)
         except OSError:  # another session's hook removed it first
             pass
+    prompt = str(payload.get("prompt") or "")
     named = sorted(s for s in guard_mcp.guarded_services() if re.search(rf"(?<!\w){re.escape(s)}(?!\w)", prompt, re.I))
     named += design_files.approval_names(prompt)
     import guard_bash  # after the clearing: if it fails to load, the last turn's approvals are already gone
@@ -58,6 +53,11 @@ def main():
         for service in named:
             open(os.path.join(guard_mcp.TURN_APPROVALS, session, service), "w").close()
         log("prompt_approvals", "approve-turn", payload, ",".join(named))
+    import phase_switches  # after the clearing, like guard_bash
+    switched = phase_switches.apply_phase_line(prompt, payload.get("cwd") or os.getcwd())
+    if switched:
+        log("prompt_approvals", "phase-switch", payload, switched)
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": switched}}))
     return 0
 
 

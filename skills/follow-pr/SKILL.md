@@ -53,7 +53,7 @@ It reads all three kinds, every page: inline comments on the diff, the conversat
 
 ## 3. Fixing on an open PR
 
-A fix is a small change of its own, and gets reviewed and tested in proportion:
+A fix is a small change of its own, and gets reviewed and tested in proportion, leaving out the phases `~/.agents/bin/phase switches` lists:
 
 1. The smallest fix, with a test that fails without it when there is a harness for it.
 2. Verify runs at the end of the turn (the stop hook).

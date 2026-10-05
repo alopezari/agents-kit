@@ -74,6 +74,11 @@ def repo_name(cwd=None):
     return repo_name_of(git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=cwd))
 
 
+def phase_cache(common, branch):
+    """bin/phase's cached label for a branch of the repo whose git common dir is `common`."""
+    return os.path.join(common, "agents", "phase", branch_key(branch) + ".json")
+
+
 def repo_name_of(common):
     """repo_name() from the absolute git common dir."""
     name = os.path.basename(common)

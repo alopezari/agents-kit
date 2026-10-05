@@ -133,6 +133,7 @@ Every block, every approved or browser MCP call and every shell command a user's
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
+- Each of these unless the user switched its phase off with a `phase off <phase>` line (`bin/phase switches`).
 
 It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them (`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in `personal-repos.txt`. For MCP writes and `DROP`/`TRUNCATE` commands, Claude Code's mod asks you right away instead, in a dialog that shows the blocked call: allowing it writes the approval your message would, for that one call or until your next message (`bin/approve`, which the shell guard refuses from the agent).
 
@@ -193,7 +194,7 @@ A repository that needs more (a Docker stack, known failing tests, project rules
 | Skill | Source | What it's for |
 |---|---|---|
 | `clarity` | https://github.com/addyosmani/clarity.git | Draft, rewrite or review prose other people will read, so it is specific and sounds like its author without inventing facts. |
-| `create-pr` | core | Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change, pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly. |
+| `create-pr` | core | Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly. |
 | `follow-pr` | core | Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs once right after create-pr (waiting for CI and bot reviews), then whenever the user asks to follow up on the PR. |
 | `impeccable` | https://github.com/pbakaus/impeccable.git, `.claude/skills/impeccable` at 508d7e8 | Design, critique, audit and polish frontend interfaces with a consistent visual direction, and keep an existing brand. |
 | `self-review` | core | Adversarial multi-lens review of your own diff before it goes to a human, using focused reviewers and a second model family, then verifying every finding before acting on it. Use before opening or updating a pull request, before declaring a non-trivial change done, or when asked to review the current branch. |
@@ -312,14 +313,14 @@ quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --cate
 
 **`bin/repo-name`**: Print the repository's name as the kit knows it: the main checkout's directory name, the same from any worktree (Xirp, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.
 
-**`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree).
+**`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). without the phase and the switches, which are the current checkout's
 
 ```
 reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
 reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 reports                                          every report that exists, with its path, the evidence, the phases off
 reports brief                                    the phase and one line per report, to pick a branch up in a new session
-reports --branch <name> …                        the same, for another branch of this repo (a merged PR's, from main)
+reports --branch <name> …                        the same, for another branch of this repo (a merged PR's, from main),
 ```
 
 **`bin/staging`**: The staging guide's steps before the merge, and the PASS/FAIL row each one gets in its latest results.

@@ -13,15 +13,18 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fcntl  # noqa: E402
+
 import design_files  # noqa: E402
 import review_stamp  # noqa: E402
 
 PHASES = ("spec", "self-review", "validate", "staging", "verify", "ci", "follow-pr", "audit")
 SCOPES = ("branch", "repo", "global")
 STORE = os.path.join(design_files.APPROVALS_DIR, "phases")
-PHASE_LINE = re.compile(r"\A[ \t]*phase[ \t]+(off|on)[ \t]+(\S+)(?:[ \t]+(\S+))?[ \t]*$", re.I | re.M)
+PHASE_LINE = re.compile(r"\A[ \t]*phase[ \t]+(off|on)\b(.*)", re.I)
 
 
 class StoreError(Exception):
@@ -29,13 +32,25 @@ class StoreError(Exception):
 
 
 def checkout(cwd, timeout=5):
-    """(repo, branch, git common dir) of the checkout in cwd; branch is None when detached, all None outside a repo."""
-    out = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD"],
-                         cwd=cwd, capture_output=True, text=True, timeout=timeout)
-    lines = out.stdout.splitlines()
-    if out.returncode != 0 or len(lines) != 2:
-        return None, None, None
-    return review_stamp.repo_name_of(lines[0]), (None if lines[1] == "HEAD" else lines[1]), lines[0]
+    """(repo, branch, git common dir) of the checkout in cwd; branch is None when detached, all None outside a repo.
+    Raises OSError or subprocess.SubprocessError when git can't answer."""
+    common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd,
+                            capture_output=True, text=True, timeout=timeout)
+    if common.returncode != 0:
+        # Only "not a repository" means no repo: any other failure must not drop the repo's and branch's switches.
+        if "not a git repository" in common.stderr:
+            return None, None, None
+        raise OSError(f"git rev-parse failed in {cwd}: {common.stderr.strip()[-200:]}")
+    repo = review_stamp.repo_name_of(common.stdout.strip())
+    if repo in ("", ".", ".."):  # `..` would turn a repo's file into a path outside its directory
+        raise OSError(f"can't name the repository of {cwd}")
+    # The full ref: --short, like rev-parse --abbrev-ref, says heads/<branch> when a tag has the branch's name.
+    head = subprocess.run(["git", "symbolic-ref", "--quiet", "HEAD"], cwd=cwd, capture_output=True, text=True,
+                          timeout=timeout)
+    if head.returncode not in (0, 1):  # 1: detached
+        raise OSError(f"git symbolic-ref failed in {cwd}: {head.stderr.strip()[-200:]}")
+    ref = head.stdout.strip()
+    return repo, ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else None, common.stdout.strip()
 
 
 def store_files(repo, branch):
@@ -54,7 +69,7 @@ def read(path):
             switches = json.load(fh)
     except FileNotFoundError:
         return {}
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RecursionError) as error:
         raise StoreError(f"Couldn't read the phase switches in {path}: {error}") from error
     if not isinstance(switches, dict) or any(v not in ("on", "off") for v in switches.values()):
         raise StoreError(f"Couldn't read the phase switches in {path}: expected {{phase: \"on\" | \"off\"}}")
@@ -78,11 +93,11 @@ def phases_off_in(repo, branch):
 
 
 def phases_off_or_error(cwd, timeout=5):
-    """(phases off, None), or ({}, why) when the store can't be read: an unreadable store leaves every phase on."""
+    """(phases off, None), or ({}, a sentence saying why) when the switches can't be read: then every phase is on."""
     try:
         return phases_off(cwd, timeout), None
-    except StoreError as error:
-        return {}, str(error)
+    except (StoreError, OSError, subprocess.SubprocessError) as error:
+        return {}, f"{error}, so every phase counts as on: tell the user"
 
 
 def describe(off):
@@ -95,14 +110,21 @@ def apply_phase_line(prompt, cwd):
     line = PHASE_LINE.match(prompt)
     if not line:
         return None
-    action, phase, scope = line.group(1).lower(), line.group(2).lower(), (line.group(3) or "branch").lower()
+    action, words = line.group(1).lower(), line.group(2).lower().split()
+    if not 1 <= len(words) <= 2:
+        return (f"The user's message opens with `phase {action}` but not as `phase {action} <phase> [branch|repo|global]`: "
+                f"nothing was switched. Tell the user; the phases are {', '.join(PHASES)}.")
+    phase, scope = words[0], words[1] if len(words) == 2 else "branch"
     if phase not in PHASES:
         return (f"Unknown phase `{phase}` in the user's `phase {action}` line: nothing was switched. "
                 f"Tell the user; the phases are {', '.join(PHASES)}.")
     if scope not in SCOPES:
         return (f"Unknown scope `{scope}` in the user's `phase {action}` line: nothing was switched. "
                 f"Tell the user; the scopes are {', '.join(SCOPES)} (branch when left out).")
-    repo, branch, common = checkout(cwd)
+    try:
+        repo, branch, common = checkout(cwd)
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"Couldn't switch {phase} {action} as the user asked: git failed in {cwd} ({error}). Tell the user."
     if scope != "global" and not repo:
         return (f"The user's `phase {action} {phase} {scope}` needs a git repository, and {cwd} isn't in one: "
                 "nothing was switched. Tell the user; `global` works anywhere.")
@@ -111,21 +133,30 @@ def apply_phase_line(prompt, cwd):
                 "switched. Tell the user; `repo` or `global` works here.")
     path = dict(store_files(repo, branch))[scope]
     try:
-        switches = read(path)
-        switches[phase] = action
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path + ".tmp", "w") as fh:
-            json.dump(switches, fh, indent=1, sort_keys=True)
-        os.replace(path + ".tmp", path)
-        off = phases_off_in(repo, branch)
-        if branch:  # bin/phase's cached label; other checkouts' age out within its 15 s
-            try:
-                os.remove(os.path.join(common, "agents", "phase", review_stamp.branch_key(branch) + ".json"))
-            except FileNotFoundError:
-                pass
+        # Two sessions switching at once: the lock keeps one from writing back what it read before the other wrote.
+        with open(os.path.join(STORE, ".lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            switches = read(path)
+            switches[phase] = action
+            fd, temporary = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+            with os.fdopen(fd, "w") as fh:
+                json.dump(switches, fh, indent=1, sort_keys=True)
+            os.replace(temporary, path)
     except (OSError, StoreError) as error:
-        return f"Couldn't switch {phase} {action} as the user asked: {error}. Tell the user."
+        return (f"Couldn't switch {phase} {action} as the user asked: {error}. Nothing was switched. Tell the user; "
+                "a file that can't be read is theirs to fix or delete.")
+    if branch:  # bin/phase's cached label; other checkouts' age out within its 15 s
+        try:
+            os.remove(review_stamp.phase_cache(common, branch))
+        except OSError:
+            pass
     where = {"branch": f"branch {branch} of {repo}", "repo": f"every branch of {repo}", "global": "every repo"}[scope]
+    try:
+        off = phases_off_in(repo, branch)
+    except StoreError as error:
+        return (f"The user switched {phase} {action} for {where}, but {error}, so every phase counts as on here until "
+                "they fix or delete it. Tell the user.")
     still = " A narrower switch keeps it on here." if action == "off" and phase not in off else ""
     return (f"The user switched {phase} {action} for {where}.{still} Phases off here now: {describe(off)}. "
             "Confirm it to the user in one line, and skip the steps of the phases off.")

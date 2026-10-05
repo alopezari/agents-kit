@@ -388,13 +388,14 @@ def unreviewed_pr(command, cwd):
              "review_stamp.py write (and --kind validate) as a command of its own, then this one."
              if re.search(r"review_stamp\.py\b[^;&|\n]*\bwrite\b", re.sub(r"\\\n", " ", shell_code(command))) else "")
     off, unreadable = phase_switches.phases_off_or_error(cwd, time_left())
-    order += f" {unreadable}, so every phase counts as on: tell the user." if unreadable else ""
+    store = f" {unreadable}." if unreadable else ""
     if "self-review" not in off and not ok("check", "--kind", "review"):
         return ("No self-review recorded for the current change. Run the self-review skill first "
-                "(it ends with review_stamp.py write); any edit after the review needs a new one." + order)
+                "(it ends with review_stamp.py write); any edit after the review needs a new one." + order + store)
     if "validate" not in off and ok("needs-validate") and not ok("check", "--kind", "validate"):
         return ("The change touches behavior but has no validation recorded for it. Run the validate skill "
-                "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run." + order)
+                "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run."
+                + order + store)
     if any(not {"--draft", "-d"} & set(pr_args(command, match, 1)) for match in creates):
         return staging_reason(cwd)  # a draft may wait for staging; any create in the command that isn't one may not
     return None
@@ -412,7 +413,7 @@ def staging_reason(cwd):
     if result.returncode == 0:
         return None
     return ((result.stdout.strip() or f"Couldn't read the staging results: {result.stderr.strip()[-300:] or 'no output'}")
-            + (f" {unreadable}, so every phase counts as on: tell the user." if unreadable else ""))
+            + (f" {unreadable}." if unreadable else ""))
 
 
 def unready_pr(command, cwd):
@@ -425,6 +426,8 @@ def unready_pr(command, cwd):
     cwd = pr_checkout(command, cwd)
     if not os.path.isdir(cwd):  # a hook that crashes lets the command through
         return f"`gh pr ready`: its checkout {cwd} doesn't exist, so its staging results can't be checked."
+    if "staging" in phase_switches.phases_off_or_error(cwd, time_left())[0]:
+        return None  # every check below is there to find the staging results
     here = subprocess.run(["git", "branch", "--show-current"], cwd=cwd, capture_output=True, text=True,
                           timeout=time_left()).stdout.strip()
     targets = set()

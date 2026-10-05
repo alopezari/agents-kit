@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """bin/pr-validation: the pull request's validation section, from the branch's reports."""
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
+import json
 import os
 import shutil
 import subprocess
 import tempfile
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
+# A HOME of our own: pr-validation reads the user's phase switches, and the real ones would change its output.
+os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-pr-validation-home-")
+os.makedirs(os.path.expanduser("~/.agents"))
+for entry in set(os.listdir(KIT)) - {"approvals", "logs"}:
+    os.symlink(os.path.join(KIT, entry), os.path.expanduser(f"~/.agents/{entry}"))
 REPORTS = os.path.join(KIT, "bin", "reports")
 PR_VALIDATION = os.path.join(KIT, "bin", "pr-validation")
 HOME = os.path.expanduser("~")
@@ -124,34 +130,40 @@ def a_missing_verify_or_review_fails_naming_it(base):
 
 
 def names_the_phases_the_user_switched_off(base):
-    # A HOME of its own: the switches live in the kit's approvals directory, and the real one is the user's.
-    home = os.path.join(base, "home")
-    os.makedirs(os.path.join(home, ".agents"))
-    for entry in set(os.listdir(KIT)) - {"approvals", "logs"}:
-        os.symlink(os.path.join(KIT, entry), os.path.join(home, ".agents", entry))
-    env = {**os.environ, "HOME": home}
-    repo = new_repo(base)
-    sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
+    try:
+        repo = new_repo(base)
+        sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
 
-    def switch(line):
-        done = subprocess.run(["python3", os.path.join(KIT, "hooks", "prompt_approvals.py")], cwd=repo, env=env,
-                              input=f'{{"prompt": "{line}", "session_id": "pr-validation", "cwd": "{repo}"}}',
-                              capture_output=True, text=True)
-        assert "switched" in done.stdout, done.stdout + done.stderr
+        def switch(line):
+            done = subprocess.run(["python3", os.path.join(KIT, "hooks", "prompt_approvals.py")], cwd=repo,
+                                  input=json.dumps({"prompt": line, "session_id": "pr-validation", "cwd": repo}),
+                                  capture_output=True, text=True)
+            assert "switched" in done.stdout, done.stdout + done.stderr
 
-    def section():
-        return subprocess.run([PR_VALIDATION], cwd=repo, env=env, capture_output=True, text=True)
+        def section():
+            return subprocess.run([PR_VALIDATION], cwd=repo, capture_output=True, text=True)
 
-    write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
-    assert section().returncode == 1, "the self-review report is missing and its phase is on"
-    switch("phase off self-review")
-    switch("phase off validate global")
-    out = section()
-    assert out.returncode == 0, out.stderr
-    for line in ("- Verify: ", "- self-review: skipped by the user (branch).", "- validate: skipped by the user (global).",
-                 "- staging: skipped by the user (validate off)."):
-        assert line in out.stdout, (line, out.stdout)
+        write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
+        assert section().returncode == 1, "the self-review report is missing and its phase is on"
+        switch("phase off self-review")
+        switch("phase off validate global")
+        out = section()
+        assert out.returncode == 0, out.stderr
+        for line in ("- Verify: ", "- Self-review: skipped by the user (branch).", "- Validate: skipped by the user (global).",
+                     "- Staging: skipped by the user (validate off)."):
+            assert out.stdout.count(line) == 1, (line, out.stdout)
+        write(repo, "validation", "| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | old | + | PASS | a |\n")
+        os.remove(sh(repo, REPORTS, "path", "verify").stdout.strip())
+        assert section().returncode == 1, "verify's report is missing and its phase is on"
+        switch("phase off verify")
+        out = section()
+        assert out.returncode == 0 and "- Verify: skipped by the user (branch)." in out.stdout, out.stdout + out.stderr
+        assert "A1" not in out.stdout and "1 PASS" not in out.stdout, f"a report from before the switch isn't shown: {out.stdout}"
+        switch("phase on validate global")
+        assert "Validate: skipped" not in section().stdout, "switched back on, the phase isn't skipped"
 
+    finally:  # the other tests share this HOME
+        shutil.rmtree(os.path.join(os.path.expanduser("~/.agents"), "approvals"), ignore_errors=True)
 
 for test in (names_the_phases_the_user_switched_off, builds_the_section_from_every_report, counts_open_findings_and_skips_absent_reports,
              keeps_qualified_verdicts_and_bounded_sections,
@@ -170,4 +182,5 @@ for name, error in RESULTS:
     print(f"{'FAIL' if error else 'ok  '} {name}")
     if error:
         print(f"     {error}")
+shutil.rmtree(os.environ["HOME"], ignore_errors=True)
 raise SystemExit(1 if any(error for _, error in RESULTS) else 0)

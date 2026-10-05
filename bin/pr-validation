@@ -101,14 +101,18 @@ def main():
     if missing:
         sys.exit("pr-validation: no report at " + " or ".join(missing)
                  + ". Run verify and the self-review first; the section is built from their reports."
-                 + (f" ({unreadable}, so every phase counts as on.)" if unreadable else ""))
-    lines = verify_line(texts[verify]) if texts[verify] is not None else []
-    lines += review_lines(texts[review]) if texts[review] is not None else []
-    if texts[validation] is not None:
-        lines += validation_lines(texts[validation])
-    if texts[guide] is not None:
-        lines += staging_lines(texts[guide], evidence)
-    lines += [f"- {phase}: skipped by the user ({off[phase]})." for phase in phase_switches.PHASES if phase in off]
+                 + (f" ({unreadable}.)" if unreadable else ""))
+    # A phase switched off stands in for its report: one left from before the switch may be stale.
+    shown = {path: text for path, phase, text in ((verify, "verify", texts[verify]), (review, "self-review", texts[review]),
+             (validation, "validate", texts[validation]), (guide, "staging", texts[guide])) if phase not in off}
+    lines = verify_line(shown[verify]) if shown.get(verify) is not None else []
+    lines += review_lines(shown[review]) if shown.get(review) is not None else []
+    if shown.get(validation) is not None:
+        lines += validation_lines(shown[validation])
+    if shown.get(guide) is not None:
+        lines += staging_lines(shown[guide], evidence)
+    lines += [f"- {phase.capitalize()}: skipped by the user ({off[phase]})."
+              for phase in phase_switches.PHASES if phase in off]
     print("## Validation\n\n" + "\n".join(lines))
 
 
