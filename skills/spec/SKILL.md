@@ -7,6 +7,8 @@ description: Turn an issue or request into a short spec with checkable acceptanc
 
 Most expensive agent mistakes come from building the wrong thing well: a requirement read too literally, an edge case nobody named, an "obvious" scope that wasn't. A spec pins down *what* done means before any code exists. It is not an implementation plan; the approach is yours to choose while building.
 
+When `~/.agents/bin/phase switches` lists `spec`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name.
+
 ## 1. Gather
 
 - **The issue:** title, description, comments, linked PRs and discussion threads.

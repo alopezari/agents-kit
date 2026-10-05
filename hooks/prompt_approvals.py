@@ -6,6 +6,8 @@ Asking for a write is approving it: when the user's message names a service guar
 writes to it are allowed until the user's next message. A DROP or TRUNCATE statement guard_bash.py refuses
 needs more than a mention: the message opens with the line `allow <statement>`, or does nothing but ask for it in
 plain words ("Sí, borra las bases de prueba", "drop the test databases").
+A message whose first line is `phase off|on <phase> [branch|repo|global]` switches a flow phase (phase_switches.py),
+and the hook tells the agent what is off now.
 Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the
 service only to read from it approves writes for that turn too.
 """
@@ -51,6 +53,11 @@ def main():
         for service in named:
             open(os.path.join(guard_mcp.TURN_APPROVALS, session, service), "w").close()
         log("prompt_approvals", "approve-turn", payload, ",".join(named))
+    import phase_switches  # after the clearing, like guard_bash
+    switched = phase_switches.apply_phase_line(prompt, payload.get("cwd") or os.getcwd())
+    if switched:
+        log("prompt_approvals", "phase-switch", payload, switched)
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": switched}}))
     return 0
 
 

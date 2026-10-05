@@ -8,6 +8,7 @@ import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import concurrent.futures
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1538,6 +1539,15 @@ def stop_follows_ci_after_a_push(base):
     ci("none")
     assert "still running" in asked(session), "a fresh push from an older guard still gets its grace"
 
+    session = RUN + "ci4"
+    phase_line("phase off ci", repo)
+    sha = push(session)
+    ci("failed")
+    before = open(calls).read()
+    assert asked(session) == "" and open(calls).read() == before, "ci off: CI isn't even queried after a push"
+    phase_line("phase on ci", repo)
+    assert f"CI failed on {sha[:12]}" in asked(session), "back on, the pushed commit's CI is asked about"
+
 
 def guard_records_the_pushed_checkout(base):
     repo, other = new_repo(os.path.join(base, "a")), new_repo(os.path.join(base, "b c"))
@@ -1873,7 +1883,237 @@ def impeccable_guard_reads_prose_as_text(base):
         shell(command)
         assert child_cpu() - started < 2, f"{child_cpu() - started:.1f}s of CPU on {label}"
 
-TESTS = [guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
+PHASE_STORE = os.path.expanduser("~/.agents/approvals/phases")
+
+
+def phase_line(text, cwd, session="phase"):
+    """What prompt_approvals.py tells the agent after the user's message `text`, or None when it says nothing.
+    A hook that crashed says nothing too, so it must have exited cleanly."""
+    done = subprocess.run(["python3", H + "prompt_approvals.py"], capture_output=True, text=True,
+                          input=json.dumps({"prompt": text, "session_id": RUN + session, "cwd": cwd}),
+                          env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+    assert done.returncode == 0 and not done.stderr, f"the prompt hook broke on {text!r}: {done.stderr}"
+    return json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"] if done.stdout.strip() else None
+
+
+def stored_switches():
+    """Every switch file in the store, as {path under the store: its JSON}: what the hook wrote, not what applies."""
+    found = {}
+    for folder, _, names in os.walk(PHASE_STORE):
+        for name in names:
+            if name.endswith(".json"):
+                found[os.path.relpath(os.path.join(folder, name), PHASE_STORE)] = json.load(open(os.path.join(folder, name)))
+    return found
+
+
+def phases_off(cwd):
+    """{phase: why it is off} as `bin/phase switches` prints them."""
+    done = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "switches"], cwd=cwd, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return dict(re.findall(r"^(\S+): off \((.+)\)$", done.stdout, re.M))
+
+
+def a_phase_line_switches_phases_by_scope(base):
+    a, b = new_repo(base, "zz-phase-a"), new_repo(base, "zz-phase-b")
+    for repo in (a, b):
+        git(repo, "switch", "-q", "-c", "feature")
+    said = phase_line("phase off validate\nGo ahead with the fix.", a)
+    assert "validate" in said and "branch" in said, said
+    assert phases_off(a) == {"validate": "branch", "staging": "validate off"}, phases_off(a)
+    assert phases_off(b) == {}, "the same branch name in another repo keeps its phases"
+    git(a, "switch", "-q", "-c", "other")
+    assert phases_off(a) == {}, "a branch switch stays on its branch"
+    phase_line("Phase off verify repo", a)
+    git(a, "switch", "-q", "feature")
+    assert phases_off(a) == {"validate": "branch", "staging": "validate off", "verify": "repo"}, phases_off(a)
+    worktree = os.path.join(base, "zz-phase-a-wt")
+    git(a, "worktree", "add", "-q", worktree, "other")
+    assert phases_off(worktree) == {"verify": "repo"}, "a worktree is the same repo"
+    phase_line("phase off self-review global", b)
+    assert phases_off(b) == {"self-review": "global"} and phases_off(a)["self-review"] == "global"
+    phase_line("phase on self-review", b)
+    assert phases_off(b) == {}, "a branch's on overrides a global off"
+    assert phases_off(a)["self-review"] == "global"
+    phase_line("phase on staging", a)
+    assert phases_off(a)["staging"] == "validate off", "validate off takes staging off whatever staging says"
+    shown = subprocess.run([os.path.expanduser("~/.agents/bin/reports")], cwd=a, capture_output=True, text=True).stdout
+    assert "phases the user switched off" in shown and "validate: off (branch)" in shown, shown
+    brief = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "brief"], cwd=a, capture_output=True, text=True).stdout
+    assert "off: self-review (global), validate (branch), staging (validate off), verify (repo)\n" in brief, brief
+    git(a, "tag", "feature")
+    assert phases_off(a)["validate"] == "branch", "a tag named like the branch doesn't move its switches"
+
+    before = stored_switches()
+    for text in ("please phase off spec", "> phase off spec", "Notes:\nphase off spec", "phase of spec", "phase offline",
+                 "Phase on-call rota is broken", "Phase off: spec is done"):
+        assert phase_line(text, b) is None, f"not a phase line: {text!r}"
+    for text, why in (("phase off create-pr", "Unknown phase"), ("phase off spec everywhere", "Unknown scope"),
+                      ("phase off spec repo please", "not as `phase off <phase>"), ("phase off", "not as `phase off <phase>")):
+        said = phase_line(text, b)
+        assert said and why in said, f"{text!r}: {said}"
+    outside = os.path.join(base, "not-a-repo")
+    os.makedirs(outside)
+    for text in ("phase off spec", "phase off spec repo"):
+        said = phase_line(text, outside)
+        assert said and "git repository" in said, f"{text!r} outside a repo: {said}"
+    broken = os.path.join(base, "broken-worktree")
+    os.makedirs(broken)
+    open(os.path.join(broken, ".git"), "w").write(f"gitdir: {os.path.join(base, 'gone', '.git', 'worktrees', 'x')}\n")
+    said = phase_line("phase off spec", broken)
+    assert said and "git failed" in said, f"a broken worktree is a git failure, not a directory outside git: {said}"
+    done = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "switches"], cwd=broken, capture_output=True, text=True)
+    assert done.returncode == 1 and "Couldn't read the phase switches" in done.stderr, done.stdout + done.stderr
+    git(b, "checkout", "-q", "--detach")
+    said = phase_line("phase off spec", b)
+    assert said and "no branch" in said, said
+    assert stored_switches() == before, "none of those wrote a switch"
+    assert "every branch of zz-phase-b" in phase_line("phase off spec repo", b), "a repo switch needs no branch"
+    git(b, "switch", "-q", "feature")
+    assert phases_off(b) == {"spec": "repo"}
+    assert "spec" in phase_line("phase off spec\r\nThanks", a), "a message with CRLF line ends still switches"
+    assert phases_off(a)["spec"] == "branch"
+    assert "global" in phase_line("phase off ci global", outside), "a global switch needs no repo"
+    assert phases_off(a)["ci"] == "global"
+
+    # The turn approvals of the last message are cleared before a phase line that fails.
+    turn = os.path.expanduser(f"~/.agents/approvals/turn/{RUN}phase")
+    os.makedirs(turn, exist_ok=True)
+    open(os.path.join(turn, "linear"), "w").close()
+    said = phase_line("phase off spec", os.path.join(base, "removed-worktree"))
+    assert said and "git failed" in said and not os.path.exists(os.path.join(turn, "linear")), said
+
+    # Two sessions switching at once both keep their switch.
+    switching = [subprocess.Popen(["python3", H + "prompt_approvals.py"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                  text=True, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+                 for _ in ("follow-pr", "audit", "staging")]
+    for process, phase in zip(switching, ("follow-pr", "audit", "staging")):
+        process.communicate(json.dumps({"prompt": f"phase off {phase} global", "session_id": RUN + phase, "cwd": a}))
+    assert {"follow-pr", "audit", "staging", "ci", "self-review"} <= set(stored_switches()["global.json"])
+
+    store = os.path.join(PHASE_STORE, "global.json")
+    assert guard(f"echo '{{}}' > {store}", a) == "deny", "the agent can't write a switch from the shell"
+    for tool, tool_input in (("Write", {"file_path": store, "content": "{}"}),
+                             ("Edit", {"file_path": store, "old_string": "off", "new_string": "on"})):
+        wrote = run_hook("guard_files.py", {"tool_name": tool, "cwd": a, "tool_input": tool_input})
+        assert wrote and wrote["hookSpecificOutput"]["permissionDecision"] == "deny", f"nor with {tool}"
+    with open(store, "w") as fh:
+        fh.write("{not json")
+    said = phase_line("phase off verify", a)
+    assert "switched verify off" in said and "every phase counts as on" in said, \
+        f"the switch is saved, and the message says another scope's file keeps every phase on: {said}"
+    assert json.load(open(os.path.join(PHASE_STORE, "branch", "zz-phase-a", "feature.json")))["verify"] == "off"
+    label = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "--refresh"], cwd=a, capture_output=True, text=True)
+    assert "switches unreadable" in label.stdout, label.stdout + label.stderr
+    with open(store, "w") as fh:
+        fh.write('{"ci": "off", "a-phase-from-a-newer-kit": "off"}')
+    assert phases_off(a)["ci"] == "global", "a phase this kit doesn't know is ignored, not an unreadable store"
+    with open(store, "w") as fh:
+        fh.write("{not json")
+    done = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "switches"], cwd=a, capture_output=True, text=True)
+    assert done.returncode == 1 and "Couldn't read" in done.stderr, done.stdout + done.stderr
+
+
+def pr_gate_skips_the_phases_switched_off(base):
+    repo = new_repo(base, "zz-phase-gate")
+    git(repo, "switch", "-q", "-c", "feature")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+
+    def reason(command):
+        d = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": "test"})
+        return d["hookSpecificOutput"]["permissionDecisionReason"] if d else None
+
+    assert "self-review" in reason("gh pr create --fill")
+    phase_line("phase off self-review", repo)
+    assert "validation" in (reason("gh pr create --fill") or ""), "self-review off leaves the validate gate"
+    phase_line("phase off validate", repo)
+    assert reason("gh pr create --fill") is None, "both off: nothing to wait for"
+    phase_line("phase on self-review", repo)
+    assert "self-review" in (reason("gh pr create --fill") or ""), "back on, the gate needs a real stamp again"
+    write_stamp(repo, "review")
+    assert reason("gh pr create --fill") is None
+    phase_line("phase on validate", repo)
+    assert "validation" in (reason("gh pr create --fill") or ""), "back on, validate needs a real stamp again"
+    write_stamp(repo, "validate")
+    assert reason("gh pr create --fill") is None
+
+    guide = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "staging-guide"], cwd=repo,
+                           capture_output=True, text=True).stdout.strip()
+    with open(guide, "w") as fh:
+        fh.write("# Guide\n## Before the merge\n### S1. Deploy\n")
+    assert reason("gh pr create --fill") and reason("gh pr ready"), "staging steps before the merge hold the PR"
+    assert reason("gh pr ready 123"), "a PR named by number is checked from its branch's checkout"
+    phase_line("phase off staging", repo)
+    for command in ("gh pr create --fill", "gh pr ready"):
+        assert reason(command) is None, f"staging off holds nothing: {command}"
+    assert reason("gh pr ready 123"), "another PR is checked from its own branch's checkout, with its own switches"
+    phase_line("phase on staging", repo)
+    assert reason("gh pr ready"), "back on, staging holds again"
+
+    # The gate reads the switches of the checkout the PR is opened from, not the session's.
+    other = new_repo(base, "zz-phase-other")
+    git(other, "switch", "-q", "-c", "feature")
+    open(os.path.join(other, "app.py"), "a").write("y = 2\n")
+    phase_line("phase off self-review", other)
+    phase_line("phase off validate", other)
+    assert reason(f"cd {other} && gh pr create --fill") is None, "the other checkout's switches apply there"
+    phase_line("phase off self-review", repo)
+    phase_line("phase on self-review", repo)
+    git(other, "worktree", "add", "-q", "-b", "feat2", os.path.join(base, "zz-phase-other-wt"))
+    open(os.path.join(base, "zz-phase-other-wt", "app.py"), "a").write("w = 1\n")
+    assert "self-review" in (reason(f"cd {os.path.join(base, 'zz-phase-other-wt')} && gh pr create --fill") or ""), \
+        "a branch switch doesn't reach another branch of the same repo"
+
+    # An unreadable file in one scope keeps every phase on, the readable ones' too, and the gate says why.
+    open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
+    phase_line("phase off self-review", repo)
+    phase_line("phase off validate", repo)
+    assert reason("gh pr create --fill --draft") is None
+    with open(os.path.join(PHASE_STORE, "global.json"), "w") as fh:
+        fh.write("[")
+    said = reason("gh pr create --fill --draft") or ""
+    assert "self-review" in said and "Couldn't read" in said, f"an unreadable store means every phase on, said: {said}"
+
+
+def stop_skips_the_phases_switched_off(base):
+    repo = new_repo(base, "zz-phase-stop")
+    git(repo, "switch", "-q", "-c", "feature")
+    vdir = os.path.expanduser("~/.agents/repos/zz-phase-stop")
+    os.makedirs(vdir)
+    ran = os.path.join(base, "verify-ran")
+    with open(os.path.join(vdir, "verify"), "w") as fh:
+        fh.write(f"#!/bin/sh\necho x >> '{ran}'\necho 'ran: pytest'\necho 'FAILED test_app.py'\nexit 1\n")
+    os.chmod(os.path.join(vdir, "verify"), 0o755)
+
+    def verify_runs():
+        return len(open(ran).read().splitlines()) if os.path.exists(ran) else 0
+    spec = subprocess.run([os.path.expanduser("~/.agents/skills/spec/path.sh")], cwd=repo, capture_output=True,
+                          text=True).stdout.strip()
+    with open(spec, "w") as fh:
+        fh.write("# X\n\nGoal: x.\n\n## Acceptance criteria\n1. y — verify: a test\n\n## Change map\n- Ways in: none\n")
+
+    def asked(session, line):
+        with open(os.path.join(repo, "app.py"), "a") as fh:
+            fh.write(line)
+        return stop(RUN + session, repo, [os.path.join(repo, "app.py")]).get("reason", "")
+
+    reason = asked("p1", "y = 2\n")
+    assert "FAILED" in reason and "Change map" in reason and verify_runs() == 1, f"both on: {reason}"
+    phase_line("phase off verify", repo)
+    reason = asked("p2", "breakpoint()\n")
+    assert "FAILED" not in reason and verify_runs() == 1, f"verify off: it doesn't run: {reason}"
+    assert "Change map" in reason and "Debug leftover" in reason, f"spec on, and the other checks run: {reason}"
+    done = subprocess.run(["python3", H + "stop_checks.py", "verify"], cwd=repo, capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+    assert verify_runs() == 2, f"run by hand, verify runs whatever the switch: {done.stdout}{done.stderr}"
+    phase_line("phase on verify", repo)
+    phase_line("phase off spec", repo)
+    reason = asked("p3", "<<<<<<< HEAD\n")
+    assert "Change map" not in reason and "FAILED" in reason and verify_runs() == 3, f"spec off, verify on: {reason}"
+    assert "conflict marker" in reason, f"the other checks run whatever is off: {reason}"
+
+
+TESTS = [a_phase_line_switches_phases_by_scope, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
+         guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
          guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,

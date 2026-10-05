@@ -2,16 +2,17 @@
 """Print a pull request's "## Validation" section from the branch's reports, so it states what they record.
 
   pr-validation    verify's verdict and what it ran, the self-review's findings, each validation check with its
-                   result and what wasn't run, and the latest staging results
+                   result and what wasn't run, the latest staging results, and each phase the user switched off
 
 Links become their text and paths under your home start with ~: the reports are local, the pull request isn't.
-Exits 1, printing nothing, when the verify or self-review report is missing.
+Exits 1, printing nothing, when the verify or self-review report is missing and the user hasn't switched its phase off.
 """
 import os
 import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
+import phase_switches  # noqa: E402
 import review_stamp  # noqa: E402
 
 RESULTS = ("PASS", "FAIL", "NOT RUN")
@@ -95,15 +96,23 @@ def main():
     verify, review, validation, guide, evidence = review_stamp.report_paths(
         "verify", "review", "validation", "staging-guide", "evidence")
     texts = {path: read(path) for path in (verify, review, validation, guide)}
-    missing = [path for path in (verify, review) if texts[path] is None]
+    off, unreadable = phase_switches.phases_off_or_error(os.getcwd())
+    missing = [path for path, phase in ((verify, "verify"), (review, "self-review")) if texts[path] is None and phase not in off]
     if missing:
         sys.exit("pr-validation: no report at " + " or ".join(missing)
-                 + ". Run verify and the self-review first; the section is built from their reports.")
-    lines = verify_line(texts[verify]) + review_lines(texts[review])
-    if texts[validation] is not None:
-        lines += validation_lines(texts[validation])
-    if texts[guide] is not None:
-        lines += staging_lines(texts[guide], evidence)
+                 + ". Run verify and the self-review first; the section is built from their reports."
+                 + (f" ({unreadable}.)" if unreadable else ""))
+    # A phase switched off stands in for its report: one left from before the switch may be stale.
+    shown = {path: text for path, phase, text in ((verify, "verify", texts[verify]), (review, "self-review", texts[review]),
+             (validation, "validate", texts[validation]), (guide, "staging", texts[guide])) if phase not in off}
+    lines = verify_line(shown[verify]) if shown.get(verify) is not None else []
+    lines += review_lines(shown[review]) if shown.get(review) is not None else []
+    if shown.get(validation) is not None:
+        lines += validation_lines(shown[validation])
+    if shown.get(guide) is not None:
+        lines += staging_lines(shown[guide], evidence)
+    lines += [f"- {phase.capitalize()}: skipped by the user ({off[phase]})."
+              for phase in phase_switches.PHASES if phase in off]
     print("## Validation\n\n" + "\n".join(lines))
 
 

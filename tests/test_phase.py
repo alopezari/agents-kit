@@ -16,7 +16,7 @@ os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-phase-home-")
 os.makedirs(os.path.expanduser("~/.agents/logs"))
 os.environ["TMPDIR"] = os.path.expanduser("~/tmp")  # path.sh moves specs out of $TMPDIR: never the real one
 os.makedirs(os.environ["TMPDIR"])
-for entry in set(os.listdir(KIT)) - {"logs"}:
+for entry in set(os.listdir(KIT)) - {"logs", "approvals"}:  # the tests switch phases: never in the real approvals
     os.symlink(os.path.join(KIT, entry), os.path.expanduser(f"~/.agents/{entry}"))
 os.environ.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
 QUALITY_LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
@@ -377,7 +377,41 @@ def fast_path_serves_cache_and_refreshes(base):
     assert not os.path.exists(cache.replace(".json", ".lock")), "the refresh releases its lock"
 
 
-TESTS = (status_line_names_the_branch, walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
+def switch(repo, line):
+    """Send the user's phase line through the prompt hook, as Claude Code and Codex do."""
+    payload = json.dumps({"prompt": line, "session_id": "phase-test", "cwd": repo})
+    done = subprocess.run(["python3", os.path.expanduser("~/.agents/hooks/prompt_approvals.py")], input=payload, cwd=repo,
+                          capture_output=True, text=True)
+    assert done.returncode == 0 and "switched" in done.stdout, done.stdout + done.stderr
+
+
+def switched_off_phases_leave_the_flow(base):
+    repo = new_repo(base)
+    sh(repo, "git", "checkout", "-q", "-b", "feature/quick")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    assert phase(repo) == "build (no spec)"
+    sh(repo, "git", "tag", "feature/quick")  # a tag named like the branch must not split the label's cache key
+    assert phase(repo) == "build (no spec)"
+    switch(repo, "phase off spec")
+    switch(repo, "phase off verify")
+    assert phase(repo, refresh=False) in ("", "self-review · off: spec, verify"), "the switch drops the stale label"
+    assert phase(repo, refresh=False) != "build (no spec)", "the switch dropped the cached label, not another key's"
+    assert phase(repo) == "self-review · off: spec, verify", phase(repo)
+    switch(repo, "phase off self-review repo")
+    switch(repo, "phase off validate global")
+    open(sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "staging-guide"), "w").write(
+        "# Guide\n## Before the merge\n### S1. Deploy\n")
+    assert phase(repo) == "create-pr · off: spec, self-review, validate, staging, verify", phase(repo)
+    switch(repo, "phase on verify")
+    assert phase(repo) == "build · off: spec, self-review, validate, staging", phase(repo)
+    assert sh(repo, PHASE, "switches").splitlines() == [
+        "spec: off (branch)", "self-review: off (repo)", "validate: off (global)", "staging: off (validate off)"]
+    sh(repo, "git", "checkout", "-q", "trunk")
+    assert sh(repo, PHASE, "switches") == "self-review: off (repo)\nvalidate: off (global)\nstaging: off (validate off)", \
+        "the default branch has its repo's and the global switches"
+
+
+TESTS = (switched_off_phases_leave_the_flow, status_line_names_the_branch, walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
          red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
          a_rename_log_that_cannot_be_written_leaves_the_spec_path,
          slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,

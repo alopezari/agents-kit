@@ -12,7 +12,8 @@ one that edited nothing, asks about the pushed commit's CI when it failed, is st
 branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change
 with its context over NEW_CHANGE_NUDGE_TOKENS, tells the user, once, that a new session picks it up for less (Claude
 Code only: it reads the transcript). Every stop also starts each profile's `after-turn` in the background with the
-stop payload on stdin, and doesn't wait for it.
+stop payload on stdin, and doesn't wait for it. The Change map question, verify and the CI question each stay quiet
+for a checkout whose user switched off the spec, verify or ci phase (phase_switches.py); the other checks always run.
 
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
 the hook has seen, for the weekly health check. `stop_checks.py verify` runs verify on the current checkout now,
@@ -30,6 +31,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import log  # noqa: E402
+import phase_switches  # noqa: E402
 import review_stamp  # noqa: E402
 
 MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
@@ -434,6 +436,12 @@ def ci_after_push(session, payload):
             continue
         if not os.path.isdir(root):
             continue  # the worktree was removed after the push
+        off, unreadable = phase_switches.phases_off_or_error(root)
+        if unreadable:
+            log("stop_checks", "phase-switches", payload, unreadable)
+        if "ci" in off:
+            followed[root] = at  # still followed: switched back on, the push is asked about
+            continue
         sha = git(["rev-parse", "--verify", "--quiet", "@{upstream}"], root).strip()
         if not sha:
             continue  # the push failed, or pushed nothing this checkout tracks
@@ -545,8 +553,11 @@ def leftover_overrides():
 
 def check_checkout(root, session, payload):
     """Return (problems, verify_failed) for one checkout."""
+    off, unreadable = phase_switches.phases_off_or_error(root)
+    if unreadable:  # not a problem to block on: the agent can't fix the user's store; the gates and status line say it
+        log("stop_checks", "phase-switches", payload, unreadable)
     problems = []
-    unmapped = unmapped_files(root, session)
+    unmapped = [] if "spec" in off else unmapped_files(root, session)
     if unmapped:  # first, so the cap on listed problems never hides a file it has marked as asked
         problems.append("Changed code files the spec's Change map doesn't name: " + ", ".join(f"`{p}`" for p in unmapped)
                         + ". Add each to the map with what it changes, or split it into another branch.")
@@ -568,6 +579,8 @@ def check_checkout(root, session, payload):
     deleted = git(["diff", review_stamp.merge_base(root), "--name-only", "--diff-filter=D"], root).splitlines()
     problems += [f"Test file deleted: {p}" for p in deleted if TEST_FILE.search(p)]
 
+    if "verify" in off:
+        return problems, False
     verify_problems, verify_failed, _, _, stamp_error = run_verify(root)
     problems += verify_problems
     if stamp_error:  # logged, not blocking: a missing stamp only makes a skill run verify again

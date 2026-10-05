@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change, pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly.
+description: Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly.
 ---
 
 # Create PR
@@ -18,7 +18,7 @@ Run from the checkout that has the branch. Each line must hold, or the listed st
 | Validated, for behavior changes | `python3 ~/.agents/hooks/review_stamp.py needs-validate && python3 ~/.agents/hooks/review_stamp.py check --kind validate` | Run the `validate` skill |
 | Staging passed for this change, when the guide has steps before the merge | `python3 ~/.agents/hooks/review_stamp.py staging` | Ask the user to run the guide, or the steps the changes since touch, then record the results from its evidence and write the staging stamp (validate, step 7) |
 
-The shell guard enforces the two stamps on `gh pr create`, and the staging results on `gh pr create` without `--draft` and on `gh pr ready` (`python3 ~/.agents/hooks/review_stamp.py staging` says what's missing); this table catches the rest before you get there.
+A row whose phase `~/.agents/bin/phase switches` lists (verify, self-review, validate, staging) is skipped: the user switched it off, and `bin/pr-validation` puts that in the description. The shell guard enforces the two stamps on `gh pr create`, and the staging results on `gh pr create` without `--draft` and on `gh pr ready` (`python3 ~/.agents/hooks/review_stamp.py staging` says what's missing); this table catches the rest before you get there.
 
 One exception: when the repo can only deploy to staging from a PR (its notes say so), open the PR as a draft with the staging results pending, say so in the description, and mark it ready when they pass.
 
@@ -52,11 +52,11 @@ Add `--draft` only in the exception from step 1. Print the PR URL.
 
 ## 5. Hand over to follow-pr
 
-Run the `follow-pr` skill in the same session (its first run): it waits for the pushed commit's CI with `~/.agents/bin/ci-wait` and reads the bot reviews that come with it. After that, the user runs it on demand.
+Unless `~/.agents/bin/phase switches` lists `follow-pr` (then tell the user the PR is open and theirs to follow up), run the `follow-pr` skill in the same session (its first run): it waits for the pushed commit's CI with `~/.agents/bin/ci-wait` and reads the bot reviews that come with it. After that, the user runs it on demand.
 
 ## 6. Free the branch
 
-When the branch is checked out in a linked worktree (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir` there), free it once that first follow-pr run is over, so the user can switch to it without removing the worktree by hand. Run it with the session's own directory (the one it started in) as the working directory, since that decides what happens:
+When the branch is checked out in a linked worktree (`git rev-parse --git-dir` differs from `git rev-parse --git-common-dir` there), free it once that first follow-pr run is over (at once when `follow-pr` is switched off), so the user can switch to it without removing the worktree by hand. Run it with the session's own directory (the one it started in) as the working directory, since that decides what happens:
 
 ```bash
 cd <the session's directory> && ~/.agents/bin/free-branch <worktree path>
