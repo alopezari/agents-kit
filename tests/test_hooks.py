@@ -2052,6 +2052,9 @@ def only_the_user_runs_the_switch_cli(base):
     assert done.returncode == 0 and phases_off(repo) == {"second-model": "global"}, done.stdout
     assert "second-model (global)" in done.stdout, done.stdout
     assert cli("on", "second-model", "--global").returncode == 0 and phases_off(repo) == {}
+    for reviewer in ("claude-review", "codex-review"):
+        assert cli("off", reviewer, "--global").returncode == 0 and phases_off(repo) == {reviewer: "global"}, reviewer
+        assert cli("on", reviewer, "--global").returncode == 0 and phases_off(repo) == {}
     outside = os.path.join(base, "not-a-repo-cli")
     os.makedirs(outside)
     try:

@@ -1,0 +1,1 @@
+- Two phases switch off the cross-model reading by who reviews: `claude-review` (Claude reading a Codex session's work) and `codex-review` (Codex reading a Claude session's). `phase off claude-review global` keeps Codex reviewing your Claude Code work while Codex sessions stop spending Claude credits; `second-model` still switches off both.

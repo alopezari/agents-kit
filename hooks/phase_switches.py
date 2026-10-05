@@ -24,7 +24,7 @@ import design_files  # noqa: E402
 import review_stamp  # noqa: E402
 from hooklog import log  # noqa: E402
 
-PHASES = ("spec", "self-review", "validate", "staging", "verify", "ci", "follow-pr", "audit", "second-model")
+PHASES = ("spec", "self-review", "validate", "staging", "verify", "ci", "follow-pr", "audit", "second-model", "claude-review", "codex-review")
 SCOPES = ("branch", "repo", "global")
 STORE = os.path.join(design_files.APPROVALS_DIR, "phases")
 PHASE_LINE = re.compile(r"\A[ \t]*phase[ \t]+(off|on)(?=\s|\Z)(.*)", re.I)
