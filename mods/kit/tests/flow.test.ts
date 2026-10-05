@@ -47,6 +47,7 @@ function repo(overrides: Record<string, Run> = {}): Record<string, Run> {
     },
     [KIT + '/bin/reports path verify']: { exitCode: 0, stdout: REPORT + '\n' },
     [KIT + '/bin/staging steps --json']: { exitCode: 0, stdout: JSON.stringify(STEPS) },
+    [KIT + '/bin/phase switches']: { exitCode: 0, stdout: '' },
     'python3 /home/.agents/hooks/review_stamp.py check --kind verify': { exitCode: 0 },
     'python3 /home/.agents/hooks/review_stamp.py check --kind verify-empty': { exitCode: 1 },
     'python3 /home/.agents/hooks/review_stamp.py check --kind review': { exitCode: 0 },
@@ -265,6 +266,12 @@ test('each kind of no change to follow says which, and a failed read is never on
        ['/main: ' + KIT + '/bin/reports brief']: { exitCode: 0, stdout: 'phase: \n' } },
       /^Detached HEAD, and the main checkout is on the default branch: no change to follow\.$/m],
     [{ [KIT + '/bin/reports brief']: { exitCode: 0, stdout: 'phase: \n' } }, /^On the default branch: no change to follow\.$/m],
+    [{ [KIT + '/bin/reports brief']: { exitCode: 0, stdout: 'phase: \n' }, [KIT + '/bin/phase switches']: { exitCode: 0, stdout: 'audit: off (branch)\nspec: off (global)\n' } },
+      /^On the default branch: no change to follow\.\nPhases off: audit \(branch\), spec \(global\)$/m],
+    [{ 'git rev-parse --show-toplevel': { exitCode: 128, stderr: 'not a git repository' }, [KIT + '/bin/phase switches']: { exitCode: 0, stdout: 'spec: off (global)\n' } },
+      /^Not in a git repository: no change to follow\.\nPhases off: spec \(global\)$/m],
+    [{ 'git rev-parse --show-toplevel': { exitCode: 128, stderr: 'not a git repository' }, [KIT + '/bin/phase switches']: { exitCode: 1, stderr: 'Couldn\'t read the phase switches in x: bad' } },
+      /^Not in a git repository: no change to follow\.\nPhases off: couldn't read: exit 1: Couldn't read the phase switches in x: bad$/m],
   ]
   let runs = repo()
   const { ran, clock } = stub(on, new Proxy({}, { get: (target, key) => runs[key] }))
@@ -291,6 +298,85 @@ test('without a surface to draw on, /flow prints the same facts as text', async 
   expect(answer.text).toMatch(/^ {2}CI: passed$/m)
   expect(answer.text).toMatch(/^ {2}context: 25%$/m)
   expect(opened).toEqual([])
+})
+
+const SWITCH_CLI = 'python3 ' + KIT + '/hooks/phase_switches.py set'
+const SWITCHED = 'Switched validate off for every branch of repo. Phases off here now: validate (repo), staging (validate off).'
+const typed = (args: string) => ({ command: 'flow', args, origin: { kind: 'composer' } }) as any
+
+test('/flow off|on typed at the prompt runs the switch CLI in the session directory and answers with what it says', async ($, on) => {
+  const { ran, cwds, opened, clock } = stub(on, repo({
+    [SWITCH_CLI + ' off validate --repo']: { exitCode: 0, stdout: SWITCHED + '\n' },
+    [SWITCH_CLI + ' on validate']: { exitCode: 0, stdout: 'Switched validate on for branch feature of repo.\n' },
+    [SWITCH_CLI + ' off create-pr']: { exitCode: 3, stdout: 'Unknown phase `create-pr`: nothing was switched. The phases are spec.\n' },
+  }), { panes: () => [] })
+  const answer = await $.command.run(typed('  OFF validate --repo '))
+  expect(answer.text).toBe(SWITCHED)
+  expect(answer.context).toEqual([`The user switched a phase with /flow: ${SWITCHED} Skip the steps of the phases off.`])
+  await clock.settle()
+  // Nothing gathered: no pane is open.
+  expect(ran).toEqual([SWITCH_CLI + ' off validate --repo'])
+  // The prompt hook reads a `phase off` line from the session's directory, not from the checkout the pane follows.
+  expect(cwds).toEqual([SESSION_CWD])
+  expect((await $.command.run(typed('on validate'))).text).toBe('Switched validate on for branch feature of repo.')
+  const refused = await $.command.run(typed('off create-pr'))
+  expect(refused.text).toMatch(/^Unknown phase `create-pr`/)
+  expect(refused.context).toBeUndefined()
+  expect(opened).toEqual([])
+})
+
+test('/flow followed by anything but off or on opens the pane', async ($, on) => {
+  const { ran, opened } = stub(on, repo())
+  await $.command.run(typed('offline'))
+  expect(opened.length).toBe(1)
+  expect(ran.some((argv) => argv.startsWith(SWITCH_CLI))).toBe(false)
+})
+
+test('/flow off from anything but the prompt runs nothing and says so', async ($, on) => {
+  const { ran } = stub(on, repo())
+  for (const origin of [undefined, { kind: 'plugin', name: 'other' }, { kind: 'bridge' }, { kind: 'sdk' }]) {
+    const answer = await $.command.run({ command: 'flow', args: 'off validate --repo', ...(origin && { origin }) } as any)
+    // The line it suggests is one the prompt hook takes: scope words, not flags.
+    expect(answer.text).toBe("/flow off switches a phase only when typed at this terminal's prompt: nothing was switched. A message opening with `phase off validate repo` does it from anywhere.")
+  }
+  expect(ran).toEqual([])
+})
+
+test('a switch CLI that crashes, fails or times out never says nothing was switched, and the pane gathers again', async ($, on) => {
+  let runs = repo()
+  const { ran, clock } = stub(on, new Proxy({}, { get: (target, key) => runs[key] }))
+  const ui = await openPane($, clock)
+  for (const [answer, said] of [
+    [{ deny: 'timed out' }, /timed out/],
+    // Python's own exit for an uncaught exception, with nothing on stdout.
+    [{ exitCode: 1, stderr: 'Traceback (most recent call last):\n  boom' }, /exit 1: Traceback/],
+    [{ exitCode: 2, stderr: 'usage: phase_switches.py set' }, /exit 2: usage/],
+  ] as const) {
+    runs = repo({ [SWITCH_CLI + ' off spec']: answer })
+    ran.length = 0
+    const { text, context } = await $.command.run(typed('off spec'))
+    expect(context).toEqual(['A /flow switch may or may not have been recorded: check `~/.agents/bin/phase switches` before a step of the flow.'])
+    expect(text).toMatch(/^Couldn't tell whether spec was switched off: /)
+    expect(text).toMatch(said)
+    expect(text).toContain('Run /flow to see what is off.')
+    expect(text).not.toMatch(/nothing was switched/)
+    await clock.settle()
+    expect(ran[0]).toBe(SWITCH_CLI + ' off spec')
+    expect(ran).toContain(KIT + '/bin/reports brief')
+  }
+  expect(await texts(ui)).toContain('phase: validate')
+})
+
+test('an open pane gathers again after a switch and shows the phases now off', async ($, on) => {
+  let brief = 'phase: validate\n'
+  const runs = repo({ [SWITCH_CLI + ' off validate']: { exitCode: 0, stdout: SWITCHED + '\n' } })
+  const { clock } = stub(on, new Proxy({}, { get: (target, key) => (key === KIT + '/bin/reports brief' ? { exitCode: 0, stdout: brief } : runs[key]) }))
+  const ui = await openPane($, clock)
+  expect(await texts(ui)).not.toContain('off: ')
+  brief = 'phase: validate\noff: validate (branch), staging (validate off)\n'
+  await $.command.run(typed('off validate'))
+  await clock.settle()
+  expect(await texts(ui)).toContain('off: validate (branch), staging (validate off)')
 })
 
 test('a source that fails says why, and the other sections still show', async ($, on) => {

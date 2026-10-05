@@ -4,6 +4,8 @@ import { FEATURES } from './features.js'
 
 const PANE = 'flow'
 const PROCESS_TIMEOUT_MS = 30_000
+// phase_switches.py's exit for a switch it refused; 1 is Python's own for a crash.
+const SWITCH_REFUSED = 3
 // ci-wait --once makes one GitHub round trip per check source, each bounded at 30 s.
 const CI_TIMEOUT_MS = 90_000
 const STAMPS = [['verify', 'verify'], ['self-review', 'review'], ['validate', 'validate'], ['staging', 'staging']]
@@ -260,7 +262,7 @@ async function collect($) {
 
 async function collectOrSayWhy($) {
   try {
-    return await collect($)
+    return await withSwitches($, await collect($))
   } catch (error) {
     return { none: "Couldn't gather the flow: " + messageOf(error) }
   }
@@ -283,6 +285,15 @@ async function gather($) {
     gathering = false
   }
   $.ui.invalidate('ui.render')
+}
+
+// With no change to follow, the repo's and every repo's switches still apply.
+async function withSwitches($, facts) {
+  if (!facts.none) return facts
+  const listed = await run($, [(await kitDir($)) + '/bin/phase', 'switches'], await $.session.cwd())
+  if (listed.failure || listed.exitCode !== 0) return { none: facts.none + "\nPhases off: couldn't read: " + failureOf(listed) }
+  const off = listed.stdout.trim().split('\n').filter(Boolean).map((line) => line.replace(': off (', ' ('))
+  return off.length ? { none: facts.none + '\nPhases off: ' + off.join(', ') } : facts
 }
 
 function asText(facts) {
@@ -416,6 +427,35 @@ async function approveHelper($, kit, args, stdin = '') {
   }
 }
 
+// `/flow off|on <phase> [--repo|--global]`: phase_switches.py decides and records, in the session's own directory,
+// as for the message line `phase off …`, which the prompt hook reads from the same directory.
+async function switchPhase($, e) {
+  const args = e.args.trim().split(/\s+/)
+  const action = args[0].toLowerCase()
+  if (e.origin?.kind !== 'composer') {
+    const line = ['phase', action, ...args.slice(1).map((word) => word.replace(/^--/, ''))].join(' ')
+    return { text: `/flow ${action} switches a phase only when typed at this terminal's prompt: nothing was switched. A message opening with \`${line}\` does it from anywhere.` }
+  }
+  const kit = await kitDir($)
+  const done = await run($, ['python3', kit + '/hooks/phase_switches.py', 'set', action, ...args.slice(1)], await $.session.cwd())
+  // After a failure too: a run that died or timed out may have written the switch first.
+  refreshIfOpen($, 'a switch')
+  const said = done.stdout?.trim()
+  if (done.exitCode === 0) return { text: said, context: [`The user switched a phase with /flow: ${said} Skip the steps of the phases off.`] }
+  if (done.exitCode === SWITCH_REFUSED) return { text: said }
+  return {
+    text: `Couldn't tell whether ${args[1] ?? 'the phase'} was switched ${action}: ${failureOf(done)}. Run /flow to see what is off.`,
+    context: ['A /flow switch may or may not have been recorded: check `~/.agents/bin/phase switches` before a step of the flow.'],
+  }
+}
+
+function refreshIfOpen($, after) {
+  // Asked each time: a pane whose drawing threw is dropped without a ui.close this mod hears.
+  $.ui.panes()
+    .then((panes) => panes.some((pane) => pane.id === PANE) && gather($))
+    .catch((error) => $.ui.log(`flow: refresh after ${after}: ` + messageOf(error), { to: 'debug' }))
+}
+
 function previewOf(tool, input) {
   const call = tool === 'Bash' ? String(input.command) : tool + ' ' + JSON.stringify(input, null, 2)
   if (call.length <= PREVIEW_CHARS) return call
@@ -472,7 +512,7 @@ export function register(on) {
 
   on('session.start', async ($, e, next) => {
     const flow = FEATURES.find((feature) => feature.command === 'flow')
-    await $.command.register({ name: 'flow', description: flow.description, immediate: true })
+    await $.command.register({ name: 'flow', description: flow.description, argumentHint: '[off|on <phase> [--repo|--global]]', immediate: true })
     const waited = new AbortController()
     const registering = registerReviewers($)
       .catch((error) => $.ui.log('kit: review agents: ' + messageOf(error), { to: 'debug' }))
@@ -484,7 +524,8 @@ export function register(on) {
     return next(e)
   })
 
-  on('command.run', { command: 'flow' }, async ($) => {
+  on('command.run', { command: 'flow' }, async ($, e) => {
+    if (/^(off|on)(\s|$)/i.test(e.args.trim())) return switchPhase($, e)
     if ((await $.session.surfaces()).length === 0) return { text: asText(await collectOrSayWhy($)) }
     // Without closeOnEscape: Escape hands the keys back to the prompt and the pane stays, refreshing after each turn.
     await $.ui.open({ id: PANE, title: 'flow', focus: true })
@@ -493,12 +534,7 @@ export function register(on) {
   })
 
   on('turn.complete', async ($, e, next) => {
-    // Asked each time: a pane whose drawing threw is dropped without a ui.close this mod hears.
-    if (!e.agentId) {
-      $.ui.panes()
-        .then((panes) => panes.some((pane) => pane.id === PANE) && gather($))
-        .catch((error) => $.ui.log('flow: refresh after the turn: ' + messageOf(error), { to: 'debug' }))
-    }
+    if (!e.agentId) refreshIfOpen($, 'the turn')
     return next(e)
   })
 

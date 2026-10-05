@@ -2,8 +2,9 @@
 """The flow phases the user switched off, for one branch, one repo or every repo.
 
 The user switches a phase with the first line of a message, `phase off <phase> [branch|repo|global]` or
-`phase on ...`, which prompt_approvals.py records here. The store is in ~/.agents/approvals, which guard_bash.py and
-guard_files.py keep the agent out of: only the user's messages switch a phase.
+`phase on ...`, which prompt_approvals.py records here, or in Claude Code with `/flow off|on …`, which the kit's mod
+runs through `phase_switches.py set`. The store is in ~/.agents/approvals, which guard_bash.py and
+guard_files.py keep the agent out of: only the user switches a phase.
 
 The narrowest switch set wins (branch over repo over global), and validate off takes staging off: a staging guide
 comes out of validation. A skip writes no stamp, so a phase switched back on needs a real one again.
@@ -21,6 +22,7 @@ import fcntl  # noqa: E402
 
 import design_files  # noqa: E402
 import review_stamp  # noqa: E402
+from hooklog import log  # noqa: E402
 
 PHASES = ("spec", "self-review", "validate", "staging", "verify", "ci", "follow-pr", "audit")
 SCOPES = ("branch", "repo", "global")
@@ -114,26 +116,33 @@ def apply_phase_line(prompt, cwd):
     if not line:
         return None
     action, words = line.group(1).lower(), line.group(2).lower().split()
+    switched, said, hint = switch(action, words, cwd, f"`phase {action} <phase> [branch|repo|global]`")
+    then = ("Confirm it to the user in one line, and skip the steps of the phases off." if switched else
+            f"Tell the user; {hint}")
+    return f"The user's `phase {action}` line: {said} {then}"
+
+
+def switch(action, words, cwd, form):
+    """Record `<action> <words>` for the checkout in cwd, asked in `form`: (whether it was recorded, what happened,
+    and when it wasn't, what the user can do instead)."""
     if not 1 <= len(words) <= 2:
-        return (f"The user's message opens with `phase {action}` but not as `phase {action} <phase> [branch|repo|global]`: "
-                f"nothing was switched. Tell the user; the phases are {', '.join(PHASES)}.")
+        return False, f"Not {form}: nothing was switched.", f"the phases are {', '.join(PHASES)}."
     phase, scope = words[0], words[1] if len(words) == 2 else "branch"
     if phase not in PHASES:
-        return (f"Unknown phase `{phase}` in the user's `phase {action}` line: nothing was switched. "
-                f"Tell the user; the phases are {', '.join(PHASES)}.")
+        return False, f"Unknown phase `{phase}`: nothing was switched.", f"the phases are {', '.join(PHASES)}."
     if scope not in SCOPES:
-        return (f"Unknown scope `{scope}` in the user's `phase {action}` line: nothing was switched. "
-                f"Tell the user; the scopes are {', '.join(SCOPES)} (branch when left out).")
+        return False, f"Unknown scope `{scope}`: nothing was switched.", f"the form is {form}, branch when left out."
     try:
         repo, branch, common = checkout(cwd)
     except (OSError, subprocess.SubprocessError, ValueError) as error:
-        return f"Couldn't switch {phase} {action} as the user asked: git failed in {cwd} ({error}). Tell the user."
+        return False, f"Couldn't switch {phase} {action}, git failed: {error}. Nothing was switched.", \
+            "try again once git works there."
     if scope != "global" and not repo:
-        return (f"The user's `phase {action} {phase} {scope}` needs a git repository, and {cwd} isn't in one: "
-                "nothing was switched. Tell the user; `global` works anywhere.")
+        return False, f"Can't switch {phase} {action} for the {scope}: {cwd} isn't in a git repository, so nothing was " \
+            "switched.", "the global scope works anywhere."
     if scope == "branch" and not branch:
-        return (f"The user's `phase {action} {phase}` is for this branch, but HEAD is on no branch: nothing was "
-                "switched. Tell the user; `repo` or `global` works here.")
+        return False, f"Can't switch {phase} {action} for this branch: HEAD in {cwd} is on no branch, so nothing was " \
+            "switched.", "the repo or global scope works there."
     path = dict(store_files(repo, branch))[scope]
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -147,8 +156,8 @@ def apply_phase_line(prompt, cwd):
                 json.dump(switches, fh, indent=1, sort_keys=True)
             os.replace(temporary, path)
     except (OSError, StoreError) as error:
-        return (f"Couldn't switch {phase} {action} as the user asked: {error}. Nothing was switched. Tell the user; "
-                "a file that can't be read is theirs to fix or delete.")
+        return False, f"Couldn't switch {phase} {action}: {error}. Nothing was switched.", \
+            "fix or delete the file the error names."
     if branch:  # bin/phase's cached label; other checkouts' age out within its 15 s
         try:
             os.remove(review_stamp.phase_cache(common, branch))
@@ -158,9 +167,34 @@ def apply_phase_line(prompt, cwd):
     try:
         off = phases_off_in(repo, branch)
     except StoreError as error:
-        return (f"The user switched {phase} {action} for {where}, but {error}, so every phase counts as on here until "
-                "they fix or delete it. Tell the user.")
+        return True, (f"Switched {phase} {action} for {where}, but {str(error)[0].lower() + str(error)[1:]}, so every "
+                      "phase counts as on here until that file is fixed or deleted."), None
     still = (" A narrower switch keeps it on here." if action == "off" and phase not in off else
              " A narrower switch keeps it off here." if action == "on" and phase in off else "")
-    return (f"The user switched {phase} {action} for {where}.{still} Phases off here now: {describe(off)}. "
-            "Confirm it to the user in one line, and skip the steps of the phases off.")
+    return True, f"Switched {phase} {action} for {where}.{still} Phases off here now: {describe(off)}.", None
+
+
+REFUSED = 3  # not 1: Python exits 1 on a crash, which may come after the write
+
+
+def main():
+    """`set <off|on> <phase> [branch|repo|global]`, a scope also as `--repo`: the /flow command's way in. The shell
+    guard keeps the agent from running it; the mod runs it only for a command the user typed."""
+    if sys.argv[1:2] != ["set"] or len(sys.argv) < 3:
+        print("usage: phase_switches.py set <off|on> <phase> [branch|repo|global|--repo|--global]", file=sys.stderr)
+        return 2
+    action = sys.argv[2].lower()
+    words = [word[2:] if word[2:] in SCOPES and word.startswith("--") else word for word in map(str.lower, sys.argv[3:])]
+    if action not in ("off", "on"):
+        print(f"`{action}` must be off or on: nothing was switched.")
+        return REFUSED
+    cwd = os.getcwd()
+    switched, said, hint = switch(action, words, cwd, f"`/flow {action} <phase> [--repo|--global]`")
+    if switched:
+        log("phase_switches", "phase-switch", {"cwd": cwd}, "/flow: " + said)
+    print(said if switched else f"{said} {hint[0].upper() + hint[1:]}")
+    return 0 if switched else REFUSED
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -133,7 +133,7 @@ Every block, every approved or browser MCP call and every shell command a user's
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
-- The last two lift for a phase the user switched off with a `phase off <phase>` line (self-review, validate, staging; `bin/phase switches`); no other rule here can be switched off.
+- The last two lift for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, validate, staging; `bin/phase switches`); no other rule here can be switched off.
 
 It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them (`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in `personal-repos.txt`. For MCP writes and `DROP`/`TRUNCATE` commands, Claude Code's mod asks you right away instead, in a dialog that shows the blocked call: allowing it writes the approval your message would, for that one call or until your next message (`bin/approve`, which the shell guard refuses from the agent).
 
@@ -211,7 +211,9 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 
 | Command, hook or agent | Capability | Codex has instead |
 |---|---|---|
-| `/flow`: Show where this branch is in the kit's flow, and run verify without a turn | Phase and reports | `bin/reports brief` |
+| `/flow`: Show where this branch is in the kit's flow, run verify without a turn, and switch a phase off or on | Phase and reports | `bin/reports brief` |
+|  | The phases switched off, with their scope, also on the default branch | `bin/phase switches` |
+|  | `/flow off\|on <phase> [--repo\|--global]`, typed at the prompt, switches a phase for the branch, the repo or every repo | a message whose first line is `phase off\|on <phase> [branch\|repo\|global]` |
 |  | Follows the branch into the main checkout once validate detaches the session's own | the commands of this list, run from the main checkout |
 |  | Stamps (verify, self-review, validate, staging), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
 |  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
