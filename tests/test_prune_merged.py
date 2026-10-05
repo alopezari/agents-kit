@@ -170,7 +170,7 @@ def keeps_the_switches_when_it_cannot_name_the_repo(base):
            "loader = importlib.machinery.SourceFileLoader('prune', sys.argv[0]); prune = loader.load_module(); "
            "prune.phase_switches.checkout = lambda cwd: (_ for _ in ()).throw(OSError('git rev-parse failed')); "
            "sys.exit(prune.main())")
-    out = subprocess.run(["python3", "-c", run, PRUNE], cwd=main, capture_output=True, text=True)
+    out = subprocess.run(["python3", "-B", "-c", run, PRUNE], cwd=main, capture_output=True, text=True)
     assert out.returncode == 1, out
     assert "deleted branch done, but kept its phase switches: couldn't name the repo" in out.stdout, out.stdout
     assert "done" not in branches(main)
