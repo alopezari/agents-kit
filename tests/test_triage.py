@@ -283,8 +283,12 @@ with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
         subprocess.run(["python3", os.path.expanduser("~/.agents/hooks/phase_switches.py"), "set", *args], cwd=repo,
                        check=True, capture_output=True, env=env)
 
-    def cross_model():
-        out = subprocess.run([TRIAGE, "--json"], cwd=repo, capture_output=True, text=True, env=env)
+    def cross_model(harness=None):
+        run_env = env
+        if harness is not None:  # "" leaves triage nothing to tell the harness by; a dict sets the variables it names
+            run_env = {k: v for k, v in env.items() if k not in ("AGENTS_HARNESS", "CODEX_THREAD_ID", "CLAUDECODE")}
+            run_env.update(harness if isinstance(harness, dict) else {"AGENTS_HARNESS": harness} if harness else {})
+        out = subprocess.run([TRIAGE, "--json"], cwd=repo, capture_output=True, text=True, env=run_env)
         return json.loads(out.stdout)["cross_model"] if out.returncode == 0 else out.stderr.strip()[-200:]
     usual = cross_model()
     for args, expected, case in ((("off", "second-model", "repo"), "none (second-model switched off)", "off for the repo"),
@@ -300,6 +304,47 @@ with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
     ok = "; cross-model: none (second-model switched off))" in text.splitlines()[0]
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} the text output names it too: {text.splitlines()[0]}")
+    # A reviewer's own switch: Claude reviews a Codex session, Codex a Claude Code one.
+    switch("on", "second-model", "branch")
+    switch("off", "claude-review", "global")
+    for harness, expected in (("codex", "none (claude-review switched off)"), ("claude-code", usual),
+                              ("", f"{usual} (unless the reviewer is off: claude-review)")):
+        got = cross_model(harness)
+        ok = got == expected
+        fail |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} cross-model, claude-review off, harness {harness or 'unknown'}: {got}")
+    for variables, expected, case in (({"CODEX_THREAD_ID": "t", "CLAUDECODE": "1"}, "none (claude-review switched off)",
+                                       "a Codex run started from Claude Code"),
+                                      ({"CLAUDECODE": "1"}, usual, "Claude Code by CLAUDECODE"),
+                                      ({"CODEX_THREAD_ID": "t"}, "none (claude-review switched off)", "Codex by CODEX_THREAD_ID"),
+                                      ({"AGENTS_HARNESS": "claude-code", "CODEX_THREAD_ID": "t"}, usual,
+                                       "AGENTS_HARNESS over CODEX_THREAD_ID"),
+                                      ({"AGENTS_HARNESS": "cursor"}, f"{usual} (unless the reviewer is off: claude-review)",
+                                       "a harness triage doesn't know")):
+        got = cross_model(variables)
+        ok = got == expected
+        fail |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} cross-model, claude-review off, {case}: {got}")
+    switch("off", "codex-review", "global")
+    got = cross_model("")
+    ok = got == "none (claude-review, codex-review switched off)"
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} both reviewers off, harness unknown: {got}")
+    switch("on", "codex-review", "global")
+    switch("off", "second-model", "branch")
+    got = cross_model("codex")
+    ok = got == "none (second-model switched off)"
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} second-model off names itself over the reviewer's own off: {got}")
+    switch("on", "claude-review", "global")
+    switch("on", "second-model", "branch")
+    switch("off", "codex-review", "repo")
+    for harness, expected in (("claude-code", "none (codex-review switched off)"), ("codex", usual)):
+        got = cross_model(harness)
+        ok = got == expected
+        fail |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} cross-model, codex-review off, harness {harness}: {got}")
+    switch("on", "codex-review", "repo")
     with open(os.path.join(home, ".agents", "approvals", "phases", "global.json"), "w") as f:
         f.write("not json")
     got = cross_model()

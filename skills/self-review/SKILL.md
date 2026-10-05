@@ -8,7 +8,7 @@ effort: high
 
 Review your own change the way a skeptical senior reviewer would, before a human spends time on it. The goal is to find real defects; step 3 separates them from false alarms.
 
-When `~/.agents/bin/phase switches` lists `self-review`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name. With `second-model` listed, run no cross-model reviewer, whatever the tier (triage then says `cross-model: none (second-model switched off)`): the same-model lenses only, `cross-model: switched off` in the report's first line and `Not run: cross-model, switched off by the user` in the report.
+When `~/.agents/bin/phase switches` lists `self-review`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name. With `second-model` listed, or the phase of the reviewer you'd call (`codex-review` when you run on a Claude model, `claude-review` on an OpenAI model), run no cross-model reviewer, whatever the tier (triage then says `cross-model: none (<that phase> switched off)`): the same-model lenses only, `cross-model: switched off` in the report's first line and `Not run: cross-model, <that phase> switched off by the user` in the report. When triage can't tell which harness runs it, it adds `(unless the reviewer is off: <phases>)`: check the phase of the reviewer you'd call yourself.
 
 Two things make self-review work:
 
@@ -43,7 +43,7 @@ The Correctness lens always runs, at every risk level, and its tables go into th
 
 ### Cross-model reviewer
 
-Skipped when `second-model` is switched off (see the top). Otherwise, use the other model family from the model you're running on.
+Skipped when `second-model`, or the reviewer's own phase, is switched off (see the top). Otherwise, use the other model family from the model you're running on.
 
 - **Running on a Claude model →** Codex. Pass the whole change in the prompt; Codex's own command runner can fail in non-interactive runs, and a reviewer that can't read the code returns nothing. A pass takes about ten minutes, so start it as a background command (in Claude Code, `run_in_background`) as soon as the diff is ready, and run the same-model lenses meanwhile; for behavior changes, start validate's local checks too. When it finishes, read only its `## Found` section (its tables and findings); the rest is its working, and every line read stays in context. No section means the pass failed: read the error file and report it as a failed reviewer, not as no findings:
   ```bash

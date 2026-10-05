@@ -84,7 +84,7 @@ The PR description reuses them, and the self-review asks for them: its Maintaina
 
 ## 4. Get a second reading
 
-Skipped when `~/.agents/bin/phase switches` lists `second-model`: when you show the spec, say `Second reading: skipped, second-model switched off by the user`.
+Skipped when `~/.agents/bin/phase switches` lists `second-model`, or the phase of the reviewer you'd call: `codex-review` when you run on a Claude model, `claude-review` on an OpenAI model. When you show the spec, say `Second reading: skipped, <that phase> switched off by the user`.
 
 The model that wrote the spec shares its blind spots, and a misread requirement is built well and then passes a review judged against the same spec. Have the other model family read it against the request. Pipe in the request as you gathered it: the issue, its comments and the linked PRs and discussion threads that shaped it, not the issue alone.
 

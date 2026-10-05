@@ -370,10 +370,23 @@ def cross_model(tier):
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
     import phase_switches
     off, unreadable = phase_switches.phases_off_or_error(os.getcwd())
+    # Codex before Claude Code: a Codex run started from Claude Code inherits CLAUDECODE.
+    harness = os.environ.get("AGENTS_HARNESS") or ("codex" if os.environ.get("CODEX_THREAD_ID") else
+                                                   "claude-code" if os.environ.get("CLAUDECODE") else None)
+    reviewer = {"codex": "claude-review", "claude-code": "codex-review"}.get(harness)
+    reviewers_off = [phase for phase in ("claude-review", "codex-review") if phase in off]
     if "second-model" in off:
         return "none (second-model switched off)"
+    if len(reviewers_off) == 2:
+        return f"none ({', '.join(reviewers_off)} switched off)"
+    if reviewer in off:
+        return f"none ({reviewer} switched off)"
     wanted = "per lens" if tier == "high" else ("correctness" if tier == "standard" else "none")
-    return f"{wanted} ({' '.join(unreadable.split())})" if unreadable else wanted  # git's stderr may hold newlines
+    if unreadable:
+        return f"{wanted} ({' '.join(unreadable.split())})"  # git's stderr may hold newlines
+    if not reviewer and reviewers_off and wanted != "none":
+        return f"{wanted} (unless the reviewer is off: {', '.join(reviewers_off)})"
+    return wanted
 
 
 def lens_briefs():
