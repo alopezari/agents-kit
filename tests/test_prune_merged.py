@@ -10,6 +10,8 @@ import tempfile
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 PRUNE = os.path.join(KIT, "bin", "prune-merged")
 RESULTS = []
+# prune-merged deletes phase switches in HOME's store: never the user's own, whatever the test sets.
+os.environ["HOME"] = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-home-"))
 
 
 def sh(cwd, *cmd):
@@ -167,7 +169,9 @@ def keeps_the_switches_when_it_cannot_name_the_repo(base):
     sh(main, "git", "worktree", "remove", os.path.join(base, "shop-done"))
     # git answers prune-merged but not phase_switches.checkout: its failure is the one under test
     run = ("import importlib.machinery, sys; sys.argv = [sys.argv[1]]; "
-           "loader = importlib.machinery.SourceFileLoader('prune', sys.argv[0]); prune = loader.load_module(); "
+           "import importlib.util; loader = importlib.machinery.SourceFileLoader('prune', sys.argv[0]); "
+           "prune = importlib.util.module_from_spec(importlib.util.spec_from_loader('prune', loader)); "
+           "loader.exec_module(prune); "
            "prune.phase_switches.checkout = lambda cwd: (_ for _ in ()).throw(OSError('git rev-parse failed')); "
            "sys.exit(prune.main())")
     out = subprocess.run(["python3", "-B", "-c", run, PRUNE], cwd=main, capture_output=True, text=True)
@@ -211,4 +215,5 @@ for name, error in RESULTS:
     print(f"{'FAIL' if error else 'ok  '} {name}")
     if error:
         print(f"     {error}")
+shutil.rmtree(os.environ["HOME"], ignore_errors=True)
 raise SystemExit(1 if any(error for _, error in RESULTS) else 0)
