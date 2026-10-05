@@ -46,9 +46,9 @@ CI_WAIT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__
 NO_CHECKS_GRACE_SECS = 300
 MAX_PROBLEMS = 20
 # Every turn re-reads the whole context; past this, a new session that starts from `reports brief` costs less.
-CONTEXT_NUDGE_TOKENS = 250_000
-# A session that moves on to another change carries the earlier one's history into every turn of the new one. Lower
-# than the threshold above: the new change has all its turns ahead of it.
+CONTEXT_NUDGE_TOKENS = 150_000
+# A session that moves on to another change carries the earlier one's history into every turn of the new one. Not
+# above the threshold above: the new change has all its turns ahead of it.
 NEW_CHANGE_NUDGE_TOKENS = 150_000
 DEFAULT_BRANCHES = ("main", "master", "trunk", "develop")
 TRANSCRIPT_TAIL_BYTES = 2_000_000

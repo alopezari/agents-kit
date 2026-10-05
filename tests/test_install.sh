@@ -76,6 +76,14 @@ else echo "FAIL personal-repos.txt: without: $(echo "$without" | grep personal) 
 warnings=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1 | grep "  warn " | grep -v "codex hook not trusted")
 if [ -z "$warnings" ]; then echo "ok   --doctor is clean after installing"
 else echo "FAIL --doctor after installing:"; echo "$warnings"; fail=1; fi
+# A key the baseline gained after an install: --check exits 1, which set -e once turned into a silent stop.
+cp "$home/.claude/settings.json" "$home/settings.saved"
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d.pop("cleanupPeriodDays"); json.dump(d,open(p,"w"))' "$home/.claude/settings.json"
+missing=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
+if grep -q "  warn  settings.json missing cleanupPeriodDays" <<<"$missing" && grep -q "status line" <<<"$missing"; then
+  echo "ok   --doctor reports a missing baseline key and carries on"
+else echo "FAIL --doctor on a missing baseline key: $(tail -3 <<<"$missing")"; fail=1; fi
+mv "$home/settings.saved" "$home/.claude/settings.json"
 if [ "$(echo "$out" | grep -c "  fix   docker installed")" = 1 ] && ! echo "$out" | grep -q "info  docker"; then
   echo "ok   a program in two lists is checked once, at the stricter tier"
 else echo "FAIL docker in core and profile: $(echo "$out" | grep docker)"; fail=1; fi
