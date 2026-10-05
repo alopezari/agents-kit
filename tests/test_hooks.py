@@ -140,11 +140,15 @@ def the_agent_stays_out_of_the_approvals(base):
                      ("mv x ./approvals/turn/s1", kit), ("tee approvals/linear < /dev/null", kit),
                      ("cd repos && touch ../approvals/linear", kit), ("mkdir -p approvals/turn/s1", kit),
                      ("rm -f approvals", kit), ("touch linear", os.path.join(kit, "approvals")),
-                     ("git commit -m x && touch ~/.agents/approvals/linear", "/tmp")]:
+                     ("git commit -m x && touch ~/.agents/approvals/linear", "/tmp"),
+                     ("python3 -c \"open('/Users/me/.agents/approvals/linear', 'w')\"", "/tmp"),
+                     ("bash -c 'cd ~/.agents && touch approvals/linear'", "/tmp"),
+                     ("python3 <<'EOF'\nopen('/Users/me/.agents/approvals/linear', 'w')\nEOF", "/tmp")]:
         assert guard(cmd, cwd) == "deny", f"should deny from {cwd}: {cmd}"
     for cmd in ["grep -rn approvals hooks/", "git commit -m 'Keep ~/.agents/approvals out of reach'",
                 "git commit -m \"$(cat <<'EOF'\nGuard ~/.agents/approvals\nEOF\n)\"", "echo 'see ~/.agents/approvals'",
-                "ls hooks", "rg -n 'approvals/turn' hooks"]:
+                "ls hooks", "rg -n 'approvals/turn' hooks",
+                "skills/self-review/bundle.sh main Correctness 'keeps the agent out of ~/.agents/approvals'"]:
         assert guard(cmd, kit) == "allow", f"should allow: {cmd}"
 
 

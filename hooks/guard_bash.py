@@ -167,7 +167,7 @@ def touches_approvals(command, cwd):
     places = {cwd} | {cd_into(cwd, target) for cd, target in zip(words, words[1:])
                       if cd in ("cd", "pushd") and "$" not in target and "`" not in target}
     program, redirected = None, False
-    for word in words:
+    for i, word in enumerate(words):
         if set(word) <= SEPARATORS:
             program = None
         elif REDIRECT.fullmatch(word):
@@ -175,7 +175,9 @@ def touches_approvals(command, cwd):
         else:
             if program is None and not redirected and not re.fullmatch(r"\w+=.*", word):
                 program = os.path.basename(word)
-            if program not in READERS or redirected:
+            if i and re.fullmatch(r"-\w*[ce]|eval", words[i - 1]) and word != command and touches_approvals(word, cwd):
+                return APPROVALS_WHY  # code an interpreter runs: bash -c, python3 -c, node -e, eval
+            if (program not in READERS or redirected) and not re.search(r"\s", word):  # a sentence is no path
                 if re.search(r"\.agents/approvals", word):
                     return APPROVALS_WHY
                 target = os.path.expanduser(word.split("=", 1)[-1] if word.startswith("-") else word)
