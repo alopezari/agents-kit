@@ -1,0 +1,2 @@
+- Claude Code compacts at a 200k-token window (`autoCompactWindow=200000`) instead of 40% of the model's window: sessions on the 1M model grew to ~400k, and every call re-read all of it. install.sh never changes a key you set, so an existing install keeps `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`; remove it from `~/.claude/settings.json` so the window alone sets when a session compacts.
+- AGENTS.md asks for fewer, fuller tool calls, the cheapest subagent model that does the job well, and browser screenshots kept in a subagent.

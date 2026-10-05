@@ -42,7 +42,7 @@ It also adds the kit's baseline settings where a key is missing, never overwriti
 
 | Harness | File | Baseline |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | `effortLevel="medium"`, `maxEffortLevel="xhigh"`, `fastMode=false`, `fastModePerSessionOptIn=true`, `cleanupPeriodDays=90`, `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="40"` |
+| Claude Code | `~/.claude/settings.json` | `effortLevel="medium"`, `maxEffortLevel="xhigh"`, `fastMode=false`, `fastModePerSessionOptIn=true`, `cleanupPeriodDays=90`, `autoCompactWindow=200000` |
 | Codex | `~/.codex/config.toml` | `model_reasoning_effort="high"`, `service_tier="default"`, `features.hooks=true`, `features.fast_mode=false`, `agents.max_concurrent_threads_per_session=3` |
 
 ## The life of a task
