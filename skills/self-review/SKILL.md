@@ -80,7 +80,17 @@ Findings reported by two independent reviewers, or by both model families, deser
 
 ## 4. Re-check and report
 
-After fixes, re-run the Correctness lens on the whole change again, with the same base, and name the fixes in the goal. A fix can break what the first pass cleared, and a reviewer shown only the fix can't see that. For a very large change, split it into batches that together cover all of it, as in step 2. The stop hook re-runs `verify` when you finish; run it by hand (`python3 ~/.agents/hooks/stop_checks.py verify`) only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
+After fixes, run one re-check, then stop. Every cross-model pass finds something narrower than the last, so rounds never come back clean; the cap is a fixed number, not a clean pass:
+
+1. **Same model, whole change.** Re-run the Correctness lens yourself on the whole change, with the same base, naming the fixes in the goal. A fix can break what the first pass cleared, and this cheap pass is what sees it. For a very large change, split it into batches that together cover all of it, as in step 2.
+2. **Cross-model, the fixes only.** When a cross-model pass ran in step 2, send one Correctness re-check to the other model family, scoped to the fixes and the code they touch: never the whole change again, even on the High tier. Commit the change before the first cross-model pass, so its commit marks what that pass reviewed; `bundle.sh` adds every untracked file whatever the base, so new files left uncommitted would come back in full. Then run step 2's command with that commit as the base, naming in the goal the findings the fixes address; its merge-base with HEAD is that commit, so the bundle holds the fixes with their surrounding lines:
+   ```bash
+   ~/.agents/skills/self-review/bundle.sh <commit the first pass reviewed> Correctness "<goal; fixes for: …>"
+   ```
+   Running on an OpenAI model, give Claude `git diff <that commit>` instead of the merge-base.
+3. **No further round.** Verify the re-check's findings as in step 3. Fix only those confirmed, high severity and cheap, each with a test, and don't send those fixes back to a reviewer. Everything else goes under Open in the report for the human to decide at PR review. A finding that would need another round to settle is a sign the change needs a different design, not another pass: say so under Open.
+
+The stop hook re-runs `verify` when you finish; run it by hand (`python3 ~/.agents/hooks/stop_checks.py verify`) only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
 
 ```bash
 python3 ~/.agents/hooks/review_stamp.py write
@@ -99,6 +109,6 @@ Self-review (risk: standard; lenses: correctness, tests, maintainability, securi
 Spec table, paths table and derived-data table (from the Correctness lens)
 Fixed:     <finding> — <file:line> — evidence: <failing test or output before the fix> — <test that now covers it>
 Rejected:  <finding> — evidence: <file:line where it's handled, or the command that disproves it>
-Open:      <finding> — <what's uncertain> — <evidence that would settle it>
+Open:      <finding> — <uncertain | confirmed, not fixed after the re-check: why | needs another round: the design question> — <evidence that would settle it, or the decision for the human>
 Not run:   <lens or reviewer skipped, and why>
 ```
