@@ -5,6 +5,7 @@ spec → build → self-review → validate → staging → create-pr → PR ope
   phase             print the cached phase at once; refresh it in the background when older than 15 s
   phase --refresh   work it out now from the spec, stamps, reports and PR state, cache it and print it
   phase switches    the phases the user switched off for this checkout, one per line with why (exit 1 unreadable)
+  phase review-rounds  how many re-checks the self-review runs here, and where that's set: `2 (repo)`, `1 (default)`
 
 A phase the user switched off (`phase off <phase>` in a message, or `/flow off <phase>` in Claude Code) leaves the flow, and the label ends `· off: <phases>`.
 
@@ -164,8 +165,11 @@ def refresh_in_background(lock):
 
 
 def main():
-    if sys.argv[1:2] == ["switches"]:
+    if sys.argv[1:2] in (["switches"], ["review-rounds"]):
         try:
+            if sys.argv[1] == "review-rounds":
+                print("%d (%s)" % phase_switches.review_rounds(os.getcwd()))
+                return 0
             off = phase_switches.phases_off(os.getcwd())
         except (phase_switches.StoreError, OSError, subprocess.SubprocessError, ValueError) as error:
             print(error if isinstance(error, phase_switches.StoreError) else f"Couldn't read the phase switches: {error}",

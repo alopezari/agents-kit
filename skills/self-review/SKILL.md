@@ -43,7 +43,7 @@ The Correctness lens always runs, at every risk level, and its tables go into th
 
 ### Cross-model reviewer
 
-Skipped when `second-model`, or the reviewer's own phase, is switched off (see the top). Otherwise, use the other model family from the model you're running on.
+Skipped when `second-model`, or the reviewer's own phase, is switched off (see the top). Otherwise, use the other model family from the model you're running on. Commit the change first: step 4's re-check uses that commit as its base.
 
 - **Running on a Claude model →** Codex. Pass the whole change in the prompt; Codex's own command runner can fail in non-interactive runs, and a reviewer that can't read the code returns nothing. A pass takes about ten minutes, so start it as a background command (in Claude Code, `run_in_background`) as soon as the diff is ready, and run the same-model lenses meanwhile; for behavior changes, start validate's local checks too. When it finishes, read only its `## Found` section (its tables and findings); the rest is its working, and every line read stays in context. No section means the pass failed: read the error file and report it as a failed reviewer, not as no findings:
   ```bash
@@ -80,7 +80,17 @@ Findings reported by two independent reviewers, or by both model families, deser
 
 ## 4. Re-check and report
 
-After fixes, re-run the Correctness lens on the whole change again, with the same base, and name the fixes in the goal. A fix can break what the first pass cleared, and a reviewer shown only the fix can't see that. For a very large change, split it into batches that together cover all of it, as in step 2. The stop hook re-runs `verify` when you finish; run it by hand (`python3 ~/.agents/hooks/stop_checks.py verify`) only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
+After fixes, run the user's number of re-check rounds, then stop. Every cross-model pass finds something narrower than the last, so rounds never come back clean; the cap is a fixed number, not a clean pass. Read it with `~/.agents/bin/phase review-rounds`: it prints the number and where it's set, `1 (default)` when the user set nothing, and only the user sets it. When it exits 1, the store is unreadable: say so in the report and run 1 round. At `0`, skip items 1 and 2: the review ends with the first pass and its fixes. Each round runs items 1 and 2, then verifies and fixes as in item 3; the fixes of one round are what the next round's cross-model re-check reviews, and the last round's go to no reviewer:
+
+1. **Same model, whole change.** Re-run the Correctness lens yourself on the whole change, with the same base, naming the fixes in the goal. A fix can break what the first pass cleared, and this cheap pass is what sees it. For a very large change, split it into batches that together cover all of it, as in step 2.
+2. **Cross-model, the fixes only.** When a cross-model pass ran in step 2, send one Correctness re-check to the other model family, scoped to the fixes and the code they touch: never the whole change again, even on the High tier. Commit the change before the first cross-model pass, so its commit marks what that pass reviewed; `bundle.sh` adds every untracked file whatever the base, so new files left uncommitted would come back in full. Then run step 2's command with that commit as the base, naming in the goal the findings the fixes address; its merge-base with HEAD is that commit, so the bundle holds the fixes with their surrounding lines:
+   ```bash
+   ~/.agents/skills/self-review/bundle.sh <commit the previous pass reviewed> Correctness "<goal; fixes for: …>"
+   ```
+   Running on an OpenAI model, give Claude `git diff <that commit>` instead of the merge-base. In a later round, commit before it too, and use the commit the previous round's cross-model re-check reviewed.
+3. **No round past the cap.** Verify the re-check's findings as in step 3. Fix only those confirmed, high severity and cheap, each with a test; after the last round, don't send those fixes back to a reviewer. Everything else goes under Open in the report for the human to decide at PR review. A finding that would need another round to settle is a sign the change needs a different design, not another pass: say so under Open.
+
+The stop hook re-runs `verify` when you finish; run it by hand (`python3 ~/.agents/hooks/stop_checks.py verify`) only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
 
 ```bash
 python3 ~/.agents/hooks/review_stamp.py write
@@ -95,10 +105,10 @@ Log every lens that ran, confirmed meaning a finding that survived step 3. The m
 Save the report to `$(~/.agents/bin/reports path review)`. Put it in the final message too (see AGENTS.md → Communication). Use this shape; it can go straight into the PR's validation notes:
 
 ```
-Self-review (risk: standard; lenses: correctness, tests, maintainability, security; cross-model: codex)
+Self-review (risk: standard; lenses: correctness, tests, maintainability, security; cross-model: codex; re-check rounds: 1 (default))
 Spec table, paths table and derived-data table (from the Correctness lens)
 Fixed:     <finding> — <file:line> — evidence: <failing test or output before the fix> — <test that now covers it>
 Rejected:  <finding> — evidence: <file:line where it's handled, or the command that disproves it>
-Open:      <finding> — <what's uncertain> — <evidence that would settle it>
+Open:      <finding> — <uncertain | confirmed, not fixed after the last re-check: why | needs another round: the design question> — <evidence that would settle it, or the decision for the human>
 Not run:   <lens or reviewer skipped, and why>
 ```

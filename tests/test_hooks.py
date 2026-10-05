@@ -2095,6 +2095,56 @@ def a_phase_line_switches_phases_by_scope(base):
     assert done.returncode == 1 and "Couldn't read" in done.stderr, done.stdout + done.stderr
 
 
+def review_rounds(cwd):
+    """`bin/phase review-rounds` as (rounds, where they're set)."""
+    done = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "review-rounds"], cwd=cwd, capture_output=True,
+                          text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+    rounds, where = re.fullmatch(r"(\d) \((\w+)\)\n", done.stdout).groups()
+    return int(rounds), where
+
+
+def a_review_rounds_line_sets_the_re_checks_by_scope(base):
+    a, b = new_repo(base, "zz-rounds-a"), new_repo(base, "zz-rounds-b")
+    for repo in (a, b):
+        git(repo, "switch", "-q", "-c", "feature")
+    assert review_rounds(a) == (1, "default"), "one re-check when nobody set it"
+    said = phase_line("review-rounds 3 global\nCarry on.", a)
+    assert said.startswith("The user's `review-rounds` line: Switched review-rounds to 3 for every repo. "
+                           "Review re-check rounds here now: 3 (global)."), said
+    assert review_rounds(a) == review_rounds(b) == (3, "global")
+    phase_line("Review-Rounds 0 repo", a)
+    assert review_rounds(a) == (0, "repo") and review_rounds(b) == (3, "global"), "0 is a value, not unset"
+    said = phase_line("review-rounds 9\r\nThanks", a)
+    assert "for branch feature of zz-rounds-a" in said, f"a CRLF line still sets it, on the branch by default: {said}"
+    assert review_rounds(a) == (9, "branch")
+    git(a, "switch", "-q", "-c", "other")
+    assert review_rounds(a) == (0, "repo"), "a branch setting stays on its branch"
+    said = phase_line("review-rounds 5 global", a)
+    assert "A narrower setting overrides it here. Review re-check rounds here now: 0 (repo)." in said, said
+    assert phases_off(a) == {}, "a rounds setting switches no phase off"
+
+    before = stored_switches()
+    for text in ("please review-rounds 2", "review-rounds-2", "review rounds 2", "Notes:\nreview-rounds 2"):
+        assert phase_line(text, b) is None, f"not a review-rounds line: {text!r}"
+    for text, why in (("review-rounds 10", "`10` isn't a number of re-check rounds from 0 to 9"),
+                      ("review-rounds -1", "`-1` isn't a number"), ("review-rounds ²", "isn't a number"),
+                      ("review-rounds two", "`two` isn't a number"), ("review-rounds 2 everywhere", "Unknown scope"),
+                      ("review-rounds", "Not `review-rounds <0-9> [branch|repo|global]`"),
+                      ("review-rounds 2 repo now", "Not `review-rounds <0-9>")):
+        said = phase_line(text, b)
+        assert said and why in said and "Tell the user" in said, f"{text!r}: {said}"
+    assert stored_switches() == before, "none of those wrote a setting"
+
+    store = os.path.join(PHASE_STORE, "global.json")
+    for bad in ('{"review-rounds": "on"}', '{"review-rounds": true}', '{"review-rounds": 10}', '{"spec": 2}'):
+        with open(store, "w") as fh:
+            fh.write(bad)
+        done = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "review-rounds"], cwd=b, capture_output=True,
+                              text=True)
+        assert done.returncode == 1 and "Couldn't read the phase switches" in done.stderr, (bad, done.stdout, done.stderr)
+
+
 def only_the_user_runs_the_switch_cli(base):
     """/flow off|on runs `phase_switches.py set`, the same code as the message line; the agent may not."""
     repo = new_repo(base, "zz-phase-cli")
@@ -2108,7 +2158,8 @@ def only_the_user_runs_the_switch_cli(base):
                 "cd ~/.agents/hooks && python3 -m phase_switches set off spec", "python3 -m hooks.phase_switches set off ci",
                 "eval 'python3 hooks/phase_switches.py set off x'", "bash -lc 'python3 hooks/phase_switches.py set off x'",
                 'echo "$(python3 hooks/phase_switches.py set off x)"', "bash -e -c 'python3 hooks/phase_switches.py set off x'",
-                "bash <<'EOF'\npython3 hooks/phase_switches.py set off x\nEOF", "cat <<EOF | sh\npython3 hooks/phase_switches.py set off x\nEOF"]:
+                "bash <<'EOF'\npython3 hooks/phase_switches.py set off x\nEOF", "cat <<EOF | sh\npython3 hooks/phase_switches.py set off x\nEOF",
+                "python3 ~/.agents/hooks/phase_switches.py set review-rounds 2 --global"]:
         assert guard(cmd, repo) == "deny", f"should deny: {cmd}"
     for cmd in ["python3 -m py_compile hooks/phase_switches.py", "grep -n 'set' hooks/phase_switches.py",
                 "~/.agents/bin/phase switches", "git log --grep 'phase_switches set'", "echo phase_switches.py; set -e",
@@ -2144,9 +2195,16 @@ def only_the_user_runs_the_switch_cli(base):
     finally:
         cli("on", "spec", "global", cwd=outside)
     assert phases_off(repo) == {}
+    done = cli("review-rounds", "2", "--repo")
+    assert done.returncode == 0 and review_rounds(repo) == (2, "repo"), done.stdout
+    assert done.stdout.strip() == ("Switched review-rounds to 2 for every branch of zz-phase-cli. "
+                                   "Review re-check rounds here now: 2 (repo)."), done.stdout
+    done = cli("review-rounds", "12")
+    assert done.returncode == 3 and "`12` isn't a number" in done.stdout and review_rounds(repo) == (2, "repo"), done.stdout
+    assert "`/flow review-rounds <0-9> [--repo|--global]`" in cli("review-rounds").stdout
     for args, why in ((["off"], "Not `/flow off <phase> [--repo|--global]`"), (["off", "create-pr"], "Unknown phase"),
                       (["off", "spec", "everywhere"], "Unknown scope"), (["off", "spec", "repo", "now"], "Not `/flow off"),
-                      (["sideways", "spec"], "off or on")):
+                      (["sideways", "spec"], "must be off, on or review-rounds")):
         done = cli(*args)
         # 3, not 1: a crash exits 1, and the mod must not read it as a refusal.
         assert done.returncode == 3 and why in done.stdout and phases_off(repo) == {}, (args, done.stdout, done.stderr)
@@ -2253,7 +2311,7 @@ def stop_skips_the_phases_switched_off(base):
     assert "conflict marker" in reason, f"the other checks run whatever is off: {reason}"
 
 
-TESTS = [a_phase_line_switches_phases_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
+TESTS = [a_phase_line_switches_phases_by_scope, a_review_rounds_line_sets_the_re_checks_by_scope,only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
          guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn,

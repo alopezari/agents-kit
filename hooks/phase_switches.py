@@ -8,6 +8,9 @@ guard_files.py keep the agent out of: only the user switches a phase.
 
 The narrowest switch set wins (branch over repo over global), and validate off takes staging off: a staging guide
 comes out of validation. A skip writes no stamp, so a phase switched back on needs a real one again.
+
+The same files hold how many re-check rounds the self-review runs after its first pass, set the same ways with
+`review-rounds <0-9> [branch|repo|global]` or `/flow review-rounds …`, and read with `bin/phase review-rounds`.
 """
 import json
 import os
@@ -28,6 +31,9 @@ PHASES = ("spec", "self-review", "validate", "staging", "verify", "ci", "follow-
 SCOPES = ("branch", "repo", "global")
 STORE = os.path.join(design_files.APPROVALS_DIR, "phases")
 PHASE_LINE = re.compile(r"\A[ \t]*phase[ \t]+(off|on)(?=\s|\Z)(.*)", re.I)
+ROUNDS = "review-rounds"
+ROUNDS_LINE = re.compile(r"\A[ \t]*review-rounds(?=\s|\Z)(.*)", re.I)
+DEFAULT_ROUNDS = 1
 
 
 class StoreError(Exception):
@@ -76,9 +82,16 @@ def read(path):
         return {}
     except (OSError, ValueError, RecursionError) as error:
         raise StoreError(f"Couldn't read the phase switches in {path}: {error}") from error
-    if not isinstance(switches, dict) or any(v not in ("on", "off") for v in switches.values()):
-        raise StoreError(f"Couldn't read the phase switches in {path}: expected {{phase: \"on\" | \"off\"}}")
+    if not isinstance(switches, dict) or any(not valid_switch(k, v) for k, v in switches.items()):
+        raise StoreError(f"Couldn't read the phase switches in {path}: expected {{phase: \"on\" | \"off\"}}, and "
+                         f"{ROUNDS} a number from 0 to 9")
     return switches
+
+
+def valid_switch(key, value):
+    if key == ROUNDS:
+        return type(value) is int and 0 <= value <= 9  # bool is an int subclass: true isn't a count
+    return value in ("on", "off")
 
 
 def phases_off(cwd, timeout=5):
@@ -97,6 +110,21 @@ def phases_off_in(repo, branch):
     return off
 
 
+def review_rounds(cwd, timeout=5):
+    """(re-check rounds after the self-review's first pass, the scope that set them or "default"). Raises StoreError
+    when a switch file can't be read."""
+    return review_rounds_in(*checkout(cwd, timeout)[:2])
+
+
+def review_rounds_in(repo, branch):
+    rounds = DEFAULT_ROUNDS, "default"
+    for scope, path in store_files(repo, branch):
+        switches = read(path)
+        if ROUNDS in switches:
+            rounds = switches[ROUNDS], scope
+    return rounds
+
+
 def phases_off_or_error(cwd, timeout=5):
     """(phases off, None), or ({}, a sentence saying why) when the switches can't be read: then every phase is on."""
     try:
@@ -111,7 +139,14 @@ def describe(off):
 
 def apply_phase_line(prompt, cwd):
     """Record the switch the message's first line asks for. Returns what to tell the agent, or None when the
-    message doesn't open with a phase line."""
+    message doesn't open with a phase or review-rounds line."""
+    rounds = ROUNDS_LINE.match(prompt)
+    if rounds:
+        switched, said, hint = switch(ROUNDS, rounds.group(1).lower().split(), cwd,
+                                      f"`{ROUNDS} <0-9> [branch|repo|global]`")
+        then = ("Confirm it to the user in one line; the self-review runs that many re-checks." if switched else
+                f"Tell the user; {hint}")
+        return f"The user's `{ROUNDS}` line: {said} {then}"
     line = PHASE_LINE.match(prompt)
     if not line:
         return None
@@ -124,24 +159,32 @@ def apply_phase_line(prompt, cwd):
 
 def switch(action, words, cwd, form):
     """Record `<action> <words>` for the checkout in cwd, asked in `form`: (whether it was recorded, what happened,
-    and when it wasn't, what the user can do instead)."""
+    and when it wasn't, what the user can do instead). The action is off, on or review-rounds."""
     if not 1 <= len(words) <= 2:
-        return False, f"Not {form}: nothing was switched.", f"the phases are {', '.join(PHASES)}."
+        return False, f"Not {form}: nothing was switched.", \
+            f"the form is {form}, branch when left out." if action == ROUNDS else f"the phases are {', '.join(PHASES)}."
     phase, scope = words[0], words[1] if len(words) == 2 else "branch"
-    if phase not in PHASES:
+    if action == ROUNDS:
+        if not re.fullmatch(r"[0-9]", phase):  # not isdigit(), which takes "²"
+            return False, f"`{phase}` isn't a number of re-check rounds from 0 to 9: nothing was switched.", \
+                f"the form is {form}, branch when left out."
+        key, value, what = ROUNDS, int(phase), f"{ROUNDS} to {phase}"
+    elif phase not in PHASES:
         return False, f"Unknown phase `{phase}`: nothing was switched.", f"the phases are {', '.join(PHASES)}."
+    else:
+        key, value, what = phase, action, f"{phase} {action}"
     if scope not in SCOPES:
         return False, f"Unknown scope `{scope}`: nothing was switched.", f"the form is {form}, branch when left out."
     try:
         repo, branch, common = checkout(cwd)
     except (OSError, subprocess.SubprocessError, ValueError) as error:
-        return False, f"Couldn't switch {phase} {action}, git failed: {error}. Nothing was switched.", \
+        return False, f"Couldn't switch {what}, git failed: {error}. Nothing was switched.", \
             "try again once git works there."
     if scope != "global" and not repo:
-        return False, f"Can't switch {phase} {action} for the {scope}: {cwd} isn't in a git repository, so nothing was " \
+        return False, f"Can't switch {what} for the {scope}: {cwd} isn't in a git repository, so nothing was " \
             "switched.", "the global scope works anywhere."
     if scope == "branch" and not branch:
-        return False, f"Can't switch {phase} {action} for this branch: HEAD in {cwd} is on no branch, so nothing was " \
+        return False, f"Can't switch {what} for this branch: HEAD in {cwd} is on no branch, so nothing was " \
             "switched.", "the repo or global scope works there."
     path = dict(store_files(repo, branch))[scope]
     try:
@@ -150,13 +193,13 @@ def switch(action, words, cwd, form):
         with open(os.path.join(STORE, ".lock"), "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             switches = read(path)
-            switches[phase] = action
+            switches[key] = value
             fd, temporary = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
             with os.fdopen(fd, "w") as fh:
                 json.dump(switches, fh, indent=1, sort_keys=True)
             os.replace(temporary, path)
     except (OSError, StoreError) as error:
-        return False, f"Couldn't switch {phase} {action}: {error}. Nothing was switched.", \
+        return False, f"Couldn't switch {what}: {error}. Nothing was switched.", \
             "fix or delete the file the error names."
     if branch:  # bin/phase's cached label; other checkouts' age out within its 15 s
         try:
@@ -166,9 +209,13 @@ def switch(action, words, cwd, form):
     where = {"branch": f"branch {branch} of {repo}", "repo": f"every branch of {repo}", "global": "every repo"}[scope]
     try:
         off = phases_off_in(repo, branch)
+        rounds, set_in = review_rounds_in(repo, branch)
     except StoreError as error:
-        return True, (f"Switched {phase} {action} for {where}, but {str(error)[0].lower() + str(error)[1:]}, so every "
+        return True, (f"Switched {what} for {where}, but {str(error)[0].lower() + str(error)[1:]}, so every "
                       "phase counts as on here until that file is fixed or deleted."), None
+    if action == ROUNDS:
+        still = " A narrower setting overrides it here." if set_in != scope else ""
+        return True, f"Switched {what} for {where}.{still} Review re-check rounds here now: {rounds} ({set_in}).", None
     still = (" A narrower switch keeps it on here." if action == "off" and phase not in off else
              " A narrower switch keeps it off here." if action == "on" and phase in off else "")
     return True, f"Switched {phase} {action} for {where}.{still} Phases off here now: {describe(off)}.", None
@@ -204,18 +251,21 @@ def forget_branch(repo, branch, common):
 
 
 def main():
-    """`set <off|on> <phase> [branch|repo|global]`, a scope also as `--repo`: the /flow command's way in. The shell
-    guard keeps the agent from running it; the mod runs it only for a command the user typed."""
+    """`set <off|on> <phase> [branch|repo|global]` or `set review-rounds <0-9> [branch|repo|global]`, a scope also as
+    `--repo`: the /flow command's way in. The shell guard keeps the agent from running it; the mod runs it only for a
+    command the user typed."""
     if sys.argv[1:2] != ["set"] or len(sys.argv) < 3:
-        print("usage: phase_switches.py set <off|on> <phase> [branch|repo|global|--repo|--global]", file=sys.stderr)
+        print("usage: phase_switches.py set <off|on> <phase> | review-rounds <0-9> [branch|repo|global|--repo|--global]",
+              file=sys.stderr)
         return 2
     action = sys.argv[2].lower()
     words = [word[2:] if word[2:] in SCOPES and word.startswith("--") else word for word in map(str.lower, sys.argv[3:])]
-    if action not in ("off", "on"):
-        print(f"`{action}` must be off or on: nothing was switched.")
+    if action not in ("off", "on", ROUNDS):
+        print(f"`{action}` must be off, on or {ROUNDS}: nothing was switched.")
         return REFUSED
     cwd = os.getcwd()
-    switched, said, hint = switch(action, words, cwd, f"`/flow {action} <phase> [--repo|--global]`")
+    form = f"`/flow {ROUNDS} <0-9> [--repo|--global]`" if action == ROUNDS else f"`/flow {action} <phase> [--repo|--global]`"
+    switched, said, hint = switch(action, words, cwd, form)
     if switched:
         log("phase_switches", "phase-switch", {"cwd": cwd}, "/flow: " + said)
     print(said if switched else f"{said} {hint[0].upper() + hint[1:]}")
