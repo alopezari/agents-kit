@@ -1,0 +1,1 @@
+- The shell guard no longer blocks a command that only names `bin/approve grant`, `bin/staging mark --by user` or `~/.agents/approvals` in a search pattern, a commit or PR message, an echoed or printed note or a quoted heredoc written to a file, and now blocks writes into the approvals through a relative path (`cd ~/.agents && touch approvals/x`).
