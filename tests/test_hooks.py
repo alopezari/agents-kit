@@ -154,7 +154,12 @@ def the_agent_stays_out_of_the_approvals(base):
                      ("cd ~/.agents && python3 -c \"open('approvals/linear', 'w').close()\"", "/tmp"),
                      ("touch \"$HOME/.agents/approvals/notes for user\"", "/tmp"),
                      ("echo hi > \"$HOME/.agents/approvals/notes for user\"", "/tmp"),
-                     ("eval -- 'touch ~/.agents/approvals/x'", "/tmp")]:
+                     ("eval -- 'touch ~/.agents/approvals/x'", "/tmp"),
+                     ("cd ~/.agents/approvals && unlink linear", "/tmp"),
+                     ("cd ~/.agents/approvals && sed -i '' 's|a|b|' linear", "/tmp"),
+                     ("cd ~/.agents/approvals && find . -delete", "/tmp"),
+                     ("cd ~/.agents/approvals && python3 -c \"import os; os.remove('linear')\"", "/tmp"),
+                     ("git log -1\nbash -lc 'touch ~/.agents/approvals/x'", "/tmp")]:
         assert guard(cmd, cwd) == "deny", f"should deny from {cwd}: {cmd}"
     try:
         for cmd, cwd in [(c, kit) for c in [
@@ -164,7 +169,7 @@ def the_agent_stays_out_of_the_approvals(base):
                 "skills/self-review/bundle.sh main Correctness 'keeps the agent out of ~/.agents/approvals'",
                 "git log --grep approvals", "echo see approvals", "git commit -m approvals", "python3 -m pytest -k approvals",
                 "git grep -n approvals", "cd ~/.agents/approvals && ls", "cat < ~/.agents/approvals/linear",
-                "wc -l < ~/.agents/approvals/linear", "command cat ~/.agents/approvals/linear"]] + [("git status", os.path.join(kit, "approvals"))]:
+                "wc -l < ~/.agents/approvals/linear", "command cat ~/.agents/approvals/linear"]] + [("ls -la", os.path.join(kit, "approvals"))]:
             assert guard(cmd, cwd) == "allow", f"should allow from {cwd}: {cmd}"
     finally:  # the other tests share this HOME
         shutil.rmtree(os.path.join(kit, "approvals"), ignore_errors=True)
@@ -201,7 +206,10 @@ def only_the_user_grants_an_approval_in_a_dialog(base):
                 "echo \"bin/approve once s1 x\" | tee run.sh | sh", "bash -c -- 'bin/approve grant s1 x'",
                 "ksh -c 'bin/approve grant s1 x'", "python3 -c \"os.system('bin/approve grant s1 x')\"",
                 "watch -n1 'bin/approve grant s1 x'", "sh -c \"$(echo 'bin/approve grant s1 x')\"",
-                "source <(echo 'bin/approve grant s1 x')", "echo 'bin/staging mark S1 PASS --by user' | bash"]:
+                "source <(echo 'bin/approve grant s1 x')", "echo 'bin/staging mark S1 PASS --by user' | bash",
+                "git status\nbash -c 'bin/approve grant s1 x'", "ls\nsh -c \"bin/approve once s1 x\"",
+                "echo hi\neval 'bin/approve grant s1 x'", "grep foo bar\nbash -c 'bin/staging mark S1 PASS --by user'",
+                "echo done\nwatch -n1 'bin/approve grant s1 x'"]:
         assert guard(cmd) == "deny", f"a shell still runs it: {cmd}"
 
 

@@ -77,7 +77,7 @@ SWITCH_CLI = re.compile(r"(?<![\w-])phase_switches\b[\s\S]*\bset\b")
 HEREDOC_BODY = re.compile(r"\$\(cat[ \t]+<<-?[ \t]*(['\"])(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s)]|$)")
 SEPARATORS = set(";&|()")
 WRITERS = {"rm", "rmdir", "mv", "cp", "touch", "mkdir", "tee", "ln", "chmod", "chown", "rsync", "install", "dd",
-           "truncate"}
+           "truncate", "unlink", "shred"}
 APPROVALS_WHY = ("Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the "
                  "agent.")
 SWITCHES_PHASE = ("`phase_switches.py set`: a phase is switched by the user, with a `phase off|on` line in their message or "
@@ -113,7 +113,8 @@ def runs_call(command, is_program, takes):
     when a known program just reads or prints it: a reader's pattern, git's or gh's arguments (a message, a title), what
     echo or printf prints where no pipe or `$(…)` takes it; even there a `$(…)` or backticks the shell would run is read. A
     quoted heredoc written to a file, or a `$(cat <<'EOF' …)` body, is only text."""
-    words = shell_words(HEREDOC_BODY.sub("$(cat", without_prose(command)))
+    text = HEREDOC_BODY.sub("$(cat", without_prose(command)).replace(CONTINUATION, "")
+    words = shell_words(text.replace("\n", ";"))  # a new line starts a new command, whatever the last one was
     substitutes = bool(re.search(r"\$\(|`", shell_code(command)))  # none in single quotes: there they're text
     for i, word in enumerate(words):
         before = words[i - 1] if i else ""
@@ -170,6 +171,10 @@ def touches_approvals(command, cwd):
     except ValueError:
         words = text.split()
     approvals = {os.path.normpath(design_files.APPROVALS_DIR), os.path.realpath(design_files.APPROVALS_DIR)}
+
+    def inside(path):
+        path = os.path.normpath(path)
+        return any(path == a or path.startswith(a + os.sep) for a in approvals)
     places, program, redirected, read_from = {cwd}, None, False, False  # every directory a cd may have left it in
     for i, word in enumerate(words):
         if set(word) <= SEPARATORS:
@@ -196,12 +201,12 @@ def touches_approvals(command, cwd):
                 if re.search(r"\.agents/approvals", target):
                     return APPROVALS_WHY
                 target = os.path.expanduser(target)
-                if "$" in target or "`" in target or ("/" not in target and program not in WRITERS and not redirected):
+                # A bare name is a path to a program that writes files, or to any program once a cd is in there.
+                bare_is_path = program in WRITERS or redirected or any(map(inside, places))
+                if "$" in target or "`" in target or ("/" not in target and not bare_is_path):
                     continue
-                for place in places:
-                    path = os.path.normpath(os.path.join(place, target))
-                    if any(path == a or path.startswith(a + os.sep) for a in approvals):
-                        return APPROVALS_WHY
+                if any(inside(os.path.join(place, target)) for place in places):
+                    return APPROVALS_WHY
         redirected = False
     return None
 
