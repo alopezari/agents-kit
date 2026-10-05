@@ -7,7 +7,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 ## At a glance
 
 - **2 harnesses** share one `AGENTS.md`, 9 skills and 6 hook scripts.
-- **21 guard rules** block irreversible or outward-facing shell commands before they run.
+- **22 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
@@ -129,6 +129,7 @@ Every block, every approved or browser MCP call and every shell command a user's
 - `sudo`: runs with root privileges.
 - `make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production.
 - `chmod 777`: world-writable permissions.
+- Touching `~/.agents/approvals`, written out or relative to the working directory or a `cd` in the command: approvals for shared-system writes must come from the user. Naming it in a message, an echo or a search is text.
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
