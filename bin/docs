@@ -334,7 +334,7 @@ def render():
     w("- `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.")
     w("- `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS "
       "backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).")
-    w("- The last two lift for a phase the user switched off with a `phase off <phase>` line (self-review, validate, "
+    w("- The last two lift for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, validate, "
       "staging; `bin/phase switches`); no other rule here can be switched off.\n")
     w("It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your "
       "approval: naming the service in your message approves it until your next one, and otherwise you create a "

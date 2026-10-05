@@ -4,6 +4,8 @@ import { FEATURES } from './features.js'
 
 const PANE = 'flow'
 const PROCESS_TIMEOUT_MS = 30_000
+// phase_switches.py's exit for a switch it refused; 1 is Python's own for a crash.
+const SWITCH_REFUSED = 3
 // ci-wait --once makes one GitHub round trip per check source, each bounded at 30 s.
 const CI_TIMEOUT_MS = 90_000
 const STAMPS = [['verify', 'verify'], ['self-review', 'review'], ['validate', 'validate'], ['staging', 'staging']]
@@ -232,8 +234,7 @@ async function collect($) {
     else {
       flow = brief.stdout.split('\n').filter((line) => line && !/^\s/.test(line) && !line.startsWith('Read one in full'))
       if (flow[0] === 'phase: ') {
-        const why = at.inMain ? 'Detached HEAD, and the main checkout is on the default branch: no change to follow.' : 'On the default branch: no change to follow.'
-        return { none: [why, ...flow.filter((line) => line.startsWith('off: '))].join(' ') }
+        return { none: at.inMain ? 'Detached HEAD, and the main checkout is on the default branch: no change to follow.' : 'On the default branch: no change to follow.' }
       }
     }
     const [stamps, report, staging, ci, context, gatheredAt] = await Promise.all([
@@ -261,7 +262,7 @@ async function collect($) {
 
 async function collectOrSayWhy($) {
   try {
-    return await collect($)
+    return await withSwitches($, await collect($))
   } catch (error) {
     return { none: "Couldn't gather the flow: " + messageOf(error) }
   }
@@ -284,6 +285,15 @@ async function gather($) {
     gathering = false
   }
   $.ui.invalidate('ui.render')
+}
+
+// With no change to follow, the repo's and every repo's switches still apply.
+async function withSwitches($, facts) {
+  if (!facts.none) return facts
+  const listed = await run($, [(await kitDir($)) + '/bin/phase', 'switches'], await $.session.cwd())
+  if (listed.failure || listed.exitCode !== 0) return { none: facts.none + "\nPhases off: couldn't read: " + failureOf(listed) }
+  const off = listed.stdout.trim().split('\n').filter(Boolean).map((line) => line.replace(': off (', ' ('))
+  return off.length ? { none: facts.none + '\nPhases off: ' + off.join(', ') } : facts
 }
 
 function asText(facts) {
@@ -420,21 +430,27 @@ async function approveHelper($, kit, args, stdin = '') {
 // `/flow off|on <phase> [--repo|--global]`: phase_switches.py decides and records, in the session's own directory,
 // as for the message line `phase off …`, which the prompt hook reads from the same directory.
 async function switchPhase($, e) {
-  const [action, ...words] = e.args.trim().split(/\s+/)
-  words.unshift(action.toLowerCase())
+  const args = e.args.trim().split(/\s+/)
+  const action = args[0].toLowerCase()
   if (e.origin?.kind !== 'composer') {
-    return { text: `/flow ${words[0]} switches a phase only when you type it at the prompt here: nothing was switched. A message opening with \`phase ${e.args.trim()}\` does it from anywhere.` }
+    const line = ['phase', action, ...args.slice(1).map((word) => word.replace(/^--/, ''))].join(' ')
+    return { text: `/flow ${action} switches a phase only when typed at this terminal's prompt: nothing was switched. A message opening with \`${line}\` does it from anywhere.` }
   }
   const kit = await kitDir($)
-  const done = await run($, ['python3', kit + '/hooks/phase_switches.py', 'set', ...words], await $.session.cwd())
-  // A run that died or timed out may have written the switch before it did.
-  if (done.failure || ![0, 1].includes(done.exitCode)) {
-    return { text: `Couldn't tell whether ${words.slice(1).join(' ')} was switched ${words[0]}: ${failureOf(done)}. Run /flow to see what is off.` }
-  }
+  const done = await run($, ['python3', kit + '/hooks/phase_switches.py', 'set', action, ...args.slice(1)], await $.session.cwd())
+  // After a failure too: a run that died or timed out may have written the switch first.
+  refreshIfOpen($, 'a switch')
+  const said = done.stdout?.trim()
+  if (done.exitCode === 0) return { text: said, context: [`The user switched a phase with /flow: ${said} Skip the steps of the phases off.`] }
+  if (done.exitCode === SWITCH_REFUSED) return { text: said }
+  return { text: `Couldn't tell whether ${args[1] ?? 'the phase'} was switched ${action}: ${failureOf(done)}. Run /flow to see what is off.` }
+}
+
+function refreshIfOpen($, after) {
+  // Asked each time: a pane whose drawing threw is dropped without a ui.close this mod hears.
   $.ui.panes()
     .then((panes) => panes.some((pane) => pane.id === PANE) && gather($))
-    .catch((error) => $.ui.log('flow: refresh after a switch: ' + messageOf(error), { to: 'debug' }))
-  return { text: done.stdout.trim() }
+    .catch((error) => $.ui.log(`flow: refresh after ${after}: ` + messageOf(error), { to: 'debug' }))
 }
 
 function previewOf(tool, input) {
@@ -515,12 +531,7 @@ export function register(on) {
   })
 
   on('turn.complete', async ($, e, next) => {
-    // Asked each time: a pane whose drawing threw is dropped without a ui.close this mod hears.
-    if (!e.agentId) {
-      $.ui.panes()
-        .then((panes) => panes.some((pane) => pane.id === PANE) && gather($))
-        .catch((error) => $.ui.log('flow: refresh after the turn: ' + messageOf(error), { to: 'debug' }))
-    }
+    if (!e.agentId) refreshIfOpen($, 'the turn')
     return next(e)
   })
 

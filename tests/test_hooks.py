@@ -1949,7 +1949,8 @@ def a_phase_line_switches_phases_by_scope(base):
                  "Phase on-call rota is broken", "Phase off: spec is done"):
         assert phase_line(text, b) is None, f"not a phase line: {text!r}"
     for text, why in (("phase off create-pr", "Unknown phase"), ("phase off spec everywhere", "Unknown scope"),
-                      ("phase off spec repo please", "isn't `off <phase>"), ("phase off", "isn't `off <phase>")):
+                      ("phase off spec repo please", "Not `phase off <phase> [branch|repo|global]`"),
+                      ("phase off", "Not `phase off <phase> [branch|repo|global]`")):
         said = phase_line(text, b)
         assert said and why in said, f"{text!r}: {said}"
     outside = os.path.join(base, "not-a-repo")
@@ -2000,7 +2001,7 @@ def a_phase_line_switches_phases_by_scope(base):
     with open(store, "w") as fh:
         fh.write("{not json")
     said = phase_line("phase off verify", a)
-    assert "switched verify off" in said and "every phase counts as on" in said, \
+    assert "Switched verify off" in said and "every phase counts as on" in said, \
         f"the switch is saved, and the message says another scope's file keeps every phase on: {said}"
     assert json.load(open(os.path.join(PHASE_STORE, "branch", "zz-phase-a", "feature.json")))["verify"] == "off"
     label = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "--refresh"], cwd=a, capture_output=True, text=True)
@@ -2023,10 +2024,14 @@ def only_the_user_runs_the_switch_cli(base):
                 "bash -c 'python3 ~/.agents/hooks/phase_switches.py set off verify'",
                 "~/.agents/bin/evidence A1 python3 ~/.agents/hooks/phase_switches.py set off audit",
                 "python3 ~/.agents/hooks/phase_switches.py \\\n  set off spec", "python3 hooks/phase_switches.py 'set' off spec",
-                "python3 hooks/phase_switches.py > /dev/null set off spec", "(python3 hooks/phase_switches.py set off x)"]:
+                "python3 hooks/phase_switches.py > /dev/null set off spec", "(python3 hooks/phase_switches.py set off x)",
+                "cd ~/.agents/hooks && python3 -m phase_switches set off spec", "python3 -m hooks.phase_switches set off ci",
+                "eval 'python3 hooks/phase_switches.py set off x'", "bash -lc 'python3 hooks/phase_switches.py set off x'",
+                'echo "$(python3 hooks/phase_switches.py set off x)"']:
         assert guard(cmd, repo) == "deny", f"should deny: {cmd}"
     for cmd in ["python3 -m py_compile hooks/phase_switches.py", "grep -n 'set' hooks/phase_switches.py",
-                "~/.agents/bin/phase switches", "git log --grep 'phase_switches set'", "echo phase_switches.py; set -e"]:
+                "~/.agents/bin/phase switches", "git log --grep 'phase_switches set'", "echo phase_switches.py; set -e",
+                "rg -n 'phase_switches.py set' hooks", 'git commit -m "Run phase_switches.py set from /flow"']:
         assert guard(cmd, repo) == "allow", f"should allow: {cmd}"
 
     def cli(*args, cwd=repo):
@@ -2036,17 +2041,27 @@ def only_the_user_runs_the_switch_cli(base):
     done = cli("off", "validate", "repo")
     assert done.returncode == 0 and phases_off(repo) == {"validate": "repo", "staging": "validate off"}, done.stdout
     said = done.stdout.strip()
-    assert said.startswith("The user switched validate off for every branch of zz-phase-cli.") and "Confirm it" not in said, said
-    assert phase_line("phase off validate repo", repo).startswith(said), "the CLI says what the line says, to the user"
-    assert cli("on", "validate", "repo").returncode == 0 and phases_off(repo) == {}
-    assert cli("off", "spec", "--GLOBAL").returncode == 0 and phases_off(repo) == {"spec": "global"}, "the flag form /flow offers"
-    assert cli("on", "spec", "--global").returncode == 0 and phases_off(repo) == {}
-    for args, why in ((["off"], "`/flow off` isn't `off <phase>"), (["off", "create-pr"], "Unknown phase"),
-                      (["off", "spec", "everywhere"], "Unknown scope"), (["off", "spec", "repo", "now"], "isn't `off <phase>"),
+    assert said.startswith("Switched validate off for every branch of zz-phase-cli. Phases off here now:"), said
+    assert phase_line("phase off validate repo", repo) == (f"The user's `phase off` line: {said} Confirm it to the user in "
+                                                           "one line, and skip the steps of the phases off."), "same switch, same facts"
+    assert cli("on", "validate", "--repo").returncode == 0 and phases_off(repo) == {}, "the flag form /flow offers"
+    outside = os.path.join(base, "not-a-repo-cli")
+    os.makedirs(outside)
+    try:
+        refused = cli("off", "spec", "repo", cwd=outside)
+        assert refused.returncode == 3 and "isn't in a git repository" in refused.stdout, refused.stdout
+        assert cli("off", "spec", "--GLOBAL", cwd=outside).returncode == 0 and phases_off(repo) == {"spec": "global"}
+    finally:
+        cli("on", "spec", "global", cwd=outside)
+    assert phases_off(repo) == {}
+    for args, why in ((["off"], "Not `/flow off <phase> [--repo|--global]`"), (["off", "create-pr"], "Unknown phase"),
+                      (["off", "spec", "everywhere"], "Unknown scope"), (["off", "spec", "repo", "now"], "Not `/flow off"),
                       (["sideways", "spec"], "off or on")):
         done = cli(*args)
-        assert done.returncode == 1 and why in done.stdout and phases_off(repo) == {}, (args, done.stdout, done.stderr)
-        assert "Tell the user" not in done.stdout, "the CLI speaks to the user, not to the agent"
+        # 3, not 1: a crash exits 1, and the mod must not read it as a refusal.
+        assert done.returncode == 3 and why in done.stdout and phases_off(repo) == {}, (args, done.stdout, done.stderr)
+        assert "Tell the user" not in done.stdout and "The user" not in done.stdout, "the CLI speaks to the user"
+    assert cli().returncode == 2, "set with no action is a usage error"
 
 
 def pr_gate_skips_the_phases_switched_off(base):

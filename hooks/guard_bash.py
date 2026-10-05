@@ -73,7 +73,7 @@ MARKS_AS_USER = ("`bin/staging mark --by user`: a step marked as the user's come
 APPROVE_GRANT = re.compile(r"(?<![\w-])approve\b[\s\S]*\b(grant|once)\b")
 GRANTS_APPROVAL = ("`bin/approve grant|once`: an approval comes from the user, in their message or in the dialog Claude "
                    "Code shows when a guard blocks a call, not from the agent.")
-SWITCH_CLI = re.compile(r"(?<![\w-])phase_switches\.py\b[\s\S]*\bset\b")
+SWITCH_CLI = re.compile(r"(?<![\w-])phase_switches\b[\s\S]*\bset\b")
 SWITCHES_PHASE = ("`phase_switches.py set`: a phase is switched by the user, with a `phase off|on` line in their message or "
                   "`/flow off|on` in Claude Code, not by the agent.")
 REDIRECT = re.compile(r"&?[<>]+[&|]?")  # >, >>, 2>&1's >&, &>, >|, <<
@@ -116,14 +116,19 @@ def marks_as_user(command):
 
 
 def switches_phase(command):
-    """`phase_switches.py set` in the command, read as grants_approval reads `bin/approve grant`."""
+    """`phase_switches.py set`, or `python3 -m phase_switches set`, in the command or in a word the shell runs as one
+    (`bash -c '…'`, `eval`, `$(…)`). Unlike grants_approval, a quoted search pattern or commit message is only text."""
     if not SWITCH_CLI.search(command.replace(CONTINUATION, "")):
         return None
     words = shell_words(command)
     for i, word in enumerate(words):
-        if re.search(r"(?<![\w-])phase_switches\.py$", word) and words[i + 1:i + 2] == ["set"]:
+        before = words[i - 1] if i else ""
+        runs_cli = re.search(r"(?<![\w-])phase_switches\.py$", word) or (
+            before == "-m" and re.fullmatch(r"(?:hooks\.)?phase_switches", word))
+        if runs_cli and words[i + 1:i + 2] == ["set"]:
             return SWITCHES_PHASE
-        if word != command and switches_phase(word):
+        run_as_command = before == "eval" or re.fullmatch(r"-\w*c", before) or "$(" in word or "`" in word
+        if word != command and run_as_command and switches_phase(word):
             return SWITCHES_PHASE
     return None
 
