@@ -2048,6 +2048,10 @@ def only_the_user_runs_the_switch_cli(base):
     assert phase_line("phase off validate repo", repo) == (f"The user's `phase off` line: {said} Confirm it to the user in "
                                                            "one line, and skip the steps of the phases off."), "same switch, same facts"
     assert cli("on", "validate", "--repo").returncode == 0 and phases_off(repo) == {}, "the flag form /flow offers"
+    done = cli("off", "second-model", "--global")
+    assert done.returncode == 0 and phases_off(repo) == {"second-model": "global"}, done.stdout
+    assert "second-model (global)" in done.stdout, done.stdout
+    assert cli("on", "second-model", "--global").returncode == 0 and phases_off(repo) == {}
     outside = os.path.join(base, "not-a-repo-cli")
     os.makedirs(outside)
     try:

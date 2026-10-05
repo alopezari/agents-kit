@@ -270,6 +270,43 @@ for case, text, expected in [
         fail |= not ok
         print(f"{'ok  ' if ok else 'FAIL'} --lens-briefs fails on {case}: exit {out.returncode}, {out.stderr.strip()}")
 
+# The user's second-model switch takes the cross-model pass out of triage's answer; the rest of the review stays.
+with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
+        tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    open(os.path.join(repo, "app.py"), "w").write("x = 1\n" * 120)
+    subprocess.run("git add -A && git -c user.name=t -c user.email=t@t commit -qm base", shell=True, cwd=repo, check=True)
+    open(os.path.join(repo, "app.py"), "w").write("x = 2\n" * 120)
+    env = {**os.environ, "HOME": home}
+
+    def switch(*args):
+        subprocess.run(["python3", os.path.expanduser("~/.agents/hooks/phase_switches.py"), "set", *args], cwd=repo,
+                       check=True, capture_output=True, env=env)
+
+    def cross_model():
+        out = subprocess.run([TRIAGE, "--json"], cwd=repo, capture_output=True, text=True, env=env)
+        return json.loads(out.stdout)["cross_model"] if out.returncode == 0 else out.stderr.strip()[-200:]
+    usual = cross_model()
+    for args, expected, case in ((("off", "second-model", "repo"), "none (second-model switched off)", "off for the repo"),
+                                 (("on", "second-model", "branch"), usual, "on for the branch, over the repo's off"),
+                                 (("off", "self-review", "global"), usual, "another phase off")):
+        switch(*args)
+        got = cross_model()
+        ok = got == expected and usual in ("none", "correctness", "per lens")
+        fail |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} cross-model, second-model {case}: {got} (usual: {usual})")
+    switch("off", "second-model", "branch")
+    text = subprocess.run([TRIAGE], cwd=repo, capture_output=True, text=True, env=env).stdout
+    ok = "; cross-model: none (second-model switched off))" in text.splitlines()[0]
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} the text output names it too: {text.splitlines()[0]}")
+    with open(os.path.join(home, ".agents", "approvals", "phases", "global.json"), "w") as f:
+        f.write("not json")
+    got = cross_model()
+    ok = got.startswith(f"{usual} (Couldn't read the phase switches") and got.endswith("tell the user)")
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} an unreadable switch store keeps the usual cross-model pass and says why: {got}")
+
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected
     fail |= not ok

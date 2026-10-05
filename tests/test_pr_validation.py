@@ -147,10 +147,11 @@ def names_the_phases_the_user_switched_off(base):
         assert section().returncode == 1, "the self-review report is missing and its phase is on"
         switch("phase off self-review")
         switch("phase off validate global")
+        switch("phase off second-model repo")
         out = section()
         assert out.returncode == 0, out.stderr
         for line in ("- Verify: ", "- Self-review: skipped by the user (branch).", "- Validate: skipped by the user (global).",
-                     "- Staging: skipped by the user (validate off)."):
+                     "- Staging: skipped by the user (validate off).", "- Second-model: skipped by the user (repo)."):
             assert out.stdout.count(line) == 1, (line, out.stdout)
         write(repo, "validation", "| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | old | + | PASS | a |\n")
         os.remove(sh(repo, REPORTS, "path", "verify").stdout.strip())
