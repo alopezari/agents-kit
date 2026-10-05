@@ -129,7 +129,7 @@ Every block, every approved or browser MCP call and every shell command a user's
 - `sudo`: runs with root privileges.
 - `make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production.
 - `chmod 777`: world-writable permissions.
-- Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent.
+- Touching `~/.agents/approvals`, written out or relative to the working directory or a `cd` in the command: approvals for shared-system writes must come from the user. Naming it in a message, an echo or a search is text.
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).

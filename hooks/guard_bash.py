@@ -63,7 +63,6 @@ RULES = [
     (r"\b(make|npm\s+run|pnpm(\s+run)?|yarn(\s+run)?|composer(\s+run)?)\s+[\w:.-]*(deploy|release|sync_db|ssh_prod)",
      "`make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production."),
     (r"\bchmod\s+(-R\s+)?777\b", "`chmod 777`: world-writable permissions."),
-    (r"\.agents/approvals", "Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the agent."),
 ]
 
 # Whether a command, or a word that is one (`bash -c '…'`), may hold the call: read its words only then.
@@ -75,8 +74,12 @@ GRANTS_APPROVAL = ("`bin/approve grant|once`: an approval comes from the user, i
                    "Code shows when a guard blocks a call, not from the agent.")
 SWITCH_CLI = re.compile(r"(?<![\w-])phase_switches\b[\s\S]*\bset\b")
 # Only `$(cat <<EOF …)`, the form commit and PR bodies take: a heredoc fed to a shell is run.
-HEREDOC_BODY = re.compile(r"\$\(cat[ \t]+<<-?[ \t]*(['\"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s)]|$)")
-SHELLS = {"bash", "sh", "zsh", "dash"}
+HEREDOC_BODY = re.compile(r"\$\(cat[ \t]+<<-?[ \t]*(['\"])(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s)]|$)")
+SEPARATORS = set(";&|()")
+WRITERS = {"rm", "rmdir", "mv", "cp", "touch", "mkdir", "tee", "ln", "chmod", "chown", "rsync", "install", "dd",
+           "truncate", "unlink", "shred"}
+APPROVALS_WHY = ("Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the "
+                 "agent.")
 SWITCHES_PHASE = ("`phase_switches.py set`: a phase is switched by the user, with a `phase off|on` line in their message or "
                   "`/flow off|on` in Claude Code, not by the agent.")
 REDIRECT = re.compile(r"&?[<>]+[&|]?")  # >, >>, 2>&1's >&, &>, >|, <<
@@ -104,51 +107,113 @@ def shell_words(command):
     return kept
 
 
-def marks_as_user(command):
-    """`bin/staging mark … --by user` in the command. A word that is a command itself (`bash -c '…'`) is read the
-    same way."""
-    words = shell_words(command)
+def runs_call(command, is_program, takes):
+    """Whether the shell runs a program is_program(word, the word before) names, with arguments takes(args) accepts,
+    in the command or in a word the shell may run as one (`bash -c '…'`, `eval`, `… | sh`, `$(…)`). A word is text only
+    when a known program just reads or prints it: a reader's pattern, git's or gh's arguments (a message, a title), what
+    echo or printf prints where no pipe or `$(…)` takes it; even there a `$(…)` or backticks the shell would run is read. A
+    quoted heredoc written to a file, or a `$(cat <<'EOF' …)` body, is only text."""
+    text = HEREDOC_BODY.sub("$(cat", without_prose(command)).replace(CONTINUATION, "")
+    words = shell_words(text.replace("\n", ";"))  # a new line starts a new command, whatever the last one was
+    substitutes = bool(re.search(r"\$\(|`", shell_code(command)))  # none in single quotes: there they're text
     for i, word in enumerate(words):
-        if re.search(r"(?<![\w-])staging$", word) and words[i + 1:i + 2] == ["mark"]:
-            args = list(itertools.takewhile(lambda arg: not set(arg) <= set(";&|()"), words[i + 2:]))
-            if "--by=user" in args or any(a == "--by" and b == "user" for a, b in zip(args, args[1:])):
-                return MARKS_AS_USER
-        elif word != command and STAGING_MARK.search(word.replace(CONTINUATION, "")) and marks_as_user(word):
-            return MARKS_AS_USER
-    return None
+        before = words[i - 1] if i else ""
+        rest = list(itertools.takewhile(lambda w: not set(w) <= SEPARATORS, words[i + 1:]))
+        if is_program(word, before) and takes(rest):
+            return True
+        simple_command = list(itertools.takewhile(lambda w: not set(w) <= SEPARATORS, reversed(words[:i])))[::-1]
+        program = next((os.path.basename(w) for w in simple_command if not re.fullmatch(r"\w+=.*", w)), "")
+        end = (words[i + 1 + len(rest):i + 2 + len(rest)] or [""])[0]
+        output_used = (end.startswith("|") and end != "||") or end.startswith(")")  # a pipe, or $(…) around it
+        git_runs = program == "git" and (before in ("-x", "--exec") or "=!" in word or word.startswith("!"))  # an alias
+        text = program in READERS or (program in ("git", "gh") and not git_runs) or (program in ("echo", "printf") and not output_used)
+        if word != command and (not text or (substitutes and ("$(" in word or "`" in word))) \
+                and runs_call(word, is_program, takes):
+            return True
+    return False
+
+
+def marks_as_user(command):
+    """`bin/staging mark … --by user` in the command, or in a word the shell runs as one."""
+    if not STAGING_MARK.search(command.replace(CONTINUATION, "")):
+        return None
+    by_user = (lambda args: args[:1] == ["mark"] and ("--by=user" in args
+                                                       or any(a == "--by" and b == "user" for a, b in zip(args, args[1:]))))
+    return MARKS_AS_USER if runs_call(command, lambda word, _: re.search(r"(?<![\w-])staging$", word), by_user) else None
 
 
 def switches_phase(command):
-    """`phase_switches.py set`, or `python3 -m phase_switches set`, in the command or in a word the shell runs as one
-    (`bash -c '…'`, `eval`, `$(…)`). Unlike grants_approval, a quoted search pattern or commit message is only text."""
+    """`phase_switches.py set`, or `python3 -m phase_switches set`, in the command or in a word the shell runs as one."""
     if not SWITCH_CLI.search(command.replace(CONTINUATION, "")):
         return None
-    words = shell_words(HEREDOC_BODY.sub("$(cat", command))  # a commit or PR body written in a heredoc is text
-    for i, word in enumerate(words):
-        before = words[i - 1] if i else ""
-        simple_command = list(itertools.takewhile(lambda w: not set(w) <= set(";&|()"), reversed(words[:i])))
-        shell = any(os.path.basename(w) in SHELLS for w in simple_command)
-        runs_cli = re.search(r"(?<![\w-])phase_switches\.py$", word) or (
-            before == "-m" and re.fullmatch(r"(?:hooks\.)?phase_switches", word))
-        if runs_cli and words[i + 1:i + 2] == ["set"]:
-            return SWITCHES_PHASE
-        run_as_command = (before == "eval" or (shell and re.fullmatch(r"-\w*c", before))
-                          or "$(" in word or "`" in word)
-        if word != command and run_as_command and switches_phase(word):
-            return SWITCHES_PHASE
-    return None
+    cli = (lambda word, before: re.search(r"(?<![\w-])phase_switches\.py$", word)
+           or (before == "-m" and re.fullmatch(r"(?:hooks\.)?phase_switches", word)))
+    return SWITCHES_PHASE if runs_call(command, cli, lambda args: args[:1] == ["set"]) else None
 
 
 def grants_approval(command):
-    """`bin/approve grant|once` in the command, read as marks_as_user reads it: only the mod's dialog runs it."""
+    """`bin/approve grant|once` in the command, or in a word the shell runs as one: only the mod's dialog runs it."""
     if not APPROVE_GRANT.search(command.replace(CONTINUATION, "")):
         return None
-    words = shell_words(command)
+    grant = lambda args: args[:1] in (["grant"], ["once"])  # noqa: E731
+    return GRANTS_APPROVAL if runs_call(command, lambda word, _: re.search(r"(?<![\w-])approve$", word), grant) else None
+
+
+def touches_approvals(command, cwd, runs=False):
+    """A path into ~/.agents/approvals, written out or relative to the working directory or to a `cd` in the command
+    (`cd ~/.agents && touch approvals/linear`), or in code an interpreter runs (`bash -c`, `python3 -c`, `eval`). What
+    a reader (grep, cat, ls…) or cd is given, a sentence, and the prose of a message or an echo, is only text; a bare
+    name is a path only to a program that writes files; a redirect's target is always a path. In code that `runs`,
+    any mention of the approvals counts: its readers and sentences are no shell's."""
+    prose_free = without_prose(command)
+    if (runs or "<<" in prose_free) and re.search(r"\.agents/approvals", prose_free):  # a heredoc left is run
+        return APPROVALS_WHY
+    text = re.sub(r"\$\{HOME\}|\$HOME\b", "~", prose_free.replace(CONTINUATION, "")).replace("\n", ";")
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|()<>")
+        lexer.whitespace_split = True
+        words = list(lexer)
+    except ValueError:
+        words = text.split()
+    approvals = {os.path.normpath(design_files.APPROVALS_DIR), os.path.realpath(design_files.APPROVALS_DIR)}
+
+    def inside(path):
+        path = os.path.normpath(path)
+        return any(path == a or path.startswith(a + os.sep) for a in approvals)
+    places, program, redirected, read_from = {cwd}, None, False, False  # every directory a cd may have left it in
     for i, word in enumerate(words):
-        if re.search(r"(?<![\w-])approve$", word) and words[i + 1:i + 2] in (["grant"], ["once"]):
-            return GRANTS_APPROVAL
-        if word != command and grants_approval(word):
-            return GRANTS_APPROVAL
+        if set(word) <= SEPARATORS or (set(word) <= SEPARATORS | {"<", ">"} and "(" in word):  # <(…), >(…)
+            program = None
+            continue
+        if REDIRECT.fullmatch(word):
+            redirected, read_from = ">" in word, "<" in word and ">" not in word
+            continue
+        if program is None and not redirected and not read_from and not re.fullmatch(r"\w+=.*", word) \
+                and word not in ("command", "builtin", "env", "time", "nohup", "exec"):
+            program = os.path.basename(word)
+        code = [w for w in words[max(0, i - 2):i] if w != "--"][-1:]
+        runs_word = (code and re.fullmatch(r"-\w*[ce]|--eval|eval", code[0])) or "$(" in word or "`" in word
+        if runs_word and word != command and any(touches_approvals(word, place, runs=True) for place in places):
+            return APPROVALS_WHY  # code the shell or an interpreter runs: bash -c [--], python3 -c, eval, $(…)
+        if read_from:
+            read_from = False
+        elif program in ("cd", "pushd") and not redirected:
+            if os.path.basename(word) != program and not word.startswith("-") and "$" not in word and "`" not in word:
+                places |= {cd_into(place, word) for place in places}
+        elif program not in READERS or redirected:
+            for target in {word, word.split("=", 1)[-1]}:  # of=approvals/x, --target-directory=approvals
+                if re.search(r"\s", target) and not re.match(r"~|\.{0,2}/|\$", target):
+                    continue  # a sentence is no path, but a quoted path can hold spaces
+                if re.search(r"\.agents/approvals", target):
+                    return APPROVALS_WHY
+                target = os.path.expanduser(target)
+                # A bare name is a path to a program that writes files, or to any program once a cd is in there.
+                bare_is_path = program in WRITERS or redirected or any(map(inside, places))
+                if "$" in target or "`" in target or ("/" not in target and not bare_is_path):
+                    continue
+                if any(inside(os.path.join(place, target)) for place in places):
+                    return APPROVALS_WHY
+        redirected = False
     return None
 
 
@@ -952,7 +1017,7 @@ def main():
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
                   or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd)
                   or impeccable_files(command, cwd, payload.get("session_id")) or marks_as_user(command)
-                  or grants_approval(command) or switches_phase(command))
+                  or grants_approval(command) or switches_phase(command) or touches_approvals(command, cwd))
         if not reason:
             for pattern, why in RULES:
                 if re.search(pattern, command):

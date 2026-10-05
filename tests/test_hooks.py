@@ -119,8 +119,66 @@ def only_the_user_marks_a_staging_step_as_theirs(base):
     for cmd in ["~/.agents/bin/staging mark S1 PASS --by agent --note 'the user said S1 passed'",
                 "~/.agents/bin/staging mark S1 FAIL --by agent --note '200; cached | user saw it'",
                 "~/.agents/bin/staging mark S1 FAIL --by agent --note 'agrees with --by user'",
-                "~/.agents/bin/staging steps --json", "git switch staging && git log --by-user"]:
+                "~/.agents/bin/staging steps --json", "git switch staging && git log --by-user",
+                # Text that only names the call: a search pattern, a commit or PR body, an echoed note.
+                "grep -rn 'staging mark S1 PASS --by user' tests/", "rg 'bin/staging mark .* --by user' skills",
+                "git log --grep 'staging mark --by user'", "echo 'the user runs bin/staging mark S1 PASS --by user'",
+                "git commit -m \"$(cat <<'EOF'\nRecord bin/staging mark S1 PASS --by user\nEOF\n)\""]:
         assert guard(cmd) == "allow", f"should allow: {cmd}"
+    for cmd in ["eval 'bin/staging mark S1 PASS --by user'", "x=$(bin/staging mark S1 PASS --by user)",
+                "bash <<EOF\nbin/staging mark S1 PASS --by user\nEOF", "cat <<EOF | sh\nbin/staging mark S1 PASS --by user\nEOF",
+                "bash -e -c 'bin/staging mark S1 PASS --by user'", "sh -c \"bin/staging mark S1 PASS --by user\""]:
+        assert guard(cmd) == "deny", f"a shell still runs it: {cmd}"
+
+
+def the_agent_stays_out_of_the_approvals(base):
+    kit = os.path.expanduser("~/.agents")
+    os.makedirs(os.path.join(kit, "approvals", "turn"), exist_ok=True)
+    for cmd, cwd in [("echo '{}' > ~/.agents/approvals/phases/global.json", "/tmp"),
+                     ("cd ~/.agents && echo '{}' > approvals/phases/global.json", "/tmp"),
+                     ("cd ~/.agents && touch approvals/linear", "/tmp"), ("cp /tmp/x approvals/linear", kit),
+                     ("mv x ./approvals/turn/s1", kit), ("tee approvals/linear < /dev/null", kit),
+                     ("cd repos && touch ../approvals/linear", kit), ("mkdir -p approvals/turn/s1", kit),
+                     ("rm -f approvals", kit), ("touch linear", os.path.join(kit, "approvals")),
+                     ("git commit -m x && touch ~/.agents/approvals/linear", "/tmp"),
+                     ("python3 -c \"open('/Users/me/.agents/approvals/linear', 'w')\"", "/tmp"),
+                     ("bash -c 'cd ~/.agents && touch approvals/linear'", "/tmp"),
+                     ("python3 <<'EOF'\nopen('/Users/me/.agents/approvals/linear', 'w')\nEOF", "/tmp"),
+                     ("cat f\ntouch ~/.agents/approvals/x", "/tmp"), ("ls ~/.agents\nrm ~/.agents/approvals/x", "/tmp"),
+                     ("cd \"$HOME/.agents\" && touch approvals/x", "/tmp"), ("cd ${HOME}/.agents && touch approvals/x", "/tmp"),
+                     ("cd ~/.agents/repos && cd .. && touch approvals/x", "/tmp"), ("pushd ~/.agents && touch approvals/x", "/tmp"),
+                     ("cd ~/.agents && dd if=/dev/zero of=approvals/x", "/tmp"), ("cat /dev/null > approvals/linear", kit),
+                     ("grep x hooks > approvals/linear", kit), ("echo x > $HOME/.agents/approvals/linear", "/tmp"),
+                     ("cp x --target-directory=approvals", kit),
+                     ("output=\"$(tee ~/.agents/approvals/linear < /tmp/input)\"", "/tmp"),
+                     ("cd ~/.agents && python3 -c \"open('approvals/linear', 'w').close()\"", "/tmp"),
+                     ("touch \"$HOME/.agents/approvals/notes for user\"", "/tmp"),
+                     ("echo hi > \"$HOME/.agents/approvals/notes for user\"", "/tmp"),
+                     ("eval -- 'touch ~/.agents/approvals/x'", "/tmp"),
+                     ("cd ~/.agents/approvals && unlink linear", "/tmp"),
+                     ("cd ~/.agents/approvals && sed -i '' 's|a|b|' linear", "/tmp"),
+                     ("cd ~/.agents/approvals && find . -delete", "/tmp"),
+                     ("cd ~/.agents/approvals && python3 -c \"import os; os.remove('linear')\"", "/tmp"),
+                     ("git log -1\nbash -lc 'touch ~/.agents/approvals/x'", "/tmp"),
+                     ("cat <(rm ~/.agents/approvals/linear)", "/tmp"),
+                     ("python3 -c \"file = '/Users/me/.agents/approvals/linear'; open(file, 'w')\"", "/tmp"),
+                     ("node --eval \"require('fs').writeFileSync('/Users/me/.agents/approvals/x', '')\"", "/tmp"),
+                     ("dd if=/dev/null of=\"~/.agents/approvals/my file\"", "/tmp"),
+                     ("touch \"$PWD/.agents/approvals/a b\"", "/tmp"),
+                     ("python3 - <<'EOF'\ntest = '/Users/me/.agents/approvals/linear'\nopen(test, 'w')\nEOF", "/tmp")]:
+        assert guard(cmd, cwd) == "deny", f"should deny from {cwd}: {cmd}"
+    try:
+        for cmd, cwd in [(c, kit) for c in [
+                "grep -rn approvals hooks/", "git commit -m 'Keep ~/.agents/approvals out of reach'",
+                "git commit -m \"$(cat <<'EOF'\nGuard ~/.agents/approvals\nEOF\n)\"", "echo 'see ~/.agents/approvals'",
+                "ls hooks", "rg -n 'approvals/turn' hooks",
+                "skills/self-review/bundle.sh main Correctness 'keeps the agent out of ~/.agents/approvals'",
+                "git log --grep approvals", "echo see approvals", "git commit -m approvals", "python3 -m pytest -k approvals",
+                "git grep -n approvals", "cd ~/.agents/approvals && ls", "cat < ~/.agents/approvals/linear",
+                "wc -l < ~/.agents/approvals/linear", "command cat ~/.agents/approvals/linear"]] + [("ls -la", os.path.join(kit, "approvals"))]:
+            assert guard(cmd, cwd) == "allow", f"should allow from {cwd}: {cmd}"
+    finally:  # the other tests share this HOME
+        shutil.rmtree(os.path.join(kit, "approvals"), ignore_errors=True)
 
 
 def only_the_user_grants_an_approval_in_a_dialog(base):
@@ -136,8 +194,30 @@ def only_the_user_grants_an_approval_in_a_dialog(base):
         assert guard(cmd) == "deny", f"should deny: {cmd}"
     for cmd in ["~/.agents/bin/approve needed < payload.json", "~/.agents/bin/approve revoke s1 sql.drop-table",
                 "git log --grep 'grant'", "echo approved grants", "bin/auto-approve grant s1 x",
-                "bin/approve revoke s1 x \\\n  && echo grant", "bin/approve revoke s1 x > /dev/null 2>&1"]:
+                "bin/approve revoke s1 x \\\n  && echo grant", "bin/approve revoke s1 x > /dev/null 2>&1",
+                "grep -rn 'approve grant' hooks/", "rg -c 'bin/approve once' tests", "echo 'run bin/approve once s1 x'",
+                "git commit -m \"$(cat <<'EOF'\nDocument bin/approve grant\nEOF\n)\"", "gh pr create --title 'approve grant docs' --body x",
+                "cat > spec.md <<'EOF'\nThe guard stops `bin/approve grant|once`.\nEOF",
+                "printf -- '- Stops `bin/approve grant` and $(bin/approve once)\\n' > changelog.md"]:
         assert guard(cmd) == "allow", f"should allow: {cmd}"
+    for cmd in ["eval 'bin/approve grant s1 x'", "x=$(bin/approve grant s1 x)", "bash <<EOF\nbin/approve grant s1 x\nEOF",
+                "cat <<EOF | sh\nbin/approve once s1 x\nEOF", "bash -e -c 'bin/approve once s1 x'", "echo ok; `bin/approve grant s1 x`",
+                "cat <<'EOF' | sh\nbin/approve once s1 x\nEOF", "cat > run.sh <<EOF\n$(bin/approve grant s1 x)\nEOF",
+                "printf -- \"- ran `bin/approve grant s1 x`\" > log.md", "echo \"$(bin/approve once s1 x)\"",
+                "printf '%s' 'text' \"`bin/approve grant s1 x`\"",
+                # Each let through by a first version of this change: text only when a known program reads or prints it.
+                "x=\"$(cat <<EOF\n$(bin/approve grant s1 x)\nEOF\n)\"",
+                "gh pr create --title t --body \"$(cat <<EOF\nRan: $(bin/approve once s1 x)\nEOF\n)\"",
+                "echo 'bin/approve grant s1 x' | sh", "printf '%s\\n' 'bin/approve once s1 x' | bash",
+                "echo \"bin/approve once s1 x\" | tee run.sh | sh", "bash -c -- 'bin/approve grant s1 x'",
+                "ksh -c 'bin/approve grant s1 x'", "python3 -c \"os.system('bin/approve grant s1 x')\"",
+                "watch -n1 'bin/approve grant s1 x'", "sh -c \"$(echo 'bin/approve grant s1 x')\"",
+                "source <(echo 'bin/approve grant s1 x')", "echo 'bin/staging mark S1 PASS --by user' | bash",
+                "git status\nbash -c 'bin/approve grant s1 x'", "ls\nsh -c \"bin/approve once s1 x\"",
+                "echo hi\neval 'bin/approve grant s1 x'", "grep foo bar\nbash -c 'bin/staging mark S1 PASS --by user'",
+                "echo done\nwatch -n1 'bin/approve grant s1 x'", "git rebase -x 'bin/approve grant s1 x' HEAD~1",
+                "git -c alias.z='!bin/approve grant s1 x' z", "git config alias.g '!bin/approve grant x' && git g"]:
+        assert guard(cmd) == "deny", f"a shell still runs it: {cmd}"
 
 
 def guard_blocks_irreversible(base):
@@ -2175,6 +2255,7 @@ def stop_skips_the_phases_switched_off(base):
 
 TESTS = [a_phase_line_switches_phases_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
+         the_agent_stays_out_of_the_approvals,
          guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
