@@ -382,7 +382,7 @@ def switch(repo, line):
     payload = json.dumps({"prompt": line, "session_id": "phase-test", "cwd": repo})
     done = subprocess.run(["python3", os.path.expanduser("~/.agents/hooks/prompt_approvals.py")], input=payload, cwd=repo,
                           capture_output=True, text=True)
-    assert done.returncode == 0 and "switched" in done.stdout, done.stdout + done.stderr
+    assert done.returncode == 0 and "Switched " in done.stdout, done.stdout + done.stderr
 
 
 def switched_off_phases_leave_the_flow(base):
