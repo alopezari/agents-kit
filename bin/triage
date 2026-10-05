@@ -51,7 +51,9 @@ HIGH_RISK = {
 }
 # A git checkout, not a shop's: lines with version-control words don't count as a payments signal.
 GIT_CHECKOUT = re.compile(r"\bgit(\b|_)|actions/checkout|worktree|\bbranch|\b(pr|primary|known|remember)_checkouts?\b|\bpr_checkout_"
-                          r"|\b(main|this|a|the|every|another|each)\s+checkouts?\b(?![\s-]+(page|form|block|field|flow|process|button|url|step))",
+                          r"|\b(main|this|a|the|every|another|each)\s+checkouts?\b(?![\s-]+(page|form|block|field|flow|process|button|url|step))"
+                          # The kit's own calls on a directory; case-sensitive, so a shop's renderCheckout(root) still counts.
+                          r"|(?-i:(?<![\w$>.:])((in_|check_)checkout\(\s*(root|cwd)|checkout\(\s*(\$,\s*)?cwd)\s*[,)]|\bphase_switches\.checkout\()",
                           re.I)
 PROPERTY_FN = re.compile(r"function\s+\w*(parse|format|calculate|compute|compare|convert|normali[sz]e|version|date|week"
                          r"|price|round|slug|sanitize|validate)\w*\s*\(", re.I)
