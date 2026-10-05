@@ -8,7 +8,7 @@ effort: high
 
 Review your own change the way a skeptical senior reviewer would, before a human spends time on it. The goal is to find real defects; step 3 separates them from false alarms.
 
-When `~/.agents/bin/phase switches` lists `self-review`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name.
+When `~/.agents/bin/phase switches` lists `self-review`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name. With `second-model` listed, run no cross-model reviewer (triage then says `cross-model: none`): the same-model lenses only, and `Not run: cross-model, switched off by the user` in the report.
 
 Two things make self-review work:
 

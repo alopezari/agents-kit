@@ -263,12 +263,40 @@ for case, text, expected in [
     with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as kit:
         os.makedirs(os.path.join(kit, "bin")); os.makedirs(os.path.join(kit, "skills", "self-review"))
         shutil.copy(TRIAGE, os.path.join(kit, "bin", "triage"))
+        os.symlink(os.path.expanduser("~/.agents/hooks"), os.path.join(kit, "hooks"))
         with open(os.path.join(kit, "skills", "self-review", "lenses.md"), "w") as f:
             f.write(text)
         out = subprocess.run([os.path.join(kit, "bin", "triage"), "--lens-briefs"], capture_output=True, text=True)
         ok = out.returncode != 0 and expected in out.stderr and not out.stdout
         fail |= not ok
         print(f"{'ok  ' if ok else 'FAIL'} --lens-briefs fails on {case}: exit {out.returncode}, {out.stderr.strip()}")
+
+# The user's second-model switch takes the cross-model pass out of triage's answer; the rest of the review stays.
+with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
+        tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    open(os.path.join(repo, "app.py"), "w").write("x = 1\n" * 120)
+    subprocess.run("git add -A && git -c user.name=t -c user.email=t@t commit -qm base", shell=True, cwd=repo, check=True)
+    open(os.path.join(repo, "app.py"), "w").write("x = 2\n" * 120)
+    store = os.path.join(home, ".agents", "approvals", "phases")
+
+    def cross_model(switches):
+        os.makedirs(store, exist_ok=True)
+        with open(os.path.join(store, "global.json"), "w") as f:
+            f.write(switches)
+        out = subprocess.run([TRIAGE, "--json"], cwd=repo, capture_output=True, text=True, env={**os.environ, "HOME": home})
+        return json.loads(out.stdout)["cross_model"] if out.returncode == 0 else out.stderr.strip()[-200:]
+    for switches, expected in (('{"second-model": "off"}', "none (second-model switched off)"),
+                               ('{"second-model": "on"}', "correctness"),
+                               ('{"self-review": "off"}', "correctness")):
+        got = cross_model(switches)
+        ok = got == expected
+        fail |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} cross-model with {switches}: {got}")
+    got = cross_model("not json")
+    ok = got.startswith("correctness (Couldn't read the phase switches") and got.endswith("tell the user)")
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} an unreadable switch store keeps the cross-model pass and says why: {got}")
 
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected

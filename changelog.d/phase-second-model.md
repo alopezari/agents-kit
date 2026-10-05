@@ -1,0 +1,1 @@
+- A new phase, `second-model`, switches off only the other model family's reading in spec and self-review (`phase off second-model`, `/flow off second-model`): the review keeps its same-model lenses, and triage then asks for no cross-model pass.

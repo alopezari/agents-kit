@@ -16,6 +16,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
+import phase_switches  # noqa: E402
+
 TEST_OR_DOC = re.compile(r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$"
                          r"|(^|/)(CHANGELOG|README|LICENSE)", re.I)
 STYLE_FILE = re.compile(r"\.(css|scss|sass|less)$", re.I)
@@ -362,7 +365,15 @@ def triage(rng=None):
 
     return {"tier": tier, "budget": BUDGET[tier], "changed_lines": changed_lines, "files": len(files),
             "reasons": reasons, "lenses": lenses, "tests": tests,
-            "cross_model": "per lens" if tier == "high" else ("correctness" if tier == "standard" else "none")}
+            "cross_model": cross_model(tier)}
+
+
+def cross_model(tier):
+    off, unreadable = phase_switches.phases_off_or_error(os.getcwd())
+    if "second-model" in off:
+        return "none (second-model switched off)"
+    wanted = "per lens" if tier == "high" else ("correctness" if tier == "standard" else "none")
+    return f"{wanted} ({unreadable})" if unreadable else wanted
 
 
 def lens_briefs():
