@@ -33,10 +33,12 @@ def git(*args):
 
 def cache_files():
     """(cache, lock) for this branch, or None where no phase applies. One git call: this runs on every refresh."""
-    out = git("rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD").splitlines()
-    if len(out) != 2 or out[1] == "HEAD":
+    # The full ref: --abbrev-ref says heads/<branch> when a tag has the branch's name, and the switches' writer
+    # drops this cache by the branch's own name.
+    out = git("rev-parse", "--path-format=absolute", "--git-common-dir", "--symbolic-full-name", "HEAD").splitlines()
+    if len(out) != 2 or not out[1].startswith("refs/heads/"):
         return None
-    cache = review_stamp.phase_cache(out[0], out[1])
+    cache = review_stamp.phase_cache(out[0], out[1][len("refs/heads/"):])
     return cache, cache[:-len(".json")] + ".lock"
 
 
@@ -165,8 +167,9 @@ def main():
     if sys.argv[1:2] == ["switches"]:
         try:
             off = phase_switches.phases_off(os.getcwd())
-        except phase_switches.StoreError as error:
-            print(error, file=sys.stderr)
+        except (phase_switches.StoreError, OSError, subprocess.SubprocessError, ValueError) as error:
+            print(error if isinstance(error, phase_switches.StoreError) else f"Couldn't read the phase switches: {error}",
+                  file=sys.stderr)
             return 1
         for phase in phase_switches.PHASES:
             if phase in off:

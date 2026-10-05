@@ -133,7 +133,7 @@ Every block, every approved or browser MCP call and every shell command a user's
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
-- Each of these unless the user switched its phase off with a `phase off <phase>` line (`bin/phase switches`).
+- The last two lift for a phase the user switched off with a `phase off <phase>` line (self-review, validate, staging; `bin/phase switches`); no other rule here can be switched off.
 
 It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them (`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in `personal-repos.txt`. For MCP writes and `DROP`/`TRUNCATE` commands, Claude Code's mod asks you right away instead, in a dialog that shows the blocked call: allowing it writes the approval your message would, for that one call or until your next message (`bin/approve`, which the shell guard refuses from the agent).
 
@@ -313,14 +313,14 @@ quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --cate
 
 **`bin/repo-name`**: Print the repository's name as the kit knows it: the main checkout's directory name, the same from any worktree (Xirp, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.
 
-**`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). without the phase and the switches, which are the current checkout's
+**`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree).
 
 ```
 reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
 reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 reports                                          every report that exists, with its path, the evidence, the phases off
 reports brief                                    the phase and one line per report, to pick a branch up in a new session
-reports --branch <name> …                        the same, for another branch of this repo (a merged PR's, from main),
+reports --branch <name> …                        the same for another branch of this repo, without phase and switches
 ```
 
 **`bin/staging`**: The staging guide's steps before the merge, and the PASS/FAIL row each one gets in its latest results.

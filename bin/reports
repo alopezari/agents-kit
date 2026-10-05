@@ -4,8 +4,7 @@
 #   reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 #   reports                                          every report that exists, with its path, the evidence, the phases off
 #   reports brief                                    the phase and one line per report, to pick a branch up in a new session
-#   reports --branch <name> …                        the same, for another branch of this repo (a merged PR's, from main),
-#                                                    without the phase and the switches, which are the current checkout's
+#   reports --branch <name> …                        the same for another branch of this repo, without phase and switches
 set -euo pipefail
 if [ "${1:-}" = "--branch" ]; then
   [ -n "${2:-}" ] || { echo "usage: reports --branch <name> [path <kind> | brief]" >&2; exit 2; }

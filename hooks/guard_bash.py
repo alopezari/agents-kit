@@ -426,8 +426,6 @@ def unready_pr(command, cwd):
     cwd = pr_checkout(command, cwd)
     if not os.path.isdir(cwd):  # a hook that crashes lets the command through
         return f"`gh pr ready`: its checkout {cwd} doesn't exist, so its staging results can't be checked."
-    if "staging" in phase_switches.phases_off_or_error(cwd, time_left())[0]:
-        return None  # every check below is there to find the staging results
     here = subprocess.run(["git", "branch", "--show-current"], cwd=cwd, capture_output=True, text=True,
                           timeout=time_left()).stdout.strip()
     targets = set()

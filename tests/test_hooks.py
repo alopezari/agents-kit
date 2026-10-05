@@ -1944,7 +1944,8 @@ def a_phase_line_switches_phases_by_scope(base):
     assert phases_off(a)["validate"] == "branch", "a tag named like the branch doesn't move its switches"
 
     before = stored_switches()
-    for text in ("please phase off spec", "> phase off spec", "Notes:\nphase off spec", "phase of spec", "phase offline"):
+    for text in ("please phase off spec", "> phase off spec", "Notes:\nphase off spec", "phase of spec", "phase offline",
+                 "Phase on-call rota is broken", "Phase off: spec is done"):
         assert phase_line(text, b) is None, f"not a phase line: {text!r}"
     for text, why in (("phase off create-pr", "Unknown phase"), ("phase off spec everywhere", "Unknown scope"),
                       ("phase off spec repo please", "not as `phase off <phase>"), ("phase off", "not as `phase off <phase>")):
@@ -2035,8 +2036,9 @@ def pr_gate_skips_the_phases_switched_off(base):
     assert reason("gh pr create --fill") and reason("gh pr ready"), "staging steps before the merge hold the PR"
     assert reason("gh pr ready 123"), "a PR named by number is checked from its branch's checkout"
     phase_line("phase off staging", repo)
-    for command in ("gh pr create --fill", "gh pr ready", "gh pr ready 123", "gh pr ready --repo a/b 123"):
+    for command in ("gh pr create --fill", "gh pr ready"):
         assert reason(command) is None, f"staging off holds nothing: {command}"
+    assert reason("gh pr ready 123"), "another PR is checked from its own branch's checkout, with its own switches"
     phase_line("phase on staging", repo)
     assert reason("gh pr ready"), "back on, staging holds again"
 

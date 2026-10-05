@@ -390,9 +390,12 @@ def switched_off_phases_leave_the_flow(base):
     sh(repo, "git", "checkout", "-q", "-b", "feature/quick")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     assert phase(repo) == "build (no spec)"
+    sh(repo, "git", "tag", "feature/quick")  # a tag named like the branch must not split the label's cache key
+    assert phase(repo) == "build (no spec)"
     switch(repo, "phase off spec")
     switch(repo, "phase off verify")
     assert phase(repo, refresh=False) in ("", "self-review · off: spec, verify"), "the switch drops the stale label"
+    assert phase(repo, refresh=False) != "build (no spec)", "the switch dropped the cached label, not another key's"
     assert phase(repo) == "self-review · off: spec, verify", phase(repo)
     switch(repo, "phase off self-review repo")
     switch(repo, "phase off validate global")

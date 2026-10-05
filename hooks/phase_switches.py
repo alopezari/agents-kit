@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fcntl  # noqa: E402
@@ -24,7 +25,7 @@ import review_stamp  # noqa: E402
 PHASES = ("spec", "self-review", "validate", "staging", "verify", "ci", "follow-pr", "audit")
 SCOPES = ("branch", "repo", "global")
 STORE = os.path.join(design_files.APPROVALS_DIR, "phases")
-PHASE_LINE = re.compile(r"\A[ \t]*phase[ \t]+(off|on)\b(.*)", re.I)
+PHASE_LINE = re.compile(r"\A[ \t]*phase[ \t]+(off|on)(?=\s|\Z)(.*)", re.I)
 
 
 class StoreError(Exception):
@@ -34,11 +35,13 @@ class StoreError(Exception):
 def checkout(cwd, timeout=5):
     """(repo, branch, git common dir) of the checkout in cwd; branch is None when detached, all None outside a repo.
     Raises OSError or subprocess.SubprocessError when git can't answer."""
+    deadline = time.monotonic() + timeout  # both calls share the caller's budget: the guard's runs out at 10 s
+    env = {**os.environ, "LC_ALL": "C"}  # the "not a git repository" check reads English
     common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd,
-                            capture_output=True, text=True, timeout=timeout)
+                            capture_output=True, text=True, timeout=timeout, env=env)
     if common.returncode != 0:
         # Only "not a repository" means no repo: any other failure must not drop the repo's and branch's switches.
-        if "not a git repository" in common.stderr:
+        if "not a git repository (or any of the parent directories)" in common.stderr:  # not a broken worktree
             return None, None, None
         raise OSError(f"git rev-parse failed in {cwd}: {common.stderr.strip()[-200:]}")
     repo = review_stamp.repo_name_of(common.stdout.strip())
@@ -46,7 +49,7 @@ def checkout(cwd, timeout=5):
         raise OSError(f"can't name the repository of {cwd}")
     # The full ref: --short, like rev-parse --abbrev-ref, says heads/<branch> when a tag has the branch's name.
     head = subprocess.run(["git", "symbolic-ref", "--quiet", "HEAD"], cwd=cwd, capture_output=True, text=True,
-                          timeout=timeout)
+                          timeout=max(deadline - time.monotonic(), 0.1), env=env)
     if head.returncode not in (0, 1):  # 1: detached
         raise OSError(f"git symbolic-ref failed in {cwd}: {head.stderr.strip()[-200:]}")
     ref = head.stdout.strip()
@@ -96,7 +99,7 @@ def phases_off_or_error(cwd, timeout=5):
     """(phases off, None), or ({}, a sentence saying why) when the switches can't be read: then every phase is on."""
     try:
         return phases_off(cwd, timeout), None
-    except (StoreError, OSError, subprocess.SubprocessError) as error:
+    except (StoreError, OSError, subprocess.SubprocessError, ValueError) as error:
         return {}, f"{error}, so every phase counts as on: tell the user"
 
 
@@ -123,7 +126,7 @@ def apply_phase_line(prompt, cwd):
                 f"Tell the user; the scopes are {', '.join(SCOPES)} (branch when left out).")
     try:
         repo, branch, common = checkout(cwd)
-    except (OSError, subprocess.SubprocessError) as error:
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
         return f"Couldn't switch {phase} {action} as the user asked: git failed in {cwd} ({error}). Tell the user."
     if scope != "global" and not repo:
         return (f"The user's `phase {action} {phase} {scope}` needs a git repository, and {cwd} isn't in one: "
@@ -157,6 +160,7 @@ def apply_phase_line(prompt, cwd):
     except StoreError as error:
         return (f"The user switched {phase} {action} for {where}, but {error}, so every phase counts as on here until "
                 "they fix or delete it. Tell the user.")
-    still = " A narrower switch keeps it on here." if action == "off" and phase not in off else ""
+    still = (" A narrower switch keeps it on here." if action == "off" and phase not in off else
+             " A narrower switch keeps it off here." if action == "on" and phase in off else "")
     return (f"The user switched {phase} {action} for {where}.{still} Phases off here now: {describe(off)}. "
             "Confirm it to the user in one line, and skip the steps of the phases off.")
