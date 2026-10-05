@@ -1956,6 +1956,13 @@ def a_phase_line_switches_phases_by_scope(base):
     for text in ("phase off spec", "phase off spec repo"):
         said = phase_line(text, outside)
         assert said and "git repository" in said, f"{text!r} outside a repo: {said}"
+    broken = os.path.join(base, "broken-worktree")
+    os.makedirs(broken)
+    open(os.path.join(broken, ".git"), "w").write(f"gitdir: {os.path.join(base, 'gone', '.git', 'worktrees', 'x')}\n")
+    said = phase_line("phase off spec", broken)
+    assert said and "git failed" in said, f"a broken worktree is a git failure, not a directory outside git: {said}"
+    done = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "switches"], cwd=broken, capture_output=True, text=True)
+    assert done.returncode == 1 and "Couldn't read the phase switches" in done.stderr, done.stdout + done.stderr
     git(b, "checkout", "-q", "--detach")
     said = phase_line("phase off spec", b)
     assert said and "no branch" in said, said
