@@ -1941,6 +1941,9 @@ def a_phase_line_switches_phases_by_scope(base):
                                         "tool_input": {"file_path": store, "content": "{}"}})
     assert wrote and wrote["hookSpecificOutput"]["permissionDecision"] == "deny", "nor with a file tool"
     with open(store, "w") as fh:
+        fh.write('{"ci": "off", "a-phase-from-a-newer-kit": "off"}')
+    assert phases_off(a)["ci"] == "global", "a phase this kit doesn't know is ignored, not an unreadable store"
+    with open(store, "w") as fh:
         fh.write("{not json")
     done = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "switches"], cwd=a, capture_output=True, text=True)
     assert done.returncode == 1 and "Couldn't read" in done.stderr, done.stdout + done.stderr

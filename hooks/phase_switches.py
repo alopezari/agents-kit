@@ -56,16 +56,21 @@ def read(path):
         return {}
     except (OSError, ValueError) as error:
         raise StoreError(f"Couldn't read the phase switches in {path}: {error}") from error
-    if not isinstance(switches, dict) or any(p not in PHASES or v not in ("on", "off") for p, v in switches.items()):
+    if not isinstance(switches, dict) or any(v not in ("on", "off") for v in switches.values()):
         raise StoreError(f"Couldn't read the phase switches in {path}: expected {{phase: \"on\" | \"off\"}}")
     return switches
 
 
 def phases_off(cwd, timeout=5):
     """{phase: why it is off} for the checkout in cwd. Raises StoreError when a switch file can't be read."""
+    return phases_off_in(*checkout(cwd, timeout)[:2])
+
+
+def phases_off_in(repo, branch):
     state = {}
-    for scope, path in store_files(*checkout(cwd, timeout)[:2]):
-        state.update({phase: (value, scope) for phase, value in read(path).items()})
+    for scope, path in store_files(repo, branch):
+        # A phase a newer kit added isn't an error: an older hook running beside it must not hold every gate.
+        state.update({phase: (value, scope) for phase, value in read(path).items() if phase in PHASES})
     off = {phase: scope for phase, (value, scope) in state.items() if value == "off"}
     if "validate" in off:
         off["staging"] = "validate off"
@@ -112,7 +117,7 @@ def apply_phase_line(prompt, cwd):
         with open(path + ".tmp", "w") as fh:
             json.dump(switches, fh, indent=1, sort_keys=True)
         os.replace(path + ".tmp", path)
-        off = phases_off(cwd)
+        off = phases_off_in(repo, branch)
         if branch:  # bin/phase's cached label; other checkouts' age out within its 15 s
             try:
                 os.remove(os.path.join(common, "agents", "phase", review_stamp.branch_key(branch) + ".json"))
