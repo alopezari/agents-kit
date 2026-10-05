@@ -14,10 +14,12 @@ import tempfile
 TRIAGE = os.path.expanduser("~/.agents/bin/triage")
 GIT_SENSE = ["cwd = pr_checkout(command, cwd)", "git checkout -b fix", "- uses: actions/checkout@v4",
              "# the main checkout serves the stack", "for path in known_checkouts():", "git_checkout(command, cwd)",
-             "def pr_checkout_unknown(command, payload):"]
+             "def pr_checkout_unknown(command, payload):", "repo = phase_switches.checkout(os.getcwd())[0]",
+             "def checkout(cwd, timeout=5):", "in_checkout(root, review_stamp.fingerprint)",
+             "check_checkout(root, session, payload)"]
 SHOP_SENSE = ["return wc_get_checkout_url();", "'wc-blocks-checkout',", "if ( is_checkout() ) {",
               "// Redirect to the checkout page", "git checkout-free refund( $order );", "// Render the checkout-page",
-              "function remember_checkout_details() { return get_checkout_url(); }"]
+              "function remember_checkout_details() { return get_checkout_url(); }", "process_checkout(cart, cwd)"]
 
 
 def payments_signal(line):
