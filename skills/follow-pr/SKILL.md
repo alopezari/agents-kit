@@ -57,7 +57,7 @@ A fix is a small change of its own, and gets reviewed and tested in proportion, 
 
 1. The smallest fix, with a test that fails without it when there is a harness for it.
 2. Verify runs at the end of the turn (the stop hook).
-3. Self-review, step 4's same-model re-check only: re-run the Correctness lens yourself on the whole change, naming the fix, then `python3 ~/.agents/hooks/review_stamp.py write`. No new cross-model round: the self-review spent its re-check rounds, and a pass per fix would restart the loop it caps.
+3. Self-review, step 4's same-model re-check only: re-run the Correctness lens yourself on the whole change, naming the fix, even when the user set the rounds to 0, then `python3 ~/.agents/hooks/review_stamp.py write`. No new cross-model round: the self-review spent its re-check rounds, and a pass per fix would restart the loop it caps.
 4. For behavior changes, validate the checks the fix touches, not the whole plan, saving their evidence and updating their rows in the validation report as in the validate skill (steps 4 and 5), then `python3 ~/.agents/hooks/review_stamp.py write --kind validate`.
 5. When the branch has staging results, any fix makes them stale (the status line shows "redo staging"). Ask the user which steps the fix touches, update the guide if it changed what a step checks, and have them re-run those; the PR is not ready until they pass. Record their results from their evidence with `bin/staging mark`, which replaces those steps' rows, and write the staging stamp, as in validate's step 7. A fix no step covers (a test, a comment) needs no re-run, but the user decides that, not you.
 6. Push. If the description no longer matches the code, run `write-pr-description` again and `gh pr edit <n> --body-file <pr-body.md>`.
