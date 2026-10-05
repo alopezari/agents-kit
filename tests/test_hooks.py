@@ -149,7 +149,12 @@ def the_agent_stays_out_of_the_approvals(base):
                      ("cd ~/.agents/repos && cd .. && touch approvals/x", "/tmp"), ("pushd ~/.agents && touch approvals/x", "/tmp"),
                      ("cd ~/.agents && dd if=/dev/zero of=approvals/x", "/tmp"), ("cat /dev/null > approvals/linear", kit),
                      ("grep x hooks > approvals/linear", kit), ("echo x > $HOME/.agents/approvals/linear", "/tmp"),
-                     ("cp x --target-directory=approvals", kit)]:
+                     ("cp x --target-directory=approvals", kit),
+                     ("output=\"$(tee ~/.agents/approvals/linear < /tmp/input)\"", "/tmp"),
+                     ("cd ~/.agents && python3 -c \"open('approvals/linear', 'w').close()\"", "/tmp"),
+                     ("touch \"$HOME/.agents/approvals/notes for user\"", "/tmp"),
+                     ("echo hi > \"$HOME/.agents/approvals/notes for user\"", "/tmp"),
+                     ("eval -- 'touch ~/.agents/approvals/x'", "/tmp")]:
         assert guard(cmd, cwd) == "deny", f"should deny from {cwd}: {cmd}"
     try:
         for cmd, cwd in [(c, kit) for c in [
@@ -158,7 +163,8 @@ def the_agent_stays_out_of_the_approvals(base):
                 "ls hooks", "rg -n 'approvals/turn' hooks",
                 "skills/self-review/bundle.sh main Correctness 'keeps the agent out of ~/.agents/approvals'",
                 "git log --grep approvals", "echo see approvals", "git commit -m approvals", "python3 -m pytest -k approvals",
-                "git grep -n approvals", "cd ~/.agents/approvals && ls"]] + [("git status", os.path.join(kit, "approvals"))]:
+                "git grep -n approvals", "cd ~/.agents/approvals && ls", "cat < ~/.agents/approvals/linear",
+                "wc -l < ~/.agents/approvals/linear", "command cat ~/.agents/approvals/linear"]] + [("git status", os.path.join(kit, "approvals"))]:
             assert guard(cmd, cwd) == "allow", f"should allow from {cwd}: {cmd}"
     finally:  # the other tests share this HOME
         shutil.rmtree(os.path.join(kit, "approvals"), ignore_errors=True)

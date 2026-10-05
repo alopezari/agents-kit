@@ -170,23 +170,28 @@ def touches_approvals(command, cwd):
     except ValueError:
         words = text.split()
     approvals = {os.path.normpath(design_files.APPROVALS_DIR), os.path.realpath(design_files.APPROVALS_DIR)}
-    places, program, redirected = {cwd}, None, False  # every directory a cd so far may have left the shell in
+    places, program, redirected, read_from = {cwd}, None, False, False  # every directory a cd may have left it in
     for i, word in enumerate(words):
         if set(word) <= SEPARATORS:
             program = None
             continue
         if REDIRECT.fullmatch(word):
-            redirected = True
+            redirected, read_from = ">" in word, "<" in word and ">" not in word
             continue
-        if program is None and not redirected and not re.fullmatch(r"\w+=.*", word):
+        if program is None and not redirected and not read_from and not re.fullmatch(r"\w+=.*", word) \
+                and word not in ("command", "builtin", "env", "time", "nohup", "exec"):
             program = os.path.basename(word)
         code = [w for w in words[max(0, i - 2):i] if w != "--"][-1:]
-        if code and re.fullmatch(r"-\w*[ce]|eval", code[0]) and word != command and touches_approvals(word, cwd):
-            return APPROVALS_WHY  # code an interpreter runs: bash -c [--], python3 -c, node -e, eval
-        if program in ("cd", "pushd") and not redirected:
+        runs = (code and re.fullmatch(r"-\w*[ce]|eval", code[0])) or "$(" in word or "`" in word
+        if runs and word != command and any(touches_approvals(word, place) for place in places):
+            return APPROVALS_WHY  # code the shell or an interpreter runs: bash -c [--], python3 -c, eval, $(…)
+        if read_from:
+            read_from = False
+        elif program in ("cd", "pushd") and not redirected:
             if os.path.basename(word) != program and not word.startswith("-") and "$" not in word and "`" not in word:
                 places |= {cd_into(place, word) for place in places}
-        elif (program not in READERS or redirected) and not re.search(r"\s", word):  # a sentence is no path
+        # A sentence is no path, but a quoted path can hold spaces.
+        elif (program not in READERS or redirected) and (not re.search(r"\s", word) or re.match(r"~|\.{0,2}/", word)):
             for target in {word, word.split("=", 1)[-1]}:  # of=approvals/x, --target-directory=approvals
                 if re.search(r"\.agents/approvals", target):
                     return APPROVALS_WHY
