@@ -143,13 +143,25 @@ def the_agent_stays_out_of_the_approvals(base):
                      ("git commit -m x && touch ~/.agents/approvals/linear", "/tmp"),
                      ("python3 -c \"open('/Users/me/.agents/approvals/linear', 'w')\"", "/tmp"),
                      ("bash -c 'cd ~/.agents && touch approvals/linear'", "/tmp"),
-                     ("python3 <<'EOF'\nopen('/Users/me/.agents/approvals/linear', 'w')\nEOF", "/tmp")]:
+                     ("python3 <<'EOF'\nopen('/Users/me/.agents/approvals/linear', 'w')\nEOF", "/tmp"),
+                     ("cat f\ntouch ~/.agents/approvals/x", "/tmp"), ("ls ~/.agents\nrm ~/.agents/approvals/x", "/tmp"),
+                     ("cd \"$HOME/.agents\" && touch approvals/x", "/tmp"), ("cd ${HOME}/.agents && touch approvals/x", "/tmp"),
+                     ("cd ~/.agents/repos && cd .. && touch approvals/x", "/tmp"), ("pushd ~/.agents && touch approvals/x", "/tmp"),
+                     ("cd ~/.agents && dd if=/dev/zero of=approvals/x", "/tmp"), ("cat /dev/null > approvals/linear", kit),
+                     ("grep x hooks > approvals/linear", kit), ("echo x > $HOME/.agents/approvals/linear", "/tmp"),
+                     ("cp x --target-directory=approvals", kit)]:
         assert guard(cmd, cwd) == "deny", f"should deny from {cwd}: {cmd}"
-    for cmd in ["grep -rn approvals hooks/", "git commit -m 'Keep ~/.agents/approvals out of reach'",
+    try:
+        for cmd, cwd in [(c, kit) for c in [
+                "grep -rn approvals hooks/", "git commit -m 'Keep ~/.agents/approvals out of reach'",
                 "git commit -m \"$(cat <<'EOF'\nGuard ~/.agents/approvals\nEOF\n)\"", "echo 'see ~/.agents/approvals'",
                 "ls hooks", "rg -n 'approvals/turn' hooks",
-                "skills/self-review/bundle.sh main Correctness 'keeps the agent out of ~/.agents/approvals'"]:
-        assert guard(cmd, kit) == "allow", f"should allow: {cmd}"
+                "skills/self-review/bundle.sh main Correctness 'keeps the agent out of ~/.agents/approvals'",
+                "git log --grep approvals", "echo see approvals", "git commit -m approvals", "python3 -m pytest -k approvals",
+                "git grep -n approvals", "cd ~/.agents/approvals && ls"]] + [("git status", os.path.join(kit, "approvals"))]:
+            assert guard(cmd, cwd) == "allow", f"should allow from {cwd}: {cmd}"
+    finally:  # the other tests share this HOME
+        shutil.rmtree(os.path.join(kit, "approvals"), ignore_errors=True)
 
 
 def only_the_user_grants_an_approval_in_a_dialog(base):
@@ -175,7 +187,15 @@ def only_the_user_grants_an_approval_in_a_dialog(base):
                 "cat <<EOF | sh\nbin/approve once s1 x\nEOF", "bash -e -c 'bin/approve once s1 x'", "echo ok; `bin/approve grant s1 x`",
                 "cat <<'EOF' | sh\nbin/approve once s1 x\nEOF", "cat > run.sh <<EOF\n$(bin/approve grant s1 x)\nEOF",
                 "printf -- \"- ran `bin/approve grant s1 x`\" > log.md", "echo \"$(bin/approve once s1 x)\"",
-                "printf '%s' 'text' \"`bin/approve grant s1 x`\""]:
+                "printf '%s' 'text' \"`bin/approve grant s1 x`\"",
+                # Each let through by a first version of this change: text only when a known program reads or prints it.
+                "x=\"$(cat <<EOF\n$(bin/approve grant s1 x)\nEOF\n)\"",
+                "gh pr create --title t --body \"$(cat <<EOF\nRan: $(bin/approve once s1 x)\nEOF\n)\"",
+                "echo 'bin/approve grant s1 x' | sh", "printf '%s\\n' 'bin/approve once s1 x' | bash",
+                "echo \"bin/approve once s1 x\" | tee run.sh | sh", "bash -c -- 'bin/approve grant s1 x'",
+                "ksh -c 'bin/approve grant s1 x'", "python3 -c \"os.system('bin/approve grant s1 x')\"",
+                "watch -n1 'bin/approve grant s1 x'", "sh -c \"$(echo 'bin/approve grant s1 x')\"",
+                "source <(echo 'bin/approve grant s1 x')", "echo 'bin/staging mark S1 PASS --by user' | bash"]:
         assert guard(cmd) == "deny", f"a shell still runs it: {cmd}"
 
 
