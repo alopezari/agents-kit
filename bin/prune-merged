@@ -98,10 +98,9 @@ def main():
             print(f"prune-merged: couldn't fetch {default}, so nothing was removed: {error}", file=sys.stderr)
             return 1
         try:
-            repo = phase_switches.checkout(os.getcwd())[0]
-        except (OSError, subprocess.SubprocessError) as error:
-            repo = None
-            print(f"prune-merged: couldn't name the repo, so deleted branches keep their phase switches: {error}")
+            repo, unnamed = phase_switches.checkout(os.getcwd())[0], None
+        except (OSError, subprocess.SubprocessError, ValueError) as error:
+            repo, unnamed = None, f"couldn't name the repo to find its phase switches: {error}"
         here = os.path.realpath(os.getcwd())
         cwds = process_cwds()
         failed = False
@@ -133,8 +132,12 @@ def main():
             checked_out = {b for p, b, _ in worktrees(root) if b and p not in gone}
             if symref or branch == local_default or branch in checked_out:
                 continue
-            switches = " and its phase switches" if repo and phase_switches.branch_switches(repo, branch) else ""
             if dry:
+                try:
+                    switches = (f", but {unnamed}" if unnamed else
+                                " and its phase switches" if phase_switches.branch_switches(repo, branch) else "")
+                except OSError as error:
+                    switches = f", but couldn't check its phase switches: {error}"
                 print(f"would delete branch {branch}{switches}")
                 continue
             try:
@@ -144,8 +147,12 @@ def main():
                 print(f"kept branch {branch}: {error}")
                 failed = True
                 continue
+            if unnamed:
+                print(f"deleted branch {branch}, but kept its phase switches: {unnamed}")
+                failed = True
+                continue
             try:
-                forgot = repo and phase_switches.forget_branch(repo, branch)
+                forgot = phase_switches.forget_branch(repo, branch, root)
                 print(f"deleted branch {branch}{' and its phase switches' if forgot else ''}")
             except OSError as error:
                 print(f"deleted branch {branch}, but kept its phase switches: {error}")
