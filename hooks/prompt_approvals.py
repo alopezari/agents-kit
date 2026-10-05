@@ -7,7 +7,8 @@ writes to it are allowed until the user's next message. A DROP or TRUNCATE state
 needs more than a mention: the message opens with the line `allow <statement>`, or does nothing but ask for it in
 plain words ("Sí, borra las bases de prueba", "drop the test databases").
 A message whose first line is `phase off|on <phase> [branch|repo|global]` switches a flow phase (phase_switches.py),
-and the hook tells the agent what is off now.
+and the hook tells the agent what is off now; one whose first line is `review-rounds <0-9> [branch|repo|global]`
+sets how many re-checks the self-review runs.
 Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the
 service only to read from it approves writes for that turn too.
 """

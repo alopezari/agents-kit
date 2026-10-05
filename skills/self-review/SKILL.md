@@ -80,15 +80,15 @@ Findings reported by two independent reviewers, or by both model families, deser
 
 ## 4. Re-check and report
 
-After fixes, run one re-check, then stop. Every cross-model pass finds something narrower than the last, so rounds never come back clean; the cap is a fixed number, not a clean pass:
+After fixes, run the user's number of re-check rounds, then stop. Every cross-model pass finds something narrower than the last, so rounds never come back clean; the cap is a fixed number, not a clean pass. Read it with `~/.agents/bin/phase review-rounds`: it prints the number and where it's set, `1 (default)` when the user set nothing, and only the user sets it. At `0`, skip items 1 and 2: the review ends with the first pass and its fixes. Each round runs items 1 and 2, then verifies and fixes as in item 3; the fixes of one round are what the next round's cross-model re-check reviews, and the last round's go to no reviewer:
 
 1. **Same model, whole change.** Re-run the Correctness lens yourself on the whole change, with the same base, naming the fixes in the goal. A fix can break what the first pass cleared, and this cheap pass is what sees it. For a very large change, split it into batches that together cover all of it, as in step 2.
 2. **Cross-model, the fixes only.** When a cross-model pass ran in step 2, send one Correctness re-check to the other model family, scoped to the fixes and the code they touch: never the whole change again, even on the High tier. Commit the change before the first cross-model pass, so its commit marks what that pass reviewed; `bundle.sh` adds every untracked file whatever the base, so new files left uncommitted would come back in full. Then run step 2's command with that commit as the base, naming in the goal the findings the fixes address; its merge-base with HEAD is that commit, so the bundle holds the fixes with their surrounding lines:
    ```bash
-   ~/.agents/skills/self-review/bundle.sh <commit the first pass reviewed> Correctness "<goal; fixes for: …>"
+   ~/.agents/skills/self-review/bundle.sh <commit the previous pass reviewed> Correctness "<goal; fixes for: …>"
    ```
-   Running on an OpenAI model, give Claude `git diff <that commit>` instead of the merge-base.
-3. **No further round.** Verify the re-check's findings as in step 3. Fix only those confirmed, high severity and cheap, each with a test, and don't send those fixes back to a reviewer. Everything else goes under Open in the report for the human to decide at PR review. A finding that would need another round to settle is a sign the change needs a different design, not another pass: say so under Open.
+   Running on an OpenAI model, give Claude `git diff <that commit>` instead of the merge-base. In a later round, commit before it too, and use the commit the previous round's cross-model re-check reviewed.
+3. **No round past the cap.** Verify the re-check's findings as in step 3. Fix only those confirmed, high severity and cheap, each with a test; after the last round, don't send those fixes back to a reviewer. Everything else goes under Open in the report for the human to decide at PR review. A finding that would need another round to settle is a sign the change needs a different design, not another pass: say so under Open.
 
 The stop hook re-runs `verify` when you finish; run it by hand (`python3 ~/.agents/hooks/stop_checks.py verify`) only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
 
@@ -105,10 +105,10 @@ Log every lens that ran, confirmed meaning a finding that survived step 3. The m
 Save the report to `$(~/.agents/bin/reports path review)`. Put it in the final message too (see AGENTS.md → Communication). Use this shape; it can go straight into the PR's validation notes:
 
 ```
-Self-review (risk: standard; lenses: correctness, tests, maintainability, security; cross-model: codex)
+Self-review (risk: standard; lenses: correctness, tests, maintainability, security; cross-model: codex; re-check rounds: 1 (default))
 Spec table, paths table and derived-data table (from the Correctness lens)
 Fixed:     <finding> — <file:line> — evidence: <failing test or output before the fix> — <test that now covers it>
 Rejected:  <finding> — evidence: <file:line where it's handled, or the command that disproves it>
-Open:      <finding> — <uncertain | confirmed, not fixed after the re-check: why | needs another round: the design question> — <evidence that would settle it, or the decision for the human>
+Open:      <finding> — <uncertain | confirmed, not fixed after the last re-check: why | needs another round: the design question> — <evidence that would settle it, or the decision for the human>
 Not run:   <lens or reviewer skipped, and why>
 ```

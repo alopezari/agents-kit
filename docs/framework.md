@@ -102,7 +102,7 @@ When the change needs manual tests on staging, `validate` ends by handing you th
 
 **`post_edit.py`**: PostToolUse hook for file edits, shared by Claude Code and Codex. Runs a fast syntax check on each edited file and records that the session edited files, so the Stop hook only runs its checks after real changes.
 
-**`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex. Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards, writes to it are allowed until the user's next message. A DROP or TRUNCATE statement guard_bash.py refuses needs more than a mention: the message opens with the line `allow <statement>`, or does nothing but ask for it in plain words ("Sí, borra las bases de prueba", "drop the test databases"). A message whose first line is `phase off|on <phase> [branch|repo|global]` switches a flow phase (phase_switches.py), and the hook tells the agent what is off now. Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the service only to read from it approves writes for that turn too.
+**`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex. Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards, writes to it are allowed until the user's next message. A DROP or TRUNCATE statement guard_bash.py refuses needs more than a mention: the message opens with the line `allow <statement>`, or does nothing but ask for it in plain words ("Sí, borra las bases de prueba", "drop the test databases"). A message whose first line is `phase off|on <phase> [branch|repo|global]` switches a flow phase (phase_switches.py), and the hook tells the agent what is off now; one whose first line is `review-rounds <0-9> [branch|repo|global]` sets how many re-checks the self-review runs. Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the service only to read from it approves writes for that turn too.
 
 **`stop_checks.py`**: Stop hook shared by Claude Code and Codex. After a turn that edited files since the last stop, looks at the lines the branch adds since the merge-base with the default branch (committed or not) and asks the agent to continue, once, for a skipped or focused test, a deleted test file, a debug leftover, a conflict marker, a possible secret, a new option read near a cache, a temporary compose override left behind, or a changed code file the spec's Change map doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read. Once a branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change with its context over NEW_CHANGE_NUDGE_TOKENS, tells the user, once, that a new session picks it up for less (Claude Code only: it reads the transcript). Every stop also starts each profile's `after-turn` in the background with the stop payload on stdin, and doesn't wait for it. The Change map question, verify and the CI question each stay quiet for a checkout whose user switched off the spec, verify or ci phase (phase_switches.py); the other checks always run.
 
@@ -211,9 +211,10 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 
 | Command, hook or agent | Capability | Codex has instead |
 |---|---|---|
-| `/flow`: Show where this branch is in the kit's flow, run verify without a turn, and switch a phase off or on | Phase and reports | `bin/reports brief` |
+| `/flow`: Show where this branch is in the kit's flow, run verify without a turn, and switch a phase off or on or set the self-review's re-check rounds | Phase and reports | `bin/reports brief` |
 |  | The phases switched off, with their scope, also on the default branch | `bin/phase switches` |
 |  | `/flow off\|on <phase> [--repo\|--global]`, typed at the prompt, switches a phase for the branch, the repo or every repo | a message whose first line is `phase off\|on <phase> [branch\|repo\|global]` |
+|  | `/flow review-rounds <0-9> [--repo\|--global]`, typed at the prompt, sets how many re-checks the self-review runs after its first pass (1 when unset) | a message whose first line is `review-rounds <0-9> [branch\|repo\|global]`; `bin/phase review-rounds` reads it |
 |  | Follows the branch into the main checkout once validate detaches the session's own | the commands of this list, run from the main checkout |
 |  | Stamps (verify, self-review, validate, staging), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
 |  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
@@ -285,6 +286,7 @@ free-branch <worktree>
 phase             print the cached phase at once; refresh it in the background when older than 15 s
 phase --refresh   work it out now from the spec, stamps, reports and PR state, cache it and print it
 phase switches    the phases the user switched off for this checkout, one per line with why (exit 1 unreadable)
+phase review-rounds  how many re-checks the self-review runs here, and where that's set: `2 (repo)`, `1 (default)`
 ```
 
 **`bin/pr-comments`**: Print the current branch's pull request comments that the follow-pr report doesn't list yet.

@@ -427,22 +427,31 @@ async function approveHelper($, kit, args, stdin = '') {
   }
 }
 
-// `/flow off|on <phase> [--repo|--global]`: phase_switches.py decides and records, in the session's own directory,
-// as for the message line `phase off …`, which the prompt hook reads from the same directory.
+// `/flow off|on <phase> [--repo|--global]` and `/flow review-rounds <0-9> [--repo|--global]`: phase_switches.py decides
+// and records, in the session's own directory, as for the message lines `phase off …` and `review-rounds …`, which the
+// prompt hook reads from the same directory.
 async function switchPhase($, e) {
   const args = e.args.trim().split(/\s+/)
   const action = args[0].toLowerCase()
+  const rounds = action === 'review-rounds'
   if (e.origin?.kind !== 'composer') {
-    const line = ['phase', action, ...args.slice(1).map((word) => word.replace(/^--/, ''))].join(' ')
-    return { text: `/flow ${action} switches a phase only when typed at this terminal's prompt: nothing was switched. A message opening with \`${line}\` does it from anywhere.` }
+    const line = [...(rounds ? [] : ['phase']), action, ...args.slice(1).map((word) => word.replace(/^--/, ''))].join(' ')
+    return { text: `/flow ${action} ${rounds ? 'sets the re-check rounds' : 'switches a phase'} only when typed at this terminal's prompt: nothing was switched. A message opening with \`${line}\` does it from anywhere.` }
   }
   const kit = await kitDir($)
   const done = await run($, ['python3', kit + '/hooks/phase_switches.py', 'set', action, ...args.slice(1)], await $.session.cwd())
   // After a failure too: a run that died or timed out may have written the switch first.
   refreshIfOpen($, 'a switch')
   const said = done.stdout?.trim()
+  if (done.exitCode === 0 && rounds) return { text: said, context: [`The user set the review re-check rounds with /flow: ${said} The self-review runs that many re-checks.`] }
   if (done.exitCode === 0) return { text: said, context: [`The user switched a phase with /flow: ${said} Skip the steps of the phases off.`] }
   if (done.exitCode === SWITCH_REFUSED) return { text: said }
+  if (rounds) {
+    return {
+      text: `Couldn't tell whether review-rounds was set to ${args[1] ?? 'a number'}: ${failureOf(done)}. Run \`~/.agents/bin/phase review-rounds\` to see the value.`,
+      context: ['A /flow review-rounds setting may or may not have been recorded: read `~/.agents/bin/phase review-rounds` before the self-review.'],
+    }
+  }
   return {
     text: `Couldn't tell whether ${args[1] ?? 'the phase'} was switched ${action}: ${failureOf(done)}. Run /flow to see what is off.`,
     context: ['A /flow switch may or may not have been recorded: check `~/.agents/bin/phase switches` before a step of the flow.'],
@@ -512,7 +521,7 @@ export function register(on) {
 
   on('session.start', async ($, e, next) => {
     const flow = FEATURES.find((feature) => feature.command === 'flow')
-    await $.command.register({ name: 'flow', description: flow.description, argumentHint: '[off|on <phase> [--repo|--global]]', immediate: true })
+    await $.command.register({ name: 'flow', description: flow.description, argumentHint: '[off|on <phase> | review-rounds <0-9> [--repo|--global]]', immediate: true })
     const waited = new AbortController()
     const registering = registerReviewers($)
       .catch((error) => $.ui.log('kit: review agents: ' + messageOf(error), { to: 'debug' }))
@@ -525,7 +534,7 @@ export function register(on) {
   })
 
   on('command.run', { command: 'flow' }, async ($, e) => {
-    if (/^(off|on)(\s|$)/i.test(e.args.trim())) return switchPhase($, e)
+    if (/^(off|on|review-rounds)(\s|$)/i.test(e.args.trim())) return switchPhase($, e)
     if ((await $.session.surfaces()).length === 0) return { text: asText(await collectOrSayWhy($)) }
     // Without closeOnEscape: Escape hands the keys back to the prompt and the pane stays, refreshing after each turn.
     await $.ui.open({ id: PANE, title: 'flow', focus: true })
