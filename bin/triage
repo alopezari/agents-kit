@@ -16,9 +16,6 @@ import re
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
-import phase_switches  # noqa: E402
-
 TEST_OR_DOC = re.compile(r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$"
                          r"|(^|/)(CHANGELOG|README|LICENSE)", re.I)
 STYLE_FILE = re.compile(r"\.(css|scss|sass|less)$", re.I)
@@ -369,11 +366,14 @@ def triage(rng=None):
 
 
 def cross_model(tier):
+    # Here, not at the top: the mod registers its lens agents from --lens-briefs, which must not need the hooks.
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
+    import phase_switches
     off, unreadable = phase_switches.phases_off_or_error(os.getcwd())
     if "second-model" in off:
         return "none (second-model switched off)"
     wanted = "per lens" if tier == "high" else ("correctness" if tier == "standard" else "none")
-    return f"{wanted} ({unreadable})" if unreadable else wanted
+    return f"{wanted} ({' '.join(unreadable.split())})" if unreadable else wanted  # git's stderr may hold newlines
 
 
 def lens_briefs():

@@ -7,7 +7,7 @@ description: Turn an issue or request into a short spec with checkable acceptanc
 
 Most expensive agent mistakes come from building the wrong thing well: a requirement read too literally, an edge case nobody named, an "obvious" scope that wasn't. A spec pins down *what* done means before any code exists. It is not an implementation plan; the approach is yours to choose while building.
 
-When `~/.agents/bin/phase switches` lists `spec`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name. With `second-model` listed, skip step 4 (the other model's reading) and say so when you show the spec.
+When `~/.agents/bin/phase switches` lists `spec`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name.
 
 ## 1. Gather
 
@@ -83,6 +83,8 @@ When the change goes through a one-way door (a schema or migration, a public con
 The PR description reuses them, and the self-review asks for them: its Maintainability lens for a new dependency, its Compatibility lens for a contract, schema or migration. The lint fails the section when it is empty or unfilled.
 
 ## 4. Get a second reading
+
+Skipped when `~/.agents/bin/phase switches` lists `second-model`: say so when you show the spec.
 
 The model that wrote the spec shares its blind spots, and a misread requirement is built well and then passes a review judged against the same spec. Have the other model family read it against the request. Pipe in the request as you gathered it: the issue, its comments and the linked PRs and discussion threads that shaped it, not the issue alone.
 
