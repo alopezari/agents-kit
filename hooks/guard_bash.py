@@ -202,7 +202,7 @@ def touches_approvals(command, cwd, runs=False):
                 places |= {cd_into(place, word) for place in places}
         elif program not in READERS or redirected:
             for target in {word, word.split("=", 1)[-1]}:  # of=approvals/x, --target-directory=approvals
-                if re.search(r"\s", target) and not re.match(r"~|\.{0,2}/", target):
+                if re.search(r"\s", target) and not re.match(r"~|\.{0,2}/|\$", target):
                     continue  # a sentence is no path, but a quoted path can hold spaces
                 if re.search(r"\.agents/approvals", target):
                     return APPROVALS_WHY

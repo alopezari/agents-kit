@@ -164,6 +164,7 @@ def the_agent_stays_out_of_the_approvals(base):
                      ("python3 -c \"file = '/Users/me/.agents/approvals/linear'; open(file, 'w')\"", "/tmp"),
                      ("node --eval \"require('fs').writeFileSync('/Users/me/.agents/approvals/x', '')\"", "/tmp"),
                      ("dd if=/dev/null of=\"~/.agents/approvals/my file\"", "/tmp"),
+                     ("touch \"$PWD/.agents/approvals/a b\"", "/tmp"),
                      ("python3 - <<'EOF'\ntest = '/Users/me/.agents/approvals/linear'\nopen(test, 'w')\nEOF", "/tmp")]:
         assert guard(cmd, cwd) == "deny", f"should deny from {cwd}: {cmd}"
     try:
