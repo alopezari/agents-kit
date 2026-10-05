@@ -138,7 +138,7 @@ def names_the_phases_the_user_switched_off(base):
             done = subprocess.run(["python3", os.path.join(KIT, "hooks", "prompt_approvals.py")], cwd=repo,
                                   input=json.dumps({"prompt": line, "session_id": "pr-validation", "cwd": repo}),
                                   capture_output=True, text=True)
-            assert "switched" in done.stdout, done.stdout + done.stderr
+            assert "Switched " in done.stdout, done.stdout + done.stderr
 
         def section():
             return subprocess.run([PR_VALIDATION], cwd=repo, capture_output=True, text=True)
