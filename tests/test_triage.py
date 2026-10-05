@@ -315,7 +315,12 @@ with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
         print(f"{'ok  ' if ok else 'FAIL'} cross-model, claude-review off, harness {harness or 'unknown'}: {got}")
     for variables, expected, case in (({"CODEX_THREAD_ID": "t", "CLAUDECODE": "1"}, "none (claude-review switched off)",
                                        "a Codex run started from Claude Code"),
-                                      ({"CLAUDECODE": "1"}, usual, "Claude Code by CLAUDECODE")):
+                                      ({"CLAUDECODE": "1"}, usual, "Claude Code by CLAUDECODE"),
+                                      ({"CODEX_THREAD_ID": "t"}, "none (claude-review switched off)", "Codex by CODEX_THREAD_ID"),
+                                      ({"AGENTS_HARNESS": "claude-code", "CODEX_THREAD_ID": "t"}, usual,
+                                       "AGENTS_HARNESS over CODEX_THREAD_ID"),
+                                      ({"AGENTS_HARNESS": "cursor"}, f"{usual} (unless the reviewer is off: claude-review)",
+                                       "a harness triage doesn't know")):
         got = cross_model(variables)
         ok = got == expected
         fail |= not ok
@@ -326,12 +331,12 @@ with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} both reviewers off, harness unknown: {got}")
     switch("on", "codex-review", "global")
-    switch("on", "claude-review", "global")
     switch("off", "second-model", "branch")
     got = cross_model("codex")
     ok = got == "none (second-model switched off)"
     fail |= not ok
-    print(f"{'ok  ' if ok else 'FAIL'} second-model off beats the reviewer's own on: {got}")
+    print(f"{'ok  ' if ok else 'FAIL'} second-model off names itself over the reviewer's own off: {got}")
+    switch("on", "claude-review", "global")
     switch("on", "second-model", "branch")
     switch("off", "codex-review", "repo")
     for harness, expected in (("claude-code", "none (codex-review switched off)"), ("codex", usual)):

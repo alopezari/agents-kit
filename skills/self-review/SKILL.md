@@ -8,7 +8,7 @@ effort: high
 
 Review your own change the way a skeptical senior reviewer would, before a human spends time on it. The goal is to find real defects; step 3 separates them from false alarms.
 
-When `~/.agents/bin/phase switches` lists `self-review`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name. With `second-model` listed, or the phase of the reviewer you'd call (`codex-review` when you run on a Claude model, `claude-review` on an OpenAI model), run no cross-model reviewer, whatever the tier (triage then says `cross-model: none (<that phase> switched off)`): the same-model lenses only, `cross-model: switched off` in the report's first line and `Not run: cross-model, <that phase> switched off by the user` in the report.
+When `~/.agents/bin/phase switches` lists `self-review`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name. With `second-model` listed, or the phase of the reviewer you'd call (`codex-review` when you run on a Claude model, `claude-review` on an OpenAI model), run no cross-model reviewer, whatever the tier (triage then says `cross-model: none (<that phase> switched off)`): the same-model lenses only, `cross-model: switched off` in the report's first line and `Not run: cross-model, <that phase> switched off by the user` in the report. When triage can't tell which harness runs it, it adds `(unless the reviewer is off: <phases>)`: check the phase of the reviewer you'd call yourself.
 
 Two things make self-review work:
 

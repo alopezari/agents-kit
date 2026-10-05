@@ -53,7 +53,9 @@ def review_lines(text):
                 for kind, summary in re.findall(r"^(Fixed|Rejected|Open):[ \t]*(\S.*)$", text, re.M)
                 if summary.strip().rstrip(".").lower() != "none"]
     counts = ", ".join(f"{sum(k == kind for k, _ in findings)} {kind.lower()}" for kind in ("Fixed", "Rejected", "Open"))
-    return [public(f"- {header}: {counts}.")] + [public(f"  - {kind}: {summary}") for kind, summary in findings]
+    not_run = [rest for rest in re.findall(r"^Not run:[ \t]*(\S.*)$", text, re.M) if rest.strip().rstrip(".").lower() != "none"]
+    return [public(f"- {header}: {counts}.")] + [public(f"  - {kind}: {summary}") for kind, summary in findings] + \
+        [public(f"  - Not run: {rest}") for rest in not_run]
 
 
 def validation_lines(text):
@@ -111,8 +113,9 @@ def main():
         lines += validation_lines(shown[validation])
     if shown.get(guide) is not None:
         lines += staging_lines(shown[guide], evidence)
+    # A reviewer's own switch skips nothing when the other reviewer runs: the review's Not run line says when it did.
     lines += [f"- {phase.capitalize()}: skipped by the user ({off[phase]})."
-              for phase in phase_switches.PHASES if phase in off]
+              for phase in phase_switches.PHASES if phase in off and phase not in ("claude-review", "codex-review")]
     print("## Validation\n\n" + "\n".join(lines))
 
 
