@@ -1,0 +1,1 @@
+- `bin/prune-merged` also removes the phases you switched for each branch it deletes (`deleted branch x and its phase switches`), so a new branch of that name starts with every phase on.

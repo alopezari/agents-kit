@@ -8,7 +8,8 @@ that fails: a stale ref would call unmerged work merged. A linked worktree goes 
 and removing it loses nothing: no changes, no ignored files other than regenerated ones (free-branch's rule), no
 submodules, not locked, not where this runs, and no running process has its working directory inside it (another
 session may still work there). A worktree it can't inspect is kept. Then each local branch merged into
-origin/<default> and checked out nowhere is deleted, if it hasn't moved since. Prints one line per linked worktree and
+origin/<default> and checked out nowhere is deleted, if it hasn't moved since, with the phases the user switched for it
+(`phase off … branch`): a new branch of that name starts with every phase on. Prints one line per linked worktree and
 deleted branch: what it removed, or why it kept it. --dry-run prints what it would do and changes nothing else.
 """
 import importlib.machinery
@@ -24,6 +25,8 @@ _spec = importlib.util.spec_from_loader("free_branch", _loader)
 free_branch = importlib.util.module_from_spec(_spec)
 _loader.exec_module(free_branch)
 REGENERATED, git, GitFailed = free_branch.REGENERATED, free_branch.git, free_branch.GitFailed
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
+import phase_switches  # noqa: E402
 
 
 def worktrees(root):
@@ -94,6 +97,11 @@ def main():
         except GitFailed as error:
             print(f"prune-merged: couldn't fetch {default}, so nothing was removed: {error}", file=sys.stderr)
             return 1
+        try:
+            repo = phase_switches.checkout(os.getcwd())[0]
+        except (OSError, subprocess.SubprocessError) as error:
+            repo = None
+            print(f"prune-merged: couldn't name the repo, so deleted branches keep their phase switches: {error}")
         here = os.path.realpath(os.getcwd())
         cwds = process_cwds()
         failed = False
@@ -125,15 +133,22 @@ def main():
             checked_out = {b for p, b, _ in worktrees(root) if b and p not in gone}
             if symref or branch == local_default or branch in checked_out:
                 continue
+            switches = " and its phase switches" if repo and phase_switches.branch_switches(repo, branch) else ""
             if dry:
-                print(f"would delete branch {branch}")
+                print(f"would delete branch {branch}{switches}")
                 continue
             try:
                 # Only if it still points where --merged saw it: a branch moved since keeps its new commits.
                 git(root, "update-ref", "--no-deref", "-d", ref, oid)
-                print(f"deleted branch {branch}")
             except GitFailed as error:
                 print(f"kept branch {branch}: {error}")
+                failed = True
+                continue
+            try:
+                forgot = repo and phase_switches.forget_branch(repo, branch)
+                print(f"deleted branch {branch}{' and its phase switches' if forgot else ''}")
+            except OSError as error:
+                print(f"deleted branch {branch}, but kept its phase switches: {error}")
                 failed = True
     except GitFailed as error:
         print(f"prune-merged: {error}", file=sys.stderr)

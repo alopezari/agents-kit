@@ -119,8 +119,47 @@ def keeps_a_worktree_it_cannot_inspect(base):
     assert out.returncode == 0 and f"kept {gone}: couldn't inspect" in out.stdout, out
 
 
+def forgets_the_phase_switches_of_the_branches_it_deletes(base):
+    main = setup(base)
+    home = os.path.join(base, "home")
+    os.makedirs(home)
+    env = {**os.environ, "HOME": home}  # the store lives in HOME: never the user's own
+    done, open_ = worktree(base, main, "done"), worktree(base, main, "open", merged=False)
+    for path in (done, open_):
+        switched = subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"],
+                                  cwd=path, capture_output=True, text=True, env=env)
+        assert switched.returncode == 0, switched.stdout + switched.stderr
+    store = os.path.join(home, ".agents", "approvals", "phases", "branch", "shop")
+    assert sorted(os.listdir(store)) == ["done.json", "open.json"], os.listdir(store)
+    dry = subprocess.run([PRUNE, "--dry-run"], cwd=main, capture_output=True, text=True, env=env)
+    assert "would delete branch done and its phase switches" in dry.stdout, dry.stdout
+    assert sorted(os.listdir(store)) == ["done.json", "open.json"], "--dry-run changes nothing"
+    out = subprocess.run([PRUNE], cwd=main, capture_output=True, text=True, env=env)
+    assert out.returncode == 0 and "deleted branch done and its phase switches" in out.stdout, out
+    assert os.listdir(store) == ["open.json"], f"a branch kept keeps its switches: {os.listdir(store)}"
+
+
+def deletes_the_branch_even_when_its_switches_stay(base):
+    main = setup(base)
+    home = os.path.join(base, "home")
+    os.makedirs(home)
+    env = {**os.environ, "HOME": home}
+    done = worktree(base, main, "done")
+    subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"], cwd=done,
+                   capture_output=True, text=True, env=env, check=True)
+    store = os.path.join(home, ".agents", "approvals", "phases", "branch", "shop")
+    os.chmod(store, 0o500)  # the switch file can't be removed
+    try:
+        out = subprocess.run([PRUNE], cwd=main, capture_output=True, text=True, env=env)
+    finally:
+        os.chmod(store, 0o700)
+    assert out.returncode == 1 and "deleted branch done, but kept its phase switches:" in out.stdout, out
+    assert "done" not in branches(main) and os.listdir(store) == ["done.json"], (branches(main), os.listdir(store))
+
+
 for test in (removes_merged_and_keeps_the_rest_with_reasons, keeps_the_worktree_it_runs_in,
-             a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect):
+             a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect,
+             forgets_the_phase_switches_of_the_branches_it_deletes, deletes_the_branch_even_when_its_switches_stay):
     base = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-"))
     try:
         test(base)

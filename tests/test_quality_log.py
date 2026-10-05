@@ -9,7 +9,7 @@ import tempfile
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 RESULTS = []
-KIT_FILES = ("bin/quality-log", "bin/repo-name", "review-mining/taxonomy.md", "hooks/review_stamp.py")
+KIT_FILES = ("bin/quality-log", "bin/repo-name", "review-mining/taxonomy.md", "hooks/review_stamp.py", "hooks/hooklog.py")
 
 
 def setup(base):

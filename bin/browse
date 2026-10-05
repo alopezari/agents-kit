@@ -17,6 +17,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
+from hooklog import session_harness  # noqa: E402
 from review_stamp import branch_key  # noqa: E402
 
 TOOLS = ["playwright-cli", "agent-browser"]
@@ -45,8 +46,7 @@ def log(event, **fields):
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
     with open(LOG, "a") as fh:
         fh.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": event, "run": run_key(),
-                             # Codex before Claude Code: a Codex run started from Claude Code inherits CLAUDECODE.
-                             "harness": (os.environ.get("AGENTS_HARNESS") or ("codex" if os.environ.get("CODEX_THREAD_ID") else "claude-code" if os.environ.get("CLAUDECODE") else "unknown")), **fields}) + "\n")
+                             "harness": session_harness() or "unknown", **fields}) + "\n")
 
 
 def assigned():
