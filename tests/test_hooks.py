@@ -2027,7 +2027,8 @@ def only_the_user_runs_the_switch_cli(base):
                 "python3 hooks/phase_switches.py > /dev/null set off spec", "(python3 hooks/phase_switches.py set off x)",
                 "cd ~/.agents/hooks && python3 -m phase_switches set off spec", "python3 -m hooks.phase_switches set off ci",
                 "eval 'python3 hooks/phase_switches.py set off x'", "bash -lc 'python3 hooks/phase_switches.py set off x'",
-                'echo "$(python3 hooks/phase_switches.py set off x)"']:
+                'echo "$(python3 hooks/phase_switches.py set off x)"', "bash -e -c 'python3 hooks/phase_switches.py set off x'",
+                "bash <<'EOF'\npython3 hooks/phase_switches.py set off x\nEOF", "cat <<EOF | sh\npython3 hooks/phase_switches.py set off x\nEOF"]:
         assert guard(cmd, repo) == "deny", f"should deny: {cmd}"
     for cmd in ["python3 -m py_compile hooks/phase_switches.py", "grep -n 'set' hooks/phase_switches.py",
                 "~/.agents/bin/phase switches", "git log --grep 'phase_switches set'", "echo phase_switches.py; set -e",

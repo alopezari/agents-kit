@@ -74,7 +74,8 @@ APPROVE_GRANT = re.compile(r"(?<![\w-])approve\b[\s\S]*\b(grant|once)\b")
 GRANTS_APPROVAL = ("`bin/approve grant|once`: an approval comes from the user, in their message or in the dialog Claude "
                    "Code shows when a guard blocks a call, not from the agent.")
 SWITCH_CLI = re.compile(r"(?<![\w-])phase_switches\b[\s\S]*\bset\b")
-HEREDOC_BODY = re.compile(r"<<-?[ \t]*(['\"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s)]|$)")
+# Only `$(cat <<EOF …)`, the form commit and PR bodies take: a heredoc fed to a shell is run.
+HEREDOC_BODY = re.compile(r"\$\(cat[ \t]+<<-?[ \t]*(['\"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s)]|$)")
 SHELLS = {"bash", "sh", "zsh", "dash"}
 SWITCHES_PHASE = ("`phase_switches.py set`: a phase is switched by the user, with a `phase off|on` line in their message or "
                   "`/flow off|on` in Claude Code, not by the agent.")
@@ -122,15 +123,16 @@ def switches_phase(command):
     (`bash -c '…'`, `eval`, `$(…)`). Unlike grants_approval, a quoted search pattern or commit message is only text."""
     if not SWITCH_CLI.search(command.replace(CONTINUATION, "")):
         return None
-    words = shell_words(HEREDOC_BODY.sub("<<heredoc", command))  # a commit or PR body written in a heredoc is text
+    words = shell_words(HEREDOC_BODY.sub("$(cat", command))  # a commit or PR body written in a heredoc is text
     for i, word in enumerate(words):
         before = words[i - 1] if i else ""
-        shell = os.path.basename(words[i - 2]) if i > 1 else ""
+        simple_command = list(itertools.takewhile(lambda w: not set(w) <= set(";&|()"), reversed(words[:i])))
+        shell = any(os.path.basename(w) in SHELLS for w in simple_command)
         runs_cli = re.search(r"(?<![\w-])phase_switches\.py$", word) or (
             before == "-m" and re.fullmatch(r"(?:hooks\.)?phase_switches", word))
         if runs_cli and words[i + 1:i + 2] == ["set"]:
             return SWITCHES_PHASE
-        run_as_command = (before == "eval" or (shell in SHELLS and re.fullmatch(r"-\w*c", before))
+        run_as_command = (before == "eval" or (shell and re.fullmatch(r"-\w*c", before))
                           or "$(" in word or "`" in word)
         if word != command and run_as_command and switches_phase(word):
             return SWITCHES_PHASE
