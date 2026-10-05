@@ -125,7 +125,8 @@ def runs_call(command, is_program, takes):
         program = next((os.path.basename(w) for w in simple_command if not re.fullmatch(r"\w+=.*", w)), "")
         end = (words[i + 1 + len(rest):i + 2 + len(rest)] or [""])[0]
         output_used = (end.startswith("|") and end != "||") or end.startswith(")")  # a pipe, or $(…) around it
-        text = program in READERS or program in ("git", "gh") or (program in ("echo", "printf") and not output_used)
+        git_runs = program == "git" and (before in ("-x", "--exec") or "=!" in word or word.startswith("!"))  # an alias
+        text = program in READERS or (program in ("git", "gh") and not git_runs) or (program in ("echo", "printf") and not output_used)
         if word != command and (not text or (substitutes and ("$(" in word or "`" in word))) \
                 and runs_call(word, is_program, takes):
             return True
@@ -158,12 +159,16 @@ def grants_approval(command):
     return GRANTS_APPROVAL if runs_call(command, lambda word, _: re.search(r"(?<![\w-])approve$", word), grant) else None
 
 
-def touches_approvals(command, cwd):
+def touches_approvals(command, cwd, runs=False):
     """A path into ~/.agents/approvals, written out or relative to the working directory or to a `cd` in the command
     (`cd ~/.agents && touch approvals/linear`), or in code an interpreter runs (`bash -c`, `python3 -c`, `eval`). What
     a reader (grep, cat, ls…) or cd is given, a sentence, and the prose of a message or an echo, is only text; a bare
-    name is a path only to a program that writes files; a redirect's target is always a path."""
-    text = re.sub(r"\$\{HOME\}|\$HOME\b", "~", without_prose(command).replace(CONTINUATION, "")).replace("\n", ";")
+    name is a path only to a program that writes files; a redirect's target is always a path. In code that `runs`,
+    any mention of the approvals counts: its readers and sentences are no shell's."""
+    prose_free = without_prose(command)
+    if (runs or "<<" in prose_free) and re.search(r"\.agents/approvals", prose_free):  # a heredoc left is run
+        return APPROVALS_WHY
+    text = re.sub(r"\$\{HOME\}|\$HOME\b", "~", prose_free.replace(CONTINUATION, "")).replace("\n", ";")
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|()<>")
         lexer.whitespace_split = True
@@ -177,7 +182,7 @@ def touches_approvals(command, cwd):
         return any(path == a or path.startswith(a + os.sep) for a in approvals)
     places, program, redirected, read_from = {cwd}, None, False, False  # every directory a cd may have left it in
     for i, word in enumerate(words):
-        if set(word) <= SEPARATORS:
+        if set(word) <= SEPARATORS or (set(word) <= SEPARATORS | {"<", ">"} and "(" in word):  # <(…), >(…)
             program = None
             continue
         if REDIRECT.fullmatch(word):
@@ -187,17 +192,18 @@ def touches_approvals(command, cwd):
                 and word not in ("command", "builtin", "env", "time", "nohup", "exec"):
             program = os.path.basename(word)
         code = [w for w in words[max(0, i - 2):i] if w != "--"][-1:]
-        runs = (code and re.fullmatch(r"-\w*[ce]|eval", code[0])) or "$(" in word or "`" in word
-        if runs and word != command and any(touches_approvals(word, place) for place in places):
+        runs_word = (code and re.fullmatch(r"-\w*[ce]|--eval|eval", code[0])) or "$(" in word or "`" in word
+        if runs_word and word != command and any(touches_approvals(word, place, runs=True) for place in places):
             return APPROVALS_WHY  # code the shell or an interpreter runs: bash -c [--], python3 -c, eval, $(…)
         if read_from:
             read_from = False
         elif program in ("cd", "pushd") and not redirected:
             if os.path.basename(word) != program and not word.startswith("-") and "$" not in word and "`" not in word:
                 places |= {cd_into(place, word) for place in places}
-        # A sentence is no path, but a quoted path can hold spaces.
-        elif (program not in READERS or redirected) and (not re.search(r"\s", word) or re.match(r"~|\.{0,2}/", word)):
+        elif program not in READERS or redirected:
             for target in {word, word.split("=", 1)[-1]}:  # of=approvals/x, --target-directory=approvals
+                if re.search(r"\s", target) and not re.match(r"~|\.{0,2}/", target):
+                    continue  # a sentence is no path, but a quoted path can hold spaces
                 if re.search(r"\.agents/approvals", target):
                     return APPROVALS_WHY
                 target = os.path.expanduser(target)

@@ -159,7 +159,12 @@ def the_agent_stays_out_of_the_approvals(base):
                      ("cd ~/.agents/approvals && sed -i '' 's|a|b|' linear", "/tmp"),
                      ("cd ~/.agents/approvals && find . -delete", "/tmp"),
                      ("cd ~/.agents/approvals && python3 -c \"import os; os.remove('linear')\"", "/tmp"),
-                     ("git log -1\nbash -lc 'touch ~/.agents/approvals/x'", "/tmp")]:
+                     ("git log -1\nbash -lc 'touch ~/.agents/approvals/x'", "/tmp"),
+                     ("cat <(rm ~/.agents/approvals/linear)", "/tmp"),
+                     ("python3 -c \"file = '/Users/me/.agents/approvals/linear'; open(file, 'w')\"", "/tmp"),
+                     ("node --eval \"require('fs').writeFileSync('/Users/me/.agents/approvals/x', '')\"", "/tmp"),
+                     ("dd if=/dev/null of=\"~/.agents/approvals/my file\"", "/tmp"),
+                     ("python3 - <<'EOF'\ntest = '/Users/me/.agents/approvals/linear'\nopen(test, 'w')\nEOF", "/tmp")]:
         assert guard(cmd, cwd) == "deny", f"should deny from {cwd}: {cmd}"
     try:
         for cmd, cwd in [(c, kit) for c in [
@@ -209,7 +214,8 @@ def only_the_user_grants_an_approval_in_a_dialog(base):
                 "source <(echo 'bin/approve grant s1 x')", "echo 'bin/staging mark S1 PASS --by user' | bash",
                 "git status\nbash -c 'bin/approve grant s1 x'", "ls\nsh -c \"bin/approve once s1 x\"",
                 "echo hi\neval 'bin/approve grant s1 x'", "grep foo bar\nbash -c 'bin/staging mark S1 PASS --by user'",
-                "echo done\nwatch -n1 'bin/approve grant s1 x'"]:
+                "echo done\nwatch -n1 'bin/approve grant s1 x'", "git rebase -x 'bin/approve grant s1 x' HEAD~1",
+                "git -c alias.z='!bin/approve grant s1 x' z", "git config alias.g '!bin/approve grant x' && git g"]:
         assert guard(cmd) == "deny", f"a shell still runs it: {cmd}"
 
 
