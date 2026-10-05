@@ -232,7 +232,8 @@ async function collect($) {
     else {
       flow = brief.stdout.split('\n').filter((line) => line && !/^\s/.test(line) && !line.startsWith('Read one in full'))
       if (flow[0] === 'phase: ') {
-        return { none: at.inMain ? 'Detached HEAD, and the main checkout is on the default branch: no change to follow.' : 'On the default branch: no change to follow.' }
+        const why = at.inMain ? 'Detached HEAD, and the main checkout is on the default branch: no change to follow.' : 'On the default branch: no change to follow.'
+        return { none: [why, ...flow.filter((line) => line.startsWith('off: '))].join(' ') }
       }
     }
     const [stamps, report, staging, ci, context, gatheredAt] = await Promise.all([
@@ -416,6 +417,26 @@ async function approveHelper($, kit, args, stdin = '') {
   }
 }
 
+// `/flow off|on <phase> [--repo|--global]`: phase_switches.py decides and records, in the session's own directory,
+// as for the message line `phase off …`, which the prompt hook reads from the same directory.
+async function switchPhase($, e) {
+  const [action, ...words] = e.args.trim().split(/\s+/)
+  words.unshift(action.toLowerCase())
+  if (e.origin?.kind !== 'composer') {
+    return { text: `/flow ${words[0]} switches a phase only when you type it at the prompt here: nothing was switched. A message opening with \`phase ${e.args.trim()}\` does it from anywhere.` }
+  }
+  const kit = await kitDir($)
+  const done = await run($, ['python3', kit + '/hooks/phase_switches.py', 'set', ...words], await $.session.cwd())
+  // A run that died or timed out may have written the switch before it did.
+  if (done.failure || ![0, 1].includes(done.exitCode)) {
+    return { text: `Couldn't tell whether ${words.slice(1).join(' ')} was switched ${words[0]}: ${failureOf(done)}. Run /flow to see what is off.` }
+  }
+  $.ui.panes()
+    .then((panes) => panes.some((pane) => pane.id === PANE) && gather($))
+    .catch((error) => $.ui.log('flow: refresh after a switch: ' + messageOf(error), { to: 'debug' }))
+  return { text: done.stdout.trim() }
+}
+
 function previewOf(tool, input) {
   const call = tool === 'Bash' ? String(input.command) : tool + ' ' + JSON.stringify(input, null, 2)
   if (call.length <= PREVIEW_CHARS) return call
@@ -472,7 +493,7 @@ export function register(on) {
 
   on('session.start', async ($, e, next) => {
     const flow = FEATURES.find((feature) => feature.command === 'flow')
-    await $.command.register({ name: 'flow', description: flow.description, immediate: true })
+    await $.command.register({ name: 'flow', description: flow.description, argumentHint: '[off|on <phase> [--repo|--global]]', immediate: true })
     const waited = new AbortController()
     const registering = registerReviewers($)
       .catch((error) => $.ui.log('kit: review agents: ' + messageOf(error), { to: 'debug' }))
@@ -484,7 +505,8 @@ export function register(on) {
     return next(e)
   })
 
-  on('command.run', { command: 'flow' }, async ($) => {
+  on('command.run', { command: 'flow' }, async ($, e) => {
+    if (/^(off|on)(\s|$)/i.test(e.args.trim())) return switchPhase($, e)
     if ((await $.session.surfaces()).length === 0) return { text: asText(await collectOrSayWhy($)) }
     // Without closeOnEscape: Escape hands the keys back to the prompt and the pane stays, refreshing after each turn.
     await $.ui.open({ id: PANE, title: 'flow', focus: true })

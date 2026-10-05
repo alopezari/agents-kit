@@ -73,6 +73,9 @@ MARKS_AS_USER = ("`bin/staging mark --by user`: a step marked as the user's come
 APPROVE_GRANT = re.compile(r"(?<![\w-])approve\b[\s\S]*\b(grant|once)\b")
 GRANTS_APPROVAL = ("`bin/approve grant|once`: an approval comes from the user, in their message or in the dialog Claude "
                    "Code shows when a guard blocks a call, not from the agent.")
+SWITCH_CLI = re.compile(r"(?<![\w-])phase_switches\.py\b[\s\S]*\bset\b")
+SWITCHES_PHASE = ("`phase_switches.py set`: a phase is switched by the user, with a `phase off|on` line in their message or "
+                  "`/flow off|on` in Claude Code, not by the agent.")
 REDIRECT = re.compile(r"&?[<>]+[&|]?")  # >, >>, 2>&1's >&, &>, >|, <<
 CONTINUATION = "\\\n"
 
@@ -109,6 +112,19 @@ def marks_as_user(command):
                 return MARKS_AS_USER
         elif word != command and STAGING_MARK.search(word.replace(CONTINUATION, "")) and marks_as_user(word):
             return MARKS_AS_USER
+    return None
+
+
+def switches_phase(command):
+    """`phase_switches.py set` in the command, read as grants_approval reads `bin/approve grant`."""
+    if not SWITCH_CLI.search(command.replace(CONTINUATION, "")):
+        return None
+    words = shell_words(command)
+    for i, word in enumerate(words):
+        if re.search(r"(?<![\w-])phase_switches\.py$", word) and words[i + 1:i + 2] == ["set"]:
+            return SWITCHES_PHASE
+        if word != command and switches_phase(word):
+            return SWITCHES_PHASE
     return None
 
 
@@ -925,7 +941,7 @@ def main():
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
                   or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd)
                   or impeccable_files(command, cwd, payload.get("session_id")) or marks_as_user(command)
-                  or grants_approval(command))
+                  or grants_approval(command) or switches_phase(command))
         if not reason:
             for pattern, why in RULES:
                 if re.search(pattern, command):

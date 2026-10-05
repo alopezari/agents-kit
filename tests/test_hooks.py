@@ -1949,7 +1949,7 @@ def a_phase_line_switches_phases_by_scope(base):
                  "Phase on-call rota is broken", "Phase off: spec is done"):
         assert phase_line(text, b) is None, f"not a phase line: {text!r}"
     for text, why in (("phase off create-pr", "Unknown phase"), ("phase off spec everywhere", "Unknown scope"),
-                      ("phase off spec repo please", "not as `phase off <phase>"), ("phase off", "not as `phase off <phase>")):
+                      ("phase off spec repo please", "isn't `off <phase>"), ("phase off", "isn't `off <phase>")):
         said = phase_line(text, b)
         assert said and why in said, f"{text!r}: {said}"
     outside = os.path.join(base, "not-a-repo")
@@ -2012,6 +2012,41 @@ def a_phase_line_switches_phases_by_scope(base):
         fh.write("{not json")
     done = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "switches"], cwd=a, capture_output=True, text=True)
     assert done.returncode == 1 and "Couldn't read" in done.stderr, done.stdout + done.stderr
+
+
+def only_the_user_runs_the_switch_cli(base):
+    """/flow off|on runs `phase_switches.py set`, the same code as the message line; the agent may not."""
+    repo = new_repo(base, "zz-phase-cli")
+    git(repo, "switch", "-q", "-c", "feature")
+    for cmd in ["python3 ~/.agents/hooks/phase_switches.py set off validate", "python3 hooks/phase_switches.py set on spec repo",
+                "cd /x && python3 '/Users/me/.agents/hooks/phase_switches.py' set off ci global",
+                "bash -c 'python3 ~/.agents/hooks/phase_switches.py set off verify'",
+                "~/.agents/bin/evidence A1 python3 ~/.agents/hooks/phase_switches.py set off audit",
+                "python3 ~/.agents/hooks/phase_switches.py \\\n  set off spec", "python3 hooks/phase_switches.py 'set' off spec",
+                "python3 hooks/phase_switches.py > /dev/null set off spec", "(python3 hooks/phase_switches.py set off x)"]:
+        assert guard(cmd, repo) == "deny", f"should deny: {cmd}"
+    for cmd in ["python3 -m py_compile hooks/phase_switches.py", "grep -n 'set' hooks/phase_switches.py",
+                "~/.agents/bin/phase switches", "git log --grep 'phase_switches set'", "echo phase_switches.py; set -e"]:
+        assert guard(cmd, repo) == "allow", f"should allow: {cmd}"
+
+    def cli(*args, cwd=repo):
+        return subprocess.run(["python3", H + "phase_switches.py", "set", *args], cwd=cwd, capture_output=True, text=True,
+                              env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+
+    done = cli("off", "validate", "repo")
+    assert done.returncode == 0 and phases_off(repo) == {"validate": "repo", "staging": "validate off"}, done.stdout
+    said = done.stdout.strip()
+    assert said.startswith("The user switched validate off for every branch of zz-phase-cli.") and "Confirm it" not in said, said
+    assert phase_line("phase off validate repo", repo).startswith(said), "the CLI says what the line says, to the user"
+    assert cli("on", "validate", "repo").returncode == 0 and phases_off(repo) == {}
+    assert cli("off", "spec", "--GLOBAL").returncode == 0 and phases_off(repo) == {"spec": "global"}, "the flag form /flow offers"
+    assert cli("on", "spec", "--global").returncode == 0 and phases_off(repo) == {}
+    for args, why in ((["off"], "`/flow off` isn't `off <phase>"), (["off", "create-pr"], "Unknown phase"),
+                      (["off", "spec", "everywhere"], "Unknown scope"), (["off", "spec", "repo", "now"], "isn't `off <phase>"),
+                      (["sideways", "spec"], "off or on")):
+        done = cli(*args)
+        assert done.returncode == 1 and why in done.stdout and phases_off(repo) == {}, (args, done.stdout, done.stderr)
+        assert "Tell the user" not in done.stdout, "the CLI speaks to the user, not to the agent"
 
 
 def pr_gate_skips_the_phases_switched_off(base):
@@ -2113,7 +2148,7 @@ def stop_skips_the_phases_switched_off(base):
     assert "conflict marker" in reason, f"the other checks run whatever is off: {reason}"
 
 
-TESTS = [a_phase_line_switches_phases_by_scope, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
+TESTS = [a_phase_line_switches_phases_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
          guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,

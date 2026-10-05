@@ -1,0 +1,1 @@
+- In Claude Code, `/flow off <phase> [--repo|--global]` and `/flow on …` switch a phase as the `phase off|on` message line does, and the `/flow` pane shows the phases switched off, on the default branch too. Only a command typed at the prompt switches anything.

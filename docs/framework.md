@@ -211,7 +211,9 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 
 | Command, hook or agent | Capability | Codex has instead |
 |---|---|---|
-| `/flow`: Show where this branch is in the kit's flow, and run verify without a turn | Phase and reports | `bin/reports brief` |
+| `/flow`: Show where this branch is in the kit's flow, run verify without a turn, and switch a phase off or on | Phase and reports | `bin/reports brief` |
+|  | The phases switched off, with their scope, also on the default branch | `bin/phase switches` |
+|  | `/flow off\|on <phase> [--repo\|--global]`, typed at the prompt, switches a phase for the branch, the repo or every repo | a message whose first line is `phase off\|on <phase> [branch\|repo\|global]` |
 |  | Follows the branch into the main checkout once validate detaches the session's own | the commands of this list, run from the main checkout |
 |  | Stamps (verify, self-review, validate, staging), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
 |  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
