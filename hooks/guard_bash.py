@@ -19,6 +19,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import harness, log  # noqa: E402
 import design_files  # noqa: E402
+import phase_switches  # noqa: E402
 import private_terms  # noqa: E402
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
@@ -371,7 +372,8 @@ def pr_args(command, match, group):
 
 def unreviewed_pr(command, cwd):
     """Opening a PR requires a self-review stamp for the exact current change, a validate stamp for a behavior
-    change, and, unless it's a draft, the staging steps before the merge passed."""
+    change, and, unless it's a draft, the staging steps before the merge passed; each unless the user switched its
+    phase off."""
     creates = list(re.finditer(COMMAND_START + PREFIXES + GH_PR + r"create\b([^;&|\n]*)", shell_code(command)))
     if not creates:
         return None
@@ -385,10 +387,12 @@ def unreviewed_pr(command, cwd):
     order = (" This command writes a stamp itself, but the guard checks before anything in it runs: run "
              "review_stamp.py write (and --kind validate) as a command of its own, then this one."
              if re.search(r"review_stamp\.py\b[^;&|\n]*\bwrite\b", re.sub(r"\\\n", " ", shell_code(command))) else "")
-    if not ok("check", "--kind", "review"):
+    off, unreadable = phase_switches.phases_off_or_error(cwd, time_left())
+    order += f" {unreadable}, so every phase counts as on: tell the user." if unreadable else ""
+    if "self-review" not in off and not ok("check", "--kind", "review"):
         return ("No self-review recorded for the current change. Run the self-review skill first "
                 "(it ends with review_stamp.py write); any edit after the review needs a new one." + order)
-    if ok("needs-validate") and not ok("check", "--kind", "validate"):
+    if "validate" not in off and ok("needs-validate") and not ok("check", "--kind", "validate"):
         return ("The change touches behavior but has no validation recorded for it. Run the validate skill "
                 "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run." + order)
     if any(not {"--draft", "-d"} & set(pr_args(command, match, 1)) for match in creates):
@@ -397,13 +401,18 @@ def unreviewed_pr(command, cwd):
 
 
 def staging_reason(cwd):
-    """Why `review_stamp.py staging` holds the PR in cwd, or None when it passes; a check that fails silently holds it too."""
+    """Why `review_stamp.py staging` holds the PR in cwd, or None when it passes or the user switched staging off; a
+    check that fails silently holds it too."""
+    off, unreadable = phase_switches.phases_off_or_error(cwd, time_left())
+    if "staging" in off:
+        return None
     stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
     result = subprocess.run([sys.executable, stamp, "staging"], cwd=cwd, capture_output=True, text=True,
                             timeout=time_left())
     if result.returncode == 0:
         return None
-    return result.stdout.strip() or f"Couldn't read the staging results: {result.stderr.strip()[-300:] or 'no output'}"
+    return ((result.stdout.strip() or f"Couldn't read the staging results: {result.stderr.strip()[-300:] or 'no output'}")
+            + (f" {unreadable}, so every phase counts as on: tell the user." if unreadable else ""))
 
 
 def unready_pr(command, cwd):

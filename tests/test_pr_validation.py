@@ -123,7 +123,37 @@ def a_missing_verify_or_review_fails_naming_it(base):
     assert out.returncode == 1 and review in out.stderr and out.stdout == "", ("no review report", out)
 
 
-for test in (builds_the_section_from_every_report, counts_open_findings_and_skips_absent_reports,
+def names_the_phases_the_user_switched_off(base):
+    # A HOME of its own: the switches live in the kit's approvals directory, and the real one is the user's.
+    home = os.path.join(base, "home")
+    os.makedirs(os.path.join(home, ".agents"))
+    for entry in set(os.listdir(KIT)) - {"approvals", "logs"}:
+        os.symlink(os.path.join(KIT, entry), os.path.join(home, ".agents", entry))
+    env = {**os.environ, "HOME": home}
+    repo = new_repo(base)
+    sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
+
+    def switch(line):
+        done = subprocess.run(["python3", os.path.join(KIT, "hooks", "prompt_approvals.py")], cwd=repo, env=env,
+                              input=f'{{"prompt": "{line}", "session_id": "pr-validation", "cwd": "{repo}"}}',
+                              capture_output=True, text=True)
+        assert "switched" in done.stdout, done.stdout + done.stderr
+
+    def section():
+        return subprocess.run([PR_VALIDATION], cwd=repo, env=env, capture_output=True, text=True)
+
+    write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
+    assert section().returncode == 1, "the self-review report is missing and its phase is on"
+    switch("phase off self-review")
+    switch("phase off validate global")
+    out = section()
+    assert out.returncode == 0, out.stderr
+    for line in ("- Verify: ", "- self-review: skipped by the user (branch).", "- validate: skipped by the user (global).",
+                 "- staging: skipped by the user (validate off)."):
+        assert line in out.stdout, (line, out.stdout)
+
+
+for test in (names_the_phases_the_user_switched_off, builds_the_section_from_every_report, counts_open_findings_and_skips_absent_reports,
              keeps_qualified_verdicts_and_bounded_sections,
              a_guide_with_only_steps_after_the_merge_claims_no_pending_staging,
              a_missing_verify_or_review_fails_naming_it):

@@ -2,7 +2,7 @@
 # Review and testing reports for the current repo and branch, stored next to the spec (outside the tree).
 #   reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
 #   reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
-#   reports                                          print every report that exists, with its path, then list the evidence
+#   reports                                          every report that exists, with its path, the evidence, the phases off
 #   reports brief                                    the phase and one line per report, to pick a branch up in a new session
 #   reports --branch <name> …                        the same, for another branch of this repo (a merged PR's, from main)
 set -euo pipefail
@@ -72,5 +72,9 @@ if [ -d "$evidence" ] && [ -n "$(ls -A "$evidence")" ]; then
   found=1
   printf '\n===== evidence — %s =====\n\n' "$evidence"
   ls -lA "$evidence" | awk 'NR > 1 { size = $5; $1 = $2 = $3 = $4 = $5 = $6 = $7 = $8 = ""; sub(/^ +/, ""); print $0 " (" size " bytes)" }'
+fi
+if [ $other_branch = 0 ]; then
+  switches="$("$HOME/.agents/bin/phase" switches 2>&1)" || switches="unknown (bin/phase switches failed: $switches)"
+  [ -z "$switches" ] || { found=1; printf '\n===== phases the user switched off =====\n\n%s\n' "$switches"; }
 fi
 [ $found = 1 ] || echo "No spec or reports yet for this branch (looked in $dir)."

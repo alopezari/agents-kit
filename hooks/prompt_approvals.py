@@ -6,6 +6,8 @@ Asking for a write is approving it: when the user's message names a service guar
 writes to it are allowed until the user's next message. A DROP or TRUNCATE statement guard_bash.py refuses
 needs more than a mention: the message opens with the line `allow <statement>`, or does nothing but ask for it in
 plain words ("Sí, borra las bases de prueba", "drop the test databases").
+A message whose first line is `phase off|on <phase> [branch|repo|global]` switches a flow phase (phase_switches.py),
+and the hook tells the agent what is off now.
 Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the
 service only to read from it approves writes for that turn too.
 """
@@ -19,6 +21,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import design_files  # noqa: E402
 import guard_mcp  # noqa: E402
+import phase_switches  # noqa: E402
 from hooklog import log  # noqa: E402
 
 STALE_SECONDS = 24 * 3600
@@ -29,6 +32,11 @@ def main():
         payload = json.load(sys.stdin)
     except ValueError:
         return 0
+    prompt = str(payload.get("prompt") or "")
+    switched = phase_switches.apply_phase_line(prompt, payload.get("cwd") or os.getcwd())
+    if switched:
+        log("prompt_approvals", "phase-switch", payload, switched)
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": switched}}))
     session = re.sub(r"[^\w-]", "", str(payload.get("session_id") or ""))
     if not session:
         return 0
@@ -41,7 +49,6 @@ def main():
                 shutil.rmtree(path, ignore_errors=True)
         except OSError:  # another session's hook removed it first
             pass
-    prompt = str(payload.get("prompt") or "")
     named = sorted(s for s in guard_mcp.guarded_services() if re.search(rf"(?<!\w){re.escape(s)}(?!\w)", prompt, re.I))
     named += design_files.approval_names(prompt)
     import guard_bash  # after the clearing: if it fails to load, the last turn's approvals are already gone

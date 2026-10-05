@@ -4,6 +4,9 @@ spec → build → self-review → validate → staging → create-pr → PR ope
 
   phase             print the cached phase at once; refresh it in the background when older than 15 s
   phase --refresh   work it out now from the spec, stamps, reports and PR state, cache it and print it
+  phase switches    the phases the user switched off for this checkout, one per line with why (exit 1 unreadable)
+
+A phase the user switched off (`phase off <phase>` in a message) leaves the flow, and the label ends `· off: <phases>`.
 
 Prints nothing outside a git repo, on the default branch or when detached.
 """
@@ -14,6 +17,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
+import phase_switches  # noqa: E402
 import review_stamp  # noqa: E402
 
 LOCAL_TTL = 15
@@ -83,17 +87,21 @@ def compute(previous):
         pr = {"MERGED": "ship", "CLOSED": "PR closed"}.get(state, "PR open" if followed or state == "OPEN" else None)
     if pr in ("ship", "PR closed"):
         return pr, extra
+    off, unreadable = phase_switches.phases_off_or_error(toplevel)
+    switched = (f" · off: {', '.join(p for p in phase_switches.PHASES if p in off)}" if off else "") + \
+        (" · switches unreadable" if unreadable else "")
 
     changed = review_stamp.changed_paths()[1]
     has_spec = os.path.exists(spec)
     if not has_spec and not changed:
-        return pr or "spec", extra
+        return (pr or ("build" if "spec" in off else "spec")) + switched, extra
     # The spec is a step, not a gate: a branch without one still has its real phase, flagged.
-    flag = "" if has_spec else " (no spec)"
+    flag = "" if has_spec or "spec" in off else " (no spec)"
     current = {kind: review_stamp.fingerprint_for(kind) for kind in ("verify", "review")}
     current.update({"verify-empty": current["verify"], "validate": current["review"], "staging": current["review"]})
     needs_validate = any(not review_stamp.NOT_BEHAVIOR.search(p) for p in changed)
     steps = [("build", "verify"), ("self-review", "review")] + ([("validate", "validate")] if needs_validate else [])
+    steps = [(step, kind) for step, kind in steps if {"build": "verify"}.get(step, step) not in off]
     checked_nothing = (not review_stamp.stamp_matches("verify", current["verify"])
                        and review_stamp.stamp_matches("verify-empty", current["verify-empty"]))
     done = [review_stamp.stamp_matches(kind, current[kind]) or (kind == "verify" and checked_nothing) for _, kind in steps]
@@ -103,23 +111,24 @@ def compute(previous):
     # On an open PR every check should cover what is pushed, so each one that doesn't is listed.
     checked = steps if pr else steps[:reached]
     redo = [("verify" if kind == "verify" else step) for (step, kind), ok in zip(checked, done) if not ok]
-    note = " · verify checked nothing" if checked_nothing else ""
+    note = " · verify checked nothing" if checked_nothing and "verify" not in off else ""
     try:
         staging = review_stamp.staging_phase(os.path.join(reports, f"staging-guide-{suffix}.md"),
                                              os.path.join(reports, f"evidence-{suffix}"),
                                              review_stamp.stamp_matches("staging", current["staging"]))
     except OSError:
         staging = "staging (you)"
+    staging = None if "staging" in off else staging
     # A re-run after staging once passed (its stamp exists) is outstanding whatever it shows: a FAIL, a step left.
     if pr and (staging == "staging: re-run" or (staging and os.path.exists(review_stamp.stamp_path("staging")))):
         redo.append("staging")
     if pr:
-        return pr + (f" · redo {', '.join(redo)}" if redo else "") + note, extra
+        return pr + (f" · redo {', '.join(redo)}" if redo else "") + note + switched, extra
     if reached < len(steps):
         label = steps[reached][0]
     else:
         label = staging or "create-pr"
-    return label + (f" · redo {', '.join(redo)}" if redo else "") + note + flag, extra
+    return label + (f" · redo {', '.join(redo)}" if redo else "") + note + flag + switched, extra
 
 
 def refresh(files):
@@ -154,6 +163,16 @@ def refresh_in_background(lock):
 
 
 def main():
+    if sys.argv[1:2] == ["switches"]:
+        try:
+            off = phase_switches.phases_off(os.getcwd())
+        except phase_switches.StoreError as error:
+            print(error, file=sys.stderr)
+            return 1
+        for phase in phase_switches.PHASES:
+            if phase in off:
+                print(f"{phase}: off ({off[phase]})")
+        return 0
     files = cache_files()
     if not files:
         return 0

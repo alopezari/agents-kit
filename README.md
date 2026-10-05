@@ -1,6 +1,6 @@
 # agents-kit
 
-One setup for every coding agent you use (Claude Code, Codex): the same instructions, skills, guardrails and checks, whichever harness runs the work. Agents are told to work like a staff engineer, and hooks check that they did: irreversible and outward-facing commands stop and wait for you, every turn that edits code is verified, and a pull request can't be opened until the exact change has been self-reviewed.
+One setup for every coding agent you use (Claude Code, Codex): the same instructions, skills, guardrails and checks, whichever harness runs the work. Agents are told to work like a staff engineer, and hooks check that they did: irreversible and outward-facing commands stop and wait for you, every turn that edits code is verified, and a pull request can't be opened until the exact change has been self-reviewed, unless you switch that phase off (`phase off self-review` as the first line of a message).
 
 **[docs/framework.md](docs/framework.md)** is the full reference: every hook, guard rule, check, skill, tool and scheduled job, with diagrams. It is generated from the code on every commit, so it describes what the kit does now.
 

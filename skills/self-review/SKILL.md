@@ -8,6 +8,8 @@ effort: high
 
 Review your own change the way a skeptical senior reviewer would, before a human spends time on it. The goal is to find real defects; step 3 separates them from false alarms.
 
+When `~/.agents/bin/phase switches` lists `self-review`, the user switched this phase off: say so in a line and skip it, unless they asked for it by name.
+
 Two things make self-review work:
 
 1. **Focus.** One reviewer checking everything finds the obvious. Several reviewers, each with one lens, find more.
