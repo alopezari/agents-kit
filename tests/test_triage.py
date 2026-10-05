@@ -21,7 +21,8 @@ SHOP_SENSE = ["return wc_get_checkout_url();", "'wc-blocks-checkout',", "if ( is
               "// Redirect to the checkout page", "git checkout-free refund( $order );", "// Render the checkout-page",
               "function remember_checkout_details() { return get_checkout_url(); }", "process_checkout(cart, cwd)",
               "renderCheckout(root);", "goToCheckout(path)", "$this->checkout(path)", "router.push(checkout(path))",
-              "new Checkout(root, opts)", "cart.checkout(root)", "self.checkout(cwd, order)", "return checkout(root, cart);"]
+              "new Checkout(root, opts)", "cart.checkout(root)", "self.checkout(cwd, order)", "return checkout(root, cart);",
+              "Cart::checkout(cwd)", "checkout(cwd.order)"]
 
 
 def payments_signal(line):

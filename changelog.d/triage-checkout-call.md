@@ -1,1 +1,1 @@
-- `bin/triage` no longer reads a function called on a directory (`checkout(cwd)`, `in_checkout(root, …)`) as a payments signal, so kit changes to the phase switches stop coming out as high risk.
+- `bin/triage` no longer reads the kit's own calls on a directory (`checkout(cwd)`, `in_checkout(root, …)`, `phase_switches.checkout(os.getcwd())`) as a payments signal, so kit changes to the phase switches stop coming out as high risk.
