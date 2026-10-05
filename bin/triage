@@ -374,13 +374,14 @@ def cross_model(tier):
     harness = os.environ.get("AGENTS_HARNESS") or ("codex" if os.environ.get("CODEX_THREAD_ID") else
                                                    "claude-code" if os.environ.get("CLAUDECODE") else None)
     reviewer = {"codex": "claude-review", "claude-code": "codex-review"}.get(harness)
-    skipped = next((phase for phase in ("second-model", reviewer) if phase in off), None)
+    reviewers_off = [phase for phase in ("claude-review", "codex-review") if phase in off]
+    skipped = "second-model" if "second-model" in off else ", ".join(reviewers_off) if len(reviewers_off) == 2 else \
+        reviewer if reviewer in off else None
     if skipped:
         return f"none ({skipped} switched off)"
     wanted = "per lens" if tier == "high" else ("correctness" if tier == "standard" else "none")
     if unreadable:
         return f"{wanted} ({' '.join(unreadable.split())})"  # git's stderr may hold newlines
-    reviewers_off = [phase for phase in ("claude-review", "codex-review") if phase in off]
     if not harness and reviewers_off:
         return f"{wanted} (unless the reviewer is off: {', '.join(reviewers_off)})"
     return wanted

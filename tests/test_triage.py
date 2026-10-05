@@ -285,9 +285,9 @@ with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
 
     def cross_model(harness=None):
         run_env = env
-        if harness is not None:  # "" leaves triage nothing to tell the harness by
+        if harness is not None:  # "" leaves triage nothing to tell the harness by; a dict sets the variables it names
             run_env = {k: v for k, v in env.items() if k not in ("AGENTS_HARNESS", "CODEX_THREAD_ID", "CLAUDECODE")}
-            run_env.update({"AGENTS_HARNESS": harness} if harness else {})
+            run_env.update(harness if isinstance(harness, dict) else {"AGENTS_HARNESS": harness} if harness else {})
         out = subprocess.run([TRIAGE, "--json"], cwd=repo, capture_output=True, text=True, env=run_env)
         return json.loads(out.stdout)["cross_model"] if out.returncode == 0 else out.stderr.strip()[-200:]
     usual = cross_model()
@@ -313,7 +313,26 @@ with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
         ok = got == expected
         fail |= not ok
         print(f"{'ok  ' if ok else 'FAIL'} cross-model, claude-review off, harness {harness or 'unknown'}: {got}")
+    for variables, expected, case in (({"CODEX_THREAD_ID": "t", "CLAUDECODE": "1"}, "none (claude-review switched off)",
+                                       "a Codex run started from Claude Code"),
+                                      ({"CLAUDECODE": "1"}, usual, "Claude Code by CLAUDECODE")):
+        got = cross_model(variables)
+        ok = got == expected
+        fail |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} cross-model, claude-review off, {case}: {got}")
+    switch("off", "codex-review", "global")
+    got = cross_model("")
+    ok = got == "none (claude-review, codex-review switched off)"
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} both reviewers off, harness unknown: {got}")
+    switch("on", "codex-review", "global")
     switch("on", "claude-review", "global")
+    switch("off", "second-model", "branch")
+    got = cross_model("codex")
+    ok = got == "none (second-model switched off)"
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} second-model off beats the reviewer's own on: {got}")
+    switch("on", "second-model", "branch")
     switch("off", "codex-review", "repo")
     for harness, expected in (("claude-code", "none (codex-review switched off)"), ("codex", usual)):
         got = cross_model(harness)
