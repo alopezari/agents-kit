@@ -162,9 +162,10 @@ def names_the_phases_the_user_switched_off(base):
         assert "A1" not in out.stdout and "1 PASS" not in out.stdout, f"a report from before the switch isn't shown: {out.stdout}"
         switch("phase off claude-review global")
         assert "Claude-review" not in section().stdout, "Codex reviewed this Claude Code change: nothing was skipped"
-        write(repo, "review", "Fixed:     x — a.py:1\nNot run:   cross-model, codex-review switched off by the user\n")
+        write(repo, "review", "Fixed:     x — a.py:1\nNot run:   cross-model, codex-review switched off by the user — /tmp/x\n")
         switch("phase on self-review")
-        assert "  - Not run: cross-model, codex-review switched off by the user" in section().stdout, section().stdout
+        out = section().stdout
+        assert "  - Not run: cross-model, codex-review switched off by the user\n" in out and "/tmp/x" not in out, out
         switch("phase on validate global")
         assert "Validate: skipped" not in section().stdout, "switched back on, the phase isn't skipped"
 

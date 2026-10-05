@@ -53,7 +53,8 @@ def review_lines(text):
                 for kind, summary in re.findall(r"^(Fixed|Rejected|Open):[ \t]*(\S.*)$", text, re.M)
                 if summary.strip().rstrip(".").lower() != "none"]
     counts = ", ".join(f"{sum(k == kind for k, _ in findings)} {kind.lower()}" for kind in ("Fixed", "Rejected", "Open"))
-    not_run = [rest for rest in re.findall(r"^Not run:[ \t]*(\S.*)$", text, re.M) if rest.strip().rstrip(".").lower() != "none"]
+    not_run = [rest.split(" — ")[0].strip() for rest in re.findall(r"^Not run:[ \t]*(\S.*)$", text, re.M)
+               if rest.strip().rstrip(".").lower() != "none"]
     return [public(f"- {header}: {counts}.")] + [public(f"  - {kind}: {summary}") for kind, summary in findings] + \
         [public(f"  - Not run: {rest}") for rest in not_run]
 
