@@ -443,7 +443,10 @@ async function switchPhase($, e) {
   const said = done.stdout?.trim()
   if (done.exitCode === 0) return { text: said, context: [`The user switched a phase with /flow: ${said} Skip the steps of the phases off.`] }
   if (done.exitCode === SWITCH_REFUSED) return { text: said }
-  return { text: `Couldn't tell whether ${args[1] ?? 'the phase'} was switched ${action}: ${failureOf(done)}. Run /flow to see what is off.` }
+  return {
+    text: `Couldn't tell whether ${args[1] ?? 'the phase'} was switched ${action}: ${failureOf(done)}. Run /flow to see what is off.`,
+    context: ['A /flow switch may or may not have been recorded: check `~/.agents/bin/phase switches` before a step of the flow.'],
+  }
 }
 
 function refreshIfOpen($, after) {

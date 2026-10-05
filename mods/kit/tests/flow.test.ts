@@ -354,7 +354,8 @@ test('a switch CLI that crashes, fails or times out never says nothing was switc
   ] as const) {
     runs = repo({ [SWITCH_CLI + ' off spec']: answer })
     ran.length = 0
-    const text = (await $.command.run(typed('off spec'))).text
+    const { text, context } = await $.command.run(typed('off spec'))
+    expect(context).toEqual(['A /flow switch may or may not have been recorded: check `~/.agents/bin/phase switches` before a step of the flow.'])
     expect(text).toMatch(/^Couldn't tell whether spec was switched off: /)
     expect(text).toMatch(said)
     expect(text).toContain('Run /flow to see what is off.')

@@ -2031,7 +2031,9 @@ def only_the_user_runs_the_switch_cli(base):
         assert guard(cmd, repo) == "deny", f"should deny: {cmd}"
     for cmd in ["python3 -m py_compile hooks/phase_switches.py", "grep -n 'set' hooks/phase_switches.py",
                 "~/.agents/bin/phase switches", "git log --grep 'phase_switches set'", "echo phase_switches.py; set -e",
-                "rg -n 'phase_switches.py set' hooks", 'git commit -m "Run phase_switches.py set from /flow"']:
+                "rg -n 'phase_switches.py set' hooks", 'git commit -m "Run phase_switches.py set from /flow"',
+                "grep -c 'phase_switches.py set' tests/test_hooks.py",
+                "git commit -m \"$(cat <<'EOF'\nDocument phase_switches.py set\nEOF\n)\""]:
         assert guard(cmd, repo) == "allow", f"should allow: {cmd}"
 
     def cli(*args, cwd=repo):
