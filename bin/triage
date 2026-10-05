@@ -369,11 +369,9 @@ def cross_model(tier):
     # Here, not at the top: the mod registers its lens agents from --lens-briefs, which must not need the hooks.
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
     import phase_switches
+    from hooklog import session_harness
     off, unreadable = phase_switches.phases_off_or_error(os.getcwd())
-    # Codex before Claude Code: a Codex run started from Claude Code inherits CLAUDECODE.
-    harness = os.environ.get("AGENTS_HARNESS") or ("codex" if os.environ.get("CODEX_THREAD_ID") else
-                                                   "claude-code" if os.environ.get("CLAUDECODE") else None)
-    reviewer = {"codex": "claude-review", "claude-code": "codex-review"}.get(harness)
+    reviewer = {"codex": "claude-review", "claude-code": "codex-review"}.get(session_harness())
     reviewers_off = [phase for phase in ("claude-review", "codex-review") if phase in off]
     if "second-model" in off:
         return "none (second-model switched off)"

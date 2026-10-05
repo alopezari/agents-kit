@@ -21,6 +21,7 @@ import time
 KIT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")
 TAXONOMY = os.path.join(KIT, "review-mining", "taxonomy.md")
 sys.path.insert(0, os.path.join(KIT, "hooks"))
+from hooklog import session_harness  # noqa: E402
 from review_stamp import quality_log  # noqa: E402
 
 
@@ -90,8 +91,7 @@ def main():
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": kind, "name": name, "tier": tier,
             "repo": subprocess.run([os.path.expanduser("~/.agents/bin/repo-name")], capture_output=True,
                                    text=True).stdout.strip() or os.path.basename(os.getcwd()),
-            # Codex before Claude Code: a Codex run started from Claude Code inherits CLAUDECODE.
-            "branch": git("branch", "--show-current"), "harness": (os.environ.get("AGENTS_HARNESS") or ("codex" if os.environ.get("CODEX_THREAD_ID") else "claude-code" if os.environ.get("CLAUDECODE") else "unknown")),
+            "branch": git("branch", "--show-current"), "harness": session_harness() or "unknown",
             **fields,
         }) + "\n")
     return 0

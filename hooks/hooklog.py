@@ -13,6 +13,13 @@ def harness(payload):
     return os.environ.get("AGENTS_HARNESS") or ("codex" if payload.get("turn_id") else "claude-code")
 
 
+def session_harness():
+    """The harness of the session running this tool, from its environment (a tool gets no hook payload), or None."""
+    # Codex before Claude Code: a Codex run started from Claude Code inherits CLAUDECODE.
+    return os.environ.get("AGENTS_HARNESS") or ("codex" if os.environ.get("CODEX_THREAD_ID") else
+                                                "claude-code" if os.environ.get("CLAUDECODE") else None)
+
+
 def log(hook, decision, payload, detail):
     try:
         os.makedirs(os.path.dirname(LOG), exist_ok=True)

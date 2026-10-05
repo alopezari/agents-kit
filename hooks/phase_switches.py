@@ -177,6 +177,32 @@ def switch(action, words, cwd, form):
 REFUSED = 3  # not 1: Python exits 1 on a crash, which may come after the write
 
 
+def branch_switches(repo, branch):
+    """The file holding a branch's own switches, or None when it has none. Raises OSError when it can't tell."""
+    path = dict(store_files(repo, branch))["branch"]
+    try:
+        os.stat(path)  # not os.path.exists, which says no when the store can't be searched
+    except FileNotFoundError:
+        return None
+    return path
+
+
+def forget_branch(repo, branch, common):
+    """Remove a deleted branch's switches and bin/phase's cached label for it, so a new branch of that name starts with
+    every phase on. True when it had switches. Raises OSError."""
+    try:
+        os.remove(review_stamp.phase_cache(common, branch))
+    except FileNotFoundError:
+        pass
+    try:
+        with open(os.path.join(STORE, ".lock"), "w") as lock:  # not under a switch() writing it back
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            os.remove(dict(store_files(repo, branch))["branch"])
+    except FileNotFoundError:  # no store, or no switches for this branch
+        return False
+    return True
+
+
 def main():
     """`set <off|on> <phase> [branch|repo|global]`, a scope also as `--repo`: the /flow command's way in. The shell
     guard keeps the agent from running it; the mod runs it only for a command the user typed."""

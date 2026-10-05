@@ -10,6 +10,8 @@ import tempfile
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 PRUNE = os.path.join(KIT, "bin", "prune-merged")
 RESULTS = []
+# prune-merged deletes phase switches in HOME's store: never the user's own, whatever the test sets.
+os.environ["HOME"] = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-home-"))
 
 
 def sh(cwd, *cmd):
@@ -119,8 +121,87 @@ def keeps_a_worktree_it_cannot_inspect(base):
     assert out.returncode == 0 and f"kept {gone}: couldn't inspect" in out.stdout, out
 
 
+def forgets_the_phase_switches_of_the_branches_it_deletes(base):
+    main = setup(base)
+    home = os.path.join(base, "home")
+    os.makedirs(home)
+    env = {**os.environ, "HOME": home}  # the store lives in HOME: never the user's own
+    done, open_ = worktree(base, main, "done"), worktree(base, main, "open", merged=False)
+    for path in (done, open_):
+        switched = subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"],
+                                  cwd=path, capture_output=True, text=True, env=env)
+        assert switched.returncode == 0, switched.stdout + switched.stderr
+    store = os.path.join(home, ".agents", "approvals", "phases", "branch", "shop")
+    assert sorted(os.listdir(store)) == ["done.json", "open.json"], os.listdir(store)
+    dry = subprocess.run([PRUNE, "--dry-run"], cwd=main, capture_output=True, text=True, env=env)
+    assert "would delete branch done and its phase switches" in dry.stdout, dry.stdout
+    assert sorted(os.listdir(store)) == ["done.json", "open.json"], "--dry-run changes nothing"
+    label = os.path.join(main, ".git", "agents", "phase", "done.json")  # bin/phase's cached label, 15 s fresh
+    os.makedirs(os.path.dirname(label), exist_ok=True)
+    open(label, "w").write('{"label": "audit off"}')
+    out = subprocess.run([PRUNE], cwd=main, capture_output=True, text=True, env=env)
+    assert out.returncode == 0 and "deleted branch done and its phase switches" in out.stdout, out
+    assert os.listdir(store) == ["open.json"], f"a branch kept keeps its switches: {os.listdir(store)}"
+    assert not os.path.exists(label), "a new branch named done must not show the old branch's label"
+
+
+def says_when_it_cannot_check_the_switches(base):
+    main = setup(base)
+    home = os.path.join(base, "home")
+    os.makedirs(home)
+    env = {**os.environ, "HOME": home}
+    done = worktree(base, main, "done")
+    subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"], cwd=done,
+                   capture_output=True, text=True, env=env, check=True)
+    sh(main, "git", "worktree", "remove", done)
+    store = os.path.join(home, ".agents", "approvals", "phases", "branch", "shop")
+    os.chmod(store, 0o600)  # can't be searched: whether done.json is there is unknown, not no
+    try:
+        dry = subprocess.run([PRUNE, "--dry-run"], cwd=main, capture_output=True, text=True, env=env)
+    finally:
+        os.chmod(store, 0o700)
+    assert "would delete branch done, but couldn't check its phase switches:" in dry.stdout, dry
+
+
+def keeps_the_switches_when_it_cannot_name_the_repo(base):
+    main = setup(base)
+    worktree(base, main, "done")
+    sh(main, "git", "worktree", "remove", os.path.join(base, "shop-done"))
+    # git answers prune-merged but not phase_switches.checkout: its failure is the one under test
+    run = ("import importlib.machinery, sys; sys.argv = [sys.argv[1]]; "
+           "import importlib.util; loader = importlib.machinery.SourceFileLoader('prune', sys.argv[0]); "
+           "prune = importlib.util.module_from_spec(importlib.util.spec_from_loader('prune', loader)); "
+           "loader.exec_module(prune); "
+           "prune.phase_switches.checkout = lambda cwd: (_ for _ in ()).throw(OSError('git rev-parse failed')); "
+           "sys.exit(prune.main())")
+    out = subprocess.run(["python3", "-B", "-c", run, PRUNE], cwd=main, capture_output=True, text=True)
+    assert out.returncode == 1, out
+    assert "deleted branch done, but kept its phase switches: couldn't name the repo" in out.stdout, out.stdout
+    assert "done" not in branches(main)
+
+
+def deletes_the_branch_even_when_its_switches_stay(base):
+    main = setup(base)
+    home = os.path.join(base, "home")
+    os.makedirs(home)
+    env = {**os.environ, "HOME": home}
+    done = worktree(base, main, "done")
+    subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"], cwd=done,
+                   capture_output=True, text=True, env=env, check=True)
+    store = os.path.join(home, ".agents", "approvals", "phases", "branch", "shop")
+    os.chmod(store, 0o500)  # the switch file can't be removed
+    try:
+        out = subprocess.run([PRUNE], cwd=main, capture_output=True, text=True, env=env)
+    finally:
+        os.chmod(store, 0o700)
+    assert out.returncode == 1 and "deleted branch done, but kept its phase switches:" in out.stdout, out
+    assert "done" not in branches(main) and os.listdir(store) == ["done.json"], (branches(main), os.listdir(store))
+
+
 for test in (removes_merged_and_keeps_the_rest_with_reasons, keeps_the_worktree_it_runs_in,
-             a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect):
+             a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect,
+             forgets_the_phase_switches_of_the_branches_it_deletes, deletes_the_branch_even_when_its_switches_stay,
+             says_when_it_cannot_check_the_switches, keeps_the_switches_when_it_cannot_name_the_repo):
     base = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-"))
     try:
         test(base)
@@ -134,4 +215,5 @@ for name, error in RESULTS:
     print(f"{'FAIL' if error else 'ok  '} {name}")
     if error:
         print(f"     {error}")
+shutil.rmtree(os.environ["HOME"], ignore_errors=True)
 raise SystemExit(1 if any(error for _, error in RESULTS) else 0)
