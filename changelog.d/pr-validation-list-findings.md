@@ -1,0 +1,1 @@
+- The PR's validation section counts self-review findings and "Not run" items listed under their label (a `Fixed:` line followed by `- ` lines), instead of reporting 0 fixed, 0 rejected, 0 open.

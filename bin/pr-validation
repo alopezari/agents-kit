@@ -47,14 +47,38 @@ def verify_line(text):
     return [public(line) + "."]
 
 
+def labelled(text, labels):
+    """(label, entry) for `Label: entry` lines, and for each `- entry` under a `Label:` line of its own.
+
+    The entries are the bullets at the first one's indentation: blank lines between them, wrapped
+    lines and nested bullets (deeper) stay inside the list; any other line ends it."""
+    entries, label, indent = [], None, None
+    for line in text.splitlines():
+        head = re.match(rf"({labels}):[ \t]*(.*)$", line)
+        item = re.match(r"([ \t]*)[-*][ \t]+(\S.*)$", line)
+        depth = len(line) - len(line.lstrip())
+        if head:
+            label, rest = head.groups()
+            if rest.strip():
+                entries.append((label, rest))
+                label = None
+            indent = None
+        elif label and item and indent in (None, item.group(1)):
+            indent = item.group(1)
+            entries.append((label, item.group(2)))
+        elif label and (not line.strip() or (indent is not None and depth > len(indent))):
+            continue
+        else:
+            label = None
+    return [(label, value) for label, value in entries if value.strip().rstrip(".").lower() != "none"]
+
+
 def review_lines(text):
     header = next((line.strip() for line in text.splitlines() if line.startswith("Self-review")), "Self-review")
     findings = [(kind, summary.split(" — ")[0].strip().rstrip(".") + ".")
-                for kind, summary in re.findall(r"^(Fixed|Rejected|Open):[ \t]*(\S.*)$", text, re.M)
-                if summary.strip().rstrip(".").lower() != "none"]
+                for kind, summary in labelled(text, "Fixed|Rejected|Open")]
     counts = ", ".join(f"{sum(k == kind for k, _ in findings)} {kind.lower()}" for kind in ("Fixed", "Rejected", "Open"))
-    not_run = [rest.split(" — ")[0].strip() for rest in re.findall(r"^Not run:[ \t]*(\S.*)$", text, re.M)
-               if rest.strip().rstrip(".").lower() != "none"]
+    not_run = [rest.split(" — ")[0].strip() for _, rest in labelled(text, "Not run")]
     return [public(f"- {header}: {counts}.")] + [public(f"  - {kind}: {summary}") for kind, summary in findings] + \
         [public(f"  - Not run: {rest}") for rest in not_run]
 
@@ -76,7 +100,7 @@ def validation_lines(text):
     counts = ", ".join(f"{n} {result}" for result in RESULTS for n in [sum(r == result for _, r, _ in rows)] if n)
     lines = [f"- Validation, {len(rows)} check{'s' * (len(rows) != 1)}: {counts or 'none'}."]
     lines += [f"  - {first} {result}: {check}" for first, result, check in rows]
-    lines += [f"  - Not run: {rest}" for rest in re.findall(r"^Not run:[ \t]*(\S.*)$", text, re.M)]
+    lines += [f"  - Not run: {rest}" for _, rest in labelled(text, "Not run")]
     return [public(line) for line in lines]
 
 

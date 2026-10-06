@@ -121,6 +121,24 @@ def a_guide_with_only_steps_after_the_merge_claims_no_pending_staging(base):
     assert out.stdout.endswith("- Staging: none before the merge; after it: P1, P2.\n"), out.stdout
 
 
+def counts_findings_listed_under_their_label(base):
+    repo = new_repo(base)
+    write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
+    write(repo, "review", "Self-review (risk: standard; lenses: correctness)\n\n## Findings\n\n"
+                          "Fixed:\n- the total ignored tax — cart.py:52\n  - evidence: test_cart.py fails before\n"
+                          "- a coupon applied twice\n  (Codex).\n\n"
+                          "Rejected:\n\n- a race on refresh — cart.py:60 handles it\n\n"
+                          "Open:\n- None.\n\n"
+                          "Not run:\n- design lens: no UI changed\n")
+    write(repo, "validation", "| # | Check | Result | Evidence |\n|---|---|---|---|\n| A1 | Pay | PASS | a1.txt |\n\n"
+                              "Not run:\n- B1 needs the payment sandbox\n  until staging has one\n\n- B2 needs a phone\n\nNext steps: none\n- not a Not run item\n")
+    out = sh(repo, PR_VALIDATION)
+    assert ("- Self-review (risk: standard; lenses: correctness): 2 fixed, 1 rejected, 0 open.\n"
+            "  - Fixed: the total ignored tax.\n  - Fixed: a coupon applied twice.\n"
+            "  - Rejected: a race on refresh.\n  - Not run: design lens: no UI changed\n") in out.stdout, out.stdout
+    assert "  - Not run: B1 needs the payment sandbox\n  - Not run: B2 needs a phone\n" in out.stdout, out.stdout
+
+
 def a_missing_verify_or_review_fails_naming_it(base):
     repo = new_repo(base)
     write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
@@ -175,7 +193,7 @@ def names_the_phases_the_user_switched_off(base):
 for test in (names_the_phases_the_user_switched_off, builds_the_section_from_every_report, counts_open_findings_and_skips_absent_reports,
              keeps_qualified_verdicts_and_bounded_sections,
              a_guide_with_only_steps_after_the_merge_claims_no_pending_staging,
-             a_missing_verify_or_review_fails_naming_it):
+             counts_findings_listed_under_their_label, a_missing_verify_or_review_fails_naming_it):
     base = tempfile.mkdtemp(prefix="agents-test-pr-validation-")
     try:
         test(base)
