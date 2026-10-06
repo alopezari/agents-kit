@@ -48,12 +48,29 @@ def verify_line(text):
 
 
 def labelled(text, labels):
-    """(label, entry) for `Label: entry` lines, and for the `- entry` lines under a `Label:` line of its own."""
-    entries = []
-    for label, rest, items in re.findall(rf"^({labels}):[ \t]*(.*)\n?((?:[ \t]*[-*][ \t]+\S.*\n?)*)", text, re.M):
-        values = [rest] if rest.strip() else re.findall(r"^[ \t]*[-*][ \t]+(\S.*)$", items, re.M)
-        entries += [(label, value) for value in values if value.strip().rstrip(".").lower() != "none"]
-    return entries
+    """(label, entry) for `Label: entry` lines, and for each `- entry` under a `Label:` line of its own.
+
+    The entries are the bullets at the first one's indentation: blank lines between them, wrapped
+    lines and nested bullets (deeper) stay inside the list; any other line ends it."""
+    entries, label, indent = [], None, None
+    for line in text.splitlines():
+        head = re.match(rf"({labels}):[ \t]*(.*)$", line)
+        item = re.match(r"([ \t]*)[-*][ \t]+(\S.*)$", line)
+        depth = len(line) - len(line.lstrip())
+        if head:
+            label, rest = head.groups()
+            if rest.strip():
+                entries.append((label, rest))
+                label = None
+            indent = None
+        elif label and item and indent in (None, item.group(1)):
+            indent = item.group(1)
+            entries.append((label, item.group(2)))
+        elif label and (not line.strip() or (indent is not None and depth > len(indent))):
+            continue
+        else:
+            label = None
+    return [(label, value) for label, value in entries if value.strip().rstrip(".").lower() != "none"]
 
 
 def review_lines(text):
