@@ -1525,6 +1525,7 @@ echo "$*" >> "$FAKE_GH_DIR/calls.log"
 [ -f "$FAKE_GH_DIR/error" ] && { echo "error connecting to api.github.com" >&2; exit 1; }
 case "$*" in
   *check-runs*) cat "$FAKE_GH_DIR/runs.jsonl" ;;
+  *graphql*) [ -f "$FAKE_GH_DIR/probe.json" ] && cat "$FAKE_GH_DIR/probe.json" ;;
 esac
 exit 0
 """
@@ -1628,6 +1629,28 @@ def stop_follows_ci_after_a_push(base):
     assert asked(session) == "" and open(calls).read() == before, "ci off: CI isn't even queried after a push"
     phase_line("phase on ci", repo)
     assert f"CI failed on {sha[:12]}" in asked(session), "back on, the pushed commit's CI is asked about"
+
+    # A repo that plainly runs no CI isn't waited for, even right after the push; CI that only runs on pull requests is.
+    def probe(pr_checked):
+        rollup = {"statusCheckRollup": {"state": "SUCCESS"} if pr_checked else None}
+        open(os.path.join(fake, "probe.json"), "w").write(json.dumps({"data": {"repository": {
+            "defaultBranchRef": {"target": {"statusCheckRollup": None}}, "parent": {"statusCheckRollup": None},
+            "pullRequests": {"nodes": [{"commits": {"nodes": [{"commit": rollup}]}}]}}}}))
+    session = RUN + "ci5"
+    probe(pr_checked=False)
+    push(session)
+    ci("none")
+    pushed = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", f"{session}.pushed")
+    assert asked(session) == "", "no CI anywhere: nothing to wait for right after the push"
+    assert os.path.realpath(repo) not in open(pushed).read(), "a repo with no CI isn't followed"
+    assert open(pushed[:-len(".pushed")] + ".ci-asked").read() == "", "a repo with no CI records no question"
+    before = open(calls).read()
+    assert asked(session) == "" and open(calls).read() == before, "a repo with no CI isn't queried again"
+    session = RUN + "ci6"
+    probe(pr_checked=True)
+    push(session)
+    assert "still running" in asked(session), "checks on a recent pull request: CI runs on pull requests, so wait"
+    os.remove(os.path.join(fake, "probe.json"))
 
 
 def guard_records_the_pushed_checkout(base):

@@ -6,10 +6,11 @@ const PANE = 'flow'
 const PROCESS_TIMEOUT_MS = 30_000
 // phase_switches.py's exit for a switch it refused; 1 is Python's own for a crash.
 const SWITCH_REFUSED = 3
-// ci-wait --once makes one GitHub round trip per check source, each bounded at 30 s.
+// ci-wait --once makes one GitHub round trip per check source, and one more for the no-CI probe when there are none,
+// each bounded at 30 s; a GitHub slower than this reads as couldn't read.
 const CI_TIMEOUT_MS = 90_000
 const STAMPS = [['verify', 'verify'], ['self-review', 'review'], ['validate', 'validate'], ['staging', 'staging']]
-const CI_OUTCOMES = { 0: 'passed', 1: 'failed', 2: 'running', 3: 'no checks', 4: 'unreadable' }
+const CI_OUTCOMES = { 0: 'passed', 1: 'failed', 2: 'running', 3: 'no checks', 4: 'unreadable', 5: 'none in this repo' }
 const REPORT_LINE = /^(ran|skipped|warning|error):/
 const VERIFY_TAIL_LINES = 8
 // Claude Code refuses a Text string over 10,000 characters; a verify line can be any length.

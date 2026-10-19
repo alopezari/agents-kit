@@ -220,7 +220,7 @@ test('CI for a HEAD with uncommitted changes says they are not in it, and a fail
 })
 
 test('each CI outcome of ci-wait is named, an unreadable one with its reason, and an unknown exit is a read failure', async ($, on) => {
-  const outcomes = { 1: /CI: failed$/m, 2: /CI: running$/m, 3: /CI: no checks$/m, 4: /CI: unreadable: gh: not logged in$/m, 9: /CI: couldn't read/ }
+  const outcomes = { 1: /CI: failed$/m, 2: /CI: running$/m, 3: /CI: no checks$/m, 4: /CI: unreadable: gh: not logged in$/m, 5: /CI: none in this repo$/m, 9: /CI: couldn't read/ }
   let code = 1
   const runs = repo()
   const { clock } = stub(on, new Proxy(runs, {
