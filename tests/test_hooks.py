@@ -277,7 +277,7 @@ def guard_allows_routine(base):
 def guard_resolves_rm_variables(base):
     def guard_env(command, tmpdir):
         env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
-        env.update({"AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE}, **({"TMPDIR": tmpdir} if tmpdir else {}))
+        env.update({"AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE}, **({"TMPDIR": tmpdir} if tmpdir is not None else {}))
         out = subprocess.run(["python3", H + "guard_bash.py"], capture_output=True, text=True, env=env,
                              input=json.dumps({"tool_input": {"command": command}, "cwd": "/usr/lib", "session_id": "t"}))
         return "deny" if out.stdout.strip() else "allow"
@@ -291,14 +291,24 @@ def guard_resolves_rm_variables(base):
         assert guard_env(cmd, "/private/var/folders/ab/T/") == "allow", f"the hook's own TMPDIR: {cmd}"
     assert guard_env('rm -rf "${TMPDIR:-/tmp}/x"', None) == "allow", "the default applies when TMPDIR is unset"
     assert guard_env('rm -rf "$TMPDIR"/x', None) == "deny", "an unset TMPDIR leaves /x"
+    assert guard_env('rm -rf "${TMPDIR:-/tmp}/x"', "") == "allow", "the default applies when TMPDIR is empty"
+    assert guard_env('rm -rf "$TMPDIR"/x', "") == "deny", "an empty TMPDIR leaves /x"
     for cmd in ['T=/usr/lib; rm -rf "$T"', 'T=$HOME; rm -rf "$T"', 'T=$(mktemp -d /usr/x.XXXX); rm -rf "$T"',
                 'T=$(mktemp -d -p /usr); rm -rf "$T"', 'T=$(mktemp -d); T=/; rm -rf "$T"',
                 'for d in /tmp/a /usr; do rm -rf "$d"; done', 'rm -rf "$T"', 'T=$(cat list); rm -rf "$T"',
                 "T=/tmp/a$X; rm -rf $T", 'rm -rf "$T"; T=/tmp/a', "T=/tmp/a true; rm -rf $T/sub",
                 'cd /; T=opt; rm -rf "$T"', 'T=$(mktemp -d); read T; rm -rf "$T"',
                 'false && T=/tmp/x; rm -rf "$T/sub"', '(T=/tmp/x); rm -rf "$T/sub"', "T=/tmp/x | true; rm -rf $T/sub",
-                'false || T=/tmp/x && rm -rf "$T/sub"']:
+                'false || T=/tmp/x && rm -rf "$T/sub"', 'T=/tmp/x & rm -rf "$T/sub"',
+                'for TMPDIR in /usr; do rm -rf "$TMPDIR"; done', 'read TMPDIR; rm -rf "$TMPDIR"',
+                'T="/tmp/a /usr"; rm -rf $T', 'T=/tmp/x; T+=/../../usr; rm -rf "$T"', 'T=/tmp/x; unset T; rm -rf "$T"/usr',
+                'if [ -n "$X" ]; then\n  T=/tmp/x\nfi\nrm -rf "$T"/usr', 'X=$(\nT=/tmp/x\n)\nrm -rf "$T"/usr',
+                "grep 'a; T=/tmp/x; b' f; rm -rf \"$T/usr\"", 'export TMPDIR=/usr; T=$(mktemp -d); rm -rf "$T"',
+                'T=$(mktemp -dp /usr x.XXXX); rm -rf "$T"/..']:
         assert guard_env(cmd, "/private/var/folders/ab/T/") == "deny", f"not a temp path for sure: {cmd!r}"
+    started = child_cpu()
+    assert guard_env("a=" + "b=" * 40 + ") && rm -rf /usr/x", None) == "deny" and child_cpu() - started < 3, \
+        "a=b=b=… must split one way, or the guard runs out of time and lets the command through"
 
 
 def guard_reads_code_not_text(base):
@@ -310,7 +320,8 @@ def guard_reads_code_not_text(base):
                 'grep -n "git reset --hard" hooks/guard_bash.py', 'grep -n "DROP\\|sudo" tests/test_hooks.py',
                 "rg -c 'DROP TABLE' schema.sql", "cat > /tmp/n.md <<'EOF'\nnever DROP TABLE here\nEOF",
                 "cat > /tmp/n.md <<'EOF'\nrm -rf $UNSET/x\nEOF", "python3 -c 'print(\"git branch -D old\")'",
-                "python3 - <<'EOF'\nprint('DROP TABLE x')\nEOF", "git log --format='%s' | grep 'DROP TABLE'"]:
+                "python3 - <<'EOF'\nprint('DROP TABLE x')\nEOF", "git log --format='%s' | grep 'DROP TABLE'",
+                "echo 'git push --force origin x' > /tmp/n.md", "node -e 'console.log(\"DROP TABLE x\")'"]:
         assert guard(cmd) == "allow", f"only text: {cmd!r}"
     for cmd in ["bash -c 'git push --force origin x'", "cat <<'EOF' | sh\ngit reset --hard\nEOF",
                 "bash <<'EOF'\ngit branch -D old\nEOF", "eval \"git branch -D old\"",
@@ -320,7 +331,16 @@ def guard_reads_code_not_text(base):
                 "x=$(cat <<'EOF'\ngit branch -D old\nEOF\n)", "cat <<'EOF' | sh\nrm -rf $UNSET/x\nEOF",
                 'psql -c "DROP TABLE runs"', "mysql -e 'drop table x'",
                 "psql -Atc \"select format('DROP DATABASE %I;', datname) from pg_database\"",
-                "python3 - <<'EOF'\ncur.execute('DROP TABLE x')\nEOF", "sqlite3 db <<'EOF'\nDROP TABLE x;\nEOF"]:
+                "python3 - <<'EOF'\ncur.execute('DROP TABLE x')\nEOF", "sqlite3 db <<'EOF'\nDROP TABLE x;\nEOF",
+                "echo 'git push --force origin x' | sh", "printf 'git branch -D old' |bash",
+                'python3 run.py "DROP TABLE x"', "node run.js 'git branch -D old'",
+                "git -c 'alias.wipe=!git reset --hard' wipe", "python3 -c \"# <<'EOF'\"\ngit branch -D old",
+                "python3 -c 'import subprocess, sys; subprocess.run(sys.argv[1], shell=True)' 'git reset --hard'",
+                "echo 'git branch -D old' \\\n  | sh", "python3 -c \"print('git branch -D old')\" | sh",
+                "perl -e 'system \"git branch -D old\"'", "ruby -e '`git branch -D old`'",
+                "php -r 'shell_exec(\"git reset --hard\");'", "git submodule foreach 'git reset --hard'",
+                "git filter-branch --tree-filter 'git clean -fdx' HEAD", "node -e 'require(\"pg\").query(\"DROP TABLE x\")'",
+                "php -r 'mysqli_query($c, \"DROP TABLE x\");'", "cat > /tmp/x.sh <<'EOF'\ngit branch -D old\nEOF\nbash /tmp/x.sh"]:
         assert guard(cmd) == "deny", f"text that runs: {cmd!r}"
 
     def reason(command, cwd="/tmp"):
@@ -334,10 +354,13 @@ def guard_reads_code_not_text(base):
     for cmd in [f"python3 - <<'EOF'\np = 'hooks/x.py'\ns = open(p).read().replace('a', '''    d = \"{approvals}/turn\"''')\n"
                 "open(p, 'w').write(s)\nEOF",
                 f'S=/private/tmp/x; mkdir -p "$S/home/.agents/approvals/turn"',
+                'true && S=/private/tmp/x && mkdir -p "$S/home/.agents/approvals/turn"',
                 f"cat > \"$(echo /tmp/spec.md)\" <<'EOF'\nnothing under {approvals} changes\nEOF"]:
         assert guard(cmd) == "allow", f"code that edits a mention, or a test HOME: {cmd!r}"
     for cmd in [f"python3 - <<'EOF'\nimport os\nopen(os.path.expanduser('{approvals}/linear'), 'w').write('x')\nEOF",
-                'mkdir -p "$X/.agents/approvals/turn"', f"touch {approvals}/linear"]:
+                'mkdir -p "$X/.agents/approvals/turn"', f"touch {approvals}/linear",
+                'mkdir -p "$S/.agents/approvals/turn"; S=/private/tmp/x',
+                "bash <<'EOF'\ncd ~/.agents\ntouch approvals/linear\nEOF"]:
         assert guard(cmd) == "deny", f"a write into the approvals: {cmd!r}"
 
     repo = new_repo(base)
@@ -1903,7 +1926,8 @@ def guard_records_the_pushed_checkout(base):
     def recorded(command):
         if os.path.exists(pushed):
             os.remove(pushed)
-        run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": RUN + "push"})
+        if run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": RUN + "push"}):
+            return "denied"
         return sorted({line.split("\t")[0] for line in open(pushed).read().splitlines()}) if os.path.exists(pushed) else []
 
     here, there = os.path.realpath(repo), os.path.realpath(other)

@@ -10,6 +10,7 @@ Records the checkout of each allowed `git push`, so the stop hook can follow
 that commit's CI.
 """
 import bisect
+import functools
 import io
 import itertools
 import json
@@ -187,9 +188,15 @@ def touches_approvals(command, cwd, runs=False):
             literals = string_literals(body, interpreter) if kind == "script" else None
             if literals is None or any(mentions.search(s) and not re.search(r"\s", s) for s in literals):
                 return APPROVALS_WHY
-        lines[start:end] = [""] * (end - start)
+        if kind == "script":
+            lines[start:end] = [""] * (end - start)
     shell = "\n".join(lines)
-    values = list(segments_with_values(shell))[-1][1]
+    seen = {}
+    for segment, known in segments_with_values(shell):
+        for m in VARIABLE.finditer(segment):
+            seen.setdefault(m.group(1) or m.group(3), set()).add(known.get(m.group(1) or m.group(3), UNKNOWN))
+    # A variable counts by its value only when every use sees the same one: used before it is set, it is unresolved.
+    values = {name: found.pop() for name, found in seen.items() if len(found) == 1 and UNKNOWN not in found}
     text = re.sub(r"\$\{HOME\}|\$HOME\b", "~", shell.replace(CONTINUATION, "")).replace("\n", ";")
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|()<>")
@@ -242,6 +249,7 @@ def touches_approvals(command, cwd, runs=False):
     return None
 
 
+UNKNOWN = object()
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 
 
@@ -677,20 +685,40 @@ PROSE_HEREDOC_RECEIVER = re.compile(LEADING_ASSIGNMENTS + r"(?:cat|tee)(?:\s|$)"
 HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(?:(['\"])([^'\"\s]+)\1|\\([^\s;&|<>()]+)|([^\s;&|<>()'\"\\]+))")
 
 
+@functools.lru_cache(maxsize=256)
+def line_layout(line):
+    """What heredoc_feeds() asks of a line, read once since a line can hold thousands of heredocs: the line with each
+    closed string masked, the (position, closing position or None) of each $( on it, where each command it chains
+    starts, where each one ends, and its pipes."""
+    masked = list(line)
+    for start, end in quoted_spans(line):
+        if end - start > 1 and line[end - 1] == line[start]:  # a closed string, like "$(path.sh)", hides its ( and |
+            masked[start:end] = "q" * (end - start)
+    masked = "".join(masked)
+    closes, opened = {}, []
+    for i, c in enumerate(masked):
+        if c == "(":
+            opened.append(i)
+        elif c == ")" and opened:
+            closes[opened.pop()] = i
+    substitutions = [(i - 1, closes.get(i)) for i in range(1, len(masked)) if masked[i - 1:i + 1] == "$("]
+    starts = [0] + [m.end() for m in re.finditer(r"&&|\|\||[;|(&]", masked)]
+    ends = [m.start() for m in re.finditer(r"&&|\|\||[;&]", line)] + [len(line)]
+    return masked, substitutions, starts, ends, [i for i, c in enumerate(line) if c == "|"]
+
+
 def heredoc_feeds(line, m, receiver):
     """The match of `receiver` when bash only feeds this heredoc's literal body to the program it matches: a quoted
     delimiter, that program owning the <<, and nothing piped onward."""
-    before = list(line[:m.start()])
-    for start, end in quoted_spans(line[:m.start()]):
-        if end - start > 1 and line[end - 1] == line[start]:  # a closed string, like "$(path.sh)", hides its ( and |
-            before[start:end] = "q" * (end - start)
-    before = "".join(before)
-    owner = before[max([0] + [s.end() for s in re.finditer(r"&&|\|\||[;|(&]", before)]):]
-    onward = re.split(r"&&|\|\||[;&]", line[m.end():], maxsplit=1)[0]
+    masked, substitutions, starts, ends, pipes = line_layout(line)
+    before = masked[:m.start()]
+    owner = before[starts[bisect.bisect_right(starts, m.start()) - 1]:]
+    onward_end = ends[bisect.bisect_left(ends, m.end())]
+    piped_onward = bisect.bisect_left(pipes, m.end()) < bisect.bisect_left(pipes, onward_end)
     # Inside an open $(...) the text goes on to the enclosing command: only a message's, as in -m "$(cat <<'EOF', is text.
-    unclosed = [s.start() for s in re.finditer(r"\$\(", before) if before.count(")", s.start()) <= before.count("(", s.end())]
+    unclosed = [i for i, close in substitutions if i < m.start() and (close is None or close > m.start())]
     enclosing = before[:unclosed[-1]] if unclosed else None
-    if not m.group(4) and "|" not in onward and (enclosing is None or MESSAGE_COMMAND.match(enclosing)):
+    if not m.group(4) and not piped_onward and (enclosing is None or MESSAGE_COMMAND.match(enclosing)):
         return receiver.match(owner)
     return None
 
@@ -705,7 +733,7 @@ def without_prose(command):
     message or an echoed sentence isn't read as a write: impeccable_files() takes its targets from the command's own
     text, quoted strings included, so a quoted path still counts. Whatever this can't read for sure, it leaves whole:
     missing a write costs more than asking about a mention."""
-    kept, heredocs = [], []  # (delimiter, body is prose) of each heredoc still open, in order
+    kept, heredocs, had_prose = [], [], False  # (delimiter, body is prose) of each heredoc still open, in order
     for line in command.split("\n"):
         if heredocs:
             delimiter, prose = heredocs[0]
@@ -723,17 +751,20 @@ def without_prose(command):
         comment = re.search(r"(?:^|\s)#", line)  # a << after it is text
         heredocs = [(m.group(2) or m.group(3) or m.group(4), heredoc_body_is_prose(line, m))
                     for m in HEREDOC.finditer(line) if not comment or m.start() < comment.start()]
+        had_prose |= any(prose for _, prose in heredocs)
         if heredocs and line.endswith("\\"):
             return command  # the header goes on, redirects and all, on the next line
     text = "\n".join(kept)
     if heredocs or RUNS_QUOTED_TEXT.search(text):
         return command  # a heredoc that never ends was only a mention of one
+    if had_prose and RUNS_SCRIPT_FILE.search(text):
+        return command  # the heredoc may have written the script it runs
 
     spans = quoted_spans(text)
     masked = list(text)
     for start, end in spans:
         masked[start:end] = "q" * (end - start)
-    masked = "".join(masked)
+    masked = "".join(masked).replace(CONTINUATION, "  ")  # the lines a continuation joins are one command
     # Each command judged once: per string, its slice of a long command would make this quadratic. No cut at a
     # parenthesis: what an echo prints inside $(...) or <(...) is fed to another command.
     cuts = [0] + [i for m in re.finditer(r"&&|\|\||[;&\n]", masked) for i in m.span()] + [len(masked)]
@@ -761,13 +792,26 @@ INTERPRETER = r"(?:\S*/)?(python[\d.]*|node|ruby|perl|php)"
 INTERPRETER_RECEIVER = re.compile(LEADING_ASSIGNMENTS + INTERPRETER + r"(?:\s|$)")
 # Interpreter code that starts a process: its strings may run as a command. Named only inside a string, it still
 # counts, which only denies more.
-SPAWNS = re.compile(r"\bos\.system\b|\bsubprocess\b|\bpopen\b|child_process|\bexec\s*\(|\bsystem\s*\(", re.I)
-SQL_USED = re.compile(r"\b(?:psql|mysql|mariadb|sqlite3|psycopg2?|pymysql)\b|\bwp\s+db\s+(?:query|cli)\b|\.execute\(")
+SPAWNS = re.compile(r"\bos\.(?:system|exec\w*|spawn\w*)\b|\bsubprocess\b|\bpopen\b|child_process|"
+                    r"\bexec(?:[lv]p?e?)?\s*\(|(?<![\w.-])system\s*[(\"'\[]|shell_exec|passthru|proc_open|pty\.spawn", re.I)
+SHELL_BACKTICKS = re.compile(r"ruby|perl|php")
+# The flag that makes an interpreter's next argument its code: its other arguments are data a script may run.
+CODE_FLAGS = {"python": "c", "node": "e|p|-eval|-print", "ruby": "e", "perl": "e|E", "php": "r"}
+SQL_USED = re.compile(r"\b(?:psql|mysqli?|mariadb|sqlite3|psycopg2?|pymysql)|\bwp\s+db\s+(?:query|cli)\b|\.(?:execute|query)\(|"
+                      r"exec_driver_sql")
+# A command that runs a script file: a heredoc it writes to a file may be that script.
+RUNS_SCRIPT_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))\s*(?:(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*[^\s<-]|source\s|\.\s+\S|"
+                              r"\.{0,2}/\S+\.sh\b)")
 # Programs whose quoted arguments are only text: what they read, match or print.
 TEXT_PROGRAMS = READERS | {"sed", "git", "gh", "echo", "printf"}
 TEXT_HINT = ("The match is in quoted text or a heredoc body: the guard reads that text as a command because something "
              "here may run it (a shell, eval, a SQL client, a process call); if it is only text, write it with a file-writing "
              "tool instead.")
+
+
+def starts_process(code, interpreter):
+    """Whether interpreter code may start a process, so its strings may run as a command."""
+    return bool(SPAWNS.search(code) or (SHELL_BACKTICKS.match(interpreter) and "`" in code))
 
 
 def read_heredocs(lines):
@@ -783,19 +827,22 @@ def read_heredocs(lines):
                     queue[0][3] = i + 1
             continue
         comment = re.search(r"(?:^|\s)#", line)
+        quoted = quoted_spans(line)
         queue = [[m.group(2) or m.group(3) or m.group(4), line, m, i + 1] for m in HEREDOC.finditer(line)
-                 if not comment or m.start() < comment.start()]
+                 if (not comment or m.start() < comment.start()) and not any(a < m.start() < b for a, b in quoted)]
         if queue and line.endswith("\\"):
             return None
     found += [q[1:] + [len(lines)] for q in queue]
     bodies = []
     for header, m, start, end in found:
         program = heredoc_feeds(header, m, INTERPRETER_RECEIVER)
-        kind = "other" if not program else "spawns" if SPAWNS.search("\n".join(lines[start:end])) else "script"
+        body = "\n".join(lines[start:end])
+        kind = "other" if not program else "spawns" if starts_process(body, program.group(1)) else "script"
         bodies.append((start, end, kind, program.group(1) if program else ""))
     return bodies
 
 
+@functools.lru_cache(maxsize=8)
 def without_scripts(command):
     """without_prose(command) with the body of each heredoc read_heredocs() calls a script blanked too, and the
     numbers of the lines every heredoc body takes; None for those when eval or sh -c may run quoted text, or a
@@ -810,20 +857,20 @@ def without_scripts(command):
         in_body.update(range(start, end))
         if kind == "script":
             lines[start:end] = [""] * (end - start)
-    return "\n".join(lines), in_body
+    return "\n".join(lines), frozenset(in_body)
 
 
 def blank_strings(text, in_body, text_in):
     """The text with the inside of each quoted string on its shell lines blanked (same length, new lines kept) when
     it is only text: text_in(segment, program) says which strings are, for the segment holding them and the program
-    it runs."""
+    it runs, given also with its strings as written."""
     lines = text.split("\n")
     shell = "\n".join("" if i in in_body else line for i, line in enumerate(lines))
     spans = quoted_spans(shell)
     masked = list(shell)
     for start, end in spans:
         masked[start:end] = "q" * (end - start)
-    masked = "".join(masked)
+    masked = "".join(masked).replace(CONTINUATION, "  ")
     cuts = [0] + [i for m in re.finditer(r"&&|\|\||[;&|\n]", masked) for i in m.span()] + [len(masked)]
     starts, out, judged = cuts[::2], list(shell), {}
     for start, end in spans:
@@ -832,27 +879,36 @@ def blank_strings(text, in_body, text_in):
             a, b = starts[segment], cuts[2 * segment + 1]
             named = re.match(r"[\s({!]*(?:(?:\w+=\S*|then|do|else|elif|if|while|until|time|command|builtin|nohup)\s+)*"
                              r"(\S+)", masked[a:b])
-            judged[segment] = text_in(masked[a:b + 2], os.path.basename(named.group(1)) if named else "")
+            separator_end = cuts[2 * segment + 2] if 2 * segment + 2 < len(cuts) else b
+            judged[segment] = text_in(masked[a:separator_end], os.path.basename(named.group(1)) if named else "",
+                                      shell[a:separator_end])
         if judged[segment](shell[start:end]):
             out[start + 1:end - 1] = ["\n" if c == "\n" else "x" for c in shell[start + 1:end - 1]]
     out = "".join(out).split("\n")
     return "\n".join(line if i in in_body else out[i] for i, line in enumerate(lines))
 
 
-def text_strings(segment, program):
-    """Which quoted strings of a segment are only text to the program it runs: those of TEXT_PROGRAMS, and an
-    interpreter's code that starts no process. None are when the segment runs a $(…) or backticks, nor a
-    double-quoted string holding one, nor those of a git alias or -x, gh api, or an echo or printf a pipe reads."""
+def text_strings(segment, program, source):
+    """Which quoted strings of a segment, separator included, are only text to the program it runs: those of
+    TEXT_PROGRAMS, and the strings of an interpreter given code with CODE_FLAGS when nothing in their segment starts a
+    process. None are when the segment runs a $(…) or backticks, nor a double-quoted string holding one, nor those of a
+    git alias, -x, submodule foreach, filter-branch or bisect run, gh api, or an echo, printf or interpreter a pipe
+    reads."""
     def runs(string):
         return string[0] == '"' and ("$(" in string or "`" in string)
     if "$(" in segment or "`" in segment:
         return lambda string: False
-    if re.fullmatch(INTERPRETER, program):
-        return lambda string: not runs(string) and not SPAWNS.search(string)
+    piped = re.search(r"(?<!\|)\|(?!\|)$", segment)
+    interpreter = re.fullmatch(INTERPRETER, program)
+    if interpreter:
+        code = re.search(rf"\s-(?:{CODE_FLAGS[interpreter.group(1).rstrip('0123456789.')]})(?:\s|$)", segment)
+        text = code and not piped and not starts_process(source, interpreter.group(1))
+        return lambda string: text and not runs(string)
     if program in ("echo", "printf"):
-        text = not re.search(r"(?<!\|)\|(?!\|)$", segment)
+        text = not piped
     elif program == "git":
-        text = not re.search(r"\s(?:-x|--exec)(?:[\s=]|$)|=!|\s!|\balias\b", segment)
+        text = not re.search(r"\s(?:-x|--exec)(?:[\s=]|$)|\bsubmodule\s+foreach\b|\bfilter-branch\b|\bbisect\s+run\b",
+                             segment) and not re.search(r"\balias\b", source)
     elif program == "gh":
         text = not re.search(r"\s(?:api|alias)\s", segment)
     else:
@@ -874,7 +930,7 @@ def bare_code(command):
     lines = text.split("\n")
     in_body = in_body if in_body is not None else set()
     shell = "\n".join("" if i in in_body else line for i, line in enumerate(lines))
-    return blank_strings(shell, set(), lambda segment, program: lambda string: True)
+    return blank_strings(shell, set(), lambda segment, program, source: lambda string: True)
 
 
 def string_literals(code, interpreter):
@@ -889,12 +945,16 @@ def string_literals(code, interpreter):
 
 
 # A variable assignment's value, each piece matched one way only: plain characters, $ not opening $(, a $(…) without
-# nested parentheses, a double- or single-quoted string.
+# nested parentheses, a double- or single-quoted string. Assignments end at whitespace, or a=b=c would split many ways.
 ASSIGNED_VALUE = r"""(?:[^\s"'$`()]|\$(?!\()|\$\([^()]*\)|"[^"]*"|'[^']*')*"""
-ASSIGNMENTS_ONLY = re.compile(r"(?:(?:export|local|readonly|declare)\s+)?((?:\w+=" + ASSIGNED_VALUE + r"\s*)+)")
+ASSIGNMENTS_ONLY = re.compile(r"(?:(?:export|local|readonly|declare)\s+)?((?:\w+=" + ASSIGNED_VALUE + r"(?:\s+|$))+)")
 ONE_ASSIGNMENT = re.compile(r"(\w+)=(" + ASSIGNED_VALUE + r")")
-ASSIGNED_NAME = re.compile(r"(?<![\w$.:/-])(\w+)=")
+ASSIGNED_NAME = re.compile(r"(?<![\w$.:/-])(\w+)\+?=")
 VARIABLE = re.compile(r"\$\{(\w+)(:?-[^}]*)?\}|\$(\w+)")
+PATH_MAX = 4096
+SEGMENT_BREAK = re.compile(r"[;&|\n][;&|\n \t]*")
+COMPOUND_OPENS = {"if", "while", "until", "for", "select", "case", "{"}
+COMPOUND_CLOSES = {"fi", "done", "esac"}
 MKTEMP = re.compile(r'"?\$\(\s*mktemp\b([^()]*)\)"?')
 
 
@@ -921,7 +981,9 @@ def mktemp_path(args, values):
         return None
     if any("$" in w or "`" in w for w in words):
         return None
-    temp = os.environ.get("TMPDIR") or "/tmp"
+    if "TMPDIR" not in values:
+        return None  # set some way it can't follow
+    temp = values["TMPDIR"] or "/tmp"
     directory, temp_flag, templates, value_of = None, False, [], None
     for word in words:
         if value_of:
@@ -930,8 +992,9 @@ def mktemp_path(args, values):
             directory = word.partition("=")[2] or temp
         elif word.startswith("--"):
             continue
-        elif word.startswith("-p"):
-            directory = word[2:] or None
+        elif re.match(r"-[a-oq-z]*p", word):
+            temp_flag |= "t" in word[:word.index("p")]
+            directory = word[word.index("p") + 1:] or None
             value_of = not directory
         elif word.startswith("-"):
             temp_flag |= "t" in word
@@ -943,17 +1006,19 @@ def mktemp_path(args, values):
 
 
 def assigned_value(raw, values):
-    """The value an assignment's raw text gives, or None when it isn't a literal path or a mktemp."""
+    """The value an assignment's raw text gives, or None when it isn't a literal path or a mktemp: one with spaces or
+    glob characters is several paths, or a pattern, where it isn't quoted."""
     made = MKTEMP.fullmatch(raw)
     if made:
         return mktemp_path(made.group(1), values)
     if raw.startswith("'"):
         return raw[1:-1] if len(raw) > 1 and raw.endswith("'") and "'" not in raw[1:-1] else None
     value = expand(raw.replace('"', ""), values)
-    return None if re.search(r"[$`'()]", value) else value
+    return None if re.search(r"[$`'()\s*?\[]", value) or len(value) > PATH_MAX else value
 
 
 def chained_by(separator):
+    """The chain a segment separator joins into: "&&", "||", "|", or None for ; and new lines."""
     for kind in ("&&", "||", "|"):
         if kind in separator:
             return kind
@@ -963,19 +1028,21 @@ def chained_by(separator):
 def segments_with_values(text):
     """Each segment the text splits into at ; & | and new lines, with the variables known to hold a value when it
     runs, then ("", the values known at the end). A variable is known after an assignment that surely ran: a
-    segment of only assignments, outside a subshell or pipeline, at the start, after ; or a new line, or earlier in
-    the same && chain. One set some other way too (twice, by read or a loop, ${X:=…}) stays unknown. $HOME and
+    segment of only assignments, outside a subshell, $(…), compound command, pipeline or background job, at the start,
+    after ; or a new line, or earlier in the same && chain. One set some other way too (twice, by read or a loop, ${X:=…}) stays unknown. $HOME and
     $TMPDIR come from the hook's environment unless the command sets them."""
     names = ASSIGNED_NAME.findall(text)
     unsure = {name for name in names if names.count(name) > 1} if len(names) < 200 else set(names)
     unsure |= {n for pair in re.findall(r"\b(?:for|select)\s+(\w+)|\$\{(\w+):?=", text) for n in pair if n}
-    for words in re.findall(r"\b(?:read|mapfile|readarray|getopts|printf\s+-v)\b([^;&|\n]*)", text):
+    for words in re.findall(r"\b(?:read|mapfile|readarray|getopts|printf\s+-v|unset)\b([^;&|\n]*)", text):
         unsure |= set(re.findall(r"\w+", words))
     base = {"HOME": os.path.expanduser("~"), "TMPDIR": os.environ.get("TMPDIR")}
-    for name in names:
+    for name in set(names) | unsure:
         base.pop(name, None)
     known, chain, depth = {}, {}, 0
-    parts = re.split(r"([;&|\n][;&|\n \t]*)", text)
+    masked = "\n".join(line_layout(line)[0] for line in text.split("\n"))
+    breaks = [0] + [i for m in SEGMENT_BREAK.finditer(masked) for i in m.span()] + [len(text)]
+    parts = [text[a:b] for a, b in zip(breaks, breaks[1:])]
     for k in range(0, len(parts), 2):
         before = chained_by(parts[k - 1]) if k else ";"
         after = chained_by(parts[k + 1]) if k + 1 < len(parts) else ";"
@@ -983,16 +1050,19 @@ def segments_with_values(text):
             chain = {}
         values = {**base, **known, **chain}
         yield parts[k], values
-        stripped = parts[k].strip()
-        depth += len(stripped) - len(stripped.lstrip("("))
+        stripped, code = parts[k].strip(), masked[breaks[k]:breaks[k + 1]].strip()
+        first = (code.split() or [""])[0]
+        depth += len(code) - len(code.lstrip("(")) + (first in COMPOUND_OPENS or code.endswith("{"))
         assignments = ASSIGNMENTS_ONLY.fullmatch(stripped)
-        if assignments and depth == 0 and before in (";", "&&") and after != "|":
+        if assignments and depth == 0 and before in (";", "&&") and after not in ("|", "&"):
             for m in ONE_ASSIGNMENT.finditer(assignments.group(1)):
                 value = None if m.group(1) in unsure else assigned_value(m.group(2), {**base, **known, **chain})
                 if value is not None:
                     (known if before == ";" else chain)[m.group(1)] = value
-        depth = max(0, depth - (len(stripped) - len(stripped.rstrip(")"))))
+        opened_inside = code.count("(") - code.count(")") - (len(code) - len(code.lstrip("(")))
+        depth = max(0, depth + opened_inside - (first in COMPOUND_CLOSES or first.startswith("}")))
     yield "", {**base, **known}
+
 
 def database_grant(statement):
     """The approval a DROP or TRUNCATE statement needs, the same for any case or spacing: `sql.drop-database`."""
