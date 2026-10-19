@@ -8,8 +8,10 @@ a check from an earlier push never passes for this one. Waits until every check 
 one more look, as another workflow's checks can register late (30 minutes by default; --once looks once).
 Prints one line per check and, for a failed GitHub Actions job, the failing lines of its log and its tail
 (not with --no-log), then `ci-wait: failed on <sha>: <checks>` when any failed.
+A commit with no checks in a repo that plainly runs no CI (no CI config in the commit, and no check on the default
+branch's head, the commit's parent or the last 5 pull requests' heads) ends at once instead of waiting for checks that will never come.
 Exit: 0 passed, 1 failed, 2 still running, 3 no checks for the commit, 4 GitHub couldn't be read,
-64 wrong arguments.
+5 the repo runs no CI, 64 wrong arguments.
 """
 import argparse
 import json
@@ -22,6 +24,14 @@ import time
 
 PASSED_RUN = {"success", "neutral", "skipped"}
 GH_TIMEOUT = 30
+GIT_TIMEOUT = 10
+CI_CONFIG = [".github/workflows", ".circleci", ".buildkite", ".teamcity", ".travis.yml", ".gitlab-ci.yml", "Jenkinsfile",
+             "azure-pipelines.yml"]
+# One call for the checks of the default branch's head, the commit's parent and the last pull requests' heads.
+NO_CI_QUERY = """query($owner: String!, $name: String!, $parent: GitObjectID!) { repository(owner: $owner, name: $name) {
+  defaultBranchRef { target { ... on Commit { statusCheckRollup { state } } } }
+  parent: object(oid: $parent) { ... on Commit { statusCheckRollup { state } } }
+  pullRequests(last: 5) { nodes { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } }"""
 # Checks show up some time after the push; before that, "no checks" means "not yet". Keep it equal to the stop
 # hook's NO_CHECKS_GRACE_SECS: the hook asks the agent to wait here while it still treats "no checks" as "not yet".
 GRACE_SECS = 300
@@ -66,6 +76,36 @@ def checks(sha):
     return found
 
 
+def git(*args):
+    try:
+        result = subprocess.run(["git", *args], capture_output=True, text=True, timeout=GIT_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Unreadable(str(error))
+    if result.returncode != 0:
+        raise Unreadable(result.stderr.strip()[-300:])
+    return result.stdout.strip()
+
+
+def runs_no_ci(sha):
+    """Whether the repo plainly runs no CI. Anything it can't tell counts as CI: a wrong "no CI" drops the CI follow-up,
+    and CI reporting through commit statuses (TeamCity) or only on pull requests has no config file to find, hence
+    the recent pull requests."""
+    try:
+        if git("ls-tree", "--name-only", sha, "--", *CI_CONFIG):
+            return False
+        try:
+            parent = git("rev-parse", "--verify", "--quiet", f"{sha}^")
+        except Unreadable:
+            parent = sha  # a root commit: its own checks, already known to be none, stand in
+        repo = json.loads(gh("api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-F", f"parent={parent}",
+                             "-f", f"query={NO_CI_QUERY}"))["data"]["repository"]
+        commits = [repo["defaultBranchRef"]["target"], repo["parent"]]
+        commits += [pr["commits"]["nodes"][0]["commit"] for pr in repo["pullRequests"]["nodes"]]
+        return not any(commit["statusCheckRollup"] for commit in commits)
+    except (Unreadable, ValueError, KeyError, TypeError, IndexError):
+        return False
+
+
 def failed(state):
     return state not in PASSED_RUN | RUNNING
 
@@ -108,13 +148,19 @@ def main():
         sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     poll = float(os.environ.get("CI_WAIT_POLL_SECS", "20"))  # tests shorten these two
     grace = float(os.environ.get("CI_WAIT_GRACE_SECS", GRACE_SECS))
-    start, previous = time.time(), None
+    start, previous, probed = time.time(), None, False
     while True:
         try:
             found = checks(sha)
         except Unreadable as error:
             print(f"ci-wait: couldn't read the checks of {sha[:12]} from GitHub: {error}")
             return 4
+        if not found and not probed:
+            probed = True
+            if runs_no_ci(sha):
+                print(f"ci-wait: no checks for {sha[:12]}, and the repo runs no CI (no CI config in the commit, no "
+                      "checks on the default branch, the parent or recent pull requests)")
+                return 5
         waited = time.time() - start
         complete = found and not any(running(state) for _, state, _ in found)
         done = complete and (any(failed(state) for _, state, _ in found) or found == previous)

@@ -451,7 +451,7 @@ def ci_after_push(session, payload):
             code, out = result.returncode, result.stdout.strip()
         except subprocess.TimeoutExpired:
             code, out = 4, "ci-wait timed out"
-        if code == 3 and time.time() - at > NO_CHECKS_GRACE_SECS:
+        if code == 5 or (code == 3 and time.time() - at > NO_CHECKS_GRACE_SECS):
             continue  # this repo runs no CI
         failed_on = [line for line in out.splitlines() if line.startswith("ci-wait: failed on ")]
         if code == 1 and not failed_on:
