@@ -280,6 +280,7 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     assert os.path.exists(guide.replace("session~wary-falcon", "shop-1~final")), "reports move with the spec"
     assert open(body.replace("session~wary-falcon", "shop-1~final")).read() == "Shop totals round once.\n", \
         "so does the PR description"
+    assert not os.path.exists(body)
     assert open(os.path.join(evidence.replace("session~wary-falcon", "shop-1~final"), "a1.txt")).read() == "$ true\n", \
         "the evidence moves with its report"
     moved_validation = validation.replace("session~wary-falcon", "shop-1~final")

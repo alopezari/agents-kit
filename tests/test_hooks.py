@@ -1158,6 +1158,12 @@ def reports_reads_another_branch(base):
     git(main, "worktree", "add", "-q", "-b", "other", wt, "trunk")
     assert run("path", "pr-body", cwd=wt).stdout.strip() == on_branch["pr-body"].replace("feat~ship", "other"), \
         "each branch has its own PR description"
+    git(wt, "switch", "-q", "--detach")
+    detached = run("path", "pr-body", cwd=wt)
+    assert detached.returncode == 2 and "needs a branch" in detached.stderr and not detached.stdout, \
+        f"detached checkouts would share one description: {detached}"
+    assert run("--branch", "feat/ship", "path", "pr-body", cwd=wt).stdout.strip() == on_branch["pr-body"]
+    git(wt, "switch", "-q", "other")
     for cwd in (main, wt):
         for kind, path in on_branch.items():
             got = run("--branch", "feat/ship", "path", kind, cwd=cwd)
