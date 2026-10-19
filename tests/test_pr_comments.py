@@ -46,6 +46,10 @@ ANSWERS = {
          "html_url": "https://github.com/o/r/pull/7#discussion_r103"},
         {"id": 104, "user": user("ana"), "path": "tax.py", "line": None, "original_line": 30, "body": "Off by one.",
          "html_url": "https://github.com/o/r/pull/7#discussion_r104"},
+        {"id": 105, "user": user("ana"), "path": "tax.py", "line": None, "original_line": None, "subject_type": "file",
+         "body": "Split this file.", "html_url": "https://github.com/o/r/pull/7#discussion_r105"},
+        {"id": 106, "user": user("ana"), "path": "cart.py", "line": 8, "side": "LEFT", "body": "This was the guard.",
+         "html_url": "https://github.com/o/r/pull/7#discussion_r106"},
     ],
     "conversation": [
         {"id": 201, "user": user("review-bot[bot]", bot=True), "body": "Two findings:\n- a\n- b",
@@ -93,6 +97,14 @@ def lists_only_new_comments_from_others(base):
   tax.py:30 (outdated)
   Off by one.
 
+105 inline ana https://github.com/o/r/pull/7#discussion_r105
+  tax.py
+  Split this file.
+
+106 inline ana https://github.com/o/r/pull/7#discussion_r106
+  cart.py:8 (deleted line)
+  This was the guard.
+
 201 conversation review-bot[bot] (bot) https://github.com/o/r/pull/7#issuecomment-201
   Two findings:
   - a
@@ -101,7 +113,7 @@ def lists_only_new_comments_from_others(base):
 302 review bo CHANGES_REQUESTED https://github.com/o/r/pull/7#pullrequestreview-302
   Please add a test.
 
-4 new comments on #7 (1 already in the follow-pr report, 1 by the author, 1 review without text).
+6 new comments on #7 (1 already in the follow-pr report, 1 by the author, 1 review without text).
 """, out.stdout
 
 

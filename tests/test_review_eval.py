@@ -14,6 +14,7 @@ RESULTS = []
 STUB = """#!/bin/bash
 # Answers with $STUB_ANSWERS/<commit>.out, or fails like a model that errored.
 cat > "$STUB_ANSWERS/$(git rev-parse HEAD).prompt"
+echo "$(basename "$0") $*" >> "$STUB_ANSWERS/calls"
 pwd -P > "$STUB_ANSWERS/$(git rev-parse HEAD).cwd"
 answer="$STUB_ANSWERS/$(git rev-parse HEAD).out"
 [ -f "$answer" ] || { echo "model unavailable" >&2; exit 1; }
@@ -41,7 +42,7 @@ def setup(base):
     git(repo, "config", "user.email", "t@example.com")
     git(repo, "config", "user.name", "t")
     commits = {}
-    for name in ("base", "hit", "miss", "clean"):
+    for name in ("base", "hit", "miss", "clean", "clean2"):
         with open(os.path.join(repo, "cart.py"), "a") as fh:
             fh.writelines(f"line_{name}_{n} = {n}\n" for n in range(40))
         git(repo, "add", "cart.py")
@@ -87,16 +88,29 @@ def adds_each_case_once(base):
     git(repo, "worktree", "remove", worktree)
     again = add_bug(env, repo, commits["hit"], commits["base"], 60)
     assert again.returncode == 0 and "already" in again.stdout, again
-    clean = evals(env, "add", "--checkout", repo, "--sha", "HEAD", "--base", "HEAD~1", "--lens", "Correctness",
+    git(repo, "worktree", "add", "--quiet", "--detach", worktree, commits["clean"])
+    clean = evals(env, "add", "--checkout", worktree, "--sha", "HEAD", "--base", "HEAD~1", "--lens", "Correctness",
                   "--goal", "Clean change", "--clean")
+    git(repo, "worktree", "remove", worktree)
     assert clean.returncode == 0, clean
     bug, clean_case = cases(env)
     assert (bug["kind"], bug["sha"], bug["base"], bug["file"], bug["line"]) == \
         ("bug", commits["hit"], commits["base"], "cart.py", 60), bug
     assert bug["checkout"] == os.path.realpath(repo) and bug["lens"] == "Correctness", \
         "the main checkout, which outlives the worktree a case is added from, and the lens as bundle.sh names it"
+    pinned = subprocess.run(["git", "-C", repo, "for-each-ref", "--format=%(objectname)", "refs/review-evals/"],
+                            capture_output=True, text=True).stdout.split()
+    assert sorted(pinned) == sorted({commits["hit"], commits["clean"]}), \
+        f"each case's commit is pinned, so gc keeps it after its branch is deleted: {pinned}"
     assert clean_case["kind"] == "clean" and clean_case["sha"] == commits["clean"] and "file" not in clean_case, \
-        "refs are stored as the commits they named, so a moved branch can't change the case"
+        "HEAD as the worktree named it, stored as a commit, so a moved branch can't change the case"
+
+
+def refuses_a_limit_below_one(base):
+    env, _, _, _ = setup(base)
+    for limit in ("0", "-3"):
+        out = evals(env, "run", "--model", "codex", "--limit", limit)
+        assert out.returncode == 2 and "at least 1" in out.stderr, out
 
 
 def refuses_cases_it_cant_replay(base):
@@ -105,7 +119,9 @@ def refuses_cases_it_cant_replay(base):
     bug = ["--file", "cart.py", "--line", "3", "--summary", "s"]
     for args, message in (
             (["--sha", "f" * 40, *bug], "isn't a commit"),
-            (["--sha", commits["hit"], "--file", "nope.py", "--line", "3", "--summary", "s"], "isn't in"),
+            (["--sha", commits["hit"], "--file", "nope.py", "--line", "3", "--summary", "s"], "isn't a file"),
+            (["--sha", commits["hit"], "--file", "", "--line", "3", "--summary", "s"], "isn't a file"),
+            (["--sha", commits["hit"], "--file", ".", "--line", "3", "--summary", "s"], "isn't a file"),
             (["--sha", commits["hit"], *bug, "--clean"], "either --clean"),
             (["--sha", commits["hit"], "--file", "cart.py", "--line", "3"], "either --clean"),
             (["--sha", commits["hit"], "--file", "cart.py", "--line", "81", "--summary", "s"], "isn't a line"),
@@ -120,36 +136,62 @@ def refuses_cases_it_cant_replay(base):
 
 def scores_hits_misses_and_false_alarms(base):
     env, repo, commits, answers = setup(base)
-    add_bug(env, repo, commits["hit"], commits["base"], 60)
+    add_bug(env, repo, commits["hit"], commits["base"], 63)
     add_bug(env, repo, commits["miss"], commits["hit"], 96)
     evals(env, "add", "--checkout", repo, "--sha", commits["clean"], "--base", commits["miss"], "--lens", "Correctness",
           "--goal", "Clean change", "--clean")
     answer(answers, commits["hit"], "- Important: total off by one — shop/cart.py:45-48 — high")
     answer(answers, commits["miss"], "- Important: wrong total — cart.py:80 — high")
+    evals(env, "add", "--checkout", repo, "--sha", commits["clean2"], "--base", commits["clean"], "--lens", "Correctness",
+          "--goal", "Another clean change", "--clean")
     answer(answers, commits["clean"], "- Important: a — cart.py:130\n- Important: b — cart.py:140\n- Nit: c — cart.py:150")
+    answer(answers, commits["clean2"], "No findings.")
     out = evals(env, "run", "--model", "codex")
     assert out.returncode == 0, out
-    assert "- Correctness: recall 1/2, 2.0 Important per clean case, 0 errors, 0 skipped (no previous run)" in out.stdout, \
-        f"45-48 is within 15 lines of 60, 80 is 16 short of 96, and the Nit isn't a false alarm:\n{out.stdout}"
+    assert "- Correctness: recall 1/2, 1.0 Important per clean case, 0 errors, 0 skipped (no previous run)" in out.stdout, \
+        f"63 is within 15 lines of 45-48's end, 80 is 16 short of 96, and the Nit isn't a false alarm, over two clean cases:\n{out.stdout}"
     prompt = open(os.path.join(answers, f"{commits['hit']}.prompt")).read()
     assert "Goal of the change: Total the cart" in prompt and "+line_hit_0 = 0" in prompt and "behavior bugs only" in prompt, \
         "the model gets bundle.sh's prompt for the case's commit, lens and goal"
+    calls = open(os.path.join(answers, "calls")).read().splitlines()
+    assert len(calls) == 4 and all("-s read-only" in call for call in calls), calls
     cwd = open(os.path.join(answers, f"{commits['hit']}.cwd")).read().strip()
     assert cwd != os.path.realpath(repo) and not os.path.exists(cwd), f"reviewed in a worktree, then removed: {cwd}"
     assert git(repo, "worktree", "list").count("\n") == 0, git(repo, "worktree", "list")
     runs = os.path.join(env["HOME"], ".agents", "review-mining", "evals", "runs")
     first = os.listdir(runs)
     assert len(first) == 1 and first[0].endswith("-codex.jsonl"), first
-    assert [json.loads(line)["result"] for line in open(os.path.join(runs, first[0]))] == ["hit", "miss", "clean"]
+    assert [json.loads(line)["result"] for line in open(os.path.join(runs, first[0]))] == ["hit", "miss", "clean", "clean"]
     assert "no previous run (results" in out.stdout, out.stdout
+    answer(answers, commits["hit"], "- Important: something else — cart.py:5 — high")
+    assert evals(env, "run", "--model", "claude").returncode == 0, "the claude run isn't codex's previous run"
     again = evals(env, "run", "--model", "codex")
-    assert "3 cases, same cases as the previous run" in again.stdout and \
-        "(previous run: recall 1/2, 2.0 Important per clean case, 0 errors, 0 skipped)" in again.stdout, again.stdout
+    assert "4 cases, same cases as the previous run" in again.stdout and "- Correctness: recall 0/2, 1.0 Important" \
+        in again.stdout and "(previous run: recall 1/2, 1.0 Important per clean case, 0 errors, 0 skipped)" \
+        in again.stdout, again.stdout
     limited = evals(env, "run", "--model", "codex", "--limit", "1")
     assert "2 cases, the cases differ from the previous run's" in limited.stdout and \
-        "- Correctness: recall 0/1, 2.0 Important per clean case" in limited.stdout, \
+        "- Correctness: recall 0/1, 0.0 Important per clean case" in limited.stdout, \
         f"--limit 1 takes the newest bug case and the newest clean one, and says the set changed:\n{limited.stdout}"
-    assert len(os.listdir(runs)) == 3, "each run keeps its own results file"
+    assert len(os.listdir(runs)) == 4, "each run keeps its own results file"
+    answer(answers, commits["hit"], "- Important: total off by one — shop/cart.py:45-48 — high")
+    add_bug(env, repo, commits["hit"], commits["base"], 63, lens="Security")
+    widened = evals(env, "run", "--model", "codex")
+    calls = open(os.path.join(answers, "calls")).read().splitlines()
+    claude = next(call for call in calls if call.startswith("claude"))
+    assert "Bash(git diff:*)" in claude and "--permission-mode dontAsk" in claude and "--no-session-persistence" \
+        in claude, claude
+    assert "- Security: recall 1/1" in widened.stdout and "(not in the previous run)" in widened.stdout, widened.stdout
+
+
+def cases_with_the_same_review_share_one_pass(base):
+    env, repo, commits, answers = setup(base)
+    add_bug(env, repo, commits["hit"], commits["base"], 47)
+    add_bug(env, repo, commits["hit"], commits["base"], 75)
+    answer(answers, commits["hit"], "- Important: total off by one — cart.py:45-48 — high")
+    out = evals(env, "run", "--model", "codex")
+    assert "recall 1/2" in out.stdout, out.stdout
+    assert len(open(os.path.join(answers, "calls")).read().splitlines()) == 1, "two comments on one PR, one review"
 
 
 def a_failed_review_is_an_error_not_a_miss(base):
@@ -171,10 +213,26 @@ def a_failed_review_is_an_error_not_a_miss(base):
     assert "- Security: recall n/a, no clean case, 0 errors, 1 skipped" in out.stdout, out.stdout
     assert "model unavailable" in out.stderr and "no ## Found" in out.stderr and "no checkout" in out.stderr, out.stderr
     assert git(repo, "worktree", "list").count("\n") == 0, "worktrees go even when the review fails"
+    no_model = evals({**env, "PATH": "/usr/bin:/bin"}, "run", "--model", "codex")
+    assert "- Correctness: recall n/a, no clean case, 3 errors" in no_model.stdout and "No such file" \
+        in no_model.stderr, no_model
+    skills = os.path.join(env["HOME"], ".agents", "skills")
+    os.unlink(skills)
+    os.makedirs(os.path.join(skills, "self-review"))
+    os.symlink(os.path.join(KIT, "skills", "self-review", "lenses.md"), os.path.join(skills, "self-review", "lenses.md"))
+    with open(os.path.join(skills, "self-review", "bundle.sh"), "w") as fh:
+        fh.write("#!/bin/bash\necho 'no such base' >&2; exit 1\n")
+    os.chmod(os.path.join(skills, "self-review", "bundle.sh"), 0o755)
+    answer(answers, commits["miss"], "- Important: x — cart.py:96")
+    with open(os.path.join(env["HOME"], ".agents", "review-mining", "evals", "cases.jsonl"), "a") as fh:
+        fh.write(json.dumps({**cases(env)[0], "lens": "Renamed lens", "line": 5}) + "\n")
+    broken = evals(env, "run", "--model", "codex")
+    assert "- Renamed lens: recall n/a, no clean case, 1 errors" in broken.stdout, broken.stdout
+    assert "- Correctness: recall n/a, no clean case, 3 errors" in broken.stdout and "bundle.sh exit 1" in broken.stderr, broken
 
 
 for test in (adds_each_case_once, refuses_cases_it_cant_replay, scores_hits_misses_and_false_alarms,
-             a_failed_review_is_an_error_not_a_miss):
+             cases_with_the_same_review_share_one_pass, a_failed_review_is_an_error_not_a_miss, refuses_a_limit_below_one):
     base = tempfile.mkdtemp(prefix="agents-test-review-eval-")
     try:
         test(base)

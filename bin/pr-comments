@@ -2,8 +2,9 @@
 """Print the current branch's pull request comments that the follow-pr report doesn't list yet.
 
   pr-comments    inline comments on the diff, conversation comments and review summaries, every page, each with its
-                 id, kind, author (bots marked), file and line ("outdated" when it's on an older commit), URL and text; skips the ids the follow-pr report
-                 already lists, the PR author's own comments and reviews without text
+                 id, kind, author (bots marked), file and line ("outdated" when it's on an older commit, "deleted
+                 line" on the base's side), URL and text; skips the ids the follow-pr report already lists, the PR
+                 author's own comments and reviews without text
 
 Exit: 0 read (new comments or none, said either way), 4 GitHub couldn't be read: never "no comments".
 """
@@ -52,9 +53,12 @@ def comment(kind, raw):
     null user."""
     user = raw.get("user") or {}
     place = ""
-    if kind == "inline":  # GitHub drops `line` once the commented lines change: the original is on an older commit
-        place = f"{raw['path']}:{raw['line']}" if raw.get("line") else \
-            f"{raw['path']}:{raw.get('original_line') or '?'} (outdated)"
+    if kind == "inline" and raw.get("subject_type") == "file":
+        place = raw["path"]
+    elif kind == "inline" and raw.get("line") is None:  # GitHub drops `line` once the commented lines change
+        place = f"{raw['path']}:{raw.get('original_line') or '?'} (outdated)"
+    elif kind == "inline":  # a LEFT line numbers the base's file: the line is gone from the head
+        place = f"{raw['path']}:{raw['line']}" + (" (deleted line)" if raw.get("side") == "LEFT" else "")
     return (int(raw["id"]), kind, user.get("login") or "ghost", user.get("type") == "Bot",
             raw.get("state") or "" if kind == "review" else "", raw["html_url"], place, (raw.get("body") or "").strip())
 

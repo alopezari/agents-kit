@@ -51,9 +51,10 @@ It reads all three kinds, every page: inline comments on the diff, the conversat
 
 1. Verify it like a self-review finding: **Confirmed**, **Rejected** or **Uncertain**, each with evidence.
 2. Confirmed: fix it (section 3). Rejected: draft a reply with the evidence. Uncertain: put it in front of the user.
-   Before fixing a confirmed comment that names a file and line, not outdated, record it as a review eval case: the PR's head still holds the bug, and the monthly job replays it against the reviewers. Skip it when the lens that should have caught it is `spec`, which has no reviewer to replay:
+   Before fixing any of them, record each confirmed comment that names a file and line, neither outdated nor a deleted line, as a review eval case: the PR's head, the commit the comment's line refers to, still holds the bug, and the monthly job replays it against the reviewers. Skip it when the lens that should have caught it is `spec`, which has no reviewer to replay:
    ```bash
-   ~/.agents/review-mining/eval.py add --checkout . --sha "$(git rev-parse HEAD)" --base "$(git merge-base HEAD origin/<baseRefName>)" \
+   head=$(gh pr view --json headRefOid -q .headRefOid)
+   ~/.agents/review-mining/eval.py add --checkout . --sha "$head" --base "$(git merge-base "$head" origin/<baseRefName>)" \
      --lens <lens that should have caught it> --goal "<PR title>" --file <path> --line <n> --summary "<the defect in one sentence>"
    ```
 3. Draft a short reply for every comment: what was fixed and where, or why not. Posting speaks for the user: show the drafts and post only what they approve.

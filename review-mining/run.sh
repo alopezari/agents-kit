@@ -50,10 +50,13 @@ python3 "$HOME/.agents/usage/extract_sessions.py" 200 "$RUN/sessions.json" > "$R
 python3 "$HOME/.agents/usage/extract_sessions.py" 100000 "$RUN/sessions-all.json" > /dev/null 2>&1 || true
 python3 "$BASE/outcomes.py" "$SINCE" "$RUN/sessions-all.json" "$RUN/outcomes.json" > "$RUN/outcomes.log" 2>&1 || true
 # Replay the escaped bugs against both reviewers: up to 10 bug and 10 clean cases each, about one review pass per case.
+# The two models run side by side: one after the other can take hours before the analysis starts.
 for model in codex claude; do
-  python3 "$BASE/eval.py" run --model "$model" --limit 10 >> "$RUN/evals.txt" 2>&1 \
-    || echo "eval.py run --model $model failed with exit $?" >> "$RUN/evals.txt"
+  { python3 "$BASE/eval.py" run --model "$model" --limit 10 || echo "eval.py run --model $model failed with exit $?"; } \
+    > "$RUN/evals-$model.txt" 2>&1 &
 done
+wait
+cat "$RUN/evals-codex.txt" "$RUN/evals-claude.txt" > "$RUN/evals.txt"
 
 cat > "$RUN/prompt.md" <<EOF
 You are updating the evidence behind a set of coding-agent instructions.
@@ -112,7 +115,7 @@ Steps:
    name the changes to lenses.md, bundle.sh or the models since the previous run and propose reverting the likely
    cause. Then name up to three merged PRs from outcomes.json with no escapes and follow_ups settled with none you
    counted, as clean-case candidates, each with the command for a person to fill in and run (never add cases yourself):
-   `$BASE/eval.py add --checkout <the repo's checkout> --sha <merge commit> --base <its first parent> --lens Correctness --goal "<PR title>" --clean`.
+   \`$BASE/eval.py add --checkout <the repo's checkout> --sha <merge commit> --base <its first parent> --lens Correctness --goal "<PR title>" --clean\`.
    Add a "Cost per merged PR" section from the sessions joined to PRs: tokens (input+output; cache reads separately),
    wall-clock minutes (idle included), hours from the first session to the PR and from the PR to the merge, per
    period and per model and effort where sessions.json has them. Compare cost per merged PR, never per session.
