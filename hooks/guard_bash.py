@@ -934,9 +934,10 @@ def bare_code(command):
 
 
 def string_literals(code, interpreter):
-    """The string literals of interpreter code, Python's as its tokenizer reads them; None when it can't."""
+    """The string literals of Python code, as its tokenizer reads them; None for other languages, whose comments,
+    template literals and q() strings a shell's quote reader misreads, or when it can't."""
     if not interpreter.startswith("python"):
-        return [code[start:end] for start, end in quoted_spans(code)]
+        return None
     kinds = {tokenize.STRING, getattr(tokenize, "FSTRING_MIDDLE", tokenize.STRING)}
     try:
         return [t.string for t in tokenize.generate_tokens(io.StringIO(code).readline) if t.type in kinds]
@@ -1021,7 +1022,7 @@ def assigned_value(raw, values):
 
 
 def chained_by(separator):
-    """The chain a segment separator joins into: "&&", "||", "|", or None for ; and new lines."""
+    """The chain a segment separator joins into: "&&", "||", "|", "&" for a background job, or ";" for ; and new lines."""
     for kind in ("&&", "||", "|"):
         if kind in separator:
             return kind
@@ -1043,9 +1044,17 @@ def segments_with_values(text):
     for name in set(names) | unsure:
         base.pop(name, None)
     known, chain, parens, compound = {}, {}, 0, 0
-    masked = "\n".join(line_layout(line)[0] for line in text.split("\n")).replace(CONTINUATION, "  ")
+    by_line = "\n".join(line_layout(line)[0] for line in text.split("\n")).replace(CONTINUATION, "  ")
+    whole = list(text.replace(CONTINUATION, "  "))
+    for start, end in quoted_spans(text):
+        whole[start:end] = "q" * (end - start)
+    whole = "".join(whole)
+    # A string spanning lines fools the line reading, an apostrophe in a heredoc body the whole-text one: a separator
+    # either leaves outside a string splits, and only separators both see frame a trusted assignment.
+    masked = "".join(a if a == b else text[i] for i, (a, b) in enumerate(zip(by_line, whole)))
     breaks = [0] + [i for m in SEGMENT_BREAK.finditer(masked) for i in m.span()] + [len(text)]
     parts = [text[a:b] for a, b in zip(breaks, breaks[1:])]
+    sure = [by_line[a:b] == masked[a:b] == whole[a:b] for a, b in zip(breaks, breaks[1:])]
     for k in range(0, len(parts), 2):
         before = chained_by(parts[k - 1]) if k else ";"
         after = chained_by(parts[k + 1]) if k + 1 < len(parts) else ";"
@@ -1059,7 +1068,8 @@ def segments_with_values(text):
         parens += leading
         compound += first in COMPOUND_OPENS or code.endswith("{")
         assignments = ASSIGNMENTS_ONLY.fullmatch(stripped)
-        if assignments and parens == compound == 0 and before in (";", "&&") and after not in ("|", "&"):
+        framed = (k == 0 or sure[k - 1]) and (k + 1 >= len(parts) or sure[k + 1])
+        if assignments and framed and parens == compound == 0 and before in (";", "&&") and after not in ("|", "&"):
             for m in ONE_ASSIGNMENT.finditer(assignments.group(1)):
                 value = None if m.group(1) in unsure else assigned_value(m.group(2), {**base, **known, **chain})
                 if value is not None:

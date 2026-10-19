@@ -285,7 +285,8 @@ def guard_resolves_rm_variables(base):
     for cmd in ['T=$(mktemp -d); rm -rf "$T"', 'T="$(mktemp -d)" && rm -rf "$T/sub" $T',
                 'T=$(mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX"); rm -rf "$T"', "T=$(mktemp -d /tmp/x.XXXX); rm -r $T",
                 "T=$(mktemp -d -t ci); rm -rf $T", "S=/private/tmp/x; E=$S/run; rm -rf \"$E\"",
-                "export T=/tmp/a; rm -rf $T", "local T=/tmp/a\nrm -rf ${T}", 'T=$(mktemp -d); cd "$T" && rm -rf sub']:
+                "export T=/tmp/a; rm -rf $T", "local T=/tmp/a\nrm -rf ${T}", 'T=$(mktemp -d); cd "$T" && rm -rf sub',
+                'true && T=/tmp/x && rm -rf "$T/s"']:
         assert guard_env(cmd, "/private/var/folders/ab/T/") == "allow", f"a temp path set in the command: {cmd!r}"
     for cmd in ['rm -rf "$TMPDIR"/x', 'rm -rf "${TMPDIR:-/tmp}/x"', "rm -rf $TMPDIR/x"]:
         assert guard_env(cmd, "/private/var/folders/ab/T/") == "allow", f"the hook's own TMPDIR: {cmd}"
@@ -304,8 +305,11 @@ def guard_resolves_rm_variables(base):
                 'T="/tmp/a /usr"; rm -rf $T', 'T=/tmp/x; T+=/../../usr; rm -rf "$T"', 'T=/tmp/x; unset T; rm -rf "$T"/usr',
                 'if [ -n "$X" ]; then\n  T=/tmp/x\nfi\nrm -rf "$T"/usr', 'X=$(\nT=/tmp/x\n)\nrm -rf "$T"/usr',
                 "grep 'a; T=/tmp/x; b' f; rm -rf \"$T/usr\"", 'export TMPDIR=/usr; T=$(mktemp -d); rm -rf "$T"',
-                'T=$(mktemp -dp /usr x.XXXX); rm -rf "$T"/..', 'case "$X" in\n  yes)\n    T=/tmp/x;;\nesac\nrm -rf "$T/usr"',
-                'false && \\\n  T=/tmp/x; rm -rf "$T/usr"', "T='/tmp/a /usr'; rm -rf $T", "T='/tmp/*'; rm -rf $T"]:
+                'T=$(mktemp -dp /usr x.XXXX); rm -rf "$T"/..', 'T=$(mktemp -d --tmpdir=/usr); rm -rf "$T"', 'case "$X" in\n  yes)\n    T=/tmp/x;;\nesac\nrm -rf "$T/usr"',
+                'false && \\\n  T=/tmp/x; rm -rf "$T/usr"', "T='/tmp/a /usr'; rm -rf $T", "T='/tmp/*'; rm -rf $T",
+                'git commit -m "subject\n\nbody for $USER" && rm -rf /usr/share/doc',
+                'python3 -c "\nprint(1)\n" && rm -rf /opt', "grep -e 'a\nb' f && rm -rf '/usr/share'",
+                'grep -e "a\nb; T=/tmp/x; c" f; rm -rf "$T/usr"']:
         assert guard_env(cmd, "/private/var/folders/ab/T/") == "deny", f"not a temp path for sure: {cmd!r}"
     started = child_cpu()
     assert guard_env("a=" + "b=" * 40 + ") && rm -rf /usr/x", None) == "deny" and child_cpu() - started < 3, \
@@ -344,7 +348,11 @@ def guard_reads_code_not_text(base):
                 "php -r 'mysqli_query($c, \"DROP TABLE x\");'", "cat > /tmp/x.sh <<'EOF'\ngit branch -D old\nEOF\nbash /tmp/x.sh",
                 "ruby -e 'Kernel.system(\"git branch -D old\")'", "cat > /tmp/x.sh <<'EOF'\ngit branch -D old\nEOF\n/bin/sh /tmp/x.sh",
                 "cat > /tmp/x.sh <<'EOF'\ngit branch -D old\nEOF\ncommand bash /tmp/x.sh",
-                "git submodule --quiet foreach 'git reset --hard'", "python3 -c 'db.query (\"DROP TABLE x\")'"]:
+                "git submodule --quiet foreach 'git reset --hard'", "python3 -c 'db.query (\"DROP TABLE x\")'",
+                "python3 -c 'import os; os.popen(\"git branch -D old\")'",
+                "node -e 'require(\"child_process\").execSync(\"git branch -D old\")'",
+                "php -r 'passthru(\"git reset --hard\");'", "php -r 'proc_open(\"git reset --hard\", [], $p);'",
+                "python3 -c 'import pty; pty.spawn(\"git reset --hard\")'", "echo 'DROP TABLE x' | psql"]:
         assert guard(cmd) == "deny", f"text that runs: {cmd!r}"
 
     def reason(command, cwd="/tmp"):
@@ -364,7 +372,10 @@ def guard_reads_code_not_text(base):
     for cmd in [f"python3 - <<'EOF'\nimport os\nopen(os.path.expanduser('{approvals}/linear'), 'w').write('x')\nEOF",
                 'mkdir -p "$X/.agents/approvals/turn"', f"touch {approvals}/linear",
                 'mkdir -p "$S/.agents/approvals/turn"; S=/private/tmp/x',
-                "bash <<'EOF'\ncd ~/.agents\ntouch approvals/linear\nEOF"]:
+                "bash <<'EOF'\ncd ~/.agents\ntouch approvals/linear\nEOF",
+                "node - <<'EOF'\n// don't\nrequire('fs').writeFileSync(\"/home/u/.agents/approvals/linear\", 'x')\nEOF",
+                "node - <<'EOF'\nrequire('fs').writeFileSync(`/home/u/.agents/approvals/linear`, 'x')\nEOF",
+                "ruby - <<'EOF'\nFile.write(%q(/home/u/.agents/approvals/linear), 'x')\nEOF"]:
         assert guard(cmd) == "deny", f"a write into the approvals: {cmd!r}"
 
     repo = new_repo(base)
@@ -381,6 +392,8 @@ def guard_reads_code_not_text(base):
     long = "S=/tmp/a; T=$(mktemp -d \"$S/x.XXXX\"); grep -n 'DROP|sudo' f; " * 300 + \
         "python3 - <<'EOF'\n" + "s = 'git push --force'\n" * 2000 + "EOF\n" + "cat <<'EOF'\n" + "x\n" * 2000
     assert guard(long) == "allow" and child_cpu() - started < 3, "a long mixed command must not stall the guard"
+    started = child_cpu()
+    assert guard(long + "EOF\ngit branch -D old") == "deny" and child_cpu() - started < 3, "the whole long command is read"
 
 
 def guard_mcp_linear(base):
