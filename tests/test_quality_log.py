@@ -65,6 +65,7 @@ def keeps_lens_names_to_the_lenses_there_are(base):
         assert log(home, "escape", "ci", "--verdict", "confirmed", "--category", "P3.2a", "--lens", name, "--pr", "1").returncode == 0, name
         lens, escape = entries(home)[-2:]
         assert (lens["name"], escape["lens"]) == (key, key), (name, lens, escape)
+    assert not os.path.exists(os.path.join(home, ".agents", "bin", "__pycache__")), "loading bin/triage left a cache bin/docs trips on"
 
 
 def refuses_malformed_entries(base):

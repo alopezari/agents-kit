@@ -32,6 +32,7 @@ from review_stamp import quality_log  # noqa: E402
 
 def lens_keys():
     """{key or lowercase heading: key} for every review lens, plus the self-review's re-check and the spec's second reading."""
+    sys.dont_write_bytecode = True  # loading triage would leave bin/__pycache__ behind, which bin/docs reads as a tool
     loader = importlib.machinery.SourceFileLoader("triage", os.path.join(KIT, "bin", "triage"))
     triage = importlib.util.module_from_spec(importlib.util.spec_from_loader("triage", loader))
     loader.exec_module(triage)
