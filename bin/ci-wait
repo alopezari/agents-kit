@@ -26,7 +26,8 @@ PASSED_RUN = {"success", "neutral", "skipped"}
 GH_TIMEOUT = 30
 GIT_TIMEOUT = 10
 CI_CONFIG = [".github/workflows", ".circleci", ".buildkite", ".teamcity", ".travis.yml", ".gitlab-ci.yml", "Jenkinsfile",
-             "azure-pipelines.yml"]
+             "azure-pipelines.yml", "azure-pipelines.yaml", ".drone.yml", "appveyor.yml", ".appveyor.yml", ".cirrus.yml",
+             ".semaphore", ".woodpecker", ".woodpecker.yml", "bitrise.yml", "codemagic.yaml"]
 # One call for the checks of the default branch's head, the commit's parent and the last pull requests' heads.
 NO_CI_QUERY = """query($owner: String!, $name: String!, $parent: GitObjectID!) { repository(owner: $owner, name: $name) {
   defaultBranchRef { target { ... on Commit { statusCheckRollup { state } } } }
@@ -87,16 +88,16 @@ def git(*args):
 
 
 def runs_no_ci(sha):
-    """Whether the repo plainly runs no CI. Anything it can't tell counts as CI: a wrong "no CI" drops the CI follow-up,
-    and CI reporting through commit statuses (TeamCity) or only on pull requests has no config file to find, hence
-    the recent pull requests."""
+    """Whether the repo plainly runs no CI. Anything it can't tell counts as CI: a wrong "no CI" drops the CI follow-up.
+    CI with no config file to find shows in the checks: TeamCity's statuses on the default branch and the parent, CI
+    that runs only on pull requests on their heads."""
     try:
-        if git("ls-tree", "--name-only", sha, "--", *CI_CONFIG):
+        if git("ls-tree", "--full-tree", "--name-only", sha, "--", *CI_CONFIG):
             return False
-        try:
-            parent = git("rev-parse", "--verify", "--quiet", f"{sha}^")
-        except Unreadable:
-            parent = sha  # a root commit: its own checks, already known to be none, stand in
+        parents = git("rev-list", "--parents", "-n", "1", sha).split()[1:]
+        if not parents and git("rev-parse", "--is-shallow-repository") == "true":
+            return False  # a shallow clone's oldest commit looks parentless: its real parent is unknown
+        parent = parents[0] if parents else sha  # a root commit: its own checks, already known to be none, stand in
         repo = json.loads(gh("api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-F", f"parent={parent}",
                              "-f", f"query={NO_CI_QUERY}"))["data"]["repository"]
         commits = [repo["defaultBranchRef"]["target"], repo["parent"]]

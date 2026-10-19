@@ -11,11 +11,11 @@ import tempfile
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 CI_WAIT = os.path.join(KIT, "bin", "ci-wait")
 SHA = "a" * 40
-# Answers the two API calls ci-wait makes and `gh run view --log-failed`. Each check-runs call for the commit takes the
+# Answers the three API calls ci-wait makes and `gh run view --log-failed`. Each check-runs call for the commit takes the
 # next state from states.json (the last one repeats); a state with "error" makes gh fail as it does offline, and one
 # with "raw" answers that text. Lists come in pages of 100, and only --paginate reads past the first. The no-CI probe's
 # GraphQL call reads "probe", the places that have checks among "main", "parent" and "pr" (missing: GitHub knows no
-# such repository), and "probe_error" fails it.
+# such repository), and "probe_error" fails it; it must pass owner and name as placeholders gh fills in (-F).
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
 state_dir = os.environ["FAKE_GH_DIR"]
@@ -39,6 +39,7 @@ if "graphql" in args:
     if "probe" not in state:
         print(json.dumps({"data": {"repository": None}}))
         sys.exit(0)
+    assert "-F owner={owner} -F name={repo}" in " ".join(args), args
     parent = next(a.split("=", 1)[1] for a in args if a.startswith("parent="))
     assert parent == os.environ["FAKE_PARENT"], parent
     rollup = lambda checked: {"statusCheckRollup": {"state": "SUCCESS"} if checked else None}
@@ -66,36 +67,47 @@ def run(name, status="completed", conclusion="success", job=None):
     return {"name": name, "status": status, "conclusion": conclusion if status == "completed" else None, "details_url": url}
 
 
-def ci_wait(states, *args, grace, ci_config=None, unknown_sha=False):
-    """With ci_config (None: no repo), runs in a repo of two commits, the second holding that file ("": none);
-    unknown_sha asks about a commit the repo doesn't have."""
+def ci_wait(states, *args, grace, ci_config=None, unknown_sha=False, history="two", subdir=""):
+    """With ci_config (None: no repo), runs in a repo whose last commit holds that file ("": none): two commits, one
+    ("root"), or a depth-1 clone of two ("shallow"), from subdir of it. unknown_sha asks about a commit the repo doesn't
+    have. Returns the exit code, the output and the number of no-CI probes."""
     base = tempfile.mkdtemp(prefix="agents-test-ci-wait-")
     try:
-        repo, sha, parent = None, SHA, ""
+        cwd, sha, parent = base, SHA, ""
         if ci_config is not None:
             repo = os.path.join(base, "repo")
             git = lambda *a: subprocess.run(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", *a],
                                             capture_output=True, text=True, check=True).stdout.strip()
-            os.makedirs(repo)
+            os.makedirs(os.path.join(repo, "src"))
             git("init", "-q")
-            git("commit", "-q", "--allow-empty", "-m", "first")
+            if history != "root":
+                git("commit", "-q", "--allow-empty", "-m", "first")
             if ci_config:
                 os.makedirs(os.path.dirname(os.path.join(repo, ci_config)) or repo, exist_ok=True)
                 open(os.path.join(repo, ci_config), "w").write("on: push\n")
                 git("add", "-A")
-            git("commit", "-q", "--allow-empty", "-m", "second")
-            sha, parent = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^")
+            git("commit", "-q", "--allow-empty", "-m", "last")
+            sha = git("rev-parse", "HEAD")
+            parent = sha if history == "root" else git("rev-parse", "HEAD^")
+            if history == "shallow":
+                clone = os.path.join(base, "clone")
+                subprocess.run(["git", "clone", "-q", "--depth", "1", "file://" + repo, clone], check=True)
+                repo = clone
             sha = SHA if unknown_sha else sha
+            cwd = os.path.join(repo, subdir)
+            os.makedirs(cwd, exist_ok=True)
         os.makedirs(os.path.join(base, "bin"))
         gh = os.path.join(base, "bin", "gh")
         open(gh, "w").write(FAKE_GH)
         os.chmod(gh, 0o755)
         json.dump(states, open(os.path.join(base, "states.json"), "w"))
         env = {**os.environ, "PATH": os.path.join(base, "bin") + ":" + os.environ["PATH"], "FAKE_GH_DIR": base,
-               "CI_WAIT_POLL_SECS": "0.2", "CI_WAIT_GRACE_SECS": grace, "FAKE_SHA": sha, "FAKE_PARENT": parent}
+               "CI_WAIT_POLL_SECS": "0.2", "CI_WAIT_GRACE_SECS": grace, "FAKE_PARENT": parent}
         result = subprocess.run([CI_WAIT, "--sha", sha, *args], capture_output=True, text=True, env=env, timeout=60,
-                                cwd=repo or base)
-        return result.returncode, result.stdout + result.stderr
+                                cwd=cwd)
+        calls = os.path.join(base, "calls.log")
+        probes = open(calls).read().count(" graphql ") if os.path.exists(calls) else 0
+        return result.returncode, result.stdout + result.stderr, probes
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
@@ -155,11 +167,14 @@ NO_CI = [  # (name, CI config file in the commit, state, args, exit code, text t
     ("a repository GitHub doesn't know keeps the wait", "", {"runs": []}, ["--timeout", "0.5"], 2, ["no checks yet"]),
     ("a repo with no CI whose commit has checks still reports them", "", {"runs": [run("suite")], "probe": []}, [], 0,
      ["suite: success"]),
+    *[(f"{config} counts as CI config", config, {"runs": [], "probe": []}, ["--once"], 3, ["no checks"])
+      for config in [".circleci/config.yml", ".buildkite/pipeline.yml", ".teamcity/settings.kts", ".travis.yml",
+                     ".gitlab-ci.yml", "azure-pipelines.yml"]],
 ]
 
 fail = 0
 for name, ci_config, state, args, code, present, *grace in NO_CI:
-    got, out = ci_wait([state], *args, grace=grace[0] if grace else "30", ci_config=ci_config)
+    got, out, _ = ci_wait([state], *args, grace=grace[0] if grace else "30", ci_config=ci_config)
     ok = got == code and all(p in out for p in present) and (code == 5 or "runs no CI" not in out)
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} {name}" + ("" if ok else f": exit {got}, wanted {code}\n     {out.strip()[-400:]}"))
@@ -167,15 +182,33 @@ for name, ci_config, state, args, code, present, *grace in NO_CI:
 # Outside a repo, or with a SHA the checkout doesn't have, nothing proves the repo runs no CI.
 for name, ci_config, unknown in [("outside a repo, no checks keeps the wait", None, False),
                                  ("a commit the checkout doesn't have keeps the wait", "", True)]:
-    got, out = ci_wait([{"runs": [], "probe": []}], "--timeout", "0.5", grace="30", ci_config=ci_config, unknown_sha=unknown)
+    got, out, _ = ci_wait([{"runs": [], "probe": []}], "--timeout", "0.5", grace="30", ci_config=ci_config,
+                          unknown_sha=unknown)
     ok = got == 2 and "runs no CI" not in out
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} {name}" + ("" if ok else f": exit {got}\n     {out.strip()[-400:]}"))
 
+# (name, keyword arguments, state, args, exit code, no-CI probes)
+for name, how, state, args, code, probes in [
+    ("run from a subdirectory, a workflow at the root keeps the wait", {"ci_config": ".github/workflows/ci.yml",
+     "subdir": "src"}, {"runs": [], "probe": []}, ["--once"], 3, None),
+    ("a repo's first commit stands in for its own parent", {"ci_config": "", "history": "root"},
+     {"runs": [], "probe": []}, ["--once"], 5, 1),
+    ("a shallow clone, whose parent is unknown, keeps the wait", {"ci_config": "", "history": "shallow"},
+     {"runs": [], "probe": []}, ["--timeout", "0.5"], 2, 0),
+    ("the probe runs once while polling", {"ci_config": "", "history": "two"}, {"runs": [], "probe": ["main"]},
+     ["--timeout", "1"], 2, 1),
+    ("a commit with checks is never probed", {"ci_config": ""}, {"runs": [run("suite")], "probe": []}, [], 0, 0),
+]:
+    got, out, made = ci_wait([state], *args, grace="30", **how)
+    ok = got == code and (code == 5) == ("runs no CI" in out) and probes in (None, made)
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {name}" + ("" if ok else f": exit {got}, {made} probes\n     {out.strip()[-400:]}"))
+
 # A long default grace: on a loaded runner one fake gh call can take over a second, which a short grace reads as
 # "no checks" in cases about something else.
 for name, states, args, code, present, absent, *grace in CASES:
-    got, out = ci_wait(states, *args, grace=grace[0] if grace else "30")
+    got, out, _ = ci_wait(states, *args, grace=grace[0] if grace else "30")
     ok = got == code and all(p in out for p in present) and not any(a in out for a in absent)
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} {name}" + ("" if ok else f": exit {got}, wanted {code}\n     {out.strip()[-400:]}"))

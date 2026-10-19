@@ -1643,6 +1643,7 @@ def stop_follows_ci_after_a_push(base):
     pushed = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", f"{session}.pushed")
     assert asked(session) == "", "no CI anywhere: nothing to wait for right after the push"
     assert os.path.realpath(repo) not in open(pushed).read(), "a repo with no CI isn't followed"
+    assert open(pushed[:-len(".pushed")] + ".ci-asked").read() == "", "a repo with no CI records no question"
     before = open(calls).read()
     assert asked(session) == "" and open(calls).read() == before, "a repo with no CI isn't queried again"
     session = RUN + "ci6"
