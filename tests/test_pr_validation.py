@@ -89,6 +89,20 @@ def counts_open_findings_and_skips_absent_reports(base):
                           "  - Open: the refund total may round twice.\n"), out.stdout
 
 
+def lists_pre_existing_findings_only_when_there_are_some(base):
+    repo = new_repo(base)
+    write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
+    write(repo, "review", "Self-review (risk: low; lenses: correctness)\n"
+                          "Fixed: none.\n"
+                          "Pre-existing: the coupon total ignores tax — cart.py:12 — evidence: main has it\n"
+                          "Open: none.\n")
+    out = sh(repo, PR_VALIDATION)
+    assert out.returncode == 0, out
+    assert out.stdout == ("## Validation\n\n- Verify: PASS, 1 check: tests/test_cart.py.\n"
+                          "- Self-review (risk: low; lenses: correctness): 0 fixed, 0 rejected, 0 open, 1 pre-existing.\n"
+                          "  - Pre-existing: the coupon total ignores tax.\n"), out.stdout
+
+
 def keeps_qualified_verdicts_and_bounded_sections(base):
     repo = new_repo(base)
     write(repo, "verify", "# Verify: PASS, but nothing was checked\n\nran: nothing to check: no changed files\n")
@@ -191,6 +205,7 @@ def names_the_phases_the_user_switched_off(base):
         shutil.rmtree(os.path.join(os.path.expanduser("~/.agents"), "approvals"), ignore_errors=True)
 
 for test in (names_the_phases_the_user_switched_off, builds_the_section_from_every_report, counts_open_findings_and_skips_absent_reports,
+             lists_pre_existing_findings_only_when_there_are_some,
              keeps_qualified_verdicts_and_bounded_sections,
              a_guide_with_only_steps_after_the_merge_claims_no_pending_staging,
              counts_findings_listed_under_their_label, a_missing_verify_or_review_fails_naming_it):

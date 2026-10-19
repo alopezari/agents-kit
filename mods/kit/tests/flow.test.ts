@@ -689,6 +689,7 @@ test('session start registers one reviewer per lens bin/triage prints, briefed w
     expect(spec.prompt).toContain(lens.brief)
     expect(spec.prompt).toContain('never edit')
     expect(spec.prompt).toContain('AGENTS.md')
+    expect(spec.prompt).toContain('~/.agents/repos/$(~/.agents/bin/repo-name)/review.md')
     expect(spec.description).toContain(lens.title)
     expect(spec.tools).toEqual(['Read', 'Grep', 'Glob', 'Bash'])
     expect(spec.omitClaudeMd).toBe(true)

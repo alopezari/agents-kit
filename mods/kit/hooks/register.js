@@ -376,7 +376,9 @@ function reviewerPrompt(lens) {
     `You are one reviewer in the kit's self-review, with one lens: ${lens.title}. You read files and run read-only`,
     'commands; you never edit files. The spawn prompt gives the base ref, the goal, the spec when there is one, and how',
     "to report. The repository's own AGENTS.md or CLAUDE.md, when it has one, holds its conventions: read it when a",
-    'finding depends on them.',
+    'finding depends on them. When `~/.agents/repos/$(~/.agents/bin/repo-name)/review.md` exists, run from the checkout',
+    'you review, it is the review guide for that repository: what failure looks like there and what to skip. Read it',
+    "first and apply it; where it conflicts with the spawn prompt's instructions (a nit cap, say), the guide wins.",
     '',
     lens.brief,
   ].join('\n')

@@ -29,13 +29,15 @@ Lens definitions are in `lenses.md` next to this file. Triage picks the lenses; 
 
 | Tier | Reviewer |
 |---|---|
-| Low | Yourself, one pass |
+| Low | Yourself, one pass, with the review guide below |
 | Standard | One subagent per selected lens, in parallel, plus one cross-model pass on Correctness |
 | High | One subagent per selected lens, plus a cross-model pass per lens |
 
 Stay within triage's time budget. If a lens would need much longer, review the riskiest part and say what you left out.
 
-Give each reviewer: the lens text, the base ref, the task or PR goal in one or two sentences, the spec's path when there is one (its Change map is where the Correctness tables start), and this instruction: *report every issue you suspect, each with file:line, the failing scenario, a severity and a confidence (high/medium/low); low-confidence findings are welcome, because step 3 verifies them.* Reviewers are read-only and never edit files.
+Give each reviewer: the lens text, the base ref, the task or PR goal in one or two sentences, the spec's path when there is one (its Change map is where the Correctness tables start), and this instruction: *report every issue you suspect, each with file:line, the failing scenario, a severity and a confidence (high/medium/low); low-confidence findings are welcome, because step 3 verifies them. Severity is one of: Important (a defect the change introduces, or makes reachable), Nit (a minor point; at most three), or Pre-existing (already on the base branch, and neither introduced nor newly reached by the change). Report a defect as a class: search the change for every other place with the same pattern and list each file:line under that one finding.* Reviewers are read-only and never edit files.
+
+A repository can have a review guide, `~/.agents/repos/$(~/.agents/bin/repo-name)/review.md`, in the user's overlay next to `notes.md`: what failure looks like there, what to skip, a different nit cap. Every reviewer applies it, and it wins over these instructions where they conflict. `bundle.sh` includes it and the `kit:review-*` agents read it themselves; give a general subagent its path, and read it yourself on the Low tier.
 
 In Claude Code with the kit plugin, each lens is an agent type: spawn `kit:review-<lens>`, with triage's name for the lens (`kit:review-correctness`, `kit:review-ux-a11y-i18n`). It already holds the lens text, has no edit tools and leaves out CLAUDE.md, so give it the rest of the list above. `bundle.sh` below takes the lens's heading instead (`Correctness`, `"Performance and scale"`). Where that type isn't listed (Codex, or the plugin off), give a general subagent the lens text too.
 
@@ -53,11 +55,11 @@ Skipped when `second-model`, or the reviewer's own phase, is switched off (see t
   awk '/^## Found$/ { section = "" } { section = section $0 "\n" } END { if (section ~ /^## Found/) printf "%s", section }' "$out"
   ```
   Run it once per lens you send cross-model. For a very large diff, split it by directory and review the riskiest parts.
-- **Running on an OpenAI model (Codex) →** Claude:
+- **Running on an OpenAI model (Codex) →** Claude, from the same bundle, so it gets the same instructions:
   ```bash
-  claude -p "<lens text + goal + evidence instruction>. Review: git diff <merge-base>" \
-    --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)" \
-    --disallowedTools "Edit,Write"
+  ~/.agents/skills/self-review/bundle.sh <base> Correctness "<goal>" \
+    | claude -p --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)" \
+      --disallowedTools "Edit,Write"
   ```
 
 If the other CLI isn't installed or fails, say so in the report and continue with same-model reviewers. Don't skip the review.
@@ -73,7 +75,9 @@ Reviewers produce false positives, and a fix for a non-bug is a new bug. For eac
    - **Uncertain**: the concern, and the evidence that would settle it.
 
    A verdict without evidence is uncertain. Forcing this choice beats adding reviewers ([arXiv 2608.18167](https://arxiv.org/abs/2608.18167)).
-3. Fix confirmed findings with the smallest change, and add the failing test when there is one.
+
+   Check the severity the same way: a Pre-existing finding is one the base branch already has (`git show <merge-base>:<file>`) and the change doesn't make reachable; otherwise it is Important.
+3. Fix confirmed Important and Nit findings with the smallest change, and add the failing test when there is one. A confirmed Pre-existing finding is not fixed in this change: it goes on the report's `Pre-existing:` line and under **Found**, and stays Pre-existing in later rounds. Keep at most five Nits in the report, the ones worth a reader's time, unless the review guide sets another cap.
 4. Put uncertain findings in front of the human; don't silently fix or drop them.
 
 Findings reported by two independent reviewers, or by both model families, deserve extra attention but still need verification.
@@ -82,13 +86,15 @@ Findings reported by two independent reviewers, or by both model families, deser
 
 After fixes, run the user's number of re-check rounds, then stop. Every cross-model pass finds something narrower than the last, so rounds never come back clean; the cap is a fixed number, not a clean pass. Read it with `~/.agents/bin/phase review-rounds`: it prints the number and where it's set, `1 (default)` when the user set nothing, and only the user sets it. When it exits 1, the store is unreadable: say so in the report and run 1 round. At `0`, skip items 1 and 2: the review ends with the first pass and its fixes. Each round runs items 1 and 2, then verifies and fixes as in item 3; the fixes of one round are what the next round's cross-model re-check reviews, and the last round's go to no reviewer:
 
-1. **Same model, whole change.** Re-run the Correctness lens yourself on the whole change, with the same base, naming the fixes in the goal. A fix can break what the first pass cleared, and this cheap pass is what sees it. For a very large change, split it into batches that together cover all of it, as in step 2.
+Every re-check gets the findings already decided, so it doesn't raise them again: write the report's Fixed, Rejected, Open and Pre-existing lines so far, each with its evidence, to a file (`decided=$(mktemp)`).
+
+1. **Same model, whole change.** Re-run the Correctness lens yourself on the whole change, with the same base, naming the fixes in the goal and holding the decided findings in front of you: report only a new instance at another location, or a regression a fix introduced. A fix can break what the first pass cleared, and this cheap pass is what sees it. For a very large change, split it into batches that together cover all of it, as in step 2.
 2. **Cross-model, the fixes only.** When a cross-model pass ran in step 2, send one Correctness re-check to the other model family, scoped to the fixes and the code they touch: never the whole change again, even on the High tier. Commit the change before the first cross-model pass, so its commit marks what that pass reviewed; `bundle.sh` adds every untracked file whatever the base, so new files left uncommitted would come back in full. Then run step 2's command with that commit as the base, naming in the goal the findings the fixes address; its merge-base with HEAD is that commit, so the bundle holds the fixes with their surrounding lines:
    ```bash
-   ~/.agents/skills/self-review/bundle.sh <commit the previous pass reviewed> Correctness "<goal; fixes for: …>"
+   ~/.agents/skills/self-review/bundle.sh <commit the previous pass reviewed> Correctness "<goal; fixes for: …>" "$decided"
    ```
-   Running on an OpenAI model, give Claude `git diff <that commit>` instead of the merge-base. In a later round, commit before it too, and use the commit the previous round's cross-model re-check reviewed.
-3. **No round past the cap.** Verify the re-check's findings as in step 3. Fix only those confirmed, high severity and cheap, each with a test; after the last round, don't send those fixes back to a reviewer. Everything else goes under Open in the report for the human to decide at PR review. A finding that would need another round to settle is a sign the change needs a different design, not another pass: say so under Open.
+   Running on an OpenAI model, pipe that same bundle into step 2's `claude -p` command. In a later round, commit before it too, and use the commit the previous round's cross-model re-check reviewed.
+3. **No round past the cap.** Verify the re-check's findings as in step 3. Fix only those confirmed, Important and cheap, each with a test; after the last round, don't send those fixes back to a reviewer. Everything else goes under Open in the report for the human to decide at PR review. A finding that would need another round to settle is a sign the change needs a different design, not another pass: say so under Open.
 
 The stop hook re-runs `verify` when you finish; run it by hand (`python3 ~/.agents/hooks/stop_checks.py verify`) only when you need its output before continuing. Then record the review; opening a PR is blocked until the stamp matches the current change, and any later edit invalidates it:
 
@@ -109,6 +115,7 @@ Self-review (risk: standard; lenses: correctness, tests, maintainability, securi
 Spec table, paths table and derived-data table (from the Correctness lens)
 Fixed:     <finding> — <file:line> — evidence: <failing test or output before the fix> — <test that now covers it>
 Rejected:  <finding> — evidence: <file:line where it's handled, or the command that disproves it>
+Pre-existing: <finding> — <file:line> — evidence: <the line on the base branch> (also under Found in the final message)
 Open:      <finding> — <uncertain | confirmed, not fixed after the last re-check: why | needs another round: the design question> — <evidence that would settle it, or the decision for the human>
 Not run:   <lens or reviewer skipped, and why>
 ```
