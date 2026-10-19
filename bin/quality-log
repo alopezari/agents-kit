@@ -2,7 +2,7 @@
 """Record what a review lens or test type produced, and what got past them, so the monthly job can keep
 only perspectives that pay off.
 
-  quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--criteria N] [--map-items N]
+  quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--criteria N] [--map-items N] [--outcomes fixed=N,wrong=N,...]
   quality-log test <type> --issues N [--secs S] [--notes "..."]
   quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 
@@ -20,6 +20,8 @@ import time
 
 KIT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")
 TAXONOMY = os.path.join(KIT, "review-mining", "taxonomy.md")
+# What became of each finding a lens raised: the self-review skill, step 4, defines each one.
+OUTCOMES = ("fixed", "wrong", "intentional", "minor", "pre-existing", "open", "uncertain")
 sys.path.insert(0, os.path.join(KIT, "hooks"))
 from hooklog import session_harness  # noqa: E402
 from review_stamp import quality_log  # noqa: E402
@@ -54,6 +56,19 @@ def parse(argv):
             raise argparse.ArgumentTypeError(f"{value!r} isn't a whole number")
         return int(value)
 
+    def outcomes(value):
+        counts = dict.fromkeys(OUTCOMES, 0)
+        given = [pair.partition("=") for pair in value.split(",")]
+        for key, sep, number in given:
+            if key not in OUTCOMES:
+                raise argparse.ArgumentTypeError(f"{key!r} isn't one of {', '.join(OUTCOMES)}")
+            if not sep:
+                raise argparse.ArgumentTypeError(f"{key!r} has no count: give it as {key}=N")
+            if [k for k, _, _ in given].count(key) > 1:
+                raise argparse.ArgumentTypeError(f"{key!r} is given twice")
+            counts[key] = count(number)
+        return counts
+
     lens = kinds.add_parser("lens", allow_abbrev=False)
     lens.add_argument("name", type=lens_name)
     lens.add_argument("--findings", type=count, required=True)
@@ -62,6 +77,7 @@ def parse(argv):
     lens.add_argument("--model", choices=("claude", "codex"))
     lens.add_argument("--criteria", type=count)
     lens.add_argument("--map-items", type=count)
+    lens.add_argument("--outcomes", type=outcomes)
     test = kinds.add_parser("test", allow_abbrev=False)
     test.add_argument("name", type=name)
     test.add_argument("--issues", type=count, required=True)
@@ -74,6 +90,8 @@ def parse(argv):
     escape.add_argument("--lens", type=lens_name, required=True)
     escape.add_argument("--pr", type=count, required=True)
     args = vars(parser.parse_args(argv))  # exits 2 on anything malformed, before the log is opened
+    if args.get("outcomes") and sum(args["outcomes"].values()) != args["findings"]:
+        parser.error(f"--outcomes add up to {sum(args['outcomes'].values())}, not --findings {args['findings']}")
     return args.pop("kind"), args.pop("name"), {k: v for k, v in args.items() if v is not None}
 
 

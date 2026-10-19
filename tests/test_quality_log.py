@@ -137,8 +137,37 @@ def other_kit_layouts_keep_their_rows_in_the_kit(base):
     assert os.path.exists(os.path.join(worktree, "logs", "quality.jsonl")), os.listdir(worktree)
 
 
+def records_each_findings_outcome(base):
+    home = setup(base)
+    assert log(home, "lens", "correctness", "--findings", "8", "--confirmed", "5", "--model", "claude", "--outcomes",
+               "fixed=3,wrong=2,intentional=1,pre-existing=1,open=1").returncode == 0
+    assert log(home, "lens", "tests", "--findings", "2", "--confirmed", "2").returncode == 0, "outcomes stay optional"
+    with_outcomes, without = entries(home)
+    assert with_outcomes["outcomes"] == {"fixed": 3, "wrong": 2, "intentional": 1, "minor": 0, "pre-existing": 1,
+                                         "open": 1, "uncertain": 0}, with_outcomes
+    assert "outcomes" not in without, without
+
+
+def refuses_outcomes_that_dont_add_up(base):
+    home = setup(base)
+    lens = ["lens", "correctness", "--findings", "3", "--confirmed", "2", "--outcomes"]
+    for outcomes, why in [
+        ("fixed=2,noise=1", "an unknown outcome"),
+        ("fixed=2,wrong=x", "a count that isn't a number"),
+        ("fixed=2,wrong=-1", "a negative count"),
+        ("fixed=1,fixed=1,wrong=1", "a duplicate outcome"),
+        ("fixed=2,wrong=2", "counts that don't sum to --findings"),
+        ("fixed=2,wrong", "an outcome without a count"),
+        ("", "no outcomes"),
+    ]:
+        out = log(home, *lens, outcomes)
+        assert out.returncode == 2 and out.stderr, (why, out)
+    assert entries(home) == [], "nothing was written"
+
+
 for test in (writes_well_formed_entries, refuses_malformed_entries, a_session_on_a_worktree_logs_to_the_main_checkout,
-             other_kit_layouts_keep_their_rows_in_the_kit):
+             other_kit_layouts_keep_their_rows_in_the_kit, records_each_findings_outcome,
+             refuses_outcomes_that_dont_add_up):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)

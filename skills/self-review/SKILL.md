@@ -100,10 +100,11 @@ The stop hook re-runs `verify` when you finish; run it by hand (`python3 ~/.agen
 python3 ~/.agents/hooks/review_stamp.py write
 ```
 
-Log every lens that ran, confirmed meaning a finding that survived step 3. The monthly job uses this to retire lenses that never pay off:
+Log every lens that ran, and every cross-model pass and re-check as a line of its own, confirmed meaning a finding that survived step 3. The monthly job uses this to retire lenses that never pay off, and the outcomes to measure each reviewer's noise: give every finding exactly one, by what became of it, not by the severity the reviewer gave it. `fixed`: confirmed and fixed. `wrong`: rejected, the scenario can't happen. `intentional`: rejected, the behavior is deliberate or outside the check's threat model. `minor`: confirmed, not worth acting on (a Nit dropped past the cap). `pre-existing`: confirmed Pre-existing. `open`: confirmed, left Open for the human. `uncertain`: left uncertain. They add up to the findings; leave out the ones at 0:
 
 ```bash
-~/.agents/bin/quality-log lens <name> --findings <N> --confirmed <M> --secs <S> --model <claude|codex>
+~/.agents/bin/quality-log lens <name> --findings <N> --confirmed <M> --secs <S> --model <claude|codex> \
+  --outcomes fixed=<N>,wrong=<N>,intentional=<N>,minor=<N>,pre-existing=<N>,open=<N>,uncertain=<N>
 ```
 
 Save the report to `$(~/.agents/bin/reports path review)`. Put it in the final message too (see AGENTS.md → Communication). Use this shape; it can go straight into the PR's validation notes:
