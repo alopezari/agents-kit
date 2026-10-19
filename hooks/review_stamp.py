@@ -102,9 +102,12 @@ def branch_base(cwd=None):
     own = {branch} | {f"{remote}/{branch}" for remote in git("remote", cwd=cwd).split()}
     own_full = {f"refs/heads/{branch}"} | {f"refs/remotes/{ref}" for ref in own - {branch}}
     recorded = git("config", "--get", f"branch.{branch}.agentsBase", cwd=cwd)
+    # HEAD and refs/heads/x spell the branch too; checked before the origin/ copy, as origin/HEAD is the default branch.
+    if recorded and git("rev-parse", "--symbolic-full-name", recorded, cwd=cwd) in own_full:
+        recorded = ""
     for ref in (f"origin/{recorded}", recorded) if recorded else ():
-        full = git("rev-parse", "--symbolic-full-name", ref, cwd=cwd)  # HEAD and refs/heads/x spell the branch too
-        if full not in own_full and git("rev-parse", "--verify", "--quiet", ref, cwd=cwd):
+        own_copy = git("rev-parse", "--symbolic-full-name", ref, cwd=cwd) in own_full
+        if not own_copy and git("rev-parse", "--verify", "--quiet", ref, cwd=cwd):
             if ref == default:
                 return default, ""
             if git("merge-base", "HEAD", ref, cwd=cwd):
@@ -127,8 +130,8 @@ def branch_base(cwd=None):
 def branch_name(ref, cwd=None):
     """A base ref as `gh pr create --base` names it: without its remote, so origin/feat/x is feat/x and a local
     feat/x stays feat/x."""
-    remote, _, name = ref.partition("/")
-    return name if name and remote in git("remote", cwd=cwd).split() else ref
+    full = git("rev-parse", "--symbolic-full-name", ref, cwd=cwd)
+    return full.removeprefix("refs/remotes/").partition("/")[2] if full.startswith("refs/remotes/") else ref
 
 
 def merge_base(cwd=None):

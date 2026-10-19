@@ -2487,6 +2487,7 @@ def a_stacked_branch_is_measured_against_its_parent(base):
     git(base, "init", "-q", "--bare", remote)
     git(repo, "remote", "add", "origin", remote)
     git(repo, "push", "-q", "origin", "main")
+    git(repo, "remote", "set-head", "origin", "main")  # as a clone has it
 
     def commit(path, text):
         open(os.path.join(repo, path), "w").write(text)
@@ -2541,7 +2542,9 @@ def a_stacked_branch_is_measured_against_its_parent(base):
     assert "No self-review recorded" in pr_gate("gh pr create --title t"), "without --base, gh targets gh-merge-base"
     git(repo, "config", "--unset", "branch.child.gh-merge-base")
     for matching in ("gh pr create --base parent --title t --body b", "gh pr create -B origin/parent --title t",
-                     "gh pr create --base=parent --title t", "gh pr create -Bparent --title t"):
+                     "gh pr create --base=parent --title t", "gh pr create -Bparent --title t",
+                     "gh pr create -B=parent --title t", "gh pr create --base parent --title '-Better checks'",
+                     "gh pr create --base parent --body '--base=main' -t t"):
         assert "No self-review recorded" in pr_gate(matching), f"the measured base passes the target check: {matching}"
 
     assert write_stamp(repo, "review").returncode == 0
@@ -2580,6 +2583,7 @@ def a_stacked_branch_is_measured_against_its_parent(base):
     git(repo, "config", "branch.tracked.agentsBase", "parent")
     assert base_of() == "origin/parent", "and recording that parent still counts"
     git(repo, "branch", "feat/p", "origin/parent")
+    git(repo, "remote", "add", "feat", remote)  # a remote named like the branch's prefix doesn't make it remote
     git(repo, "config", "branch.tracked.agentsBase", "feat/p")
     assert base_of() == "feat/p", "a recorded local branch, with no pushed copy, is the base"
     said = pr_gate("gh pr create --base p --title t")

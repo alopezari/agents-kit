@@ -462,17 +462,26 @@ def pr_args(command, match, group):
     return args
 
 
+GH_PR_CREATE_SWITCHES = {"--draft", "-d", "--dry-run", "--editor", "-e", "--fill", "-f", "--fill-first", "--fill-verbose",
+                         "--no-maintainer-edit", "--web", "-w", "--help"}
+
+
 def pr_target(words):
     """The branch `gh pr create` targets with --base/-B, the last one given as gh reads it; empty when it has
     none (review_stamp.py base resolves what gh then picks)."""
-    target = ""
-    for i, word in enumerate(words):
-        if word in ("--base", "-B") and i + 1 < len(words):
-            target = words[i + 1]
+    target, value_of = "", None
+    for word in words:
+        if value_of:
+            target = word if value_of in ("--base", "-B") else target
+            value_of = None
+        elif word in ("--base", "-B"):
+            value_of = word
         elif word.startswith("--base="):
             target = word.split("=", 1)[1]
         elif word.startswith("-B") and len(word) > 2:
-            target = word[2:]
+            target = word[2:].removeprefix("=")
+        elif re.fullmatch(r"-[A-Za-z]|--[a-z-]+", word) and word not in GH_PR_CREATE_SWITCHES:
+            value_of = word  # its value is the next word, even one that starts with -B (a title)
     return target
 
 
