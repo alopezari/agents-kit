@@ -349,13 +349,19 @@ def a_write_to_an_object_the_user_approved_is_approved_for_the_session(base):
     def prompt(text, session="o1"):
         run_hook("prompt_approvals.py", {"prompt": text, "session_id": session, "cwd": "/tmp"}, env=env)
 
-    def call(operation, params, session="o1", response="", service="linear", tool="mcp__plugin_gateway__execute"):
-        """The harness's PreToolUse, then, only when it let the call through, its PostToolUse with the response."""
+    calls = iter(range(1000))
+
+    def call(operation, params, session="o1", response="", service="linear", tool="mcp__plugin_gateway__execute",
+             during=lambda: None):
+        """The harness's PreToolUse, then, only when it let the call through, `during` (what happens while the tool
+        runs) and its PostToolUse with the response."""
         tool_input = {"provider": service, "tool": operation, "params": params} if "gateway" in tool else params
-        payload = {"tool_name": tool, "tool_input": tool_input, "cwd": "/tmp", "session_id": session}
+        payload = {"tool_name": tool, "tool_input": tool_input, "cwd": "/tmp", "session_id": session,
+                   "tool_use_id": f"toolu_{next(calls)}"}
         denied = run_hook("guard_mcp.py", {**payload, "hook_event_name": "PreToolUse"}, env=env)
         if denied:
             return denied["hookSpecificOutput"]["permissionDecisionReason"]
+        during()
         assert run_hook("guard_mcp.py", {**payload, "hook_event_name": "PostToolUse", "tool_response": response},
                         env=env) is None, "recording says nothing to the agent"
         return "allow"
@@ -376,6 +382,8 @@ def a_write_to_an_object_the_user_approved_is_approved_for_the_session(base):
         "a follow-up edit to the task the user had created"
     assert call("attach-url", {"issueId": "ENG-1130", "url": "https://github.com/o/r/pull/2"}) == "allow"
     assert call("add-comment", {"issueId": "ENG-1130", "body": "done"}) == "allow"
+    assert call("update-issue", {"id": "ENG-1130", "issueId": ""}) == "allow", "an empty field names no object"
+    assert call("update-issue", {"id": "eng-1130"}) != "allow", "ids match exactly, even on a case-insensitive disk"
     other = call("update-issue", {"id": "ENG-1131", "status": "Done"})
     assert "didn't ask for linear" in other and "approved writing to earlier in this session" in other, other
     assert call("update-issue", {"id": "cf9fe0bb-643a-4c26-90d1-8070bce57447"}) != "allow", \
@@ -398,6 +406,9 @@ def a_write_to_an_object_the_user_approved_is_approved_for_the_session(base):
     prompt("one more thing")
     assert call("update-issue", {"id": "ENG-1130"}) == "allow"
     assert time.time() - os.path.getmtime(record("o1", "linear", "ENG-1130")) > day - 3700, "a follow-up doesn't extend it"
+    assert call("update-issue", {"id": "ENG-1130"}, during=lambda: os.remove(record("o1", "linear", "ENG-1130"))) == "allow"
+    assert not os.path.exists(record("o1", "linear", "ENG-1130")), "nor brings back a record swept while it ran"
+    open(record("o1", "linear", "ENG-1130"), "w").write("ENG-1130")
     prompt("in Linear, also set the priority")
     assert call("update-issue", {"id": "ENG-1130", "priority": 1}) == "allow"
     assert time.time() - os.path.getmtime(record("o1", "linear", "ENG-1130")) < 60, "an approved write restarts it"
@@ -415,16 +426,20 @@ def a_write_to_an_object_the_user_approved_is_approved_for_the_session(base):
     assert not os.path.exists(os.path.join(approvals, "session", "gone")), "expired records go, with their folders"
     assert os.path.exists(record("o1", "linear", "ENG-7")), "a user message keeps the session's records"
 
-    # The dialog's one-call approval, revoked after the call, and the manual file once it has expired.
+    # The dialog's one-call approval, revoked while the call runs (the mod's order), and the manual file once it expired.
     approve = lambda *args: subprocess.run([os.path.join(KIT, "bin", "approve"), *args], capture_output=True,  # noqa: E731
                                            env={**os.environ, **env, "AGENTS_TEST": "1"}).returncode
     prompt("go on", session="o3")
+    revoke = lambda: approve("revoke", "o3", "linear")  # noqa: E731
     assert approve("once", "o3", "linear") == 0
     blocks = [{"type": "text", "text": json.dumps({"identifier": "ENG-1200", "tool": "create-issue"})}]
-    assert call("create-issue", {"team": "ENG"}, session="o3", response=blocks) == "allow"
-    assert approve("revoke", "o3", "linear") == 0
+    assert call("create-issue", {"team": "ENG"}, session="o3", response=blocks, during=revoke) == "allow"
     assert call("update-issue", {"id": "ENG-1200"}, session="o3") == "allow", "the object the dialog approved creating"
     assert call("create-issue", {"team": "ENG"}, session="o3") != "allow"
+    os.utime(record("o3", "linear", "ENG-1200"), (time.time() - day + 60,) * 2)
+    assert approve("once", "o3", "linear") == 0
+    assert call("update-issue", {"id": "ENG-1200", "priority": 2}, session="o3", during=revoke) == "allow"
+    assert time.time() - os.path.getmtime(record("o3", "linear", "ENG-1200")) < 60, "a write the dialog approved restarts it"
     prompt("go on", session="o4")
     manual = os.path.join(approvals, "linear")
     open(manual, "w").close()
@@ -435,6 +450,13 @@ def a_write_to_an_object_the_user_approved_is_approved_for_the_session(base):
     assert call("update-issue", {"id": "ENG-1400"}, session="") != "allow", "calls with no session share no records"
     assert call("update-issue", {"id": "ENG-1300"}, session="o4") == "allow", "after the manual approval expired"
     assert call("update-issue", {"id": "ENG-1301"}, session="o4") != "allow"
+    open(manual, "w").close()
+    assert call("create-issue", {"team": "ENG"}, session="o4", response=json.dumps({"identifier": "../ENG-1"})) == "allow"
+    assert not os.path.exists(os.path.join(approvals, "session", "o4", "ENG-1")), "a returned id is a plain id too"
+    open(os.path.join(approvals, "session", "o8"), "w").close()  # the store can't be written
+    assert call("update-issue", {"id": "ENG-1500"}, session="o8") == "allow", "a failed record never blocks the write"
+    os.utime(manual, (time.time() - 3600,) * 2)
+    assert call("update-issue", {"id": "ENG-1500"}, session="o8") != "allow", "it only leaves the follow-up to ask"
     os.remove(manual)
 
     # A direct server's rules, and a service whose rules name no object fields.
@@ -443,10 +465,16 @@ def a_write_to_an_object_the_user_approved_is_approved_for_the_session(base):
     prompt("tidy it", session="o5")
     assert call("update_note", {"id": "n-1"}, session="o5", tool="mcp__notes__update_note") == "allow"
     assert call("update_note", {"id": "n-2"}, session="o5", tool="mcp__notes__update_note") != "allow"
+    prompt("add a second one in notes", session="o5")
+    both = {"structuredContent": {"title": "y"}, "content": [{"type": "text", "text": json.dumps({"id": "n-3"})}]}
+    assert call("create_note", {"title": "y"}, session="o5", response=both, tool="mcp__notes__create_note") == "allow"
+    prompt("tidy that one too", session="o5")
+    assert call("update_note", {"id": "n-3"}, session="o5", tool="mcp__notes__update_note") == "allow"
     prompt("in the tracker", session="o6")
     assert call("update-issue", {"id": "T-1"}, session="o6", service="tracker") == "allow"
     prompt("again", session="o6")
-    assert call("update-issue", {"id": "T-1"}, session="o6", service="tracker") != "allow", "no object rules: as before"
+    unchanged = call("update-issue", {"id": "T-1"}, session="o6", service="tracker")
+    assert "didn't ask for tracker. Show them" in unchanged, f"no object rules: as before: {unchanged}"
 
 
 DATABASE_STATEMENTS = {"DROP DATABASE": "psql -c 'DROP DATABASE arm_test_1'", "DROP TABLE": "psql -c 'DROP TABLE runs'",
