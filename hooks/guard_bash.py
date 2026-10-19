@@ -462,10 +462,20 @@ def pr_args(command, match, group):
     return args
 
 
+def pr_target(words):
+    """The branch `gh pr create` targets with --base/-B; empty for the repository's default branch."""
+    for i, word in enumerate(words):
+        if word in ("--base", "-B") and i + 1 < len(words):
+            return words[i + 1]
+        if word.startswith(("--base=", "-B=")):
+            return word.split("=", 1)[1]
+    return ""
+
+
 def unreviewed_pr(command, cwd):
-    """Opening a PR requires a self-review stamp for the exact current change, a validate stamp for a behavior
-    change, and, unless it's a draft, the staging steps before the merge passed; each unless the user switched its
-    phase off."""
+    """Opening a PR requires a self-review stamp for the exact current change, measured against the branch the PR
+    targets, a validate stamp for a behavior change, and, unless it's a draft, the staging steps before the merge
+    passed; each unless the user switched its phase off."""
     creates = list(re.finditer(COMMAND_START + PREFIXES + GH_PR + r"create\b([^;&|\n]*)", shell_code(command)))
     if not creates:
         return None
@@ -481,6 +491,12 @@ def unreviewed_pr(command, cwd):
              if re.search(r"review_stamp\.py\b[^;&|\n]*\bwrite\b", re.sub(r"\\\n", " ", shell_code(command))) else "")
     off, unreadable = phase_switches.phases_off_or_error(cwd, time_left())
     store = f" {unreadable}." if unreadable else ""
+    if not {"self-review", "validate"} <= off.keys():
+        for target in {pr_target(pr_args(command, match, 1)) for match in creates}:
+            matched = subprocess.run([sys.executable, stamp, "base", "--matches", target], cwd=cwd,
+                                     capture_output=True, text=True, timeout=time_left())
+            if matched.returncode != 0:
+                return matched.stdout.strip() or matched.stderr.strip()
     if "self-review" not in off and not ok("check", "--kind", "review"):
         return ("No self-review recorded for the current change. Run the self-review skill first "
                 "(it ends with review_stamp.py write); any edit after the review needs a new one." + order + store)

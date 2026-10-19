@@ -20,6 +20,8 @@ Run from the checkout that has the branch. Each line must hold, or the listed st
 
 A row whose phase `~/.agents/bin/phase switches` lists (verify, self-review, validate, staging) is skipped: the user switched it off, and `bin/pr-validation` puts that in the description. The shell guard enforces the two stamps on `gh pr create`, and the staging results on `gh pr create` without `--draft` and on `gh pr ready` (`python3 ~/.agents/hooks/review_stamp.py staging` says what's missing); this table catches the rest before you get there.
 
+The stamps measure the change against `python3 ~/.agents/hooks/review_stamp.py base`, and the guard denies a PR whose target differs from it. When the PR should target another branch (a stacked branch whose parent wasn't detected, or the default branch for one that was), record the target first, `git config branch."$(git branch --show-current)".agentsBase <target>`, which makes the stamps stale: re-run the self-review and validate on the change it shows.
+
 One exception: when the repo can only deploy to staging from a PR (its notes say so), open the PR as a draft with the staging results pending, say so in the description, and mark it ready when they pass.
 
 ## 2. Push
@@ -46,7 +48,7 @@ python3 ~/.agents/hooks/private_terms.py pr "<title>" <pr-body.md>
 gh pr create --base <base> --head "$(git branch --show-current)" --title "<title>" --body-file <pr-body.md>
 ```
 
-Run it as a command of its own, after the stamps were written and the description file saved in earlier commands: the guard reads both before anything in the command runs.
+`<base>` is the branch `review_stamp.py base` prints, without its `origin/`, written out: the guard reads the command's text, so a `$(...)` there doesn't name a branch. Run it as a command of its own, after the stamps were written and the description file saved in earlier commands: the guard reads both before anything in the command runs.
 
 Add `--draft` only in the exception from step 1. Print the PR URL.
 

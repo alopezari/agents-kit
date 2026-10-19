@@ -1,0 +1,2 @@
+- A branch stacked on another unmerged branch is now measured against that branch: triage, the stop hook and the review stamps judge only what it adds. The base comes from `git config branch.<name>.agentsBase` when set, else from the nearest pushed branch in its own history, else the default branch; triage prints which one it used, and `review_stamp.py base` prints it.
+- `gh pr create` is denied when the PR's target isn't the branch the stamps measured against, with the command that records the right one.

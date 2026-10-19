@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.
 
-  triage                  change vs the merge-base with the default branch (committed + uncommitted + untracked)
+  triage                  change vs the merge-base with the branch's base, the default branch or a stacked
+                          branch's parent (committed + uncommitted + untracked)
   triage --range A..B     a commit range instead (for calibration on past changes)
   triage --json           machine-readable output
   triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/self-review/lenses.md
@@ -117,15 +118,6 @@ def git(*args, cwd=None):
     return subprocess.run(["git", *args], capture_output=True, text=True, errors="replace", cwd=cwd).stdout
 
 
-def base_ref():
-    remote_head = git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").strip()
-    for ref in ([remote_head] if remote_head else []) + ["origin/trunk", "origin/main", "origin/master",
-                                                         "origin/develop", "trunk", "main", "master", "develop"]:
-        if git("rev-parse", "--verify", "--quiet", ref).strip():
-            return ref
-    return "HEAD"
-
-
 def diff_path(field):
     """A path as git prints it in a diff: C-quoted when it holds a quote, a backslash or a control character, and
     followed by a tab in ---/+++ lines when it holds a space."""
@@ -133,12 +125,11 @@ def diff_path(field):
     return ast.literal_eval(field) if field.startswith('"') else field
 
 
-def collect(rng):
+def collect(rng, merge_base):
     if rng:
         diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", rng)
         untracked = []
     else:
-        merge_base = git("merge-base", "HEAD", base_ref()).strip() or "HEAD"
         diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", merge_base)
         untracked = [p for p in git("ls-files", "-z", "--others", "--exclude-standard").split("\0") if p]
     files, added, removed, renamed_from = {}, [], 0, {}
@@ -236,7 +227,7 @@ def dependency_names(path, text):
     return names
 
 
-def new_dependencies(files, renamed_from, rng):
+def new_dependencies(files, renamed_from, rng, merge_base):
     """'new dependency: <name> (<manifest>)' for each name a changed manifest gains, and a line for each it can't read."""
     # The same ends git diff compares: A...B from their merge-base, A..B, and a lone ref against the working tree.
     if rng and "..." in rng:
@@ -246,7 +237,7 @@ def new_dependencies(files, renamed_from, rng):
         a, b = rng.split("..", 1)
         before_ref, after_ref = a or "HEAD", b or "HEAD"
     else:
-        before_ref, after_ref = rng or git("merge-base", "HEAD", base_ref()).strip() or "HEAD", None
+        before_ref, after_ref = rng or merge_base, None
     root = git("rev-parse", "--show-toplevel").strip()
     found = []
     for path in (p for p in files if MANIFEST.search(p)):
@@ -286,7 +277,9 @@ def php_min():
 
 
 def triage(rng=None):
-    files, added, removed, renamed_from = collect(rng)
+    base, base_why = (None, "") if rng else branch_base()
+    merge_base = None if rng else git("merge-base", "HEAD", base).strip() or "HEAD"
+    files, added, removed, renamed_from = collect(rng, merge_base)
     changed_lines = sum(files.values()) + removed
     behavior = [p for p in files if not TEST_OR_DOC.search(p)]
     style_only = bool(behavior) and all(STYLE_FILE.search(p) for p in behavior)
@@ -334,7 +327,7 @@ def triage(rng=None):
                 lenses[lens] = h
         if ui:
             lenses["ux-a11y-i18n"] = ui[:3]
-    dependencies = new_dependencies(files, renamed_from, rng)
+    dependencies = new_dependencies(files, renamed_from, rng, merge_base)
     if dependencies:
         lenses.setdefault("maintainability", []).extend(dependencies)
 
@@ -364,7 +357,13 @@ def triage(rng=None):
 
     return {"tier": tier, "budget": BUDGET[tier], "changed_lines": changed_lines, "files": len(files),
             "reasons": reasons, "lenses": lenses, "tests": tests,
-            "cross_model": cross_model(tier)}
+            "cross_model": cross_model(tier), "base": base, "base_why": base_why}
+
+
+def branch_base():
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))  # as in cross_model
+    import review_stamp
+    return review_stamp.branch_base()
 
 
 def cross_model(tier):
@@ -414,6 +413,8 @@ def main():
         return 0
     print(f"Risk: {result['tier']} ({result['changed_lines']} changed lines in {result['files']} files; "
           f"budget {result['budget']}; cross-model: {result['cross_model']})")
+    if result["base_why"]:
+        print(f"Base: {result['base']} ({result['base_why']})")
     for r in result["reasons"]:
         print(f"  high-risk signal: {r}")
     print("Review lenses:")

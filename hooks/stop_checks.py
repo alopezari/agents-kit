@@ -2,7 +2,8 @@
 """Stop hook shared by Claude Code and Codex.
 
 After a turn that edited files since the last stop, looks at the lines the
-branch adds since the merge-base with the default branch (committed or not) and asks
+branch adds since the merge-base with its base (`review_stamp.branch_base`: the
+default branch, or the branch it is stacked on; committed or not) and asks
 the agent to continue, once, for a skipped or focused test, a deleted test file, a debug
 leftover, a conflict marker, a possible secret, a new option read near a cache, a
 temporary compose override left behind, or a changed code file the spec's Change map

@@ -17,7 +17,7 @@ Two things make self-review work:
 
 ## 1. Scope the diff
 
-- Base: the PR's target branch, else `trunk`/`main`/`master`/`develop`, whichever exists. Use `git merge-base HEAD <base>`.
+- Base: `python3 ~/.agents/hooks/review_stamp.py base` prints it: the branch recorded in `branch.<name>.agentsBase`, else the nearest pushed branch this one is stacked on, else the default branch. It is the base the stamps and triage measure against, so the review covers the same change the PR gate checks. Use `git merge-base HEAD <base>`.
 - Review committed and uncommitted changes together: `git diff <merge-base>` plus untracked files.
 - Goal: if `~/.agents/skills/spec/path.sh` points at an existing file, that spec's goal and acceptance criteria are the goal every reviewer gets. Otherwise, state the goal in one or two sentences.
 - For a check that stops something (a guard, validation, permission, rate limit), the goal says who it stops: an honest mistake, a careless model or user, or a deliberate attacker. Without it, reviewers report bypasses the check was never meant to stop, and each round goes to rejecting them.
