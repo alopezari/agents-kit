@@ -13,6 +13,7 @@ guide="$HOME/.agents/repos/$("$HOME/.agents/bin/repo-name")/review.md"
 guide_text=""
 if [ -e "$guide" ]; then guide_text=$(cat "$guide") || { echo "bundle.sh: can't read the review guide $guide" >&2; exit 1; }; fi
 decided_text=""
+if [ $# -ge 4 ] && [ -z "$decided" ]; then echo "bundle.sh: no decided-findings file: the 4th argument is empty" >&2; exit 1; fi
 if [ -n "$decided" ]; then decided_text=$(cat "$decided") || { echo "bundle.sh: can't read the decided findings $decided" >&2; exit 1; }; fi
 
 echo "You are reviewing a code change. Goal of the change: $goal"
