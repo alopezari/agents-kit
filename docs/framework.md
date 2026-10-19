@@ -133,7 +133,7 @@ Every block, every approved or browser MCP call and every shell command a user's
 - `chmod 777`: world-writable permissions.
 - Touching `~/.agents/approvals`, written out or relative to the working directory or a `cd` in the command: approvals for shared-system writes must come from the user. Naming it in a message, an echo or a search is text.
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
-- `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.
+- `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change, and while the PR's target isn't the base the stamps measured against (`review_stamp.py base`).
 - `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
 - The last two lift for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, validate, staging; `bin/phase switches`); no other rule here can be switched off.
 
@@ -141,7 +141,7 @@ It is a seatbelt against agent mistakes, not a security boundary. MCP writes to 
 
 ## Verify: checking the change at the end of every turn
 
-"The change" is everything the branch adds since it left the default branch, committed or not, plus untracked files: what the pull request will contain. Only findings on changed lines count, so old problems in a touched file never block.
+"The change" is everything the branch adds since it left its base, committed or not, plus untracked files: what the pull request will contain. The base is the default branch, or for a branch stacked on another the branch it builds on (recorded in `branch.<name>.agentsBase`, else the nearest pushed branch in its history). Only findings on changed lines count, so old problems in a touched file never block.
 
 Each run saves its output as evidence (`bin/reports`), and every line says what happened: `ran:` for checks that executed, `skipped:` with the reason for checks that could not (never counted as a pass), `warning:` and `error:`.
 
@@ -339,7 +339,7 @@ staging mark <step> PASS|FAIL --by user|agent [--note <text>] [--branch <name>]
 **`bin/triage`**: Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.
 
 ```
-triage                  change vs the merge-base with the branch's base, the default branch or a stacked
+triage                  change vs the merge-base with the branch's base (committed + uncommitted + untracked)
 triage --range A..B     a commit range instead (for calibration on past changes)
 triage --json           machine-readable output
 triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/self-review/lenses.md

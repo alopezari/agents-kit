@@ -97,9 +97,9 @@ def branch_base(cwd=None):
     branch = git("symbolic-ref", "--quiet", "--short", "HEAD", cwd=cwd)
     if not branch:
         return default, ""
-    # Not @{upstream}: after `git push -u` it is the branch's own remote copy, under any name.
-    own = {branch, git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}", cwd=cwd)}
-    own |= {f"{remote}/{branch}" for remote in git("remote", cwd=cwd).split()}
+    # Not all of @{upstream}: a branch started from origin/parent tracks its parent; after `git push -u` it is the
+    # branch's own copy, which the same-named refs below already cover.
+    own = {branch} | {f"{remote}/{branch}" for remote in git("remote", cwd=cwd).split()}
     recorded = git("config", "--get", f"branch.{branch}.agentsBase", cwd=cwd)
     for ref in (f"origin/{recorded}", recorded) if recorded else ():
         if ref not in own and git("rev-parse", "--verify", "--quiet", ref, cwd=cwd):
@@ -120,6 +120,13 @@ def branch_base(cwd=None):
     history = git("rev-list", "--first-parent", "--max-count=1000", f"{fork_point}..HEAD", cwd=cwd).split()[1:]
     ref = next((tips[sha] for sha in history if sha in tips), None)
     return (ref, f"{ref} is in this branch's history") if ref else (default, "")
+
+
+def branch_name(ref, cwd=None):
+    """A base ref as `gh pr create --base` names it: without its remote, so origin/feat/x is feat/x and a local
+    feat/x stays feat/x."""
+    remote, _, name = ref.partition("/")
+    return name if name and remote in git("remote", cwd=cwd).split() else ref
 
 
 def merge_base(cwd=None):
@@ -473,13 +480,13 @@ def main():
             print(base)
             return 0
         target = args[args.index("--matches") + 1] if len(args) > args.index("--matches") + 1 else ""
-        target = target or base_ref().split("/", 1)[-1]
-        if target in (base, base.split("/", 1)[-1]):
+        target = target or branch_name(base_ref())
+        if target in (base, branch_name(base)):
             return 0
         print(f"This PR targets `{target}`, but its stamps measure the change against `{base}`, so the review would "
               f"cover a different change than the PR shows. If `{target}` is the right target, record it with "
               f"`git config branch.{git('branch', '--show-current')}.agentsBase {target}`, then re-run the "
-              f"self-review and validate on the change it shows; otherwise pass `--base {base.split('/', 1)[-1]}`.")
+              f"self-review and validate on the change it shows; otherwise pass `--base {branch_name(base)}`.")
         return 1
     if command == "follow-renames":
         follow_branch_renames()

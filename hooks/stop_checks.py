@@ -73,7 +73,7 @@ def git(args, cwd):
 
 
 def added_lines(root):
-    """Yield (path, line) for lines added since the branch left the default branch (committed or not),
+    """Yield (path, line) for lines added since the branch left its base (committed or not),
     including untracked files: a leftover committed mid-session still reaches the pull request."""
     diff = git(["diff", review_stamp.merge_base(root), "--unified=0", "--no-color"], root)
     path = None

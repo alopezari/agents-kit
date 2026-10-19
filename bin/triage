@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.
 
-  triage                  change vs the merge-base with the branch's base, the default branch or a stacked
-                          branch's parent (committed + uncommitted + untracked)
+  triage                  change vs the merge-base with the branch's base (committed + uncommitted + untracked)
   triage --range A..B     a commit range instead (for calibration on past changes)
   triage --json           machine-readable output
   triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/self-review/lenses.md

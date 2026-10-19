@@ -467,8 +467,10 @@ def pr_target(words):
     for i, word in enumerate(words):
         if word in ("--base", "-B") and i + 1 < len(words):
             return words[i + 1]
-        if word.startswith(("--base=", "-B=")):
+        if word.startswith("--base="):
             return word.split("=", 1)[1]
+        if word.startswith("-B") and len(word) > 2:
+            return word[2:]
     return ""
 
 
