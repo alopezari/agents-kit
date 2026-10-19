@@ -333,7 +333,8 @@ def render():
     w("- Touching `~/.agents/approvals`, written out or relative to the working directory or a `cd` in the command: "
       "approvals for shared-system writes must come from the user. Naming it in a message, an echo or a search is text.")
     w("- Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.")
-    w("- `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change.")
+    w("- `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change, and "
+      "while the PR's target isn't the base the stamps measured against (`review_stamp.py base`).")
     w("- `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS "
       "backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).")
     w("- The last two lift for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, validate, "
@@ -353,8 +354,9 @@ def render():
       "until your next message (`bin/approve`, which the shell guard refuses from the agent).\n")
 
     w("## Verify: checking the change at the end of every turn\n")
-    w("\"The change\" is everything the branch adds since it left the default branch, committed or not, plus untracked files: "
-      "what the pull request will contain. Only findings on changed lines count, so old problems in a touched file never block.\n")
+    w("\"The change\" is everything the branch adds since it left its base, committed or not, plus untracked files: "
+      "what the pull request will contain. The base is the default branch, or for a branch stacked on another the "
+      "branch it builds on (recorded in `branch.<name>.agentsBase`, else the nearest pushed branch in its history). Only findings on changed lines count, so old problems in a touched file never block.\n")
     w("Each run saves its output as evidence (`bin/reports`), and every line says what happened: `ran:` for checks that "
       "executed, `skipped:` with the reason for checks that could not (never counted as a pass), `warning:` and `error:`.\n")
     w("### Automatic, for any repository\n")

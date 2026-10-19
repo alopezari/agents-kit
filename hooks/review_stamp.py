@@ -12,9 +12,13 @@
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
   review_stamp.py branch-key                       # the current branch as it appears in those file names
+  review_stamp.py base [--matches <branch>]        # the ref the change is measured against (see branch_base), or
+                                                   # exit 1, saying why, when a PR targeting <branch> (empty: the
+                                                   # default branch) would show a different change
 
-A stamp covers every file that differs from the merge-base with the default branch, except the
-changelog, so committing stamped changes keeps it valid and any later edit invalidates it. Review,
+A stamp covers every file that differs from the merge-base with the branch's base (the default branch, or the
+parent of a stacked branch: branch_base), except the changelog, so committing stamped changes keeps it valid
+and any later edit invalidates it. Review,
 validate and staging stamps hold the branch's diff, so merging the default branch keeps them unless it
 moves the changed lines or their context; verify's holds the files' content, so the tests run again. Stamps live in the repository's shared git dir, per branch
 (.git/agents/stamps/<branch key>/), never in the tree: they survive removing the worktree they were
@@ -85,9 +89,54 @@ def repo_name_of(common):
     return os.path.basename(os.path.dirname(common)) if name == ".git" else name[:-len(".git")] if name.endswith(".git") else name
 
 
+def branch_base(cwd=None):
+    """(ref, why) this branch's change is measured against: the base recorded in `branch.<name>.agentsBase`, else the
+    nearest pushed branch in its first-parent history (the parent of a stacked branch), else the default branch, with
+    an empty why. A nearer base shrinks what the stamps cover, so only positive evidence moves it."""
+    default = base_ref(cwd)
+    branch = git("symbolic-ref", "--quiet", "--short", "HEAD", cwd=cwd)
+    if not branch:
+        return default, ""
+    # Not all of @{upstream}: a branch started from origin/parent tracks its parent; after `git push -u` it is the
+    # branch's own copy, which the same-named refs below already cover.
+    own = {branch} | {f"{remote}/{branch}" for remote in git("remote", cwd=cwd).split()}
+    own_full = {f"refs/heads/{branch}"} | {f"refs/remotes/{ref}" for ref in own - {branch}}
+    recorded = git("config", "--get", f"branch.{branch}.agentsBase", cwd=cwd)
+    # HEAD and refs/heads/x spell the branch too; checked before the origin/ copy, as origin/HEAD is the default branch.
+    if recorded and git("rev-parse", "--symbolic-full-name", recorded, cwd=cwd) in own_full:
+        recorded = ""
+    for ref in (f"origin/{recorded}", recorded) if recorded else ():
+        own_copy = git("rev-parse", "--symbolic-full-name", ref, cwd=cwd) in own_full
+        if not own_copy and git("rev-parse", "--verify", "--quiet", ref, cwd=cwd):
+            if ref == default:
+                return default, ""
+            if git("merge-base", "HEAD", ref, cwd=cwd):
+                return ref, f"recorded in branch.{branch}.agentsBase"
+            break
+    fork_point = git("merge-base", "HEAD", default, cwd=cwd)
+    if not fork_point:
+        return default, ""
+    tips = {}
+    for line in git("for-each-ref", "--format=%(objectname) %(refname:short)", "refs/remotes", cwd=cwd).splitlines():
+        sha, ref = line.split(" ", 1)
+        if ref not in own and "/" in ref and not ref.endswith("/HEAD"):  # origin/HEAD's short name is "origin"
+            tips.setdefault(sha, ref)
+    # HEAD itself is skipped: a pushed branch there would leave nothing to review.
+    history = git("rev-list", "--first-parent", "--max-count=1000", f"{fork_point}..HEAD", cwd=cwd).split()[1:]
+    ref = next((tips[sha] for sha in history if sha in tips), None)
+    return (ref, f"{ref} is in this branch's history") if ref else (default, "")
+
+
+def branch_name(ref, cwd=None):
+    """A base ref as `gh pr create --base` names it: without its remote, so origin/feat/x is feat/x and a local
+    feat/x stays feat/x."""
+    full = git("rev-parse", "--symbolic-full-name", ref, cwd=cwd)
+    return full.removeprefix("refs/remotes/").partition("/")[2] if full.startswith("refs/remotes/") else ref
+
+
 def merge_base(cwd=None):
-    """Where this branch left the default branch; HEAD when on the default branch itself."""
-    return git("merge-base", "HEAD", base_ref(cwd), cwd=cwd) or "HEAD"
+    """Where this branch left its base (branch_base); HEAD when on the default branch itself."""
+    return git("merge-base", "HEAD", branch_base(cwd)[0], cwd=cwd) or "HEAD"
 
 
 def changed_paths():
@@ -430,6 +479,22 @@ def main():
     if command == "branch-key":
         print(branch_key(git("branch", "--show-current")))
         return 0
+    if command == "base":
+        base = branch_base()[0]
+        if "--matches" not in args:
+            print(base)
+            return 0
+        target = args[args.index("--matches") + 1] if len(args) > args.index("--matches") + 1 else ""
+        # Without --base, gh targets the branch's gh-merge-base, else the repository's default branch.
+        branch = git("branch", "--show-current")
+        target = target or git("config", "--get", f"branch.{branch}.gh-merge-base") or branch_name(base_ref())
+        if target in (base, branch_name(base)):
+            return 0
+        print(f"This PR targets `{target}`, but its stamps measure the change against `{base}`, so the review would "
+              f"cover a different change than the PR shows. If `{target}` is the right target, record it with "
+              f"`git config branch.{branch}.agentsBase {target}`, then re-run the "
+              f"self-review and validate on the change it shows; otherwise pass `--base {branch_name(base)}`.")
+        return 1
     if command == "follow-renames":
         follow_branch_renames()
         return 0

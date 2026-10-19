@@ -2481,7 +2481,120 @@ def stop_skips_the_phases_switched_off(base):
     assert "conflict marker" in reason, f"the other checks run whatever is off: {reason}"
 
 
-TESTS = [a_phase_line_switches_phases_by_scope, a_review_rounds_line_sets_the_re_checks_by_scope,only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
+def a_stacked_branch_is_measured_against_its_parent(base):
+    repo = new_repo(base, "zz-stacked", branch="main")
+    remote = os.path.join(base, "zz-stacked.git")
+    git(base, "init", "-q", "--bare", remote)
+    git(repo, "remote", "add", "origin", remote)
+    git(repo, "push", "-q", "origin", "main")
+    git(repo, "remote", "set-head", "origin", "main")  # as a clone has it
+
+    def commit(path, text):
+        open(os.path.join(repo, path), "w").write(text)
+        git(repo, "add", path)
+        git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", path)
+
+    def base_of():
+        done = subprocess.run(["python3", H + "review_stamp.py", "base"], cwd=repo, capture_output=True, text=True)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return done.stdout.strip()
+
+    def changed():
+        done = subprocess.run(["python3", "-c", f"import sys; sys.path.insert(0, {H!r}); import review_stamp; "
+                               "print(' '.join(review_stamp.changed_paths()[1]))"], cwd=repo, capture_output=True, text=True)
+        return done.stdout.split()
+
+    def leftover(session):
+        return "Debug leftover in parent.py" in stop(RUN + session, repo, [os.path.join(repo, "child.py")]).get("reason", "")
+
+    git(repo, "switch", "-q", "-c", "parent")
+    commit("parent.py", "breakpoint()\n")
+    git(repo, "switch", "-q", "-c", "child")
+    commit("child.py", "c = 1\n")
+    assert base_of() == "origin/main" and changed() == ["child.py", "parent.py"], "a local-only parent is no evidence"
+    assert leftover("k1"), "without a parent the stop hook reads the parent's lines too"
+
+    git(repo, "push", "-q", "origin", "parent")
+    assert base_of() == "origin/parent", "a pushed branch in this branch's history is its parent"
+    assert changed() == ["child.py"], f"the stamps cover what the child adds: {changed()}"
+    assert not leftover("k2"), "nor does the stop hook read the parent's lines"
+    triaged = subprocess.run([os.path.join(KIT, "bin", "triage"), "--json"], cwd=repo, capture_output=True, text=True)
+    result = json.loads(triaged.stdout)
+    assert result["files"] == 1 and result["base"] == "origin/parent", triaged.stdout + triaged.stderr
+    said = subprocess.run([os.path.join(KIT, "bin", "triage")], cwd=repo, capture_output=True, text=True).stdout
+    assert "Base: origin/parent (" in said, f"triage says which base it used: {said}"
+
+    git(repo, "push", "-q", "-u", "origin", "child")
+    commit("child2.py", "d = 1\n")
+    assert base_of() == "origin/parent", "the branch's own pushed copy is not its parent"
+    git(repo, "push", "-q", "origin", "HEAD:refs/heads/backup")
+    assert base_of() == "origin/parent", "a pushed branch at HEAD would leave nothing to review"
+
+    def pr_gate(command):
+        said = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": "test"})
+        return said["hookSpecificOutput"]["permissionDecisionReason"] if said else ""
+    target = "targets `main`, but its stamps measure the change against `origin/parent`"
+    assert target in pr_gate("gh pr create --title t --body b"), "a PR without --base targets the default branch"
+    assert target in pr_gate("gh pr create --base main --title t --body b")
+    assert "git config branch.child.agentsBase main" in pr_gate("gh pr create -B main --title t --body b")
+    assert target in pr_gate("gh pr create --base parent --base main --title t"), "gh takes the last --base"
+    git(repo, "config", "branch.child.gh-merge-base", "parent")
+    assert "No self-review recorded" in pr_gate("gh pr create --title t"), "without --base, gh targets gh-merge-base"
+    git(repo, "config", "--unset", "branch.child.gh-merge-base")
+    for matching in ("gh pr create --base parent --title t --body b", "gh pr create -B origin/parent --title t",
+                     "gh pr create --base=parent --title t", "gh pr create -Bparent --title t",
+                     "gh pr create -B=parent --title t", "gh pr create --base parent --title '-Better checks'",
+                     "gh pr create --base parent --body '--base=main' -t t"):
+        assert "No self-review recorded" in pr_gate(matching), f"the measured base passes the target check: {matching}"
+
+    assert write_stamp(repo, "review").returncode == 0
+    git(repo, "config", "branch.child.agentsBase", "main")
+    assert base_of() == "origin/main" and "parent.py" in changed(), "a recorded base wins over the pushed parent"
+    assert leftover("k3"), "and the stop hook reads from it"
+    stale = subprocess.run(["python3", H + "review_stamp.py", "check"], cwd=repo, capture_output=True, text=True)
+    assert stale.returncode == 1, "recording another base makes stamps measured against the old one stale"
+    triaged = json.loads(subprocess.run([os.path.join(KIT, "bin", "triage"), "--json"], cwd=repo, capture_output=True,
+                                        text=True).stdout)
+    assert triaged["base"] == "origin/main" and triaged["files"] == 3, triaged
+
+    git(repo, "config", "branch.child.agentsBase", "parent")
+    assert base_of() == "origin/parent", "a recorded branch name is read as its origin copy"
+    said = pr_gate("gh pr create --base parent --title t")
+    assert "has no validation recorded" in said, f"the record names the target, and the review measured against it counts: {said}"
+    for ignored, why in (("gone", "doesn't resolve"), ("child", "names the branch itself"),
+                         ("origin/child", "names its own pushed copy"), ("refs/heads/child", "names the branch itself"),
+                         ("refs/remotes/origin/child", "names its own pushed copy"), ("HEAD", "names the branch itself"),
+                         ("island", "shares no history")):
+        if ignored == "island":
+            git(repo, "switch", "-q", "--orphan", "island")
+            commit("island.py", "i = 1\n")
+            git(repo, "switch", "-q", "child")
+        git(repo, "config", "branch.child.agentsBase", ignored)
+        assert base_of() == "origin/parent", f"a record that {why} is ignored, and detection applies"
+
+    git(repo, "config", "branch.child.agentsBase", "main")
+    git(repo, "branch", "-m", "child", "renamed")
+    assert base_of() == "origin/main", "the record follows `git branch -m`"
+    git(repo, "switch", "-q", "--detach")
+    assert base_of() == "origin/main", "a detached HEAD has no parent to find"
+    git(repo, "switch", "-q", "-c", "tracked", "--track", "origin/parent")
+    commit("tracked.py", "t = 1\n")
+    assert base_of() == "origin/parent", "a branch started from its pushed parent tracks it, which is evidence, not its own copy"
+    git(repo, "config", "branch.tracked.agentsBase", "parent")
+    assert base_of() == "origin/parent", "and recording that parent still counts"
+    git(repo, "branch", "feat/p", "origin/parent")
+    git(repo, "remote", "add", "feat", remote)  # a remote named like the branch's prefix doesn't make it remote
+    git(repo, "config", "branch.tracked.agentsBase", "feat/p")
+    assert base_of() == "feat/p", "a recorded local branch, with no pushed copy, is the base"
+    said = pr_gate("gh pr create --base p --title t")
+    assert "against `feat/p`" in said and "pass `--base feat/p`" in said, f"only a remote's name is stripped: {said}"
+    assert "No self-review recorded" in pr_gate("gh pr create --base feat/p --title t")
+    git(repo, "switch", "-q", "main")
+    git(repo, "branch", "-q", "-D", "renamed")
+    assert git(repo, "config", "--get-regexp", r"branch\.renamed\.").stdout == "", "and goes with `git branch -D`"
+
+
+TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, a_review_rounds_line_sets_the_re_checks_by_scope,only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
          guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn,
