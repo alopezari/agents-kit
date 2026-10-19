@@ -2536,6 +2536,10 @@ def a_stacked_branch_is_measured_against_its_parent(base):
     assert target in pr_gate("gh pr create --title t --body b"), "a PR without --base targets the default branch"
     assert target in pr_gate("gh pr create --base main --title t --body b")
     assert "git config branch.child.agentsBase main" in pr_gate("gh pr create -B main --title t --body b")
+    assert target in pr_gate("gh pr create --base parent --base main --title t"), "gh takes the last --base"
+    git(repo, "config", "branch.child.gh-merge-base", "parent")
+    assert "No self-review recorded" in pr_gate("gh pr create --title t"), "without --base, gh targets gh-merge-base"
+    git(repo, "config", "--unset", "branch.child.gh-merge-base")
     for matching in ("gh pr create --base parent --title t --body b", "gh pr create -B origin/parent --title t",
                      "gh pr create --base=parent --title t", "gh pr create -Bparent --title t"):
         assert "No self-review recorded" in pr_gate(matching), f"the measured base passes the target check: {matching}"
@@ -2555,7 +2559,9 @@ def a_stacked_branch_is_measured_against_its_parent(base):
     said = pr_gate("gh pr create --base parent --title t")
     assert "has no validation recorded" in said, f"the record names the target, and the review measured against it counts: {said}"
     for ignored, why in (("gone", "doesn't resolve"), ("child", "names the branch itself"),
-                         ("origin/child", "names its own pushed copy"), ("island", "shares no history")):
+                         ("origin/child", "names its own pushed copy"), ("refs/heads/child", "names the branch itself"),
+                         ("refs/remotes/origin/child", "names its own pushed copy"), ("HEAD", "names the branch itself"),
+                         ("island", "shares no history")):
         if ignored == "island":
             git(repo, "switch", "-q", "--orphan", "island")
             commit("island.py", "i = 1\n")

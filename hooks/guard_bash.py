@@ -463,15 +463,17 @@ def pr_args(command, match, group):
 
 
 def pr_target(words):
-    """The branch `gh pr create` targets with --base/-B; empty for the repository's default branch."""
+    """The branch `gh pr create` targets with --base/-B, the last one given as gh reads it; empty when it has
+    none (review_stamp.py base resolves what gh then picks)."""
+    target = ""
     for i, word in enumerate(words):
         if word in ("--base", "-B") and i + 1 < len(words):
-            return words[i + 1]
-        if word.startswith("--base="):
-            return word.split("=", 1)[1]
-        if word.startswith("-B") and len(word) > 2:
-            return word[2:]
-    return ""
+            target = words[i + 1]
+        elif word.startswith("--base="):
+            target = word.split("=", 1)[1]
+        elif word.startswith("-B") and len(word) > 2:
+            target = word[2:]
+    return target
 
 
 def unreviewed_pr(command, cwd):
@@ -498,7 +500,8 @@ def unreviewed_pr(command, cwd):
             matched = subprocess.run([sys.executable, stamp, "base", "--matches", target], cwd=cwd,
                                      capture_output=True, text=True, timeout=time_left())
             if matched.returncode != 0:
-                return matched.stdout.strip() or matched.stderr.strip()
+                return (matched.stdout.strip() or matched.stderr.strip()
+                        or f"review_stamp.py base failed (exit {matched.returncode}), so the PR's target can't be checked.")
     if "self-review" not in off and not ok("check", "--kind", "review"):
         return ("No self-review recorded for the current change. Run the self-review skill first "
                 "(it ends with review_stamp.py write); any edit after the review needs a new one." + order + store)

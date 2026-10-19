@@ -14,7 +14,7 @@ gh pr view --json number,url,author,headRefName,baseRefName,isDraft,reviewReques
 cat "$(~/.agents/bin/reports path follow-pr)" 2>/dev/null   # what earlier runs handled
 ```
 
-When `baseRefName` isn't the branch `python3 ~/.agents/hooks/review_stamp.py base` names (without its `origin/`), record it: `git config branch.<headRefName>.agentsBase <baseRefName>`. A PR retargeted on GitHub (its parent merged) then measures the change GitHub shows; the stamps go stale, and the fix steps of section 3 bring them back.
+Record the PR's target as the branch's base, `git config branch.<headRefName>.agentsBase <baseRefName>`, even when `python3 ~/.agents/hooks/review_stamp.py base` already names it: a parent found by detection is lost once its pushed tip moves past this branch. A PR retargeted on GitHub (its parent merged) then measures the change GitHub shows; when that change differs the stamps go stale, and the fix steps of section 3 bring them back.
 
 - **First run** (right after `create-pr`): wait for CI as in section 1, then read the comments. Bot reviewers usually post when their own check finishes, so reading earlier misses them.
 - **On-demand runs** (the user asks to follow up): read the current state, don't wait. If checks are still running, say which and handle the rest. In a new session, start with `~/.agents/bin/reports brief`: the phase and one line per report, so you read in full only the reports you need.

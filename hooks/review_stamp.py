@@ -100,9 +100,11 @@ def branch_base(cwd=None):
     # Not all of @{upstream}: a branch started from origin/parent tracks its parent; after `git push -u` it is the
     # branch's own copy, which the same-named refs below already cover.
     own = {branch} | {f"{remote}/{branch}" for remote in git("remote", cwd=cwd).split()}
+    own_full = {f"refs/heads/{branch}"} | {f"refs/remotes/{ref}" for ref in own - {branch}}
     recorded = git("config", "--get", f"branch.{branch}.agentsBase", cwd=cwd)
     for ref in (f"origin/{recorded}", recorded) if recorded else ():
-        if ref not in own and git("rev-parse", "--verify", "--quiet", ref, cwd=cwd):
+        full = git("rev-parse", "--symbolic-full-name", ref, cwd=cwd)  # HEAD and refs/heads/x spell the branch too
+        if full not in own_full and git("rev-parse", "--verify", "--quiet", ref, cwd=cwd):
             if ref == default:
                 return default, ""
             if git("merge-base", "HEAD", ref, cwd=cwd):
@@ -480,12 +482,14 @@ def main():
             print(base)
             return 0
         target = args[args.index("--matches") + 1] if len(args) > args.index("--matches") + 1 else ""
-        target = target or branch_name(base_ref())
+        # Without --base, gh targets the branch's gh-merge-base, else the repository's default branch.
+        branch = git("branch", "--show-current")
+        target = target or git("config", "--get", f"branch.{branch}.gh-merge-base") or branch_name(base_ref())
         if target in (base, branch_name(base)):
             return 0
         print(f"This PR targets `{target}`, but its stamps measure the change against `{base}`, so the review would "
               f"cover a different change than the PR shows. If `{target}` is the right target, record it with "
-              f"`git config branch.{git('branch', '--show-current')}.agentsBase {target}`, then re-run the "
+              f"`git config branch.{branch}.agentsBase {target}`, then re-run the "
               f"self-review and validate on the change it shows; otherwise pass `--base {branch_name(base)}`.")
         return 1
     if command == "follow-renames":
