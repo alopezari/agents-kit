@@ -261,6 +261,9 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     open(spec, "w").write("# SHOP-1: the spec\n")
     guide = spec.replace("spec-shop-", "staging-guide-shop-")
     open(guide, "w").write("# Staging guide\n")
+    body = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "pr-body")
+    assert body == spec.replace("spec-shop-", "pr-body-shop-"), body
+    open(body, "w").write("Shop totals round once.\n")
     evidence = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "evidence")
     assert os.path.isdir(evidence), evidence
     open(os.path.join(evidence, "a1.txt"), "w").write("$ true\n")
@@ -275,6 +278,8 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     assert os.path.basename(moved) == "spec-shop-shop-1~final.md", moved
     assert open(moved).read() == "# SHOP-1: the spec\n" and not os.path.exists(spec)
     assert os.path.exists(guide.replace("session~wary-falcon", "shop-1~final")), "reports move with the spec"
+    assert open(body.replace("session~wary-falcon", "shop-1~final")).read() == "Shop totals round once.\n", \
+        "so does the PR description"
     assert open(os.path.join(evidence.replace("session~wary-falcon", "shop-1~final"), "a1.txt")).read() == "$ true\n", \
         "the evidence moves with its report"
     moved_validation = validation.replace("session~wary-falcon", "shop-1~final")

@@ -34,7 +34,7 @@ git push -u origin "$(git branch --show-current)"
 
 Run the `write-pr-description` skill. Give it the evidence, so the validation section is concrete: `~/.agents/bin/reports` prints the verify, self-review and validation reports and the staging results. Start the validation section from `~/.agents/bin/pr-validation`, which builds it from those reports. Shorten its wording or merge its lines, but keep every verdict and count it prints, and add no result it doesn't show: a count written from memory is how a description ends up claiming more than was tested. Link the issue with the repository's syntax, and give it the spec's `## Decisions` for the approach: a reviewer sees the alternative that was rejected, and why, without asking. Both come from the spec (`~/.agents/skills/spec/path.sh`).
 
-Write the description to a file outside the working tree, for example `"$(dirname "$(~/.agents/skills/spec/path.sh)")/pr-body.md"`.
+Write the description to the branch's own file, outside the working tree, at the path `~/.agents/bin/reports path pr-body` prints. Below, `<pr-body.md>` is that path written out: the guard reads the file before the shell runs, so a `$(...)` there names no file.
 
 ## 4. Open it
 

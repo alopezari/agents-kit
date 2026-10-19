@@ -1,0 +1,1 @@
+- create-pr and follow-pr save the pull request description in a file of the branch's own (`bin/reports path pr-body`), so two sessions opening pull requests in the same repo no longer overwrite each other's description. The file moves with the branch when it is renamed.
