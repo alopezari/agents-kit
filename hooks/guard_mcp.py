@@ -178,8 +178,10 @@ def record_objects(payload):
         ids.append(returned)
     try:
         for object_id in ids:
-            with open(object_record(session, service, object_id), "w") as record:
+            path = object_record(session, service, object_id)
+            with open(f"{mark}-{object_id}", "w") as record:  # whole, or not at all: a follow-up may be reading it
                 record.write(object_id)
+            os.replace(f"{mark}-{object_id}", path)
         os.remove(mark)  # last: until then it keeps the sweep from removing the folder
     except OSError as error:
         log("guard_mcp", "record-failed", payload, f"{service}:{operation}: {error}")

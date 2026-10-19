@@ -129,9 +129,6 @@ check "sample profile: repo overlay, skill and research linked into the kit and 
   '[ -L "$kit/repos/example-plugin" ] && [ -L "$kit/skills/release-notes" ] && [ -L "$kit/research/example-study.md" ] \
    && [ "$(readlink "$home/.claude/skills/release-notes")" = "$kit/skills/release-notes" ]'
 check "sample profile: its optional program is reported, not installed" 'echo "$out" | grep -q "info  composer not installed"'
-records='.hooks.PostToolUse | any(.matcher == "mcp__.*" and (.hooks[0].command | endswith("/hooks/guard_mcp.py")))'
-check "the MCP guard records approved objects after MCP calls, in Claude Code and Codex" \
-  'jq -e "$records" "$home/.claude/settings.json" >/dev/null && jq -e "$records" "$home/.codex/hooks.json" >/dev/null'
 mcp() {  # mcp <tool> <input json>: the MCP guard's decision; it prints nothing to allow
   local decision; decision=$(printf '{"tool_name":"%s","tool_input":%s,"session_id":"t"}' "$1" "$2" \
     | HOME="$home" python3 "$kit/hooks/guard_mcp.py" | jq -r '.hookSpecificOutput.permissionDecision')
@@ -433,6 +430,9 @@ done
 odd="$home/client#1"; mkdir -p "$odd/launchd"
 printf '<plist><string>__PROFILE__/x.sh</string></plist>\n' > "$odd/launchd/odd-weekly.plist"
 HOME="$home" "$kit/install.sh" --yes --profile "$odd" >/dev/null 2>&1
+records='.hooks.PostToolUse | any(.matcher == "mcp__.*" and (.hooks[0].command | endswith("/hooks/guard_mcp.py")))'
+check "the MCP guard records approved objects after MCP calls, in Claude Code and Codex" \
+  'jq -e "$records" "$home/.claude/settings.json" >/dev/null && jq -e "$records" "$home/.codex/hooks.json" >/dev/null'
 out=$(HOME="$home" "$kit/install.sh" --yes --profile "$clash" 2>&1); status=$?
 job="$home/Library/LaunchAgents/com.$(id -un).sample-weekly.plist"
 printf '<plist><string>__PROFILE__/x.sh</string></plist>\n' > "$clash/launchd/weekly brief.plist"
