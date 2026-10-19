@@ -148,26 +148,37 @@ def records_each_findings_outcome(base):
     assert "outcomes" not in without, without
 
 
-def refuses_outcomes_that_dont_add_up(base):
+def refuses_malformed_outcomes(base):
+    """Each case adds up to --findings and matches --confirmed, so only the rule it names can refuse it."""
     home = setup(base)
-    lens = ["lens", "correctness", "--findings", "3", "--confirmed", "2", "--outcomes"]
-    for outcomes, why in [
-        ("fixed=2,noise=1", "an unknown outcome"),
-        ("fixed=2,wrong=x", "a count that isn't a number"),
-        ("fixed=2,wrong=-1", "a negative count"),
-        ("fixed=1,fixed=1,wrong=1", "a duplicate outcome"),
-        ("fixed=2,wrong=2", "counts that don't sum to --findings"),
-        ("fixed=2,wrong", "an outcome without a count"),
-        ("", "no outcomes"),
+    lens = ["lens", "correctness", "--findings", "3", "--confirmed", "3", "--outcomes"]
+    for args, message in [
+        ([*lens, "fixed=2,noise=1"], "isn't one of"),
+        ([*lens, "fixed=2,minor=x"], "isn't a whole number"),
+        ([*lens, "fixed=4,minor=-1"], "isn't a whole number"),
+        ([*lens, "fixed=1,fixed=1,minor=2"], "given twice"),
+        ([*lens, "fixed=3,minor"], "has no count"),
+        ([*lens, ""], "isn't one of"),
+        ([*lens, "fixed=2,minor=2"], "add up to 4, not --findings 3"),
+        ([*lens, "fixed=1,wrong=2"], "count 1 confirmed, not --confirmed 3"),
+        ([*lens, "fixed=3", "--outcomes", "minor=3"], "--outcomes is given twice"),
     ]:
-        out = log(home, *lens, outcomes)
-        assert out.returncode == 2 and out.stderr, (why, out)
+        out = log(home, *args)
+        assert out.returncode == 2 and message in out.stderr, (args, out)
     assert entries(home) == [], "nothing was written"
+
+
+def a_lens_with_no_findings_logs_without_outcomes(base):
+    home = setup(base)
+    assert log(home, "lens", "correctness", "--findings", "0", "--confirmed", "0").returncode == 0
+    assert log(home, "lens", "correctness", "--findings", "0", "--confirmed", "0", "--outcomes", "fixed=0").returncode == 0
+    without, zeros = entries(home)
+    assert "outcomes" not in without and set(zeros["outcomes"].values()) == {0}, (without, zeros)
 
 
 for test in (writes_well_formed_entries, refuses_malformed_entries, a_session_on_a_worktree_logs_to_the_main_checkout,
              other_kit_layouts_keep_their_rows_in_the_kit, records_each_findings_outcome,
-             refuses_outcomes_that_dont_add_up):
+             refuses_malformed_outcomes, a_lens_with_no_findings_logs_without_outcomes):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)

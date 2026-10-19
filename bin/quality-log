@@ -22,6 +22,7 @@ KIT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")
 TAXONOMY = os.path.join(KIT, "review-mining", "taxonomy.md")
 # What became of each finding a lens raised: the self-review skill, step 4, defines each one.
 OUTCOMES = ("fixed", "wrong", "intentional", "minor", "pre-existing", "open", "uncertain")
+CONFIRMED_OUTCOMES = ("fixed", "minor", "pre-existing", "open")
 sys.path.insert(0, os.path.join(KIT, "hooks"))
 from hooklog import session_harness  # noqa: E402
 from review_stamp import quality_log  # noqa: E402
@@ -57,15 +58,15 @@ def parse(argv):
         return int(value)
 
     def outcomes(value):
-        counts = dict.fromkeys(OUTCOMES, 0)
-        given = [pair.partition("=") for pair in value.split(",")]
-        for key, sep, number in given:
+        counts, seen = dict.fromkeys(OUTCOMES, 0), set()
+        for key, sep, number in (pair.partition("=") for pair in value.split(",")):
             if key not in OUTCOMES:
                 raise argparse.ArgumentTypeError(f"{key!r} isn't one of {', '.join(OUTCOMES)}")
             if not sep:
                 raise argparse.ArgumentTypeError(f"{key!r} has no count: give it as {key}=N")
-            if [k for k, _, _ in given].count(key) > 1:
+            if key in seen:
                 raise argparse.ArgumentTypeError(f"{key!r} is given twice")
+            seen.add(key)
             counts[key] = count(number)
         return counts
 
@@ -90,8 +91,16 @@ def parse(argv):
     escape.add_argument("--lens", type=lens_name, required=True)
     escape.add_argument("--pr", type=count, required=True)
     args = vars(parser.parse_args(argv))  # exits 2 on anything malformed, before the log is opened
-    if args.get("outcomes") and sum(args["outcomes"].values()) != args["findings"]:
-        parser.error(f"--outcomes add up to {sum(args['outcomes'].values())}, not --findings {args['findings']}")
+    if args.get("outcomes"):
+        # argparse keeps a repeated flag's last value, which would drop the first one's counts.
+        if sum(arg.split("=")[0] == "--outcomes" for arg in argv) > 1:
+            parser.error("--outcomes is given twice")
+        counts = args["outcomes"]
+        if sum(counts.values()) != args["findings"]:
+            parser.error(f"--outcomes add up to {sum(counts.values())}, not --findings {args['findings']}")
+        confirmed = sum(counts[key] for key in CONFIRMED_OUTCOMES)
+        if confirmed != args["confirmed"]:
+            parser.error(f"--outcomes count {confirmed} confirmed, not --confirmed {args['confirmed']}")
     return args.pop("kind"), args.pop("name"), {k: v for k, v in args.items() if v is not None}
 
 
