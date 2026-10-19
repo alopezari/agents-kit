@@ -96,7 +96,7 @@ When the change needs manual tests on staging, `validate` ends by handing you th
 | Codex | Stop | (every stop) | stop_checks.py | 660 |
 | Codex | UserPromptSubmit | (every stop) | prompt_approvals.py | 10 |
 
-**`guard_bash.py`**: PreToolUse guard for shell commands, shared by Claude Code and Codex. Blocks irreversible or outward-facing commands. It is a seatbelt against agent mistakes, not a security boundary: a determined command can evade regexes. Records the checkout of each allowed `git push`, so the stop hook can follow that commit's CI.
+**`guard_bash.py`**: PreToolUse guard for shell commands, shared by Claude Code and Codex. Blocks irreversible or outward-facing commands. It is a seatbelt against agent mistakes, not a security boundary: a determined command can evade regexes. It reads code, not text: a quoted string or heredoc that only a reader, printer or interpreter takes as text doesn't count, unless a SQL client is in the command; `rm` resolves variables the same command assigns. Records the checkout of each allowed `git push`, so the stop hook can follow that commit's CI.
 
 **`guard_files.py`**: PreToolUse guard for file tools (Claude Code Edit/Write/MultiEdit/NotebookEdit, Codex apply_patch/Edit/Write): Impeccable's project files in a shared repository need the user first (design_files.py).
 
