@@ -153,7 +153,8 @@ def replay(case, model, worktree):
     out = bounded(MODELS[model], REVIEW_SECS, worktree, bundle.stdout)
     found = found_section(out.stdout) if out.returncode == 0 else None
     if found is None:
-        return None, f"{model} exit {out.returncode}, no ## Found section: {out.stderr.strip()[-300:]}"
+        said = " / ".join(text.strip()[-300:] for text in (out.stderr, out.stdout) if text.strip())
+        return None, f"{model} exit {out.returncode}, no ## Found section: {said}"
     return found, None
 
 
@@ -174,7 +175,7 @@ def review(case, model):
             try:
                 removed = bounded(["git", "-C", case["checkout"], "worktree", "remove", "--force", worktree], GIT_SECS,
                                   case["checkout"])
-                failed = removed.stderr.strip() if removed.returncode else None
+                failed = (removed.stderr.strip() or f"exit {removed.returncode}") if removed.returncode else None
             except subprocess.TimeoutExpired:
                 failed = f"took over {GIT_SECS}s"
             if failed:
@@ -222,8 +223,8 @@ def run(args):
         return 0
     os.makedirs(RUNS, exist_ok=True)
     previous = sorted(f for f in os.listdir(RUNS) if f.endswith(f"-{args.model}.jsonl"))
-    kit = subprocess.run(["git", "-C", os.path.dirname(os.path.realpath(__file__)), "describe", "--always", "--dirty"],
-                         capture_output=True, text=True).stdout.strip() or None
+    kit_dir = os.path.dirname(os.path.realpath(__file__))
+    kit = bounded(["git", "-C", kit_dir, "describe", "--always", "--dirty"], GIT_SECS, kit_dir).stdout.strip() or None
     rows, reviews = [], {}
     for case in cases:
         started = time.time()

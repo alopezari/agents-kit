@@ -17,7 +17,7 @@ cat > "$STUB_ANSWERS/$(git rev-parse HEAD).prompt"
 echo "$(basename "$0") $*" >> "$STUB_ANSWERS/calls"
 pwd -P > "$STUB_ANSWERS/$(git rev-parse HEAD).cwd"
 answer="$STUB_ANSWERS/$(git rev-parse HEAD).out"
-[ -f "$answer" ] || { echo "model unavailable" >&2; exit 1; }
+[ -f "$answer" ] || { echo "Not logged in"; echo "model unavailable" >&2; exit 1; }
 cat "$answer"
 """
 
@@ -194,6 +194,21 @@ def cases_with_the_same_review_share_one_pass(base):
     assert len(open(os.path.join(answers, "calls")).read().splitlines()) == 1, "two comments on one PR, one review"
 
 
+def a_worktree_left_behind_is_an_error(base):
+    env, repo, commits, answers = setup(base)
+    add_bug(env, repo, commits["hit"], commits["base"], 47)
+    answer(answers, commits["hit"], "- Important: total off by one — cart.py:45-48 — high")
+    shims = os.path.join(base, "shims")
+    os.makedirs(shims)
+    with open(os.path.join(shims, "git"), "w") as fh:
+        fh.write(f'#!/bin/bash\n[ "$3 $4" = "worktree remove" ] && exit 1\nexec {shutil.which("git")} "$@"\n')
+    os.chmod(os.path.join(shims, "git"), 0o755)
+    out = evals({**env, "PATH": f"{shims}:{env['PATH']}"}, "run", "--model", "codex")
+    assert "- Correctness: recall n/a, no clean case, 1 errors" in out.stdout, \
+        f"a removal that fails without saying why still fails the case:\n{out.stdout}"
+    assert "couldn't remove the worktree" in out.stderr and "exit 1" in out.stderr, out.stderr
+
+
 def a_failed_review_is_an_error_not_a_miss(base):
     env, repo, commits, answers = setup(base)
     add_bug(env, repo, commits["hit"], commits["base"], 60)
@@ -211,7 +226,7 @@ def a_failed_review_is_an_error_not_a_miss(base):
     assert "- Correctness: recall n/a, no clean case, 3 errors, 0 skipped" in out.stdout, \
         f"a failed model, an answer without ## Found and a clean case that failed are errors:\n{out.stdout}"
     assert "- Security: recall n/a, no clean case, 0 errors, 1 skipped" in out.stdout, out.stdout
-    assert "model unavailable" in out.stderr and "no ## Found" in out.stderr and "no checkout" in out.stderr, out.stderr
+    assert "model unavailable" in out.stderr and "Not logged in" in out.stderr and "no ## Found" in out.stderr and "no checkout" in out.stderr, out.stderr
     assert git(repo, "worktree", "list").count("\n") == 0, "worktrees go even when the review fails"
     no_model = evals({**env, "PATH": "/usr/bin:/bin"}, "run", "--model", "codex")
     assert "- Correctness: recall n/a, no clean case, 3 errors" in no_model.stdout and "No such file" \
@@ -232,7 +247,8 @@ def a_failed_review_is_an_error_not_a_miss(base):
 
 
 for test in (adds_each_case_once, refuses_cases_it_cant_replay, scores_hits_misses_and_false_alarms,
-             cases_with_the_same_review_share_one_pass, a_failed_review_is_an_error_not_a_miss, refuses_a_limit_below_one):
+             cases_with_the_same_review_share_one_pass, a_worktree_left_behind_is_an_error,
+             a_failed_review_is_an_error_not_a_miss, refuses_a_limit_below_one):
     base = tempfile.mkdtemp(prefix="agents-test-review-eval-")
     try:
         test(base)
