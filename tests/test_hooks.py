@@ -304,7 +304,8 @@ def guard_resolves_rm_variables(base):
                 'T="/tmp/a /usr"; rm -rf $T', 'T=/tmp/x; T+=/../../usr; rm -rf "$T"', 'T=/tmp/x; unset T; rm -rf "$T"/usr',
                 'if [ -n "$X" ]; then\n  T=/tmp/x\nfi\nrm -rf "$T"/usr', 'X=$(\nT=/tmp/x\n)\nrm -rf "$T"/usr',
                 "grep 'a; T=/tmp/x; b' f; rm -rf \"$T/usr\"", 'export TMPDIR=/usr; T=$(mktemp -d); rm -rf "$T"',
-                'T=$(mktemp -dp /usr x.XXXX); rm -rf "$T"/..']:
+                'T=$(mktemp -dp /usr x.XXXX); rm -rf "$T"/..', 'case "$X" in\n  yes)\n    T=/tmp/x;;\nesac\nrm -rf "$T/usr"',
+                'false && \\\n  T=/tmp/x; rm -rf "$T/usr"', "T='/tmp/a /usr'; rm -rf $T", "T='/tmp/*'; rm -rf $T"]:
         assert guard_env(cmd, "/private/var/folders/ab/T/") == "deny", f"not a temp path for sure: {cmd!r}"
     started = child_cpu()
     assert guard_env("a=" + "b=" * 40 + ") && rm -rf /usr/x", None) == "deny" and child_cpu() - started < 3, \
@@ -340,7 +341,10 @@ def guard_reads_code_not_text(base):
                 "perl -e 'system \"git branch -D old\"'", "ruby -e '`git branch -D old`'",
                 "php -r 'shell_exec(\"git reset --hard\");'", "git submodule foreach 'git reset --hard'",
                 "git filter-branch --tree-filter 'git clean -fdx' HEAD", "node -e 'require(\"pg\").query(\"DROP TABLE x\")'",
-                "php -r 'mysqli_query($c, \"DROP TABLE x\");'", "cat > /tmp/x.sh <<'EOF'\ngit branch -D old\nEOF\nbash /tmp/x.sh"]:
+                "php -r 'mysqli_query($c, \"DROP TABLE x\");'", "cat > /tmp/x.sh <<'EOF'\ngit branch -D old\nEOF\nbash /tmp/x.sh",
+                "ruby -e 'Kernel.system(\"git branch -D old\")'", "cat > /tmp/x.sh <<'EOF'\ngit branch -D old\nEOF\n/bin/sh /tmp/x.sh",
+                "cat > /tmp/x.sh <<'EOF'\ngit branch -D old\nEOF\ncommand bash /tmp/x.sh",
+                "git submodule --quiet foreach 'git reset --hard'", "python3 -c 'db.query (\"DROP TABLE x\")'"]:
         assert guard(cmd) == "deny", f"text that runs: {cmd!r}"
 
     def reason(command, cwd="/tmp"):

@@ -793,14 +793,14 @@ INTERPRETER_RECEIVER = re.compile(LEADING_ASSIGNMENTS + INTERPRETER + r"(?:\s|$)
 # Interpreter code that starts a process: its strings may run as a command. Named only inside a string, it still
 # counts, which only denies more.
 SPAWNS = re.compile(r"\bos\.(?:system|exec\w*|spawn\w*)\b|\bsubprocess\b|\bpopen\b|child_process|"
-                    r"\bexec(?:[lv]p?e?)?\s*\(|(?<![\w.-])system\s*[(\"'\[]|shell_exec|passthru|proc_open|pty\.spawn", re.I)
+                    r"\bexec(?:[lv]p?e?)?\s*\(|(?<![\w-])system\s*[(\"'\[]|shell_exec|passthru|proc_open|pty\.spawn", re.I)
 SHELL_BACKTICKS = re.compile(r"ruby|perl|php")
 # The flag that makes an interpreter's next argument its code: its other arguments are data a script may run.
 CODE_FLAGS = {"python": "c", "node": "e|p|-eval|-print", "ruby": "e", "perl": "e|E", "php": "r"}
-SQL_USED = re.compile(r"\b(?:psql|mysqli?|mariadb|sqlite3|psycopg2?|pymysql)|\bwp\s+db\s+(?:query|cli)\b|\.(?:execute|query)\(|"
+SQL_USED = re.compile(r"\b(?:psql|mysqli?|mariadb|sqlite3|psycopg2?|pymysql)|\bwp\s+db\s+(?:query|cli)\b|\.(?:execute|query)\s*\(|"
                       r"exec_driver_sql")
 # A command that runs a script file: a heredoc it writes to a file may be that script.
-RUNS_SCRIPT_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))\s*(?:(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*[^\s<-]|source\s|\.\s+\S|"
+RUNS_SCRIPT_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))\s*(?:(?:command|exec)\s+)?(?:(?:(?:/[\w.-]+)*/)?(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*[^\s<-]|source\s|\.\s+\S|"
                               r"\.{0,2}/\S+\.sh\b)")
 # Programs whose quoted arguments are only text: what they read, match or print.
 TEXT_PROGRAMS = READERS | {"sed", "git", "gh", "echo", "printf"}
@@ -907,7 +907,7 @@ def text_strings(segment, program, source):
     if program in ("echo", "printf"):
         text = not piped
     elif program == "git":
-        text = not re.search(r"\s(?:-x|--exec)(?:[\s=]|$)|\bsubmodule\s+foreach\b|\bfilter-branch\b|\bbisect\s+run\b",
+        text = not re.search(r"\s(?:-x|--exec)(?:[\s=]|$)|\bsubmodule\s+(?:-\S+\s+)*foreach\b|\bfilter-branch\b|\bbisect\s+run\b",
                              segment) and not re.search(r"\balias\b", source)
     elif program == "gh":
         text = not re.search(r"\s(?:api|alias)\s", segment)
@@ -1010,11 +1010,14 @@ def assigned_value(raw, values):
     glob characters is several paths, or a pattern, where it isn't quoted."""
     made = MKTEMP.fullmatch(raw)
     if made:
-        return mktemp_path(made.group(1), values)
-    if raw.startswith("'"):
-        return raw[1:-1] if len(raw) > 1 and raw.endswith("'") and "'" not in raw[1:-1] else None
-    value = expand(raw.replace('"', ""), values)
-    return None if re.search(r"[$`'()\s*?\[]", value) or len(value) > PATH_MAX else value
+        value = mktemp_path(made.group(1), values)
+    elif raw.startswith("'"):
+        value = raw[1:-1] if len(raw) > 1 and raw.endswith("'") and "'" not in raw[1:-1] else None
+    else:
+        value = expand(raw.replace('"', ""), values)
+        if re.search(r"[$`'()]", value):
+            return None
+    return None if value is None or re.search(r"[\s*?\[]", value) or len(value) > PATH_MAX else value
 
 
 def chained_by(separator):
@@ -1039,8 +1042,8 @@ def segments_with_values(text):
     base = {"HOME": os.path.expanduser("~"), "TMPDIR": os.environ.get("TMPDIR")}
     for name in set(names) | unsure:
         base.pop(name, None)
-    known, chain, depth = {}, {}, 0
-    masked = "\n".join(line_layout(line)[0] for line in text.split("\n"))
+    known, chain, parens, compound = {}, {}, 0, 0
+    masked = "\n".join(line_layout(line)[0] for line in text.split("\n")).replace(CONTINUATION, "  ")
     breaks = [0] + [i for m in SEGMENT_BREAK.finditer(masked) for i in m.span()] + [len(text)]
     parts = [text[a:b] for a, b in zip(breaks, breaks[1:])]
     for k in range(0, len(parts), 2):
@@ -1052,15 +1055,17 @@ def segments_with_values(text):
         yield parts[k], values
         stripped, code = parts[k].strip(), masked[breaks[k]:breaks[k + 1]].strip()
         first = (code.split() or [""])[0]
-        depth += len(code) - len(code.lstrip("(")) + (first in COMPOUND_OPENS or code.endswith("{"))
+        leading = len(code) - len(code.lstrip("("))
+        parens += leading
+        compound += first in COMPOUND_OPENS or code.endswith("{")
         assignments = ASSIGNMENTS_ONLY.fullmatch(stripped)
-        if assignments and depth == 0 and before in (";", "&&") and after not in ("|", "&"):
+        if assignments and parens == compound == 0 and before in (";", "&&") and after not in ("|", "&"):
             for m in ONE_ASSIGNMENT.finditer(assignments.group(1)):
                 value = None if m.group(1) in unsure else assigned_value(m.group(2), {**base, **known, **chain})
                 if value is not None:
                     (known if before == ";" else chain)[m.group(1)] = value
-        opened_inside = code.count("(") - code.count(")") - (len(code) - len(code.lstrip("(")))
-        depth = max(0, depth + opened_inside - (first in COMPOUND_CLOSES or first.startswith("}")))
+        parens = max(0, parens + code.count("(") - code.count(")") - leading)  # a case pattern's ) opened nothing
+        compound = max(0, compound - (first in COMPOUND_CLOSES or first.startswith("}")))
     yield "", {**base, **known}
 
 
