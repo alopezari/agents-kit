@@ -169,7 +169,9 @@ NO_CI = [  # (name, CI config file in the commit, state, args, exit code, text t
      ["suite: success"]),
     *[(f"{config} counts as CI config", config, {"runs": [], "probe": []}, ["--once"], 3, ["no checks"])
       for config in [".circleci/config.yml", ".buildkite/pipeline.yml", ".teamcity/settings.kts", ".travis.yml",
-                     ".gitlab-ci.yml", "azure-pipelines.yml"]],
+                     ".gitlab-ci.yml", "azure-pipelines.yml", "azure-pipelines.yaml", ".drone.yml", "appveyor.yml",
+                     ".appveyor.yml", ".cirrus.yml", ".semaphore/semaphore.yml", ".woodpecker/ci.yml",
+                     ".woodpecker.yml", "bitrise.yml", "codemagic.yaml"]],
 ]
 
 fail = 0
