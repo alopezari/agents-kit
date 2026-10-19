@@ -102,7 +102,7 @@ Log every lens that ran, confirmed meaning a finding that survived step 3. The m
 ~/.agents/bin/quality-log lens <name> --findings <N> --confirmed <M> --secs <S> --model <claude|codex> [--shared <K>]
 ```
 
-When a lens ran in both model families in step 2, add `--shared` to both rows: how many of that row's confirmed findings the other family also reported, a defect both found counting once per row. Claude confirms A and B, Codex confirms B and C: `--shared 1` on both. It is what the monthly job weighs the cross-model pass by, so leave it out when the other family's pass failed or was skipped, and on re-check rounds: no `--shared` means unknown, not zero.
+When a lens ran in both model families in step 2, add `--shared` to both rows: how many of that row's confirmed findings the other family also reported, a defect both found counting once per row. Claude confirms A and B, Codex confirms B and C: `--shared 1` on both. It is what the monthly job weighs the cross-model pass by, so leave it out when the other family's pass failed or was skipped: no `--shared` means unknown, not zero. Log each re-check round from step 4 as `correctness-recheck`, without `--shared`, so its findings don't count toward the first pass's.
 
 Save the report to `$(~/.agents/bin/reports path review)`. Put it in the final message too (see AGENTS.md → Communication). Use this shape; it can go straight into the PR's validation notes:
 

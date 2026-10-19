@@ -51,14 +51,16 @@ def records_the_findings_the_other_model_shared(base):
     home = setup(base)
     assert log(home, "lens", "correctness", "--findings", "5", "--confirmed", "3", "--model", "codex", "--shared", "2").returncode == 0
     assert log(home, "lens", "correctness", "--findings", "3", "--confirmed", "2", "--model", "claude", "--shared", "0").returncode == 0
-    codex, claude = entries(home)
-    assert (codex["model"], codex["shared"], claude["shared"]) == ("codex", 2, 0), (codex, claude)
+    assert log(home, "lens", "tests", "--findings", "2", "--confirmed", "1", "--model", "codex", "--shared", "1").returncode == 0, "all shared"
+    codex, claude, all_shared = entries(home)
+    assert (codex["model"], codex["shared"], claude["shared"], all_shared["shared"]) == ("codex", 2, 0, 1), entries(home)
 
 
 def keeps_lens_names_to_the_lenses_there_are(base):
     home = setup(base)
     for name, key in [("Correctness", "correctness"), ("Performance and scale", "performance"),
-                      ("UX, accessibility and i18n", "ux-a11y-i18n"), ("ux-a11y-i18n", "ux-a11y-i18n"), ("spec", "spec")]:
+                      ("UX, accessibility and i18n", "ux-a11y-i18n"), ("ux-a11y-i18n", "ux-a11y-i18n"), ("spec", "spec"),
+                      ("correctness-recheck", "correctness-recheck")]:
         assert log(home, "lens", name, "--findings", "1", "--confirmed", "1").returncode == 0, name
         assert log(home, "escape", "ci", "--verdict", "confirmed", "--category", "P3.2a", "--lens", name, "--pr", "1").returncode == 0, name
         lens, escape = entries(home)[-2:]
@@ -67,6 +69,8 @@ def keeps_lens_names_to_the_lenses_there_are(base):
 
 def refuses_malformed_entries(base):
     home = setup(base)
+    says = {"more shared than confirmed": "more than --confirmed", "shared without the model": "--shared needs --model",
+            "a lens that doesn't exist": "isn't a lens", "an escape's unknown lens": "isn't a lens"}
     for args, why in [
         (["lens", "correctness 10 6 claude", "--findings", "--confirmed", "--secs", "600"], "values pasted into the name"),
         (["lens", "correctness", "--findings", "--confirmed", "6"], "a flag taken as a value"),
@@ -83,11 +87,11 @@ def refuses_malformed_entries(base):
         (["lens", "correctness", "--findings", "3", "--confirmed", "2", "--shared", "1"], "shared without the model"),
         (["lens", "data", "--findings", "1", "--confirmed", "1"], "a lens that doesn't exist"),
         (["lens", "performance-scale", "--findings", "1", "--confirmed", "1"], "a name between key and heading"),
-        (["lens", "correctness-recheck", "--findings", "1", "--confirmed", "1"], "a re-check logged as a lens of its own"),
         (["escape", "bot", "--verdict", "confirmed", "--category", "P3.2a", "--lens", "data", "--pr", "1"], "an escape's unknown lens"),
     ]:
         out = log(home, *args)
         assert out.returncode == 2 and out.stderr, (why, out)
+        assert says.get(why, "") in out.stderr, (why, out.stderr)
     assert entries(home) == [], "nothing was written"
 
 

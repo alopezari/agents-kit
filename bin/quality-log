@@ -6,7 +6,7 @@ only perspectives that pay off.
   quality-log test <type> --issues N [--secs S] [--notes "..."]
   quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 
-A lens is named by its key or heading in bin/triage, or `spec`; --shared counts the confirmed findings the other model
+A lens is named by its key or heading in bin/triage, `correctness-recheck` or `spec`; --shared counts the confirmed findings the other model
 family's run of the same lens also reported, and leaving it out means the overlap is unknown.
 
 Refuses malformed input (exit 2) without writing: a flag left without its value once took the next flag as one.
@@ -31,11 +31,11 @@ from review_stamp import quality_log  # noqa: E402
 
 
 def lens_keys():
-    """{key or lowercase heading: key} for every review lens, plus the spec's second reading."""
+    """{key or lowercase heading: key} for every review lens, plus the self-review's re-check and the spec's second reading."""
     loader = importlib.machinery.SourceFileLoader("triage", os.path.join(KIT, "bin", "triage"))
     triage = importlib.util.module_from_spec(importlib.util.spec_from_loader("triage", loader))
     loader.exec_module(triage)
-    return {"spec": "spec", **{name: key for key, title in triage.LENS_TITLES.items() for name in (key, title.lower())}}
+    return {"spec": "spec", "correctness-recheck": "correctness-recheck", **{name: key for key, title in triage.LENS_TITLES.items() for name in (key, title.lower())}}
 
 
 def git(*args):
