@@ -295,6 +295,7 @@ if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
   hook "$S" PreToolUse  "Edit|Write|MultiEdit|NotebookEdit" guard_files.py 10
   hook "$S" UserPromptSubmit "" prompt_approvals.py 10
   hook "$S" PostToolUse "Edit|Write|MultiEdit|NotebookEdit" post_edit.py 30
+  hook "$S" PostToolUse "mcp__.*" guard_mcp.py 10
   hook "$S" Stop        "" stop_checks.py 660
   # Tools that add their own status line may point statusLine at a wrapper script that runs ours;
   # that keeps our line, so it counts as installed. Anything else loses it.
@@ -328,6 +329,7 @@ if command -v codex >/dev/null || [ -d "$HOME/.codex" ]; then
   hook "$H" PreToolUse  "apply_patch|Edit|Write" guard_files.py 10
   hook "$H" UserPromptSubmit "" prompt_approvals.py 10
   hook "$H" PostToolUse "apply_patch|Edit|Write" post_edit.py 30
+  hook "$H" PostToolUse "mcp__.*" guard_mcp.py 10
   hook "$H" Stop        "" stop_checks.py 660
   # Codex silently skips hooks the user hasn't trusted; trust lives in config.toml [hooks.state].
   jq -r '.hooks | to_entries[] | .key as $e | .value | to_entries[] | .key as $i | .value.hooks | to_entries[]

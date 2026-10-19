@@ -137,6 +137,8 @@ def the_agent_stays_out_of_the_approvals(base):
     for cmd, cwd in [("echo '{}' > ~/.agents/approvals/phases/global.json", "/tmp"),
                      ("cd ~/.agents && echo '{}' > approvals/phases/global.json", "/tmp"),
                      ("cd ~/.agents && touch approvals/linear", "/tmp"), ("cp /tmp/x approvals/linear", kit),
+                     ("touch ~/.agents/approvals/session/s1/linear/ENG-1", "/tmp"),
+                     ("mkdir -p approvals/session/s1/linear", kit),
                      ("mv x ./approvals/turn/s1", kit), ("tee approvals/linear < /dev/null", kit),
                      ("cd repos && touch ../approvals/linear", kit), ("mkdir -p approvals/turn/s1", kit),
                      ("rm -f approvals", kit), ("touch linear", os.path.join(kit, "approvals")),
@@ -328,6 +330,123 @@ def asking_for_a_service_approves_its_writes_for_that_turn(base):
     prompt("use wiki- for it")
     assert write("mcp__plugin_gateway__execute", {"provider": "wiki-", "subtool": "create-issue"}) == "allow", \
         "a name that ends in a symbol"
+
+
+def a_write_to_an_object_the_user_approved_is_approved_for_the_session(base):
+    profiles = os.path.join(base, "profiles")
+    os.makedirs(os.path.join(profiles, "work"))
+    json.dump({"gateways": [{"tool": "gateway__execute$", "service_field": "provider", "operation_fields": ["subtool", "tool"],
+                             "writes": {"linear": ["add-comment", "attach-url", "create-issue", "update-issue"],
+                                        "tracker": ["update-issue"]},
+                             "objects": {"linear": {"fields": ["params.id", "params.issueId"],
+                                                    "created": {"create-issue": "identifier"}}}}],
+               "direct": {"notes": "^(create|update)_"},
+               "direct_objects": {"notes": {"fields": ["id"], "created": {"create_note": "id"}}}},
+              open(os.path.join(profiles, "work", "mcp-writes.json"), "w"))
+    env = {"HOME": base, "AGENTS_PROFILES_DIR": profiles}
+    approvals = os.path.join(base, ".agents", "approvals")
+
+    def prompt(text, session="o1"):
+        run_hook("prompt_approvals.py", {"prompt": text, "session_id": session, "cwd": "/tmp"}, env=env)
+
+    def call(operation, params, session="o1", response="", service="linear", tool="mcp__plugin_gateway__execute"):
+        """The harness's PreToolUse, then, only when it let the call through, its PostToolUse with the response."""
+        tool_input = {"provider": service, "tool": operation, "params": params} if "gateway" in tool else params
+        payload = {"tool_name": tool, "tool_input": tool_input, "cwd": "/tmp", "session_id": session}
+        denied = run_hook("guard_mcp.py", {**payload, "hook_event_name": "PreToolUse"}, env=env)
+        if denied:
+            return denied["hookSpecificOutput"]["permissionDecisionReason"]
+        assert run_hook("guard_mcp.py", {**payload, "hook_event_name": "PostToolUse", "tool_response": response},
+                        env=env) is None, "recording says nothing to the agent"
+        return "allow"
+
+    def record(session, service, object_id):
+        return os.path.join(approvals, "session", session, service, object_id)
+
+    # The 2026-10-19 session: the user asked for a Linear task, then, in their next message, for more in it.
+    created = json.dumps({"identifier": "ENG-1130", "title": "Investigate", "url": "https://linear.app/acme/issue/ENG-1130/x",
+                          "tool": "create-issue", "subtool": "create-issue"})
+    prompt("create a Linear task in the ENG team for this")
+    assert call("create-issue", {"team": "ENG", "title": "Investigate"}, response=created) == "allow"
+    assert call("update-issue", {"id": "ENG-1130", "status": "Todo"}) == "allow"
+    assert call("attach-url", {"issueId": "ENG-1130", "url": "https://github.com/o/r/pull/1"},
+                response=json.dumps({"id": "cf9fe0bb-643a-4c26-90d1-8070bce57447", "tool": "attach-url"})) == "allow"
+    prompt("Asegúrate de que la tarea cubre tanto los woo e2e tests como woo api tests como activation")
+    assert call("update-issue", {"id": "ENG-1130", "description": "e2e, api, activation"}) == "allow", \
+        "a follow-up edit to the task the user had created"
+    assert call("attach-url", {"issueId": "ENG-1130", "url": "https://github.com/o/r/pull/2"}) == "allow"
+    assert call("add-comment", {"issueId": "ENG-1130", "body": "done"}) == "allow"
+    other = call("update-issue", {"id": "ENG-1131", "status": "Done"})
+    assert "didn't ask for linear" in other and "approved writing to earlier in this session" in other, other
+    assert call("update-issue", {"id": "cf9fe0bb-643a-4c26-90d1-8070bce57447"}) != "allow", \
+        "attach-url's response id is the attachment's, never recorded"
+    assert call("create-issue", {"team": "ENG", "title": "Another"}) != "allow", "a new object needs the user"
+    assert call("create-issue", {"id": "ENG-1130", "team": "ENG"}) != "allow", "a create never rides on a record"
+    assert call("update-issue", {"id": "ENG-1130"}, session="o2") != "allow", "another session's record"
+    assert call("update-issue", {"id": "ENG-1130"}, session="") != "allow", "no session, no record"
+    for params in [{"status": "Done"}, {"id": ""}, {"id": "../o1/linear/ENG-1130"}, {"id": ["ENG-1130"]}]:
+        assert call("update-issue", params) != "allow", f"no plain object id: {params}"
+    assert call("update-issue", {"id": "ENG-1130", "issueId": "ENG-1131"}) != "allow", "every id it names must be recorded"
+    assert call("update-issue", {"id": "ENG-1130", "issueId": "../ENG-1130"}) != "allow", "and be a plain id"
+    wrote = run_hook("guard_files.py", {"tool_name": "Write", "cwd": "/tmp", "session_id": "o1",
+                                        "tool_input": {"file_path": record("o1", "linear", "ENG-1131"), "content": ""}}, env=env)
+    assert wrote and "approvals come from the user" in wrote["hookSpecificOutput"]["permissionDecisionReason"]
+
+    # The window: 24 h from the last write the user approved, not from follow-ups.
+    day = 24 * 3600
+    os.utime(record("o1", "linear", "ENG-1130"), (time.time() - day + 3600,) * 2)
+    prompt("one more thing")
+    assert call("update-issue", {"id": "ENG-1130"}) == "allow"
+    assert time.time() - os.path.getmtime(record("o1", "linear", "ENG-1130")) > day - 3700, "a follow-up doesn't extend it"
+    prompt("in Linear, also set the priority")
+    assert call("update-issue", {"id": "ENG-1130", "priority": 1}) == "allow"
+    assert time.time() - os.path.getmtime(record("o1", "linear", "ENG-1130")) < 60, "an approved write restarts it"
+    os.utime(record("o1", "linear", "ENG-1130"), (time.time() - day - 60,) * 2)
+    prompt("and close it")
+    assert call("update-issue", {"id": "ENG-1130", "status": "Done"}) != "allow", "an expired record"
+    gone = record("gone", "linear", "ENG-1")
+    os.makedirs(os.path.dirname(gone))
+    open(gone, "w").close()
+    os.utime(gone, (time.time() - day - 60,) * 2)
+    assert not os.path.exists(record("o1", "linear", "ENG-1130")), "the last message swept the expired record"
+    os.makedirs(os.path.dirname(record("o1", "linear", "ENG-7")))
+    open(record("o1", "linear", "ENG-7"), "w").close()
+    prompt("anything")
+    assert not os.path.exists(os.path.join(approvals, "session", "gone")), "expired records go, with their folders"
+    assert os.path.exists(record("o1", "linear", "ENG-7")), "a user message keeps the session's records"
+
+    # The dialog's one-call approval, revoked after the call, and the manual file once it has expired.
+    approve = lambda *args: subprocess.run([os.path.join(KIT, "bin", "approve"), *args], capture_output=True,  # noqa: E731
+                                           env={**os.environ, **env, "AGENTS_TEST": "1"}).returncode
+    prompt("go on", session="o3")
+    assert approve("once", "o3", "linear") == 0
+    blocks = [{"type": "text", "text": json.dumps({"identifier": "ENG-1200", "tool": "create-issue"})}]
+    assert call("create-issue", {"team": "ENG"}, session="o3", response=blocks) == "allow"
+    assert approve("revoke", "o3", "linear") == 0
+    assert call("update-issue", {"id": "ENG-1200"}, session="o3") == "allow", "the object the dialog approved creating"
+    assert call("create-issue", {"team": "ENG"}, session="o3") != "allow"
+    prompt("go on", session="o4")
+    manual = os.path.join(approvals, "linear")
+    open(manual, "w").close()
+    mcp_result = {"content": [{"type": "text", "text": json.dumps({"identifier": "ENG-1300"})}]}
+    assert call("create-issue", {"team": "ENG"}, session="o4", response=mcp_result) == "allow"
+    assert call("create-issue", {"team": "ENG"}, session="", response=json.dumps({"identifier": "ENG-1400"})) == "allow"
+    os.utime(manual, (time.time() - 3600,) * 2)
+    assert call("update-issue", {"id": "ENG-1400"}, session="") != "allow", "calls with no session share no records"
+    assert call("update-issue", {"id": "ENG-1300"}, session="o4") == "allow", "after the manual approval expired"
+    assert call("update-issue", {"id": "ENG-1301"}, session="o4") != "allow"
+    os.remove(manual)
+
+    # A direct server's rules, and a service whose rules name no object fields.
+    prompt("save it in notes", session="o5")
+    assert call("create_note", {"title": "x"}, session="o5", response={"id": "n-1"}, tool="mcp__notes__create_note") == "allow"
+    prompt("tidy it", session="o5")
+    assert call("update_note", {"id": "n-1"}, session="o5", tool="mcp__notes__update_note") == "allow"
+    assert call("update_note", {"id": "n-2"}, session="o5", tool="mcp__notes__update_note") != "allow"
+    prompt("in the tracker", session="o6")
+    assert call("update-issue", {"id": "T-1"}, session="o6", service="tracker") == "allow"
+    prompt("again", session="o6")
+    assert call("update-issue", {"id": "T-1"}, session="o6", service="tracker") != "allow", "no object rules: as before"
 
 
 DATABASE_STATEMENTS = {"DROP DATABASE": "psql -c 'DROP DATABASE arm_test_1'", "DROP TABLE": "psql -c 'DROP TABLE runs'",
@@ -2314,7 +2433,8 @@ def stop_skips_the_phases_switched_off(base):
 TESTS = [a_phase_line_switches_phases_by_scope, a_review_rounds_line_sets_the_re_checks_by_scope,only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
-         guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_allow_line_approves_a_database_statement_for_that_turn,
+         guard_allows_routine, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn,
+         a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,

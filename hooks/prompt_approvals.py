@@ -11,6 +11,8 @@ and the hook tells the agent what is off now; one whose first line is `review-ro
 sets how many re-checks the self-review runs.
 Only the user's own messages reach this hook, so an agent can't grant itself one; mentioning the
 service only to read from it approves writes for that turn too.
+The objects guard_mcp.py records a session's approved writes to outlast the user's messages: this hook only deletes
+the ones older than guard_mcp.OBJECT_APPROVAL_HOURS.
 """
 import json
 import os
@@ -44,6 +46,19 @@ def main():
                 shutil.rmtree(path, ignore_errors=True)
         except OSError:  # another session's hook removed it first
             pass
+    for folder, _, records in os.walk(guard_mcp.SESSION_APPROVALS, topdown=False):
+        for name in records:
+            path = os.path.join(folder, name)
+            try:
+                if time.time() - os.path.getmtime(path) > guard_mcp.OBJECT_APPROVAL_HOURS * 3600:
+                    os.remove(path)
+            except OSError:
+                pass
+        if folder != guard_mcp.SESSION_APPROVALS:
+            try:
+                os.rmdir(folder)  # only once it's empty
+            except OSError:
+                pass
     prompt = str(payload.get("prompt") or "")
     named = sorted(s for s in guard_mcp.guarded_services() if re.search(rf"(?<!\w){re.escape(s)}(?!\w)", prompt, re.I))
     named += design_files.approval_names(prompt)
