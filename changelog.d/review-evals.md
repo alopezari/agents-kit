@@ -1,0 +1,1 @@
+- Review evals: follow-pr records each confirmed review comment with a location as a case (`review-mining/eval.py add`), and the monthly job replays the newest cases against both reviewers, reporting recall, false alarms on clean changes and the previous run's numbers. `pr-comments` marks a comment on an older commit as outdated.

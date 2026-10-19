@@ -49,6 +49,11 @@ python3 "$HOME/.agents/usage/extract_sessions.py" 200 "$RUN/sessions.json" > "$R
 # Every session, not the 200 above: joining sessions to merged PRs needs the ones before the kit too.
 python3 "$HOME/.agents/usage/extract_sessions.py" 100000 "$RUN/sessions-all.json" > /dev/null 2>&1 || true
 python3 "$BASE/outcomes.py" "$SINCE" "$RUN/sessions-all.json" "$RUN/outcomes.json" > "$RUN/outcomes.log" 2>&1 || true
+# Replay the escaped bugs against both reviewers: up to 10 bug and 10 clean cases each, about one review pass per case.
+for model in codex claude; do
+  python3 "$BASE/eval.py" run --model "$model" --limit 10 >> "$RUN/evals.txt" 2>&1 \
+    || echo "eval.py run --model $model failed with exit $?" >> "$RUN/evals.txt"
+done
 
 cat > "$RUN/prompt.md" <<EOF
 You are updating the evidence behind a set of coding-agent instructions.
@@ -65,6 +70,8 @@ Inputs (read them from disk):
 - $RUN/sessions.json: my last 200 agent sessions (harness, model, effort, tokens, advisor_calls, prompts, correction_signals).
 
 - $HOME/.agents/research/health/*.md: weekly health reports from this month.
+- $RUN/evals.txt: this month's review evals, per model and lens: recall over escaped bugs replayed against the
+  reviewers, Important findings per clean case, errors and skips, beside the previous run's numbers.
 - $RUN/outcomes.json: my merged PRs since the kit started and in a baseline window before it (see $BASE/outcomes.py
   for every field), with per-period summaries; $RUN/outcomes.log has its errors, if any.
 $COMMENT_NOTE
@@ -100,6 +107,12 @@ Steps:
      first review, real follow-ups) between baseline and since_kit, with the PR counts. Few PRs since the kit make
      any difference noise; say so instead of drawing a conclusion. The baseline counts every PR; the kit numbers can't
      beat it by excluding hard ones.
+   Add a "Review evals" section from evals.txt: per model and lens, recall and Important findings per clean case
+   beside the previous run's, and whether the cases were the same. When they were and recall fell or false alarms rose,
+   name the changes to lenses.md, bundle.sh or the models since the previous run and propose reverting the likely
+   cause. Then name up to three merged PRs from outcomes.json with no escapes and follow_ups settled with none you
+   counted, as clean-case candidates, each with the command for a person to fill in and run (never add cases yourself):
+   `$BASE/eval.py add --checkout <the repo's checkout> --sha <merge commit> --base <its first parent> --lens Correctness --goal "<PR title>" --clean`.
    Add a "Cost per merged PR" section from the sessions joined to PRs: tokens (input+output; cache reads separately),
    wall-clock minutes (idle included), hours from the first session to the PR and from the PR to the merge, per
    period and per model and effort where sessions.json has them. Compare cost per merged PR, never per session.

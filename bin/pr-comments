@@ -2,7 +2,7 @@
 """Print the current branch's pull request comments that the follow-pr report doesn't list yet.
 
   pr-comments    inline comments on the diff, conversation comments and review summaries, every page, each with its
-                 id, kind, author (bots marked), file and line, URL and text; skips the ids the follow-pr report
+                 id, kind, author (bots marked), file and line ("outdated" when it's on an older commit), URL and text; skips the ids the follow-pr report
                  already lists, the PR author's own comments and reviews without text
 
 Exit: 0 read (new comments or none, said either way), 4 GitHub couldn't be read: never "no comments".
@@ -51,7 +51,10 @@ def comment(kind, raw):
     """One comment as (id, kind, login, is a bot, review state, url, place, body). A deleted account comes back as a
     null user."""
     user = raw.get("user") or {}
-    place = f"{raw['path']}:{raw.get('line') or raw.get('original_line') or '?'}" if kind == "inline" else ""
+    place = ""
+    if kind == "inline":  # GitHub drops `line` once the commented lines change: the original is on an older commit
+        place = f"{raw['path']}:{raw['line']}" if raw.get("line") else \
+            f"{raw['path']}:{raw.get('original_line') or '?'} (outdated)"
     return (int(raw["id"]), kind, user.get("login") or "ghost", user.get("type") == "Bot",
             raw.get("state") or "" if kind == "review" else "", raw["html_url"], place, (raw.get("body") or "").strip())
 
