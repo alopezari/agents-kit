@@ -34,21 +34,21 @@ git push -u origin "$(git branch --show-current)"
 
 Run the `write-pr-description` skill. Give it the evidence, so the validation section is concrete: `~/.agents/bin/reports` prints the verify, self-review and validation reports and the staging results. Start the validation section from `~/.agents/bin/pr-validation`, which builds it from those reports. Shorten its wording or merge its lines, but keep every verdict and count it prints, and add no result it doesn't show: a count written from memory is how a description ends up claiming more than was tested. Link the issue with the repository's syntax, and give it the spec's `## Decisions` for the approach: a reviewer sees the alternative that was rejected, and why, without asking. Both come from the spec (`~/.agents/skills/spec/path.sh`).
 
-Write the description to a file outside the working tree, for example `"$(dirname "$(~/.agents/skills/spec/path.sh)")/pr-body.md"`.
+Write the description to the branch's own file, at the path `~/.agents/bin/reports path pr-body` prints. Below, `<body file>` is that path, written out (see step 4).
 
 ## 4. Open it
 
 For a pull request to the kit itself (`~/.agents`, which is public), check the title and description for a profile's private terms first. It names each one and the line it's on; rewrite those, then run it again:
 
 ```bash
-python3 ~/.agents/hooks/private_terms.py pr "<title>" <pr-body.md>
+python3 ~/.agents/hooks/private_terms.py pr "<title>" <body file>
 ```
 
 ```bash
-gh pr create --base <base> --head "$(git branch --show-current)" --title "<title>" --body-file <pr-body.md>
+gh pr create --base <base> --head "$(git branch --show-current)" --title "<title>" --body-file <body file>
 ```
 
-`<base>` is the branch `review_stamp.py base` prints, without its `origin/`, written out: the guard reads the command's text, so a `$(...)` there doesn't name a branch. Run it as a command of its own, after the stamps were written and the description file saved in earlier commands: the guard reads both before anything in the command runs.
+`<base>` is the branch `review_stamp.py base` prints, without its `origin/`, written out: the guard reads the command's text, so a `$(...)` there names no branch, and for a pull request to the kit no description file either. Run it as a command of its own, after the stamps were written and the description file saved in earlier commands: the guard reads both before anything in the command runs.
 
 Add `--draft` only in the exception from step 1. Print the PR URL.
 

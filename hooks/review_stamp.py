@@ -197,7 +197,7 @@ def fingerprint_for(kind):
 
 
 # Files skills/spec/path.sh and bin/reports name <kind>-<repo>-<branch key>.md, next to the spec.
-REPORT_KINDS = ("spec", "verify", "review", "validation", "staging-guide", "follow-pr")
+REPORT_KINDS = ("spec", "verify", "review", "validation", "staging-guide", "follow-pr", "pr-body")
 
 
 def branch_file_names(repo, key):

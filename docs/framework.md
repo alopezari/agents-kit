@@ -323,6 +323,7 @@ quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --cate
 
 ```
 reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
+reports path pr-body                             where create-pr and follow-pr save the PR description; left out of the listings
 reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 reports                                          every report that exists, with its path, the evidence, the phases off
 reports brief                                    the phase and one line per report, to pick a branch up in a new session
