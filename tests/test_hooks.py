@@ -1304,6 +1304,15 @@ def unrun_checks_never_hold_the_pr(base):
 
     for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", "gh pr ready 12 --repo o/r"]:
         assert decision(command) == "allow", f"the user decides on unrun checks: {command}"
+    with open(os.path.join(os.path.dirname(guide), os.path.basename(guide).replace("checks-guide-", "staging-guide-")), "w") as fh:
+        fh.write("# Staging guide\n## Before the merge\n### S1. Deploy\n## Results (2026-10-01)\n\n"
+                 "| Step | Result | Evidence |\n|---|---|---|\n| S1 | FAIL | `S1.txt` |\n")
+    os.remove(guide)
+    for command in ["gh pr create --fill", "gh pr ready 12"]:
+        assert decision(command) == "allow", f"nor does an older guide's failed staging step: {command}"
+    for args in (["staging"], ["write", "--kind", "staging"], ["check", "--kind", "staging"], ["write", "--kind", "reveiw"]):
+        done = subprocess.run(["python3", H + "review_stamp.py", *args], cwd=repo, capture_output=True, text=True)
+        assert done.returncode == 2 and "Unknown" in done.stderr, f"a removed or mistyped stamp is refused: {args} {done.stderr}"
     open(os.path.join(repo, "app.py"), "a").write("y = 3\n")
     assert decision("gh pr create --fill") == "deny", "the self-review gate still holds an unreviewed change"
 
@@ -1366,7 +1375,7 @@ def codex_pr_commands_name_their_checkout(base):
     assert "33986" in codex("gh pr edit 5 --title x")
     assert "33986" in codex("command gh pr create --fill"), "a wrapper doesn't hide it"
     assert "33986" in codex("gh pr -R o/r create --fill"), "nor gh's --repo flag"
-    assert "33986" in codex("gh pr ready 12"), "marking ready checks the checkout too"
+    assert codex("gh pr ready 12") == "allow", "marking ready reads no checkout, so it needs no cd"
     # Each of these leaves the PR in the unknown workdir, or somewhere the gate would read differently.
     for command in ["cd sub && gh pr create --fill", f"cd {repo}; gh pr create --fill", f"false && cd {repo}; gh pr create --fill",
                     f"cd {repo} | gh pr create --fill", f"cd {repo} && cd - && gh pr create --fill", f"  cd {repo} && gh pr create --fill",

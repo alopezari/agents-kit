@@ -63,11 +63,11 @@ def builds_the_section_from_every_report(base):
     write(repo, "checks-guide", "# Checks guide\n\n## Before the merge (optional)\n\n### M1. Pay on a phone\n\n"
                                 "### M2. Refund in the [sandbox](https://pay.test)\n\n### M3. Try it in Safari\n\n"
                                 "## After the merge\n\n### P1. Backfill the totals\n\n**Where:** the agent, on this machine\n\n"
-                                "### P2. Watch the error log\n\n**Where:** you, on the production host\n\n"
+                                "### P2. Watch the error log\n\n**Where:** you, on the production host with ssh-agent running\n\n"
                                 "## Results (2026-09-30)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
                                 "| M1 | FAIL | m1.txt |\n| M2 | PASS | m2.txt |\n\n"
                                 "## Results (2026-10-01)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
-                                "| M1 | PASS | m1.txt |\n| M3 | NOT RUN | no Mac at hand |\n")
+                                "| M1 | PASS | m1.txt |\n| M2 | NOT RUN | run it again after the fix |\n| M3 | NOT RUN | no Mac at hand |\n")
     out = sh(repo, PR_VALIDATION)
     assert out.returncode == 0, out
     expected = """## Validation
@@ -83,7 +83,7 @@ def builds_the_section_from_every_report(base):
   - B1 NOT RUN: Admin list loads
   - Not run: B1 needs the payment sandbox.
 - Before the merge (optional): M1 Pay on a phone: PASS (2026-10-01).
-- Before the merge (optional): M2 Refund in the sandbox: PASS (2026-09-30).
+- Not run before the merge (optional): M2 Refund in the sandbox (you).
 - Not run before the merge (optional): M3 Try it in Safari (you).
 - After the merge: P1 Backfill the totals (agent).
 - After the merge: P2 Watch the error log (you).
@@ -137,6 +137,14 @@ def keeps_qualified_verdicts_and_bounded_sections(base):
     with open(sh(repo, REPORTS, "path", "checks-guide").stdout.strip(), "a") as fh:
         fh.write("\n## Results (2026-10-03)")
     assert "S1 Pay: PASS (2026-09-30)" in sh(repo, PR_VALIDATION).stdout, "an empty later round leaves the last result"
+    listed, brief = sh(repo, REPORTS).stdout, sh(repo, REPORTS, "brief").stdout
+    assert "### S1 Pay" in listed and "staging-guide-" in brief, "the listing and the brief show an older guide: " + brief
+    legacy = sh(repo, REPORTS, "path", "checks-guide").stdout.strip()
+    with open(legacy.replace("/staging-guide-", "/checks-guide-"), "w") as fh:
+        fh.write("# Checks guide\n\n## After the merge\n\n### P1. Backfill\n")
+    out = sh(repo, PR_VALIDATION).stdout
+    assert "staging-guide-" in legacy and "S1" not in out and "- After the merge: P1 Backfill (you).\n" in out, "a new guide wins over the older one: " + out
+    assert "### S1 Pay" not in sh(repo, REPORTS).stdout, "in the listing too"
 
 
 def a_guide_with_only_steps_after_the_merge_lists_them(base):
@@ -149,6 +157,18 @@ def a_guide_with_only_steps_after_the_merge_lists_them(base):
     out = sh(repo, PR_VALIDATION)
     assert out.stdout.endswith("- After the merge: P1 Load the job (agent).\n- After the merge: P2 One full run (you).\n"), \
         out.stdout
+    write(repo, "checks-guide", "# Checks guide\n\n## After the merge\n\n### P1. Load the job\n\nWhere: the agent, on this machine\n\n"
+                                "### P2. Restart it\n\n**Where:** you, in ~/.agents\n\n"
+                                "## Before the merge (optional)\n\n### M1. Pay on a phone\n\n"
+                                "## Results (2026-10-01)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
+                                "| P1a | PASS | p1a.txt |\n| P1b | PASS | p1b.txt |\n| P2a | PASS | p2a.txt |\n| P2b | FAIL | p2b.txt |\n")
+    out = sh(repo, PR_VALIDATION)
+    assert out.stdout.endswith("- Not run before the merge (optional): M1 Pay on a phone (you).\n"
+                               "- After the merge: P1 Load the job: PASS (2026-10-01).\n"
+                               "- After the merge: P2 Restart it: FAIL (2026-10-01).\n"), \
+        "sub-steps add up to their step, any FAIL failing it, and the steps before the merge come first: " + out.stdout
+    sh(repo, "sh", "-c", f"printf '| P1 | NOT RUN | |\\n' >> '{sh(repo, REPORTS, 'path', 'checks-guide').stdout.strip()}'")
+    assert "- After the merge: P1 Load the job (agent).\n" in sh(repo, PR_VALIDATION).stdout, "a plain Where: names its owner too"
 
 
 def says_when_the_guide_has_no_steps_or_cannot_be_read(base):
@@ -225,6 +245,8 @@ def names_the_phases_the_user_switched_off(base):
         out = section()
         assert out.returncode == 0 and "- Verify: skipped by the user (branch)." in out.stdout, out.stdout + out.stderr
         assert "A1" not in out.stdout and "1 PASS" not in out.stdout, f"a report from before the switch isn't shown: {out.stdout}"
+        write(repo, "checks-guide", "# Checks guide\n\n## After the merge\n\n### P1. Backfill\n")
+        assert "P1" not in section().stdout, "nor the checks guide validate wrote before it was switched off"
         switch("phase off claude-review global")
         assert "Claude-review" not in section().stdout, "Codex reviewed this Claude Code change: nothing was skipped"
         write(repo, "review", "Fixed:     x — a.py:1\nNot run:   cross-model, codex-review switched off by the user — /tmp/x\n")

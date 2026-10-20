@@ -1,7 +1,7 @@
 #!/bin/bash
-# Review and testing reports for the current repo and branch, stored next to the spec (outside the tree).
+# Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). A branch
+# with only a guide saved under its older name, staging-guide, reads it as its checks-guide.
 #   reports path <verify|review|validation|checks-guide|follow-pr>   where the stop hook or a skill saves that report
-#                                                    (checks-guide: a branch's older staging-guide file, when it has only that)
 #   reports path pr-body                             where create-pr and follow-pr save the PR description; left out of the listings
 #   reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 #   reports                                          every report that exists, with its path, the evidence, the phases off

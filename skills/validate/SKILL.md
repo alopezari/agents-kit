@@ -136,7 +136,7 @@ The guide holds the checks that couldn't run in step 4. What needs an environmen
   - **Expected:** the exact output, status code, UI text or log line, and **If not:** what it means and what to do next (retry, collect this output, stop and tell whom).
 - **Check every command you can** before handing it over: run it locally, or with a dry-run or `--help` for its flags, so a typo can't waste the user's time on a shared environment.
 - **Negative steps too,** including one that proves a positive result isn't a false positive: remove the new behavior's trigger and confirm the result changes.
-- **Warnings where they bite.** For example, a deploy to a shared environment that includes uncommitted work or overwrites a shared environment, or commands that would launch real runs. Use fake inputs (e.g. version `99.0.0-rc.1`) to exercise guards without real side effects.
+- **Warnings where they bite.** For example, a deploy that includes uncommitted work or overwrites a shared environment, or commands that would launch real runs. Use fake inputs (e.g. version `99.0.0-rc.1`) to exercise guards without real side effects.
 - **Anything that changes shared configuration** (repo variables, feature flags, production settings) is marked as the user's step, never run by you.
 - **Cleanup keeps the evidence.** "Put the environment back" undoes deploys and data, never `$EVIDENCE_DIR`: it is the results' proof.
 

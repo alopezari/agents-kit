@@ -17,7 +17,7 @@ parent of a stacked branch: branch_base), except the changelog, so committing st
 and any later edit invalidates it. Review and validate stamps hold the branch's diff, so merging the default branch
 keeps them unless it moves the changed lines or their context; verify's holds the files' content, so the tests run again. Stamps live in the repository's shared git dir, per branch
 (.git/agents/stamps/<branch key>/), never in the tree: they survive removing the worktree they were
-written in, so the PR can be opened from the main checkout. They also follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
+written in, so they are still read from the main checkout once create-pr frees the branch. They also follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
 """
 import hashlib
 import json
@@ -38,6 +38,8 @@ NOT_BEHAVIOR = re.compile(
 # CI checks the changelog entry, and it is often written last: adding it re-runs nothing.
 NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?\Z|(^|/)changelog\.d/[^/]+\.md\Z", re.I)
 VERIFY_KINDS = ("verify", "verify-empty")
+STAMP_KINDS = ("review", "validate", *VERIFY_KINDS)
+COMMANDS = ("check", "write", "base", "branch-key", "follow-renames", "needs-validate")
 
 
 def git(*args, cwd=None):
@@ -408,6 +410,11 @@ def main():
     args = sys.argv[1:]
     kind = args[args.index("--kind") + 1] if "--kind" in args else "review"
     command = args[0] if args else "check"
+    if command not in COMMANDS or kind not in STAMP_KINDS:
+        print(f"Unknown {'command' if command not in COMMANDS else 'stamp kind'} "
+              f"`{command if command not in COMMANDS else kind}`: the commands are {', '.join(COMMANDS)}, "
+              f"and the kinds {', '.join(STAMP_KINDS)}.", file=sys.stderr)
+        return 2
     if command == "write" and kind in VERIFY_KINDS:
         print("A verify stamp comes only from running verify: run `python3 ~/.agents/hooks/stop_checks.py verify`, "
               "which stamps the change when it passes.", file=sys.stderr)

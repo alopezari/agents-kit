@@ -454,8 +454,8 @@ def time_left():
 
 
 def pr_checkout(command, cwd):
-    """The checkout `gh pr create` or `gh pr ready` acts on: a `cd <dir>` before it, else the worktree holding --head."""
-    before = re.split(r"\b" + GH_PR + r"(?:" + PR_CREATE + r"|ready)\b", command)[0]
+    """The checkout `gh pr create` acts on: a `cd <dir>` before it, else the worktree holding --head."""
+    before = re.split(r"\b" + GH_PR + PR_CREATE + r"\b", command)[0]
     cds = re.findall(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before)
     runs_in = cwd
     for target in cds:
@@ -660,7 +660,7 @@ def unreviewed_pr(command, cwd):
 ABSOLUTE_CD_FIRST = re.compile(r"""cd[ \t]+((?:~[\w.-]*)?/[^\s;&|()$`'"\\*?\[]*|"/[^"$`\\]*"|'/[^']*')[ \t]*&&""")
 # Anywhere, not only in command position: a wrapper, `then` or `{` in front must not hide it, and a false match only
 # asks for the cd form.
-GH_PR_WORDS = re.compile(r"\b" + GH_PR + r"(create|new|edit|ready)\b([^;&|\n]*)")
+GH_PR_WORDS = re.compile(r"\b" + GH_PR + r"(create|new|edit)\b([^;&|\n]*)")
 CD_WORD = re.compile(r"(?<![\w/.-])(?:cd|pushd|popd)(?![\w/.-])")
 
 
@@ -669,7 +669,7 @@ def pr_checkout_unknown(command, payload):
     checks would judge the wrong checkout unless the command starts by cd-ing to an existing absolute path, and
     neither cds again nor backgrounds the chain. Guards against a model's slip, not a hostile one."""
     code = shell_code(command)
-    if harness(payload) != "codex" or not any(m.group(1) in ("edit", "ready") or not {"--help", "-h"} & set(pr_args(command, m, 2))
+    if harness(payload) != "codex" or not any(m.group(1) == "edit" or not {"--help", "-h"} & set(pr_args(command, m, 2))
                                               for m in GH_PR_WORDS.finditer(code)):
         return None
     first = ABSOLUTE_CD_FIRST.match(command)

@@ -214,7 +214,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | The phases switched off, with their scope, also on the default branch | `bin/phase switches` |
 |  | `/flow off\|on <phase> [--repo\|--global]`, typed at the prompt, switches a phase for the branch, the repo or every repo | a message whose first line is `phase off\|on <phase> [branch\|repo\|global]` |
 |  | `/flow review-rounds <0-9> [--repo\|--global]`, typed at the prompt, sets how many re-checks the self-review runs after its first pass (1 when unset) | a message whose first line is `review-rounds <0-9> [branch\|repo\|global]`; `bin/phase review-rounds` reads it |
-|  | Follows the branch into the main checkout once validate detaches the session's own | the commands of this list, run from the main checkout |
+|  | Follows the branch into the main checkout once create-pr detaches the session's own | the commands of this list, run from the main checkout |
 |  | Stamps (verify, self-review, validate), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
 |  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
 |  | CI of the pushed HEAD | `bin/ci-wait --once --no-log` |
@@ -314,7 +314,7 @@ quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --cate
 
 **`bin/repo-name`**: Print the repository's name as the kit knows it: the main checkout's directory name, the same from any worktree (Xirp, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.
 
-**`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). (checks-guide: a branch's older staging-guide file, when it has only that)
+**`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). A branch with only a guide saved under its older name, staging-guide, reads it as its checks-guide.
 
 ```
 reports path <verify|review|validation|checks-guide|follow-pr>   where the stop hook or a skill saves that report

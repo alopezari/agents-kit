@@ -106,34 +106,39 @@ def validation_lines(text):
     return [public(line) for line in lines]
 
 
-STEP = r"([MSP]\d+)\b"  # S: a step before the merge in a guide from before checks-guide
+STEP = r"([MSP]\d+)[a-z]*\b"  # S: a step before the merge in a guide from before checks-guide; M3a: a sub-step of M3
 
 
 def checks_lines(text, evidence):
     """One line per step of the checks guide: its latest PASS or FAIL with that table's date, else who runs it."""
     steps = {}
+    # A step ends at the next heading of any level; a results table only at the next `## `, past its own lines.
     for step, name, body in re.findall(rf"^### {STEP}\.?[ \t]*([^\n]*)\n?(.*?)(?=^##|\Z)", text, re.M | re.S):
-        where = re.search(r"\*\*Where:?\*\*:?([^\n]*)", body)
-        steps[step] = {"name": name.strip(), "owner": "agent" if where and "agent" in where.group(1) else "you"}
+        where = re.search(r"^[-*\s]*(?:\*\*)?Where:?(?:\*\*)?:?\s*the agent\b", body, re.M)
+        steps[step] = {"name": name.strip(), "owner": "agent" if where else "you"}
+    # Every results table counts, ship's `## Results after the deploy` too; a later NOT RUN asks for the step again.
     for heading, table in re.findall(r"^## Results([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S):
         when = re.search(r"\(([^)]*)\)", heading)
+        results = {}
         for first, result, _, _ in review_stamp.result_rows(table.splitlines(), evidence):
             step = re.match(r"[*_]*" + STEP, first)
-            if step and result != "NOT RUN":
-                steps.setdefault(step.group(1), {"name": "", "owner": "you"})["result"] = \
-                    result + (f" ({when.group(1)})" if when else "")
+            if step:  # a step's sub-steps add up: any FAIL fails it, any NOT RUN leaves it to run
+                results.setdefault(step.group(1), set()).add(result)
+        for step, found in results.items():
+            result = next(r for r in ("FAIL", "NOT RUN", "PASS") if r in found)
+            steps.setdefault(step, {"name": "", "owner": "you"})["result"] = \
+                None if result == "NOT RUN" else result + (f" ({when.group(1)})" if when else "")
     if not steps:
         return ["- Checks guide: no steps."]
     lines = []
-    for step, info in steps.items():
-        section = "After the merge" if step.startswith("P") else "Before the merge (optional)"
+    for step, info in sorted(steps.items(), key=lambda item: item[0].startswith("P")):
+        after = step.startswith("P")
         named = f"{step} {info['name']}".strip()
-        if "result" in info:
-            lines.append(f"- {section}: {named}: {info['result']}.")
+        if info.get("result"):
+            lines.append(f"- {'After the merge' if after else 'Before the merge (optional)'}: {named}: {info['result']}.")
         else:
-            lines.append(f"- {'Not run before the merge (optional)' if section != 'After the merge' else section}: "
-                         f"{named} ({info['owner']}).")
-    return [public(line) for line in sorted(lines, key=lambda line: line.startswith("- After"))]
+            lines.append(f"- {'After the merge' if after else 'Not run before the merge (optional)'}: {named} ({info['owner']}).")
+    return [public(line) for line in lines]
 
 
 def main():
@@ -153,8 +158,8 @@ def main():
     lines += review_lines(shown[review]) if shown.get(review) is not None else []
     if shown.get(validation) is not None:
         lines += validation_lines(shown[validation])
-    try:
-        checks = read(guide)
+    try:  # validate writes the guide, so one from before validate was switched off may be stale too
+        checks = read(guide) if "validate" not in off else None
     except (OSError, UnicodeDecodeError) as error:  # shown, not fatal: the guide only informs the user's decision
         lines.append(public(f"- Checks guide unreadable: {error}."))
     else:
