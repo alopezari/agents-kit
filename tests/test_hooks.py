@@ -396,6 +396,57 @@ def guard_reads_code_not_text(base):
     assert guard(long + "EOF\ngit branch -D old") == "deny" and child_cpu() - started < 3, "the whole long command is read"
 
 
+def guard_reads_through_wrappers_and_scripts(base):
+    for cmd in ["env X=1 sudo ls", "env sudo ls", "X=1 sudo ls", "time sudo ls", "command sudo ls", "nohup sudo ls",
+                "env -i PATH=/bin sudo ls", "if true; then env sudo ls; fi", "(X=1 sudo ls)",
+                "env rm -rf /usr", "env -i rm -rf /usr", "nohup rm -rf /usr", "then env rm -rf /usr", "X=1 rm -rf /usr",
+                "exec rm -rf /usr", "env -u HOME nohup rm -rf /usr", "(env rm -rf /usr)"]:
+        assert guard(cmd) == "deny", f"the wrapper runs it all the same: {cmd!r}"
+    for cmd in ["env X=1 rm -rf /tmp/x", "env ls", "nohup rm -rf /tmp/x", "X=1 ls", "echo sudo", "time ls",
+                "grep -n 'env sudo' notes.md"]:
+        assert guard(cmd) == "allow", f"nothing guarded runs: {cmd!r}"
+    for cmd in ["env -C / rm -rf usr", "env --chdir=/ rm -rf usr", "env -C/ rm -rf usr"]:
+        assert guard(cmd, cwd="/usr/lib") == "deny", f"env -C moves the rm like a cd: {cmd!r}"
+    assert guard("env -C /tmp rm -rf x", cwd="/usr/lib") == "allow"
+    for cmd in ["bash -c 'rm -rf /usr'", "eval 'rm -rf /usr'", "echo 'rm -rf /usr' | bash", "sh -c \"cd / && rm -rf usr\"",
+                "python3 -c 'import os; os.system(\"rm -rf /usr\")'"]:
+        assert guard(cmd) == "deny", f"a recursive delete in text that runs: {cmd!r}"
+    for cmd in ["grep -n 'rm -rf /usr' notes.md", "echo 'rm -rf /usr'", "git commit -m 'drop rm -rf /usr'",
+                "bash -c 'rm -rf /tmp/x'", "python3 -c 'print(\"rm -rf /usr\")'"]:
+        assert guard(cmd) == "allow", f"a delete only mentioned, or a safe one: {cmd!r}"
+
+    for cmd in ["printf 'rm -rf /usr\\n' > /tmp/x.sh && bash /tmp/x.sh",
+                "echo 'git branch -D old' > /tmp/x.sh; sh /tmp/x.sh",
+                "python3 - <<'EOF'\nopen('/tmp/x.sh', 'w').write('git branch -D old')\nEOF\nbash /tmp/x.sh",
+                "cat > /tmp/deploy <<'EOF'\ngit branch -D old\nEOF\nchmod +x /tmp/deploy && /tmp/deploy",
+                "cat > deploy <<'EOF'\ngit branch -D old\nEOF\nchmod +x deploy && ./deploy",
+                "cat > /tmp/p.py <<'EOF'\nimport os\nos.system('git branch -D old')\nEOF\npython3 /tmp/p.py",
+                "tee /tmp/x.js <<'EOF'\nrequire('child_process').execSync('git branch -D old')\nEOF\nnode /tmp/x.js",
+                "echo 'rm -rf /usr' 2>&1 | bash", "echo 'git branch -D old' 2>/dev/null >&2 | sh",
+                "cat <<'E' 2>&1 | bash\ngit branch -D old\nE", "printf 'git branch -D old' &>/dev/null | bash"]:
+        assert guard(cmd) == "deny", f"text written, then run: {cmd!r}"
+    for cmd in ["cat > notes.md <<'EOF'\ngit branch -D old\nEOF\ngit add notes.md",
+                "echo 'rm -rf /usr' 2>&1", "echo 'git branch -D old' >&2", "echo 'rm -rf /usr' &> /tmp/log",
+                "printf 'git branch -D old' > /tmp/n.md && cat /tmp/n.md",
+                "cat > /tmp/n.md <<'EOF'\ngit branch -D old\nEOF\npython3 -c 'print(1)'",
+                "cat > /tmp/n.md <<'EOF'\ngit branch -D old\nEOF\npython3 report.py",
+                "echo 'git branch -D old' > notes.md && node build.js"]:
+        assert guard(cmd) == "allow", f"text that nothing runs: {cmd!r}"
+
+    for cmd in ["python3 -c 'import asyncio; asyncio.create_subprocess_shell(\"git branch -D old\")'",
+                "python3 -c 'asyncio.create_subprocess_exec(*\"git reset --hard\".split())'",
+                "ruby -e 'Open3.capture2(\"git branch -D old\")'", "ruby -e 'spawn(\"git branch -D old\")'",
+                "ruby -e '%x(git branch -D old)'", "perl -e 'qx{git branch -D old}'",
+                "perl -e 'exec \"git branch -D old\"'", "ruby -e 'system \"git branch -D old\"'",
+                "python3 -c 'duckdb.sql(\"DROP TABLE x\")'", "node -e 'knex.raw(\"DROP TABLE x\")'",
+                "node -e 'prisma.$executeRaw(\"DROP TABLE x\")'", "node -e 'prisma.$queryRawUnsafe(\"DROP TABLE x\")'"]:
+        assert guard(cmd) == "deny", f"a process or SQL call: {cmd!r}"
+    for cmd in ["python3 -c 'print(\"git branch -D old\")'", "ruby -e 'puts \"git branch -D old\"'",
+                "perl -e 'print \"git branch -D old\"'", "node -e 'console.log(\"DROP TABLE x\")'",
+                "python3 -c 'x = \"DROP TABLE x\"'"]:
+        assert guard(cmd) == "allow", f"text a program only prints: {cmd!r}"
+
+
 def guard_mcp_linear(base):
     os.makedirs(os.path.join(base, "profiles", "work"))
     json.dump({"gateways": [{"tool": "gateway__execute$", "service_field": "provider", "operation_fields": ["subtool"],
@@ -973,7 +1024,8 @@ def pr_gate_review_and_validation(base):
             "command gh pr create --fill", "env GH_HOST=x gh pr create --fill", "env -i PATH=/bin gh pr create --fill",
             "nohup gh pr create --fill", "time gh pr create --fill", "exec gh pr create --fill", "command -- gh pr create --fill",
             "env -u GH_TOKEN gh pr create --fill", "exec -a gh gh pr create --fill", "time -f %E gh pr create --fill",
-            "exec -aSlip gh pr create --fill", "env -uGH_TOKEN gh pr create --fill"]
+            "exec -aSlip gh pr create --fill", "env -uGH_TOKEN gh pr create --fill", "gh pr new --fill",
+            "env X=1 gh pr new --fill"]
     for command in runs:
         assert guard(command, repo) == "deny", f"the shell runs gh here: {command!r}"
     inert = ["cat <<EOF\n EOF\ngh pr create --fill\nEOF", "cat <<'END-MARK'\ngh pr create --fill\nEND-MARK",
@@ -992,6 +1044,7 @@ def pr_gate_review_and_validation(base):
     assert guard("env X=1 evidence A1 gh pr create --fill", repo) == "deny"
     write_stamp(repo, "validate")
     assert guard("gh pr create --fill", repo) == "allow"
+    assert guard("gh pr new --fill", repo) == "allow", "gh's alias passes the same gate"
     open(os.path.join(repo, "CHANGELOG.md"), "w").write("- A line (#12).\n")
     assert guard("gh pr create --fill", repo) == "allow", "the changelog line CI checks doesn't invalidate the stamps"
     os.makedirs(os.path.join(repo, "changelog.d"))
@@ -1338,6 +1391,9 @@ def pr_gate_follows_worktrees(base):
         write_stamp(wt, kind)
     assert guard(f"cd {wt} && gh pr create --fill", main) == "allow"
     assert guard("gh pr create --head feat/x --fill", main) == "allow"
+    open(os.path.join(main, "app.py"), "a").write("z = 3\n")
+    assert guard("gh pr new --fill", main) == "deny"
+    assert guard("gh pr new --head feat/x --fill", main) == "allow", "gh's alias acts on the --head worktree too"
 
 
 def codex_pr_commands_name_their_checkout(base):
@@ -1369,6 +1425,9 @@ def codex_pr_commands_name_their_checkout(base):
                     "env GH_HOST=github.com gh pr create --fill", "if true; then gh pr create --fill; fi", "{ gh pr edit 5 --title x; }",
                     f"cd {repo} && {{ cd /tmp; gh pr create --fill; }}", f"cd {repo} && command cd /tmp && gh pr create --fill"]:
         assert "33986" in codex(command), f"the PR's checkout isn't the one checked: {command!r}"
+    assert "33986" in codex("gh pr new --fill"), "gh's alias for create"
+    for command in ["gh pr create --help", "gh pr new -h"]:
+        assert codex(command) == "allow", f"help opens no PR: {command!r}"
     assert codex(f"cd {repo} && gh pr create --fill") == "allow"
     assert codex(f'cd "{repo}" && git push && gh pr create --fill') == "allow"
     assert codex("gh pr view 5") == "allow", "only the commands the PR checks judge"
@@ -2902,7 +2961,7 @@ def a_stacked_branch_is_measured_against_its_parent(base):
 TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, a_review_rounds_line_sets_the_re_checks_by_scope,only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
-         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
+         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,

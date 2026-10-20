@@ -31,6 +31,16 @@ import private_terms  # noqa: E402
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
 
+# What can stand before a command's name and still run it: VAR=value assignments, and wrappers that run their
+# arguments, with the options that take a value. Each piece matches one way only: an ambiguous one backtracks
+# exponentially on a long env line and runs past the hook's timeout.
+ASSIGNMENT = r"""\w+=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+"""
+PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+)?"
+            r"|exec\s+(?:-a(?:\s+\S+|\S+)\s+|-[cl]+\s+|--\s+)*|time\s+(?:-[fo](?:\s+\S+|\S+)\s+|-[pv]+\s+|--\s+)*"
+            r"|env\s+(?:-[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir)=\S+\s+|-[i0v]+\s+|--\s+|-\s+)*)*")
+# Where a command starts: after a separator, or after a shell keyword or brace (`then gh pr ready`, `{ gh pr ready; }`).
+COMMAND_START = r"(?:^|[;&|(\n`{]|\b(?:then|do|else|elif|if|while|until)\b|!)\s*"
+
 GIT = r"\bgit\s+(?:(?:-C|-c)\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
 PROTECTED_BRANCHES = r"(main|master|trunk|develop|production|release(/[\w.-]+)?)"
 DATABASE_STATEMENT = r"\bDROP{space}+(DATABASE|TABLE|SCHEMA)\b|\bTRUNCATE{space}+TABLE\b"
@@ -65,7 +75,7 @@ RULES = [
                        "`allow DROP DATABASE` (or the statement needed)."),
     (r"\bwp\s+(db\s+(drop|reset|clean)|site\s+(empty|delete))\b", "`wp db drop|reset|clean`, `wp site empty|delete`: destroys WordPress data."),
     (r"\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z)?sh\b", "`curl … | sh`: pipes a download straight into a shell."),
-    (r"(^|[;&|]\s*)sudo\b", "`sudo`: runs with root privileges."),
+    (COMMAND_START + PREFIXES + r"sudo\b", "`sudo`: runs with root privileges."),
     (r"\b(make|npm\s+run|pnpm(\s+run)?|yarn(\s+run)?|composer(\s+run)?)\s+[\w:.-]*(deploy|release|sync_db|ssh_prod)",
      "`make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production."),
     (r"\bchmod\s+(-R\s+)?777\b", "`chmod 777`: world-writable permissions."),
@@ -265,8 +275,7 @@ def dangerous_rm(command, cwd):
             tokens = [expand(t, values) for t in shlex.split(stripped.lstrip("(").rstrip(")"))]
         except ValueError:
             tokens = []
-        while tokens and tokens[0] in ("builtin", "command", "{", "then", "do", "else", "!", "time"):
-            tokens = tokens[1:]
+        tokens, chdir = run_words(tokens)
         if tokens and tokens[0] in ("cd", "pushd"):
             args = [t for t in tokens[1:] if t == "-" or not t.startswith("-")]
             target = (args[0] if args else "~").replace("${HOME}", "~").replace("$HOME", "~")
@@ -277,12 +286,46 @@ def dangerous_rm(command, cwd):
         elif tokens and os.path.basename(tokens[0]) == "rm":
             flags = "".join(t.lstrip("-") for t in tokens[1:] if t.startswith("-") and not t.startswith("--"))
             if "r" in flags.lower() or "--recursive" in tokens:
-                denied = dangerous_rm_targets([t for t in tokens[1:] if t and not t.startswith("-")], here, cwd)
+                runs_in = here if chdir is None or here is None and not os.path.isabs(chdir) else cd_into(here or cwd, chdir)
+                denied = dangerous_rm_targets([t for t in tokens[1:] if t and not t.startswith("-")], runs_in, cwd)
                 if denied:
                     return denied
         for _ in range(len(stripped) - len(stripped.rstrip(")"))):
             here = outer.pop() if outer else here
+    for script in runnable_strings(command):  # bash -c '…', eval, echo '…' | sh: judged from cwd, which only denies more
+        denied = dangerous_rm(script.replace("\\n", "\n"), cwd)
+        if denied:
+            return denied
     return None
+
+
+# Wrappers that run the rest of their words, with their options that take a value (`env -u NAME`, `exec -a NAME`).
+WRAPPER_VALUE_OPTIONS = {"env": "uCS", "time": "fo", "exec": "a", "command": "", "nohup": ""}
+
+
+def run_words(tokens):
+    """The words the shell runs once the keywords, VAR=value assignments and wrappers before them step aside, and the
+    directory `env -C` runs them in (None when no wrapper moves)."""
+    chdir, i = None, 0
+    while i < len(tokens):
+        word = tokens[i]
+        i += 1
+        if word in WRAPPER_VALUE_OPTIONS:
+            while i < len(tokens) and tokens[i].startswith("-"):
+                option = tokens[i]
+                i += 1
+                if option == "--":
+                    break
+                if option.startswith("--chdir="):
+                    chdir = option[len("--chdir="):]
+                elif len(option) > 1 and option[1] in WRAPPER_VALUE_OPTIONS[word]:
+                    value = option[2:] or (tokens[i] if i < len(tokens) else "")
+                    i += not option[2:]
+                    chdir = value if option[1] == "C" else chdir
+        elif word not in ("builtin", "{", "then", "do", "else", "elif", "if", "while", "until", "!") \
+                and not re.fullmatch(r"\w+=.*", word, re.S):
+            return tokens[i - 1:], chdir
+    return [], chdir
 
 
 def dangerous_rm_targets(targets, here, cwd):
@@ -347,7 +390,7 @@ def time_left():
 
 def pr_checkout(command, cwd):
     """The checkout `gh pr create` or `gh pr ready` acts on: a `cd <dir>` before it, else the worktree holding --head."""
-    before = re.split(r"\b" + GH_PR + r"(?:create|ready)\b", command)[0]
+    before = re.split(r"\b" + GH_PR + r"(?:" + PR_CREATE + r"|ready)\b", command)[0]
     cds = re.findall(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before)
     runs_in = cwd
     for target in cds:
@@ -441,13 +484,6 @@ def shell_code(command):
     return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(masked) else masked
 
 
-# What can stand before a command's name and still run it: VAR=value assignments, and wrappers that run their
-# arguments, with the options that take a value. Each piece matches one way only: an ambiguous one backtracks
-# exponentially on a long env line and runs past the hook's timeout.
-ASSIGNMENT = r"""\w+=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+"""
-PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+)?"
-            r"|exec\s+(?:-a(?:\s+\S+|\S+)\s+|-[cl]+\s+|--\s+)*|time\s+(?:-[fo](?:\s+\S+|\S+)\s+|-[pv]+\s+|--\s+)*"
-            r"|env\s+(?:-[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir)=\S+\s+|-[i0v]+\s+|--\s+|-\s+)*)*")
 # bin/evidence <id> runs the rest of its line. A one-character lookbehind, with its path cut in Python: a path
 # pattern tried after every separator was quadratic on a long line.
 EVIDENCE_RUNNER = re.compile(r"(?<![^\s;&|(`/])evidence\s+(['\"]?)[A-Za-z0-9][\w.-]*\1\s+")
@@ -467,11 +503,10 @@ def without_evidence_runner(command):
 ENV_CLEARED = re.compile(r"\benv\s+(?:\S+\s+)*?(?:-[0v]*i[0v]*|--ignore-environment|-)\s")
 
 
-# Where a command starts: after a separator, or after a shell keyword or brace (`then gh pr ready`, `{ gh pr ready; }`).
-COMMAND_START = r"(?:^|[;&|(\n`{]|\b(?:then|do|else|elif|if|while|until)\b|!)\s*"
 # gh's --repo may come before or after `pr`, attached or not: `gh -R owner/repo pr ready 12`, `gh pr -Rowner/repo ready`.
 REPO_FLAG = r"(?:(?:-R|--repo)(?:=|\s+)?\S+\s+)?"
 GH_PR = r"gh\s+" + REPO_FLAG + r"pr\s+" + REPO_FLAG
+PR_CREATE = r"(?:create|new)"  # `gh pr new` is gh's alias for create
 
 
 def pr_args(command, match, group):
@@ -523,7 +558,7 @@ def unreviewed_pr(command, cwd):
     targets, a validate stamp for a behavior change, and, unless it's a draft, the staging steps before the merge
     passed; each unless the user switched its phase off."""
     command = without_scripts(command)[0]
-    creates = [m for m in re.finditer(COMMAND_START + PREFIXES + GH_PR + r"create\b([^;&|\n]*)", shell_code(command))
+    creates = [m for m in re.finditer(COMMAND_START + PREFIXES + GH_PR + PR_CREATE + r"\b([^;&|\n]*)", shell_code(command))
                if not {"--help", "-h"} & set(pr_args(command, m, 1))]
     if not creates:
         return None
@@ -614,7 +649,7 @@ def unready_pr(command, cwd):
 ABSOLUTE_CD_FIRST = re.compile(r"""cd[ \t]+((?:~[\w.-]*)?/[^\s;&|()$`'"\\*?\[]*|"/[^"$`\\]*"|'/[^']*')[ \t]*&&""")
 # Anywhere, not only in command position: a wrapper, `then` or `{` in front must not hide it, and a false match only
 # asks for the cd form.
-GH_PR_WORDS = re.compile(r"\b" + GH_PR + r"(?:create|edit|ready)\b")
+GH_PR_WORDS = re.compile(r"\b" + GH_PR + r"(create|new|edit|ready)\b([^;&|\n]*)")
 CD_WORD = re.compile(r"(?<![\w/.-])(?:cd|pushd|popd)(?![\w/.-])")
 
 
@@ -623,7 +658,8 @@ def pr_checkout_unknown(command, payload):
     checks would judge the wrong checkout unless the command starts by cd-ing to an existing absolute path, and
     neither cds again nor backgrounds the chain. Guards against a model's slip, not a hostile one."""
     code = shell_code(command)
-    if harness(payload) != "codex" or not GH_PR_WORDS.search(code):
+    if harness(payload) != "codex" or not any(m.group(1) in ("edit", "ready") or not {"--help", "-h"} & set(pr_args(command, m, 2))
+                                              for m in GH_PR_WORDS.finditer(code)):
         return None
     first = ABSOLUTE_CD_FIRST.match(command)
     if first and os.path.isdir(os.path.expanduser(first.group(1).strip("\"'"))):
@@ -702,8 +738,9 @@ def line_layout(line):
         elif c == ")" and opened:
             closes[opened.pop()] = i
     substitutions = [(i - 1, closes.get(i)) for i in range(1, len(masked)) if masked[i - 1:i + 1] == "$("]
+    masked = REDIRECT_AMPERSAND.sub(" ", masked)
     starts = [0] + [m.end() for m in re.finditer(r"&&|\|\||[;|(&]", masked)]
-    ends = [m.start() for m in re.finditer(r"&&|\|\||[;&]", line)] + [len(line)]
+    ends = [m.start() for m in re.finditer(r"&&|\|\||[;&]", REDIRECT_AMPERSAND.sub(" ", line))] + [len(line)]
     return masked, substitutions, starts, ends, [i for i, c in enumerate(line) if c == "|"]
 
 
@@ -757,14 +794,14 @@ def without_prose(command):
     text = "\n".join(kept)
     if heredocs or RUNS_QUOTED_TEXT.search(text):
         return command  # a heredoc that never ends was only a mention of one
-    if had_prose and RUNS_SCRIPT_FILE.search(text):
-        return command  # the heredoc may have written the script it runs
+    if had_prose and RUNS_SCRIPT_FILE.search(text) or written_files(text) & files_run(text):
+        return command  # the heredoc or echo may have written the script it runs
 
     spans = quoted_spans(text)
     masked = list(text)
     for start, end in spans:
         masked[start:end] = "q" * (end - start)
-    masked = "".join(masked).replace(CONTINUATION, "  ")  # the lines a continuation joins are one command
+    masked = REDIRECT_AMPERSAND.sub(" ", "".join(masked).replace(CONTINUATION, "  "))  # continued lines are one command
     # Each command judged once: per string, its slice of a long command would make this quadratic. No cut at a
     # parenthesis: what an echo prints inside $(...) or <(...) is fed to another command.
     cuts = [0] + [i for m in re.finditer(r"&&|\|\||[;&\n]", masked) for i in m.span()] + [len(masked)]
@@ -793,15 +830,37 @@ INTERPRETER_RECEIVER = re.compile(LEADING_ASSIGNMENTS + INTERPRETER + r"(?:\s|$)
 # Interpreter code that starts a process: its strings may run as a command. Named only inside a string, it still
 # counts, which only denies more.
 SPAWNS = re.compile(r"\bos\.(?:system|exec\w*|spawn\w*)\b|\bsubprocess\b|\bpopen\b|child_process|"
-                    r"\bexec(?:[lv]p?e?)?\s*\(|(?<![\w-])system\s*[(\"'\[]|shell_exec|passthru|proc_open|pty\.spawn", re.I)
+                    r"\bexec(?:[lv]p?e?)?\s*[(\"'\[]|(?<![\w-])system\s*[(\"'\[]|shell_exec|passthru|proc_open|pty\.spawn|"
+                    r"create_subprocess_\w+|\bOpen3\b|\bspawn\s*\(|%x[{(\[|]|\bqx\s*[{(\[/|'\"]", re.I)
 SHELL_BACKTICKS = re.compile(r"ruby|perl|php")
 # The flag that makes an interpreter's next argument its code: its other arguments are data a script may run.
 CODE_FLAGS = {"python": "c", "node": "e|p|-eval|-print", "ruby": "e", "perl": "e|E", "php": "r"}
 SQL_USED = re.compile(r"\b(?:psql|mysqli?|mariadb|sqlite3|psycopg2?|pymysql)|\bwp\s+db\s+(?:query|cli)\b|\.(?:execute|query)\s*\(|"
-                      r"exec_driver_sql")
+                      r"exec_driver_sql|\bduckdb\b|\.raw\s*\(|\$(?:execute|query)Raw(?:Unsafe)?\b")
 # A command that runs a script file: a heredoc it writes to a file may be that script.
 RUNS_SCRIPT_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))\s*(?:(?:command|exec)\s+)?(?:(?:(?:/[\w.-]+)*/)?(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*[^\s<-]|source\s|\.\s+\S|"
                               r"\.{0,2}/\S+\.sh\b)")
+# A redirection's & (2>&1, >&2, &>) joins no commands.
+REDIRECT_AMPERSAND = re.compile(r"(?<=[<>])&|&(?=>)")
+# A file a command writes: the target of > or >> (not >&2 nor a process substitution), or of tee.
+WRITES_FILE = re.compile(r"(?:(?<![<>&])\d*>>?|&>>?|\btee\s+(?:-\w+\s+)*)(?![&>(|])\s*(['\"]?)(?P<file>[^\s;&|<>()'\"]+)\1")
+# The file a command runs: given to a shell, source or an interpreter, or run by its own path.
+RUNS_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))\s*(?:(?:command|exec|nohup)\s+)?(?P<runner>(?:(?:/[\w.-]+)*/)?(?:ba|z|da|k)?sh\s+"
+                       r"(?:-\w+\s+)*|source\s+|\.\s+|(?:/[\w.-]+)*/?(?:python[\d.]*|node|ruby|perl|php)\s+(?:-\w+\s+)*)?"
+                       r"(['\"]?)(?P<file>[^\s;&|<>()'\"-][^\s;&|<>()'\"]*)\2")
+
+
+def written_files(text):
+    """The files the text's commands write, as given (./ dropped); /dev/null and the like are not files."""
+    return {m.group("file").removeprefix("./") for m in WRITES_FILE.finditer(text) if not m.group("file").startswith("/dev/")}
+
+
+def files_run(text):
+    """The script files the text's commands run, as given (./ dropped): a bare name only when a runner is given it,
+    since a shell looks the name up in PATH."""
+    return {m.group("file").removeprefix("./") for m in RUNS_FILE.finditer(text) if m.group("runner") or "/" in m.group("file")}
+
+
 # Programs whose quoted arguments are only text: what they read, match or print.
 TEXT_PROGRAMS = READERS | {"sed", "git", "gh", "echo", "printf"}
 TEXT_HINT = ("The match is in quoted text or a heredoc body: the guard reads that text as a command because something "
@@ -852,10 +911,10 @@ def without_scripts(command):
     bodies = None if RUNS_QUOTED_TEXT.search(text) else read_heredocs(lines)
     if bodies is None:
         return text, None
-    in_body = set()
+    in_body, run = set(), {os.path.basename(f) for f in files_run(text)}
     for start, end, kind, _ in bodies:
         in_body.update(range(start, end))
-        if kind == "script":
+        if kind == "script" and not any(name in "\n".join(lines[start:end]) for name in run):  # it may write one
             lines[start:end] = [""] * (end - start)
     return "\n".join(lines), frozenset(in_body)
 
@@ -870,7 +929,7 @@ def blank_strings(text, in_body, text_in):
     masked = list(shell)
     for start, end in spans:
         masked[start:end] = "q" * (end - start)
-    masked = "".join(masked).replace(CONTINUATION, "  ")
+    masked = REDIRECT_AMPERSAND.sub(" ", "".join(masked).replace(CONTINUATION, "  "))
     cuts = [0] + [i for m in re.finditer(r"&&|\|\||[;&|\n]", masked) for i in m.span()] + [len(masked)]
     starts, out, judged = cuts[::2], list(shell), {}
     for start, end in spans:
@@ -920,7 +979,22 @@ def code_text(command):
     """The command as the RULES read it: without its prose, its interpreter scripts, and the strings of programs that
     only read or print them (text_strings())."""
     text, in_body = without_scripts(command)
-    return text if in_body is None else blank_strings(text, in_body, text_strings)
+    if in_body is None:
+        return text
+    run = files_run(text)
+
+    def text_in(segment, program, source):
+        if program in ("echo", "printf") and written_files(source) & run:
+            return lambda string: False  # it writes a script the command runs
+        return text_strings(segment, program, source)
+    return blank_strings(text, in_body, text_in)
+
+
+def runnable_strings(command):
+    """The inside of each quoted string code_text() keeps, which may run as a command, that holds an rm."""
+    text, code = without_scripts(command)[0], code_text(command)
+    return [text[a + 1:b - 1] for a, b in quoted_spans(text)
+            if code[a + 1:b - 1] == text[a + 1:b - 1] and re.search(r"\brm\s", text[a + 1:b - 1])]
 
 
 def bare_code(command):
@@ -1275,7 +1349,7 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
     def quote_around(pos):
         return next(((start, end) for start, end in spans if start < pos < end), None)
 
-    for match in re.finditer(r"(?:^|[;&|(\n`])\s*(" + PREFIXES + r")" + GH_PR + r"(?:create|edit)\b", code):
+    for match in re.finditer(r"(?:^|[;&|(\n`])\s*(" + PREFIXES + r")" + GH_PR + r"(?:" + PR_CREATE + r"|edit)\b", code):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
         # The cds are found in the code, where a quote may read as ; around eval's argument, and read from the command.
