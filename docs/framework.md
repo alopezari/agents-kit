@@ -312,7 +312,7 @@ prune-merged [--dry-run]
 **`bin/quality-log`**: Record what a review lens or test type produced, and what got past them, so the monthly job can keep only perspectives that pay off.
 
 ```
-quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--criteria N] [--map-items N] [--outcomes fixed=N,wrong=N,...]
+quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--shared N] [--criteria N] [--map-items N] [--outcomes fixed=N,wrong=N,...]
 quality-log test <type> --issues N [--secs S] [--notes "..."]
 quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 ```
@@ -323,6 +323,7 @@ quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --cate
 
 ```
 reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
+reports path pr-body                             where create-pr and follow-pr save the PR description; left out of the listings
 reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 reports                                          every report that exists, with its path, the evidence, the phases off
 reports brief                                    the phase and one line per report, to pick a branch up in a new session

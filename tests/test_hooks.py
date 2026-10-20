@@ -1126,11 +1126,16 @@ def reports_brief_gives_one_line_per_report(base):
     open(path("validation"), "w").write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
                                          "| A1 | a PASS | + | **PASS** | e |\n| A2 | b | - | FAIL | e |\n|A3|c|+|NOT RUN|-|\n")
     open(path("follow-pr"), "w").write("## Run 1\nStatus:  waiting on CI\n## Run 2\nStatus:  ready to merge\n")
+    open(path("pr-body"), "w").write("Totals now round once.\n")
     shown = subprocess.run([reports, "brief"], cwd=repo, capture_output=True, text=True).stdout
     for line in ("Round prices once", "Self-review (risk: standard)", "Open:     the 0.005 case", "1 PASS, 1 FAIL, 1 NOT RUN",
                  "Status:  ready to merge", path("review")):
         assert line in shown, (line, shown)
     assert "detail" not in shown and "waiting on CI" not in shown and len(shown.splitlines()) < 20, shown
+    listed = subprocess.run([reports], cwd=repo, capture_output=True, text=True).stdout
+    assert "Self-review (risk: standard)" in listed, listed
+    assert all("pr-body" not in out and "Totals now round once" not in out for out in (shown, listed)), \
+        "the PR description isn't a report"
     open(path("review"), "w").write("Self-review\n")
     open(path("follow-pr"), "w").write("## Run 1\n")
     done = subprocess.run([reports, "brief"], cwd=repo, capture_output=True, text=True)
@@ -1144,12 +1149,21 @@ def reports_reads_another_branch(base):
     def run(*args, cwd=main):
         return subprocess.run([reports, *args], cwd=cwd, capture_output=True, text=True)
     git(main, "switch", "-q", "-c", "feat/ship")
-    on_branch = {kind: run("path", kind).stdout.strip() for kind in ("staging-guide", "evidence")}
+    on_branch = {kind: run("path", kind).stdout.strip() for kind in ("staging-guide", "evidence", "pr-body")}
+    assert os.path.basename(on_branch["pr-body"]) == "pr-body-main-feat~ship.md", on_branch
     open(on_branch["staging-guide"], "w").write("# Checks after the merge\n")
     open(os.path.join(on_branch["evidence"], "P1.txt"), "w").write("loaded\n")
     git(main, "switch", "-q", "trunk")
     wt = os.path.join(base, "wt")
     git(main, "worktree", "add", "-q", "-b", "other", wt, "trunk")
+    assert run("path", "pr-body", cwd=wt).stdout.strip() == on_branch["pr-body"].replace("feat~ship", "other"), \
+        "each branch has its own PR description"
+    git(wt, "switch", "-q", "--detach")
+    detached = run("path", "pr-body", cwd=wt)
+    assert detached.returncode == 2 and "needs a branch" in detached.stderr and not detached.stdout, \
+        f"detached checkouts would share one description: {detached}"
+    assert run("--branch", "feat/ship", "path", "pr-body", cwd=wt).stdout.strip() == on_branch["pr-body"]
+    git(wt, "switch", "-q", "other")
     for cwd in (main, wt):
         for kind, path in on_branch.items():
             got = run("--branch", "feat/ship", "path", kind, cwd=cwd)
