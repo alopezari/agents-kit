@@ -1,0 +1,2 @@
+- A long run now ends with Status, What it does and How sure before Blocked on me, Changed and Found, and Review and testing gives each report's verdict and counts in chat, leaving the full tables in the report files.
+- Coming back to a session after 8 hours or more, the agent first runs `reports brief` and opens its reply with the task's status, what it does and how sure it is, or says the status is unknown and why.

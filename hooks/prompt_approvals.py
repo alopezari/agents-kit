@@ -17,7 +17,11 @@ Only the user's own messages reach this hook, so an agent can't grant itself one
 user has to accept it. Mentioning the service only to read from it approves writes for that turn too.
 The objects guard_mcp.py records a session's approved writes to outlast the user's messages: this hook only deletes
 the ones older than guard_mcp.OBJECT_APPROVAL_HOURS.
+When the message arrives RETURN_GAP_HOURS or more after the newest conversation entry in the transcript's tail, the
+hook tells the agent to run `~/.agents/bin/reports brief` and open its reply with Status, What it does and How sure.
+It runs no report itself, and a tail it can't read only leaves that out (logged as return-gap-unreadable).
 """
+import datetime
 import json
 import os
 import re
@@ -33,6 +37,16 @@ from hooklog import log  # noqa: E402
 
 STALE_SECONDS = 24 * 3600
 TRANSCRIPT_TAIL_BYTES = 256 * 1024  # this hook runs on every message: a transcript grows to hundreds of MB
+RETURN_GAP_HOURS = 8  # longer than a lunch or a meeting; the "is it done?" questions came after nights and weekends
+RETURN_TAIL_BYTES = 64 * 1024  # smaller than the approvals' tail: this one is read on every message
+# Codex events that mark the conversation itself; task_started and the like are written as the new message arrives.
+CODEX_CONVERSATION_EVENTS = {"task_complete", "agent_message", "user_message", "turn_aborted"}
+RETURN_BRIEF = (
+    "The user is back after {hours:.0f} hours away. Before answering, run `~/.agents/bin/reports brief` from the "
+    "checkout of the branch this conversation was about (`~/.agents/bin/reports --branch <branch> brief` when that "
+    "checkout is gone or detached), and open your reply with **Status**, **What it does** and **How sure** for that "
+    "task, as AGENTS.md's Communication section describes them. When the brief fails or finds no reports, say the "
+    "status is unknown, and why.")
 # Written without accents, as plain() leaves text. An offer's verb opens its phrase ("¿la creo?", "¿quieres que la
 # cree?", "¿puedo crearla?", "want me to create…?"); a verb that offers a read as often ("abro", "open", "make", "log",
 # "dejo") is left out, and so are orders that as often revise the draft ("cambia", "add", "edit"): those approve nothing.
@@ -178,6 +192,52 @@ def offered_services(message, services):
     return named(question[question.rfind("¿") + 1:]) or named(question)
 
 
+def hours_away(transcript, prompt):
+    """Hours from the newest conversation entry in the transcript's tail, other than the user's `prompt` already
+    written, until now; None when the tail holds no such entry. Harness entries (attachments, hook output) don't
+    count: they can be written as the prompt arrives. Raises OSError, and ValueError on a corrupt tail."""
+    with open(transcript, "rb") as fh:
+        skipped = max(0, os.fstat(fh.fileno()).st_size - RETURN_TAIL_BYTES)
+        fh.seek(skipped)
+        tail = fh.read(RETURN_TAIL_BYTES)
+    if skipped:
+        tail = tail.partition(b"\n")[2]  # the line the tail cut into
+    try:
+        lines = tail.decode().splitlines()
+    except UnicodeDecodeError:
+        raise ValueError("the transcript isn't UTF-8") from None
+    for number, line in enumerate(reversed(lines)):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except (ValueError, RecursionError):
+            raise ValueError(f"line {len(lines) - number} of the tail doesn't parse") from None
+        if not isinstance(entry, dict):
+            raise ValueError(f"line {len(lines) - number} of the tail isn't an entry")
+        event = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+        if entry.get("type") == "event_msg":  # Codex
+            if event.get("type") not in CODEX_CONVERSATION_EVENTS or (
+                    event.get("type") == "user_message" and str(event.get("message") or "").strip() == prompt.strip()):
+                continue
+        elif entry.get("type") in ("user", "assistant") and not entry.get("isSidechain") and not entry.get("isMeta"):
+            content = entry["message"].get("content") if isinstance(entry.get("message"), dict) else None
+            texts = [content] if isinstance(content, str) else [
+                b.get("text") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
+            if entry["type"] == "user" and any(isinstance(t, str) and t.strip() == prompt.strip() for t in texts):
+                continue
+        else:
+            continue
+        try:
+            at = datetime.datetime.fromisoformat(str(entry.get("timestamp")).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if at.tzinfo is None:
+            continue  # a time with no zone could be hours off either way
+        return (time.time() - at.timestamp()) / 3600
+    return None
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -230,9 +290,22 @@ def main():
         log("prompt_approvals", "approve-turn", payload, ",".join(named))
     import phase_switches  # after the clearing, like guard_bash
     switched = phase_switches.apply_phase_line(prompt, payload.get("cwd") or os.getcwd())
+    told = []
     if switched:
         log("prompt_approvals", "phase-switch", payload, switched)
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": switched}}))
+        told.append(switched)
+    if transcript:
+        try:
+            hours = hours_away(str(transcript), prompt)
+        except (OSError, ValueError) as error:
+            hours = None
+            log("prompt_approvals", "return-gap-unreadable", payload, str(error))
+        if hours is not None and hours >= RETURN_GAP_HOURS:
+            log("prompt_approvals", "return-brief", payload, f"{hours:.1f}h")
+            told.append(RETURN_BRIEF.format(hours=hours))
+    if told:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+                                                 "additionalContext": "\n\n".join(told)}}))
     return 0
 
 
