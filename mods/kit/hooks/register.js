@@ -489,17 +489,27 @@ async function askToLiftBlock($, e, next) {
   } catch (error) {
     asked.failure = 'printed something not JSON: ' + messageOf(error)
   }
-  if (asked.failure) $.ui.log('kit: approve needed: ' + asked.failure, { to: 'debug' })
+  if (asked.failure) {
+    $.ui.log(`kit: approval dialog unavailable: bin/approve needed ${asked.failure}, so the call stays blocked`)
+    return blocked
+  }
   if (!needed?.names?.length) return blocked
   const allowTurn = `Allow ${needed.scope} until my next message`
+  let unanswered = ''
   const answer = await $.ui
     .ask(`A kit guard blocked this call: ${needed.what}.\n\n${previewOf(tool, input)}\n\nAllow it?`,
       { header: 'Approval', options: [ALLOW_ONCE, allowTurn, KEEP_BLOCKED] })
-    .then((given) => given || null)
-    .catch(() => null)  // dismissed, interrupted, or a -p run with no one to ask: the block stands, as without the mod
-  const outcome = answer === null ? 'dismissed, or no one to ask' : [ALLOW_ONCE, allowTurn, KEEP_BLOCKED].includes(answer) ? answer : 'answered in their own words'
+    .then((given) => given || null, (error) => {
+      unanswered = messageOf(error)
+      return null
+    })  // dismissed, interrupted, or a -p run with no one to ask: the block stands, as without the mod
+  if (answer === null) {
+    // The engine rejects a dismissal and a dialog it couldn't show alike: the line says what is known, not which.
+    $.ui.log(`kit: the approval dialog for ${needed.names.join(', ')} closed without an answer${unanswered && ` (${unanswered})`}, so the call stays blocked`)
+    return blocked
+  }
+  const outcome = [ALLOW_ONCE, allowTurn, KEEP_BLOCKED].includes(answer) ? answer : 'answered in their own words'
   $.ui.log(`kit: approval dialog for ${needed.names.join(', ')}: ${outcome}`, { to: 'debug' })
-  if (answer === null) return blocked
   if (answer !== ALLOW_ONCE && answer !== allowTurn) {
     const said = answer === KEEP_BLOCKED ? '' : ` They answered: ${JSON.stringify(answer)}.`
     return { deny: `${blocked.text}\nThe user was asked in a dialog and kept it blocked.${said} Don't ask them to approve it again this turn.` }
@@ -523,6 +533,8 @@ export function register(on) {
   on('tool.call', { tool: ['Bash', /^mcp__/] }, askToLiftBlock)
 
   on('session.start', async ($, e, next) => {
+    // First: guard_mcp tells the user no dialog can ask when a Claude Code hook runs without it (KIT_MOD_MARKER).
+    await $.env.set('AGENTS_KIT_MOD', '1').catch((error) => $.ui.log('kit: AGENTS_KIT_MOD not set: ' + messageOf(error), { to: 'debug' }))
     const flow = FEATURES.find((feature) => feature.command === 'flow')
     await $.command.register({ name: 'flow', description: flow.description, argumentHint: '[off|on <phase> | review-rounds <0-9> [--repo|--global]]', immediate: true })
     const waited = new AbortController()

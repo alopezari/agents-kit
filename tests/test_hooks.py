@@ -412,6 +412,27 @@ def guard_mcp_linear(base):
         assert got == want, f"{tool} {inp}: {got} != {want}"
 
 
+def a_block_says_when_no_approval_dialog_can_show(base):
+    def block(payload=(), **harness):
+        env = {"HOME": base, "AGENTS_HARNESS": "", "CLAUDECODE": "", "CODEX_THREAD_ID": "", "AGENTS_KIT_MOD": "", **harness}
+        subprocess_env = {k: v for k, v in {**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, **env}.items() if v}
+        done = subprocess.run(["python3", H + "guard_mcp.py"], capture_output=True, text=True, env=subprocess_env,
+                              input=json.dumps({"tool_name": "mcp__linear__save_issue", "tool_input": {}, "cwd": "/tmp",
+                                                "session_id": "d1", "hook_event_name": "PreToolUse", **dict(payload)}))
+        return json.loads(done.stdout)
+
+    unmarked = block(CLAUDECODE="1")
+    reason = unmarked["hookSpecificOutput"]["permissionDecisionReason"]
+    assert unmarked["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "approval dialog unavailable" in reason and "kit mod" in reason, reason
+    assert "approval dialog unavailable" in unmarked.get("systemMessage", ""), "the user sees it, not only the agent"
+    assert "name linear in your next message" in unmarked["systemMessage"], "and how to allow it without the dialog"
+    for marked in [block(CLAUDECODE="1", AGENTS_KIT_MOD="1"), block(CODEX_THREAD_ID="th-1", CLAUDECODE="1"), block(),
+                   block({"turn_id": "turn-1"}, CLAUDECODE="1")]:
+        assert "systemMessage" not in marked and "dialog" not in marked["hookSpecificOutput"]["permissionDecisionReason"], \
+            "the mod loaded, or Codex (no dialog there to miss, even started from Claude Code), or no harness known"
+
+
 def asking_for_a_service_approves_its_writes_for_that_turn(base):
     os.makedirs(os.path.join(base, "profiles", "work"))
     json.dump({"gateways": [{"tool": "gateway__execute$", "service_field": "provider", "operation_fields": ["subtool"],
@@ -452,6 +473,150 @@ def asking_for_a_service_approves_its_writes_for_that_turn(base):
     prompt("use wiki- for it")
     assert write("mcp__plugin_gateway__execute", {"provider": "wiki-", "subtool": "create-issue"}) == "allow", \
         "a name that ends in a symbol"
+
+
+def an_answer_to_the_agents_offer_approves_the_service_it_named(base):
+    os.makedirs(os.path.join(base, "profiles", "work"))
+    json.dump({"gateways": [{"tool": "gateway__execute$", "service_field": "provider", "operation_fields": ["subtool"],
+                             "writes": {"linear": ["create-issue"], "tracker": ["create-issue"]}}]},
+              open(os.path.join(base, "profiles", "work", "mcp-writes.json"), "w"))
+    env = {"HOME": base, "AGENTS_PROFILES_DIR": os.path.join(base, "profiles")}
+    offer = ("Tengo el borrador listo: título «Flaky checkout test», equipo WCCOM, proyecto Checkout Reliability.\n\n"
+             "¿Quieres que la cree en Linear?")
+    answer = ("Si, crea la tarea en el equipo WCCOM, ponla en todo, asignamela a mi, prioridad media y metela en el "
+              "proyecto que dijiste")
+
+    def entry(kind, content, **extra):
+        return {"type": kind, "message": {"role": kind, "content": content}, "isSidechain": False,
+                "timestamp": "2026-10-20T08:00:00Z", **extra}
+
+    def said(text):
+        return entry("assistant", [{"type": "text", "text": text}])
+
+    history = [entry("user", "look at the flaky checkout test"), entry("assistant", [{"type": "thinking", "thinking": "…"}]),
+               entry("assistant", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]),
+               entry("user", [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}])]
+
+    def transcript(*entries, padding=0, big_first=0):
+        path = os.path.join(base, "t.jsonl")
+        with open(path, "w") as fh:
+            for _ in range(padding):
+                fh.write(json.dumps(said("y" * 1000)) + "\n")
+            if big_first:  # a tool result longer than the tail, which the tail cuts into
+                fh.write(json.dumps(entry("user", [{"type": "tool_result", "tool_use_id": "t1", "content": "r" * big_first}])) + "\n")
+            for line in entries:
+                fh.write((line if isinstance(line, str) else json.dumps(line)) + "\n")
+        return path
+
+    def prompt(text, path, session="c1", codex=False):
+        payload = {"prompt": text, "session_id": session, "cwd": "/tmp", "hook_event_name": "UserPromptSubmit"}
+        if path is not None:
+            payload["transcript_path"] = path
+        if codex:
+            payload["turn_id"] = "turn-2"
+        done = subprocess.run(["python3", H + "prompt_approvals.py"], input=json.dumps(payload), capture_output=True,
+                              text=True, timeout=10, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, **env})
+        assert done.returncode == 0 and "Traceback" not in done.stderr, done.stderr
+
+    def write(service="linear", session="c1"):
+        got = run_hook("guard_mcp.py", {"tool_name": "mcp__plugin_gateway__execute", "cwd": "/tmp", "session_id": session,
+                                        "tool_input": {"provider": service, "subtool": "create-issue"}}, env=env)
+        return "deny" if got else "allow"
+
+    def approves(text, *entries, padding=0, big_first=0, codex=False):
+        prompt(text, transcript(*entries, padding=padding, big_first=big_first), codex=codex)
+        return write()
+
+    proposal = [*history, said("Voy a revisar el test."), said(offer)]
+    assert approves(answer, *proposal) == "allow", "the user's yes to the agent's offer to create it in Linear"
+    assert write("tracker") == "deny", "only the service the offer named"
+    assert approves(answer, *proposal, entry("user", answer + "\n")) == "allow", "the prompt already in the transcript"
+    prompt("now fix the failing test", transcript(*proposal, entry("user", answer), said("Creada: WCCOM-12.")))
+    assert write() == "deny", "until the user's next message: a create still needs a new approval"
+    for reply in ["sí", "Sí.", "dale", "go ahead", "yes please", "créala", "En el equipo WCCOM, créala",
+                  "Sí, créala, pero no urgente", "ok, create it", "vale, gracias", "perfecto, adelante", "sure, do it"]:
+        assert approves(reply, *proposal) == "allow", f"{reply!r} accepts the offer"
+    for reply in ["no", "No, espera", "no la crees todavía", "wait", "not yet", "Sí, pero espera a que lo revise",
+                  "¿En qué proyecto?", "mejor no", "arregla el test primero", "Sí, ¿pero no era otro equipo?",
+                  "Sí, pero ahora no", "Si, pero no", "claro que no", "vale, mejor no", "yes but not now",
+                  "ok never mind", "vale, déjalo", "sí, más tarde", "show me first", "Sí, pero enséñamela antes",
+                  "please", "por favor", "please fix the test first", "Si quieres, primero arregla el test",
+                  "make it shorter", "haz el cambio en el test", "si va bien", "Si puedes, mira el CI", "pon el título en inglés",
+                  "open the test file", "ok, but use the Tracker instead"]:
+        assert approves(reply, *proposal) == "deny", f"{reply!r} doesn't accept it"
+    assert approves("sí", *history, said("He revisado el test: falla por un timeout.")) == "deny", "no proposal"
+    assert approves("sí", entry("user", "hola")) == "deny", "no agent message at all"
+    assert approves("sí", *history, said("La tarea de Linear WCCOM-3 trata de esto. El fix está en el test.")) == "deny", \
+        "names Linear but proposes nothing"
+    assert approves("sí", *history, said("La tarea de Linear WCCOM-3 trata de esto. ¿Quieres que cree un test?")) == \
+        "deny", "an offer to write whose question doesn't name the service"
+    for question in ["¿Quieres que busque la tarea en Linear?", "¿Abro la tarea en Linear para revisarla?",
+                     "Should I open the issue in Linear to check it?", "¿Quieres que no la cree en Linear?",
+                     "¿Creo que está en Linear, la busco?", "¿La creo en Linear o en GitHub?",
+                     "Did you already create it in Linear?", "I don't want to create it in Linear yet, ok?",
+                     'Él preguntó: "¿La creo en Linear?"', "¿Archivo de Linear, lo reviso?",
+                     "Como Linear está caído, ¿la creo en el Tracker?", "¿Hay algo que quieras que cambie antes, o la creo en Linear?"]:
+        assert approves("sí", *history, said(question)) == "deny", f"{question!r} offers no write"
+    for question, reply in [("¿La actualizo en Linear?", "sí"), ("¿La borro en Linear?", "bórrala"),
+                            ("**¿La creo en Linear?**", "sí"), ("Should I create the issue in Linear?", "yes"),
+                            ("¿Puedo crearla en Linear con estos datos?", "adelante"), ("¿La creamos en Linear?", "venga"), ("En Linear, ¿la creo?", "sí"),
+                            ("Want me to file an issue in Linear for this?", "yes, go ahead"),
+                            ("**Should I create an issue in Linear?**", "yes"), ("Should I create\nan issue in Linear?", "yes"),
+                            ("Borrador listo:\n¿La creo\nen Linear?", "sí"), ("Draft ready:\n- Should I file it in Linear?", "ok")]:
+        assert approves(reply, *history, said(question)) == "allow", f"{reply!r} to {question!r}"
+    assert approves("sí", *history, said(offer + "\n\nTambién puedo dejarlo para luego, lo que prefieras.")) == "deny", \
+        "the question isn't the last thing the agent said"
+    assert approves("sí", *proposal, entry("assistant", [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {}}])) \
+        == "deny", "the agent went on to a tool call after asking"
+    assert approves("sí", *proposal, entry("user", "otra cosa: mira el CI")) == "deny", \
+        "an older message of the user's sits between"
+    assert approves("sí", *proposal, {**said("Hecho."), "isSidechain": True}) == "allow", \
+        "a subagent's text isn't the agent's last message"
+    assert approves("sí", *history, {**said("¿Quieres que la cree en Linear?"), "isSidechain": True}) == "deny", \
+        "and a subagent's offer approves nothing"
+    assert approves("sí", *proposal, {"type": "attachment", "attachment": {}}, {"type": "system", "content": "x"}) == \
+        "allow", "entries that aren't messages are skipped"
+    assert approves("Do you want me to file it?", *history, said("Want me to file an issue in Linear for this?")) == "deny"
+    assert approves("sí", *proposal, padding=2500) == "allow", "a recent exchange after megabytes of history"
+    assert approves("sí", *proposal, big_first=300_000) == "allow", "a long tool result before the run is left out"
+    assert approves("sí", said(offer), big_first=300_000) == "deny", "the line the tail cuts into could be more of the message"
+    assert approves("sí", *history, said("z" * 300_000), said(offer)) == "deny", "a run of the agent's text longer than the tail"
+    assert approves("sí", *history, said("z" * 300_000 + " ¿Quieres que la cree en Linear?")) == "deny", \
+        "a last message longer than the tail read isn't read"
+    started = time.monotonic()
+    assert approves("sí", *history, said("palabra " * 25_000 + "¿Quieres que la cree en Linear?")) == "allow"
+    assert time.monotonic() - started < 3, "a long sentence is read in linear time, well within the hook's timeout"
+    codex = [{"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1", "last_agent_message": offer}}]
+    assert approves("sí", *codex, codex=True) == "allow", "a Codex rollout"
+    assert approves("sí", *codex, {"type": "event_msg", "payload": {"type": "user_message", "message": "sí"}},
+                    codex=True) == "allow", "a Codex rollout that already holds the prompt"
+    assert approves("sí", *codex, {"type": "event_msg", "payload": {"type": "turn_aborted", "turn_id": "turn-1b"}},
+                    codex=True) == "deny", "a Codex turn the user interrupted after the offer"
+    assert approves("sí", *codex, {"type": "event_msg", "payload": {"type": "user_message", "message": "mira el CI"}},
+                    codex=True) == "deny", "an older Codex message of the user's sits between"
+    prompt("sí", None)
+    assert write() == "deny", "no transcript"
+    prompt("sí", os.path.join(base, "missing.jsonl"))
+    assert write() == "deny", "a transcript that isn't there"
+    for broken in [["{not json", json.dumps(said(offer))[:-5]], [*proposal, json.dumps("a string")],
+                   [*proposal, json.dumps([1, 2])], [*proposal, "[" * 100_000 + "]" * 100_000],
+                   [*proposal, {"type": "assistant", "message": {"content": {"text": "x"}}}],
+                   [*proposal, {"type": "user", "message": None}], [*proposal, {"type": "assistant", "message": []}],
+                   [*proposal, {"type": "user", "message": {"content": []}}], [*proposal, {"type": "event_msg", "payload": "x"}]]:
+        prompt("sí", transcript(*broken))
+        assert write() == "deny", f"a corrupt transcript: {str(broken[-1])[:40]}"
+    with open(os.path.join(base, "bin.jsonl"), "wb") as fh:
+        fh.write(os.urandom(4096))
+    prompt("sí", os.path.join(base, "bin.jsonl"))
+    assert write() == "deny", "a binary transcript"
+    with open(os.path.join(base, "latin.jsonl"), "wb") as fh:
+        fh.write(json.dumps(said(offer), ensure_ascii=False).encode().replace("¿".encode(), b"\xbf") + b"\n")
+    prompt("sí", os.path.join(base, "latin.jsonl"))
+    assert write() == "deny", "a transcript that isn't UTF-8"
+    prompt("sí, y abre otra en el Tracker", transcript(*proposal, json.dumps([1, 2])))
+    assert write("tracker") == "allow", "the literal name still approves, whatever the transcript"
+    prompt("sí, y abre otra en el Tracker", transcript(*proposal))
+    assert (write(), write("tracker")) == ("allow", "allow"), "both rules in one message"
 
 
 def a_write_to_an_object_the_user_approved_is_approved_for_the_session(base):
@@ -2737,7 +2902,7 @@ def a_stacked_branch_is_measured_against_its_parent(base):
 TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, a_review_rounds_line_sets_the_re_checks_by_scope,only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
-         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn,
+         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
