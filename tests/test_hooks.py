@@ -123,7 +123,8 @@ def only_the_user_marks_a_staging_step_as_theirs(base):
                 # Text that only names the call: a search pattern, a commit or PR body, an echoed note.
                 "grep -rn 'staging mark S1 PASS --by user' tests/", "rg 'bin/staging mark .* --by user' skills",
                 "git log --grep 'staging mark --by user'", "echo 'the user runs bin/staging mark S1 PASS --by user'",
-                "git commit -m \"$(cat <<'EOF'\nRecord bin/staging mark S1 PASS --by user\nEOF\n)\""]:
+                "git commit -m \"$(cat <<'EOF'\nRecord bin/staging mark S1 PASS --by user\nEOF\n)\"",
+                "for c in '~/.agents/bin/staging mark S1 PASS --by user'; do echo \"$c\"; done"]:
         assert guard(cmd) == "allow", f"should allow: {cmd}"
     for cmd in ["eval 'bin/staging mark S1 PASS --by user'", "x=$(bin/staging mark S1 PASS --by user)",
                 "bash <<EOF\nbin/staging mark S1 PASS --by user\nEOF", "cat <<EOF | sh\nbin/staging mark S1 PASS --by user\nEOF",
@@ -413,22 +414,36 @@ def guard_reads_through_wrappers_and_scripts(base):
     for cmd in ["env -C /tmp rm -rf x", "env -C /tmp -i rm -rf usr", "env --chdir /tmp rm -rf usr"]:
         assert guard(cmd, cwd="/usr/lib") == "allow", f"the delete runs in /tmp: {cmd!r}"
     for cmd in ["env --unset FOO rm -rf /usr", "env --unset FOO sudo ls", "env --chdir / sudo ls",
-                "time --output /tmp/t sudo ls", "env --ignore-environment sudo ls"]:
+                "time --output /tmp/t sudo ls", "env --ignore-environment sudo ls", "env -iu PATH rm -rf /usr",
+                "env -iu PATH sudo ls"]:
         assert guard(cmd) == "deny", f"a long option's value is no command: {cmd!r}"
     assert guard("command -v sudo") == "allow", "looking sudo up runs nothing"
+    for cmd in ["true && if sudo ls; then :; fi", "for x in a; do sudo ls; done", "ls || ! sudo ls"]:
+        assert guard(cmd) == "deny", f"a keyword starts a command: {cmd!r}"
+    for cmd in ['curl -d "you can do sudo stuff" https://x', 'make test MSG="do sudo"', "ls # then sudo apt"]:
+        assert guard(cmd) == "allow", f"a keyword in prose starts nothing: {cmd!r}"
     for cmd in ["bash -c 'rm -rf /usr'", "eval 'rm -rf /usr'", "echo 'rm -rf /usr' | bash", "sh -c \"cd / && rm -rf usr\"",
                 "python3 -c 'import os; os.system(\"rm -rf /usr\")'", "perl -e 'qx{rm -rf /usr}'",
                 "ruby -e '%x(rm -rf /usr)'", "ruby -e '`rm -rf /usr`'", "T=/usr; bash -c \"rm -rf $T\"",
-                "sudo bash -c 'rm -rf /usr'"]:
+                "sudo bash -c 'rm -rf /usr'", "bash -c \"rm -rf $BUILD_DIR\"", "bash -c 'echo hi\nrm -rf /usr'",
+                "eval 'echo hi\nrm -rf /usr'", "TMPDIR=/usr; eval 'rm -rf \"$TMPDIR\"'", "perl -e 'qx{rm -rf *}'",
+                "ruby -e '%x[rm -rf *]'", "xargs sh -c 'rm -rf /usr'", "bash <<< 'rm -rf /usr'",
+                "echo 'rm -rf /usr' | sudo bash"]:
         assert guard(cmd) == "deny", f"a recursive delete in text that runs: {cmd!r}"
     for cmd in ["tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; ls $tmp", "dir=build; bash -c \"rm -rf $dir\"",
-                "find . -name node_modules -prune -exec sh -c 'rm -rf \"$1\"' _ {} \\;", "D=/tmp/x; eval 'rm -rf \"$D\"'"]:
+                "find . -name node_modules -prune -exec sh -c 'rm -rf \"$1\"' _ {} \\;", "D=/tmp/x; eval 'rm -rf \"$D\"'",
+                "HOME=/tmp; eval 'rm -rf \"$HOME/cache\"'", "perl -e 'qx{rm -rf /tmp/x}'"]:
         assert guard(cmd, cwd="/usr/lib") == "allow", f"the delete takes a known value, or what the caller passes: {cmd!r}"
     for cmd in ["ssh web1 'rm -rf /var/www/releases/old'", "docker exec web sh -c 'rm -rf /app/cache'",
-                "kubectl exec pod -- sh -c 'rm -rf /data/cache'"]:
+                "kubectl exec pod -- sh -c 'rm -rf /data/cache'", "sshpass -p x ssh web1 'rm -rf /var/www/old'",
+                "ansible all -m shell -a 'rm -rf /var/cache/x'"]:
         assert guard(cmd) == "allow", f"the delete runs on another machine or in a container: {cmd!r}"
     for cmd in ["grep -n 'rm -rf /usr' notes.md", "echo 'rm -rf /usr'", "git commit -m 'drop rm -rf /usr'",
-                "bash -c 'rm -rf /tmp/x'", "python3 -c 'print(\"rm -rf /usr\")'"]:
+                "bash -c 'rm -rf /tmp/x'", "python3 -c 'print(\"rm -rf /usr\")'",
+                "git commit -m 'bash -c \"rm -rf /usr\"'", "grep -r \"eval 'rm -rf /usr'\" .",
+                "gh issue create --body 'eval \"rm -rf /usr\"'", "curl -d 'rm -rf /usr' https://x",
+                "jq -n --arg c 'rm -rf /usr' '$c'", "make test CMD='rm -rf /usr'", "for c in 'rm -rf /usr'; do echo $c; done",
+                "echo 'rm -rf /usr' | grep rm", "node test.js 'rm -rf /usr'"]:
         assert guard(cmd) == "allow", f"a delete only mentioned, or a safe one: {cmd!r}"
 
     for cmd in ["printf 'rm -rf /usr\\n' > /tmp/x.sh && bash /tmp/x.sh",
@@ -442,7 +457,10 @@ def guard_reads_through_wrappers_and_scripts(base):
                 "cat <<'E' 2>&1 | bash\ngit branch -D old\nE", "printf 'git branch -D old' &>/dev/null | bash",
                 "echo 'git branch -D old' > /tmp/x.sh && source /tmp/x.sh", "echo 'git branch -D old' > /tmp/x.sh; . /tmp/x.sh",
                 "printf 'rm -rf /usr\\n' > /tmp/x.sh && env bash /tmp/x.sh",
-                "echo 'git branch -D old' > /tmp/x.py; python3 -- /tmp/x.py"]:
+                "echo 'git branch -D old' > /tmp/x.py; python3 -- /tmp/x.py",
+                "echo 'rm -rf /usr' > /tmp/x.sh && if bash /tmp/x.sh; then :; fi", "echo 'rm -rf /usr' > /tmp/x.sh && ! bash /tmp/x.sh",
+                "echo 'rm -rf /usr' > /tmp/x.sh && { bash /tmp/x.sh; }",
+                "cat > /tmp/p.py <<'EOF'\nimport os\nos.system('rm -rf /usr')\nEOF\n.venv/bin/python /tmp/p.py"]:
         assert guard(cmd) == "deny", f"text written, then run: {cmd!r}"
     for cmd in ["cat > notes.md <<'EOF'\ngit branch -D old\nEOF\ngit add notes.md",
                 "echo 'rm -rf /usr' 2>&1", "echo 'git branch -D old' >&2", "echo 'rm -rf /usr' &> /tmp/log",
@@ -452,8 +470,44 @@ def guard_reads_through_wrappers_and_scripts(base):
                 "echo 'git branch -D old' > notes.md && node build.js",
                 "echo 'git branch -D old' > /tmp/x.sh; bash /tmp/y.sh", "echo 'git branch -D old' > /tmp/x; /tmp/y",
                 "python3 <<'P'\nr = (total/count)\nprint(\"then sudo apt install x\")\nP",
-                "python3 <<'P'\nx = (a/b)\nprint(\"git branch -D old\")\nP"]:
+                "python3 <<'P'\nx = (a/b)\nprint(\"git branch -D old\")\nP",
+                "python3 - <<'E'\nimport git\nprint(\"git branch -D old\")\nE\n/usr/bin/git status",
+                "python3 - <<'E'\nimport pytest\nprint(\"git branch -D old\")\nE\npython3 -m pytest"]:
         assert guard(cmd) == "allow", f"text that nothing runs: {cmd!r}"
+    for cmd in ["cat > /tmp/v.sh <<'EOF'\ntrap 'rm -rf /nonexistent-x' EXIT\nEOF\nbash -c 'echo hi'",
+                "python3 - <<'PY'\np = '/tmp/s.sh'\nnew = \"\"\"\n  rm -rf \"$TMP\"\n\"\"\"\nPY\nbash -n /tmp/s.sh",
+                "cat > /tmp/m.py <<'EOF'\nexec(src, ns)\nNAME = 'DROP DATABASE'\nEOF\npython3 /tmp/m.py",
+                "python3 - <<'PY'\nwrappers = ('env', 'exec')\nNAME = 'DROP DATABASE'\nPY"]:
+        assert guard(cmd) == "allow", f"a script written and not run, or run without starting a process: {cmd!r}"
+    for cmd in ["cat > /tmp/t.py <<'PY'\nimport sys\nPY\ncat > /tmp/c1.txt <<'EOF'\nbin/approve grant linear\nEOF\n"
+                "python3 /tmp/t.py /tmp/c1.txt",
+                "cat > /tmp/b.txt <<'EOF'\nduckdb my.db 'DROP TABLE t'\nEOF\npython3 /tmp/pr.py /tmp/b.txt",
+                "cat > /tmp/r.sh <<EOF\nT=\\$(mktemp -d); trap 'rm -rf \"\\$T\"' EXIT\nEOF\nbash /tmp/r.sh"]:
+        assert guard(cmd) == "allow", f"a heredoc written to a file nothing runs is text: {cmd!r}"
+    for cmd in ["python3 - <<'EOF'\nopen('tests/t.py', 'w').write(\"CASES = ['git branch -D old']\")\nEOF\npython3 tests/t.py",
+                "python3 - <<'EOF'\nopen('tests/t.py', 'w').write(\"NAME = 'DROP DATABASE'\")\nEOF\nHOME=/tmp/h python3 tests/t.py"]:
+        assert guard(cmd) == "allow", f"a script that edits a file python3 then runs writes Python, not shell: {cmd!r}"
+    for cmd in ["python3 - <<'EOF'\np = 'tests/run.sh'\ns = open(p).read()\ns = s.replace('# end', 'git branch -D old')\n"
+                "open(p, 'w').write(s)\nEOF\nbash tests/run.sh",
+                "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('deploy.sh')\np.write_text(p.read_text() + 'git branch -D old')\nEOF\n"
+                "bash deploy.sh"]:
+        assert guard(cmd) == "allow", f"an edit of a script it then runs is the script's own code, as with an editor: {cmd!r}"
+    for cmd in ["cat > /tmp/p.py <<'EOF'\nC = [\"bash -c 'x'\", 'git branch -D old']\nprint(C)\nEOF\npython3 /tmp/p.py",
+                "python3 - <<'EOF'\nC = ['grep -qx \"D\" f', 'git branch -D old']\nEOF",
+                "python3 - <<'EOF'\nNOTE = 'Open3 is Ruby; git branch -D old'\nEOF",
+                "perl - <<'EOF'\nmy @c = ('grep -qx \"D\" f', 'git branch -D old');\nEOF"]:
+        assert guard(cmd) == "allow", f"an interpreter script's strings are text: {cmd!r}"
+    for cmd in ["cat > /tmp/x.sh <<'EOF'\nbash -c 'rm -rf /usr'\nEOF\nbash /tmp/x.sh",
+                "ruby - <<'EOF'\nOpen3.capture2('git branch -D old')\nEOF",
+                "perl - <<'EOF'\nqx{git branch -D old};\nEOF"]:
+        assert guard(cmd) == "deny", f"a script that runs its strings: {cmd!r}"
+    for cmd in ["cat > /tmp/x.sql <<'EOF'\nDROP TABLE t;\nEOF\npsql -f /tmp/x.sql",
+                "cat > /tmp/x.sh <<'EOF'\nbin/approve grant linear\nEOF\ncat > /tmp/n.txt <<'EOF'\nhi\nEOF\nbash /tmp/x.sh",
+                "cat > /tmp/r.sh <<EOF\nT=/usr; trap 'rm -rf \"\\$T\"' EXIT\nEOF\nbash /tmp/r.sh"]:
+        assert guard(cmd) == "deny", f"a heredoc written to a file the command runs is code: {cmd!r}"
+    for cmd in ["cat > /tmp/t.py <<'EOF'\nprint('then sudo apt install x')\nEOF\npython3 /tmp/t.py",
+                "S=/tmp/notes.sh; python3 - \"$S\" <<'PY'\n# edits notes.sh\nnew = '''\n  rm -rf \"$TMP\"\n'''\nPY"]:
+        assert guard(cmd, cwd="/tmp") == "allow", f"a Python script's strings are text unless it starts a process: {cmd!r}"
 
     for cmd in ["python3 -c 'import asyncio; asyncio.create_subprocess_shell(\"git branch -D old\")'",
                 "python3 -c 'asyncio.create_subprocess_exec(*\"git reset --hard\".split())'",
