@@ -1,0 +1,3 @@
+- Self-review findings carry one severity, Important, Nit or Pre-existing: Pre-existing ones go under Found and on the PR's Validation section instead of being fixed in the change, and the report keeps at most five Nits.
+- Reviewers report a defect as a class, every instance of the pattern under one finding, and a re-check gets the findings already decided (`bundle.sh … <decided-file>`) so it doesn't raise them again.
+- A repo can have a review guide, `~/.agents/repos/<repo>/review.md`, that every reviewer applies: what failure looks like there, what to skip, a nit cap. Running on Codex, the Claude cross-model pass now takes its prompt from `bundle.sh` too.

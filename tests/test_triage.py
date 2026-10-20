@@ -357,6 +357,73 @@ with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} an unreadable switch store keeps the usual cross-model pass and says why: {got}")
 
+# bundle.sh: the cross-model prompt carries the severities, the bug-class rule, the repo's review guide and the findings
+# an earlier round decided. Its HOME holds a kit whose repos/ is the test's own, so the guide is the test's.
+with tempfile.TemporaryDirectory(prefix="agents-test-bundle-") as home, \
+        tempfile.TemporaryDirectory(prefix="agents-test-bundle-") as repo:
+    kit = os.path.realpath(os.path.expanduser("~/.agents"))
+    os.makedirs(os.path.join(home, ".agents", "repos"))
+    for entry in os.listdir(kit):
+        if entry != "repos":
+            os.symlink(os.path.join(kit, entry), os.path.join(home, ".agents", entry))
+    subprocess.run("git init -q -b main && echo 'x = 1' > app.py && git add -A && "
+                   "git -c user.name=t -c user.email=t@t commit -qm base && echo 'x = 2' > app.py",
+                   shell=True, cwd=repo, check=True)
+    guide_dir = os.path.join(home, ".agents", "repos", os.path.basename(repo))
+    decided = os.path.join(home, "decided.txt")
+    env = {**os.environ, "HOME": home}
+
+    def bundle(*extra):
+        return subprocess.run([os.path.join(home, ".agents", "skills", "self-review", "bundle.sh"), "main", "Correctness",
+                               "Double x", *extra], cwd=repo, capture_output=True, text=True, env=env)
+    plain = bundle()
+    rules = ("Important", "Nit", "Pre-existing", "at most three", "every other place")
+    ok = plain.returncode == 0 and all(r in plain.stdout for r in rules) and "+x = 2" in plain.stdout
+    ok = ok and "review guide" not in plain.stdout and "already decided" not in plain.stdout
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} bundle.sh asks for the three severities, the nit cap and every instance, "
+          f"and with no guide or decided file mentions neither: exit {plain.returncode} {plain.stderr.strip()[-200:]}")
+    with open(os.path.join(kit, "skills", "self-review", "SKILL.md")) as f:
+        skill = f.read()
+    shared = re.search(r"Severity is one of: .*? under that one finding\.", skill)
+    ok = shared is not None and shared.group(0) in plain.stdout
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} SKILL.md gives same-model reviewers the severities, nit cap and bug-class rule "
+          f"bundle.sh gives cross-model ones, word for word: {shared and shared.group(0)[:80]}")
+    os.makedirs(guide_dir)
+    with open(os.path.join(guide_dir, "review.md"), "w") as f:
+        f.write("A wrong total on an invoice is the failure that matters here. Skip vendor/.\n")
+    with open(decided, "w") as f:
+        f.write("Rejected:  x can be None — evidence: app.py:1 sets it\n")
+    first = bundle()
+    ok = (first.returncode == 0 and "wrong total on an invoice" in first.stdout and "the guide wins" in first.stdout
+          and "already decided" not in first.stdout)
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} a first pass gets the review guide, which wins over the defaults, and no decided "
+          f"findings: exit {first.returncode} {first.stderr.strip()[-200:]}")
+    full = bundle(decided)
+    ok = (full.returncode == 0 and "wrong total on an invoice" in full.stdout and "x can be None" in full.stdout
+          and "Report only a new instance at another location" in full.stdout and full.stdout.index("```diff") > full.stdout.index("x can be None"))
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} bundle.sh includes the repo's review guide and the decided findings, before the diff: "
+          f"exit {full.returncode} {full.stderr.strip()[-200:]}")
+    missing = bundle(os.path.join(home, "nope.txt"))
+    ok = missing.returncode != 0 and "bundle.sh: can't read the decided findings" in missing.stderr and "```diff" not in missing.stdout
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} bundle.sh fails on a decided file that isn't there: exit {missing.returncode} "
+          f"{missing.stderr.strip()[-200:]}")
+    empty = bundle("")
+    ok = empty.returncode != 0 and "bundle.sh: no decided-findings file" in empty.stderr and "```diff" not in empty.stdout
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} bundle.sh fails on an empty decided-file argument, a variable lost between shells: "
+          f"exit {empty.returncode} {empty.stderr.strip()[-200:]}")
+    os.chmod(os.path.join(guide_dir, "review.md"), 0)
+    unreadable = bundle()
+    ok = unreadable.returncode != 0 and "bundle.sh: can't read the review guide" in unreadable.stderr and "```diff" not in unreadable.stdout
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} bundle.sh fails on a review guide it can't read: exit {unreadable.returncode} "
+          f"{unreadable.stderr.strip()[-200:]}")
+
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected
     fail |= not ok
