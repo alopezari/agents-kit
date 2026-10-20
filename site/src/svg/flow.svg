@@ -17,7 +17,7 @@
 <text x="56" y="251" fill="#C6EC5A">guard_bash · guard_mcp</text><text x="1160" y="251" text-anchor="end" fill="#8A8F88">every command · shared-system writes need your approval</text>
 <rect x="215" y="282" width="961" height="40" fill="#0E100F" stroke="#2A2E2B"></rect>
 <text x="231" y="307" fill="#C6EC5A">stop checks + verify</text><text x="1160" y="307" text-anchor="end" fill="#8A8F88">every turn that edited files · changed lines only · evidence saved</text>
-<rect x="361" y="338" width="331" height="40" fill="#0E100F" stroke="#FF9B73"></rect>
-<text x="377" y="363" fill="#FF9B73">stamps of the change</text><text x="676" y="363" text-anchor="end" fill="#FF9B73">gate gh pr create</text>
+<rect x="371" y="338" width="311" height="40" fill="#0E100F" stroke="#FF9B73"></rect>
+<text x="387" y="363" fill="#FF9B73">stamps gate gh pr create</text>
 </g>
 </svg>

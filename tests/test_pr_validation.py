@@ -169,6 +169,12 @@ def a_guide_with_only_steps_after_the_merge_lists_them(base):
         "sub-steps add up to their step, any FAIL failing it, and the steps before the merge come first: " + out.stdout
     sh(repo, "sh", "-c", f"printf '| P1 | NOT RUN | |\\n' >> '{sh(repo, REPORTS, 'path', 'checks-guide').stdout.strip()}'")
     assert "- After the merge: P1 Load the job (agent).\n" in sh(repo, PR_VALIDATION).stdout, "a plain Where: names its owner too"
+    sh(repo, "sh", "-c", f"printf '\\n## Results (2026-10-02)\\n\\n| Step | Result | Evidence |\\n|---|---|---|\\n| P2b | PASS | p2b.txt |\\n' >> '{sh(repo, REPORTS, 'path', 'checks-guide').stdout.strip()}'")
+    assert "- After the merge: P2 Restart it: PASS (2026-10-02).\n" in sh(repo, PR_VALIDATION).stdout, "a rerun sub-step replaces its own row"
+    sh(repo, "sh", "-c", f"printf '\\n## Results (2026-10-03)\\n\\n| Step | Result | Evidence |\\n|---|---|---|\\n| P2a | FAIL | p2a.txt |\\n| P2b | PASS | p2b.txt |\\n' >> '{sh(repo, REPORTS, 'path', 'checks-guide').stdout.strip()}'")
+    sh(repo, "sh", "-c", f"printf '\\n## Results (2026-10-04)\\n\\n| Step | Result | Evidence |\\n|---|---|---|\\n| P2b | PASS | p2b.txt |\\n' >> '{sh(repo, REPORTS, 'path', 'checks-guide').stdout.strip()}'")
+    assert "- After the merge: P2 Restart it: FAIL (2026-10-04).\n" in sh(repo, PR_VALIDATION).stdout, \
+        "a sibling's FAIL from an earlier table still fails the step"
 
 
 def says_when_the_guide_has_no_steps_or_cannot_be_read(base):

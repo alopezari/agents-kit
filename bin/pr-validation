@@ -117,17 +117,17 @@ def checks_lines(text, evidence):
         where = re.search(r"^[-*\s]*(?:\*\*)?Where:?(?:\*\*)?:?\s*the agent\b", body, re.M)
         steps[step] = {"name": name.strip(), "owner": "agent" if where else "you"}
     # Every results table counts, ship's `## Results after the deploy` too; a later NOT RUN asks for the step again.
+    rows, dates = {}, {}  # the latest result of each row (P2 or its sub-step P2b), and each step's latest table
     for heading, table in re.findall(r"^## Results([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S):
         when = re.search(r"\(([^)]*)\)", heading)
-        results = {}
         for first, result, _, _ in review_stamp.result_rows(table.splitlines(), evidence):
-            step = re.match(r"[*_]*" + STEP, first)
-            if step:  # a step's sub-steps add up: any FAIL fails it, any NOT RUN leaves it to run
-                results.setdefault(step.group(1), set()).add(result)
-        for step, found in results.items():
-            result = next(r for r in ("FAIL", "NOT RUN", "PASS") if r in found)
-            steps.setdefault(step, {"name": "", "owner": "you"})["result"] = \
-                None if result == "NOT RUN" else result + (f" ({when.group(1)})" if when else "")
+            step = re.match(r"[*_]*(" + STEP + ")", first)
+            if step:
+                rows.setdefault(step.group(2), {})[step.group(1)] = result
+                dates[step.group(2)] = f" ({when.group(1)})" if when else ""
+    for step, found in rows.items():  # a step's sub-steps add up: any FAIL fails it, any NOT RUN leaves it to run
+        result = next(r for r in ("FAIL", "NOT RUN", "PASS") if r in found.values())
+        steps.setdefault(step, {"name": "", "owner": "you"})["result"] = None if result == "NOT RUN" else result + dates[step]
     if not steps:
         return ["- Checks guide: no steps."]
     lines = []

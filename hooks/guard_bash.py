@@ -1479,7 +1479,7 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
                 repo = arg
         if not (values or files):
             continue
-        if not ("$" in (repo or "") or targets_kit(repo, host, pr_checkout(command[match.start(1):], runs_in))):
+        if not ("$" in (repo or "") or targets_kit(repo, host, pr_checkout(shlex.join(args), runs_in))):
             continue
         # Checked before the shell runs, so fail closed on text only the shell will produce.
         if any(re.search(r"[$`]", v) for v in values):

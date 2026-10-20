@@ -132,6 +132,8 @@ def pr_text_is_checked_before_gh(base):
     assert missing.returncode == 2 and "none.md" in missing.stderr, ("an unreadable file isn't clean", missing)
     assert "private_terms.py pr" in guard('gh pr edit 3 --title "Fix ACME-12 flow"', KIT, env), \
         "the guard's denial says how to find each term's line"
+    assert "private_terms.py pr" in guard('gh pr edit 3 --title "Fix ACME-12 flow" && gh pr ready 3 && cd /tmp', KIT, env), \
+        "a cd after the edit doesn't move the checkout it acts on"
 
 
 def kit_commits_are_checked(base):
