@@ -62,6 +62,11 @@ def session(home, rows, renames=(), cwd="repo"):
     return found
 
 
+def spending(phases):
+    """The phases that spent tokens: a prompt alone also puts its phase on a branch."""
+    return {b: {p: v for p, v in ps.items() if v["in"] or v["out"]} for b, ps in phases.items()}
+
+
 def phases_per_branch_and_skill(home):
     rows = [user(0, "build the thing", "a"),
             *assistant(1, "m0", "a", [TEXT, skill("spec"), edit("/tmp/agents-specs/spec-a.md")], out=7),
@@ -79,7 +84,8 @@ def phases_per_branch_and_skill(home):
     found = session(home, rows)
     a, b = found["phases"]["a"], found["phases"]["b"]
     assert sorted(a) == ["build", "self-review", "spec", "validate"], a
-    assert a["spec"] == {"in": 1, "out": 7, "cache_read": 1000, "cache_write": 100, "minutes": 1}, a["spec"]
+    assert a["spec"] == {"in": 1, "out": 7, "cache_read": 1000, "cache_write": 100, "minutes": 1, "prompts": 1, "questions": 0,
+                         "corrections": 0, "wait_minutes": 0, "reply_minutes": 0}, a["spec"]
     assert (a["build"]["out"], a["build"]["minutes"]) == (20, 2), f"m1 and m6, 1 minute each: {a['build']}"
     assert (a["self-review"]["out"], a["self-review"]["minutes"]) == (20, 3), \
         f"m2 and m3, minutes 2 to 5 through the branchless entry and past the replayed timestamp: {a['self-review']}"
@@ -93,8 +99,9 @@ def a_rename_keeps_the_phase(home):
             *assistant(3, "m2", "other", [skill("validate")]), *assistant(4, "m3", "next", [TEXT])]
     found = session(home, rows, renames=[("repo", "session/x", "session/y"), ("repo", "session/y", "feature/cart"),
                                          ("elsewhere", "other", "next")])
-    assert sorted(found["phases"]["feature/cart"]) == ["validate"], f"a chain of renames is one change: {found['phases']}"
-    assert sorted(found["phases"]["next"]) == ["build"], f"another repo's rename doesn't apply here: {found['phases']}"
+    phases = spending(found["phases"])
+    assert sorted(phases["feature/cart"]) == ["validate"], f"a chain of renames is one change: {phases}"
+    assert sorted(phases["next"]) == ["build"], f"another repo's rename doesn't apply here: {phases}"
 
 
 def what_ends_a_phase(home):
@@ -171,8 +178,8 @@ def what_counts_as_starting_the_code(home):
             *assistant(6, "m5", "b2", [{**edit("/g/agents/spec-repo-b2.md"), "name": "Edit"}]),
             *assistant(7, "m6", "b2", [bash("git switch -q -c b1 origin/main")]),                     # the old name, reused
             *assistant(8, "m7", "b1", [edit("/g/agents/spec-repo-b1.md")])]
-    phases = session(home, rows)["phases"]
-    assert "main" not in phases and (phases["b2"]["spec"]["out"], phases["b2"]["build"]["out"]) == (30, 30), \
+    phases = spending(session(home, rows)["phases"])
+    assert not phases["main"] and (phases["b2"]["spec"]["out"], phases["b2"]["build"]["out"]) == (30, 30), \
         f"m0 (it ends on b1) to m2 spec; after the code edit a rename keeps it started, so the later spec edit is build: {phases}"
     assert sorted(phases["b1"]) == ["spec"], f"a new branch under a renamed one's old name starts fresh: {phases}"
 
@@ -183,8 +190,34 @@ def short_gaps_add_up(home):
     assert found["phases"]["a"]["build"]["minutes"] == 1.0, found["phases"]["a"]
 
 
+def the_users_attention_per_branch(home):
+    ask = {"type": "tool_use", "id": "t-ask", "name": "AskUserQuestion", "input": {"questions": []}}
+    answer = {"type": "user", "timestamp": at(20), "cwd": "/repo", "gitBranch": "a", "uuid": "ans",
+              "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t-ask", "content": "Option A"}]}}
+    tool_result = {**answer, "timestamp": at(21), "uuid": "tr",
+                   "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t-b", "content": "done"}]}}
+    rows = [user(3, "build the thing", "a"),                                  # the first prompt waited on nobody
+            *assistant(4, "m0", "a", [TEXT, ask]),
+            answer,                                                           # 16 minutes to answer the question
+            tool_result,                                                      # not the user
+            *assistant(22, "m1", "a", [TEXT, bash("ls")]),
+            {**user(24, "Base directory for this skill: /x", "a"), "isMeta": True},  # a skill's text, not a prompt
+            user(30, "no, that's wrong", "a"),                                # 6 minutes after the skill's text
+            {**user(30, "<local-command-stdout>Kept model</local-command-stdout>", "a"), "uuid": "out"},  # the harness's
+            user(31, "<command-message>validate</command-message>\n<command-name>/validate</command-name>", "a"),  # typed
+            *assistant(31, "m2", "b", [TEXT]),
+            {**user(31, "go on", "b"), "timestamp": "2026-10-01T12:01:00Z"}]  # 90 minutes later, on branch b
+    phases = session(home, rows)["phases"]
+    totals = {b: {k: round(sum(p.get(k, 0) for p in ps.values()), 1) for k in ("prompts", "questions", "corrections", "wait_minutes",
+                                                                             "reply_minutes")} for b, ps in phases.items()}
+    assert totals["a"] == {"prompts": 3, "questions": 1, "corrections": 1, "wait_minutes": 23, "reply_minutes": 22}, totals["a"]
+    assert totals["b"] == {"prompts": 1, "questions": 0, "corrections": 0, "wait_minutes": 90, "reply_minutes": 15}, \
+        f"an away gap is all idle time but at most 15 reply minutes: {totals['b']}"
+
+
 for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, branches_started_by_commands,
-             writing_the_spec_marks_the_work_before_it, what_counts_as_starting_the_code, short_gaps_add_up):
+             writing_the_spec_marks_the_work_before_it, what_counts_as_starting_the_code, short_gaps_add_up,
+             the_users_attention_per_branch):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:

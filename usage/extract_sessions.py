@@ -176,7 +176,11 @@ def renamed(renames, repos, old, new):
 
 
 def no_spending():
-    return {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "minutes": 0}
+    """Tokens and active minutes, and the user's share: prompts (typed commands too), the agent's questions,
+    corrections, minutes the session sat idle until each prompt or answer, and the same gaps capped at
+    ACTIVE_GAP_MINUTES each, a guess at the user's time on them rather than a measurement."""
+    return {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "minutes": 0,
+            "prompts": 0, "questions": 0, "corrections": 0, "wait_minutes": 0, "reply_minutes": 0}
 
 
 def add_spending(into, spent, sign=1):
@@ -192,8 +196,23 @@ def failed_calls(entries):
             if isinstance(c, dict) and c.get("is_error") and "fatal:" in json.dumps(c.get("content"))}
 
 
+def user_reply(entry, questions):
+    """"prompt" for a prompt or command the user typed, "answer" for their answer to one of the agent's questions (the
+    tool-use ids in `questions`), None for anything else a user entry holds: tool results, a skill's text."""
+    msg = entry.get("message") or {}
+    if entry.get("type") != "user" or msg.get("role") != "user" or entry.get("isMeta"):
+        return None
+    text = text_of(msg.get("content"))
+    if is_real_prompt(text) or TYPED_SKILL.search(text):
+        return "prompt"
+    content = msg.get("content")
+    if isinstance(content, list) and any(isinstance(c, dict) and c.get("tool_use_id") in questions for c in content):
+        return "answer"
+    return None
+
+
 def split_into_phases(entries, renames, repos):
-    """branch -> phase -> tokens and active minutes. A message belongs to the last flow skill started on its branch
+    """branch -> phase -> tokens, active minutes and the user's share (see no_spending). A message belongs to the last flow skill started on its branch
     ("build" before any, and again after the spec once code is edited); a change of branch starts again at
     "build" unless it is a rename (`git branch -m`, or one logged), which carries the branch's spending to the new
     name. The branch changes when the session directory's gitBranch does or a command starts one. An entry without a
@@ -206,6 +225,9 @@ def split_into_phases(entries, renames, repos):
         mid = (e.get("message") or {}).get("id")
         if e.get("type") == "assistant" and mid:
             events_of[mid] = events_of.get(mid, []) + phase_events(e, failed)
+    questions = {c.get("id") for e in entries if e.get("type") == "assistant"
+                 for c in (e.get("message") or {}).get("content") or [] if isinstance(c, dict) and c.get("name") == "AskUserQuestion"}
+    asked = set()
     phases, counted = {}, set()
     started, before_code = set(), {}  # branches past their first code edit or flow skill; build spent before that
 
@@ -250,11 +272,22 @@ def split_into_phases(entries, renames, repos):
                 phase = "build" if phase == "spec" else phase
                 started.add(branch)
         spent = no_spending()
+        reply = user_reply(e, questions)
+        if reply == "prompt":
+            spent["prompts"] += 1
+            spent["corrections"] += bool(CORRECTION.search(text_of((e.get("message") or {}).get("content")).strip()))
+        for c in (e.get("message") or {}).get("content") or [] if e.get("type") == "assistant" else []:
+            if isinstance(c, dict) and c.get("id") in questions and c["id"] not in asked:
+                asked.add(c["id"])
+                spent["questions"] += 1
         if e.get("timestamp"):
             now = ts(e["timestamp"])
             gap = (now - last).total_seconds() / 60 if last else 0
             if 0 < gap <= ACTIVE_GAP_MINUTES:
                 spent["minutes"] += gap
+            if reply and gap > 0:
+                spent["wait_minutes"] += gap
+                spent["reply_minutes"] += min(gap, ACTIVE_GAP_MINUTES)
             last = max(last, now) if last else now  # a resumed session replays older timestamps
         if first_line:
             counted.add(mid)
@@ -266,7 +299,7 @@ def split_into_phases(entries, renames, repos):
         add_spending(phases.setdefault(branch, {}).setdefault(phase, no_spending()), spent)
         if phase == "build" and branch not in started:
             add_spending(before_code.setdefault(branch, no_spending()), spent)
-    rounded = {b: {p: {**v, "minutes": round(v["minutes"], 1)} for p, v in ps.items()} for b, ps in phases.items() if b}
+    rounded = {b: {p: {k: round(x, 1) for k, x in v.items()} for p, v in ps.items()} for b, ps in phases.items() if b}
     kept = {b: {p: v for p, v in ps.items() if any(v.values())} for b, ps in rounded.items()}
     return {b: ps for b, ps in kept.items() if ps}
 

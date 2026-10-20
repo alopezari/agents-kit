@@ -1,0 +1,1 @@
+- The monthly job reports the user's share of each merged PR: prompts, the agent's questions, corrections, minutes the session sat idle until each reply, and a capped reply-time guess, per phase and per PR, with how many PRs it covers fully, partly (Codex sessions) or not at all.
