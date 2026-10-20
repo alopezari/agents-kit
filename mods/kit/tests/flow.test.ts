@@ -64,8 +64,10 @@ function repo(overrides: Record<string, Run> = {}): Record<string, Run> {
 const REPORT_TEXT = '# Verify: PASS\n\n```\nran: tests/a.py\nran: tests/test_failed_login.py\nskipped: ruff: not installed\nwarning: slow\nerror: none\n```\n'
 
 // Stubs everything the mod reaches outside itself; returns the argv and options of every process it ran.
-function stub(on, runs: Record<string, Run>, { surfaces = ['terminal'], report = REPORT_TEXT, process = null, panes = () => ['flow'], cwd = { value: SESSION_CWD } } = {}) {
+function stub(on, runs: Record<string, Run>, { surfaces = ['terminal'], report = REPORT_TEXT, process = null, panes = () => ['flow'], cwd = { value: SESSION_CWD },
+  env = { value: undefined } as { value: undefined } | { deny: string } } = {}) {
   const ran: string[] = []
+  const started: string[] = []  // env.set and command.register, in order
   const cwds: string[] = []
   const timeouts: number[] = []
   const opened: object[] = []
@@ -74,7 +76,14 @@ function stub(on, runs: Record<string, Run>, { surfaces = ['terminal'], report =
   on('session.cwd', () => (typeof cwd === 'function' ? cwd() : cwd))
   on('session.surfaces', () => ({ value: surfaces }))
   on('session.usage', () => ({ value: { context: { window: 200000, tokens: 50000, percent: 25 } } }))
-  on('command.register', () => ({ value: undefined }))
+  on('env.set', ($, e) => {
+    started.push(`env ${e.name}=${e.value}`)
+    return env
+  })
+  on('command.register', ($, e) => {
+    started.push('command ' + e.name)
+    return { value: undefined }
+  })
   on('ui.open', ($, e) => {
     opened.push(e)
     return { value: { isPlaced: true } }
@@ -96,7 +105,7 @@ function stub(on, runs: Record<string, Run>, { surfaces = ['terminal'], report =
     if ('deny' in answer) return answer
     return { value: { exitCode: answer.exitCode, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' } }
   }))
-  return { ran, cwds, timeouts, opened, clock }
+  return { ran, cwds, timeouts, opened, clock, started }
 }
 
 async function openPane($, clock) {
@@ -724,6 +733,26 @@ test('a reviewer the host refuses is logged, and the next one is still registere
   expect(logged.length).toBe(1)
   expect(logged[0].text).toMatch(/review-correctness.*schema: bad name/)
   expect(logged[0].to).toBe('debug')
+})
+
+test('session start marks the process, so guard_mcp knows a dialog can ask, before anything else it does', async ($, on) => {
+  const { started } = stub(on, { [TRIAGE_ARGV]: { exitCode: 0, stdout: '[]' } })
+  on('session.start', () => ({ cwd: ROOT }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT })
+  expect(started).toEqual(['env AGENTS_KIT_MOD=1', 'command flow'])
+})
+
+test('a marker the host refuses to set is a debug line, and the session still starts with /flow', async ($, on) => {
+  const logged: { text: string; to: string }[] = []
+  const { started } = stub(on, { [TRIAGE_ARGV]: { exitCode: 0, stdout: '[]' } }, { env: { deny: 'no env here' } })
+  on('ui.log', ($, e) => {
+    logged.push({ text: e.text, to: e.to })
+    return { value: undefined }
+  })
+  on('session.start', () => ({ cwd: ROOT }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT })
+  expect(started).toEqual(['env AGENTS_KIT_MOD=1', 'command flow'])
+  expect(logged).toEqual([{ text: expect.stringMatching(/^kit: AGENTS_KIT_MOD not set: .*no env here$/), to: 'debug' }])
 })
 
 test('the reviewers are registered before the session starts, so its first turn has them', async ($, on) => {

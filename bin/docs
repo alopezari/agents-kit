@@ -340,7 +340,8 @@ def render():
     w("- The last two lift for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, validate, "
       "staging; `bin/phase switches`); no other rule here can be switched off.\n")
     w("It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your "
-      "approval: naming the service in your message approves it until your next one, and otherwise you create a "
+      "approval: naming the service in your message approves it until your next one, as does saying yes when the "
+      "agent's last message asked to write to it by name, and otherwise you create a "
       "short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare "
       "other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. Where a "
       "profile also says which input fields name the object a write touches, and which field a create returns, the "

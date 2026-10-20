@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """PreToolUse guard for MCP tools that write to shared systems, and the PostToolUse hook that records what they wrote to.
 
-Reads pass. Writes are allowed when the user's current message names the service
-(prompt_approvals.py) or they allowed it in Claude Code's dialog (bin/approve), or the user approved it in the
-last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves. The shell guard (guard_bash.py)
+Reads pass. Writes are allowed when the user's current message names the service or accepts the agent's offer to
+write to it (prompt_approvals.py), or they allowed it in Claude Code's dialog (bin/approve), or the user approved it in
+the last APPROVAL_MINUTES by creating ~/.agents/approvals/<service> themselves. The shell guard (guard_bash.py)
 never lets agents create any of them.
+
+The dialog is the kit's Claude Code mod, which marks its session's process with KIT_MOD_MARKER when it starts. A block
+in a Claude Code session without the marker says, to the agent and the user, that no dialog will show.
 
 A write the user approved records the objects it touched, where the service's rules say which they are: the ids in
 the input's object fields, and the id a create returns. For OBJECT_APPROVAL_HOURS from the last write the user
@@ -30,13 +33,14 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from hooklog import log  # noqa: E402
+from hooklog import log, session_harness  # noqa: E402
 
 APPROVALS = os.path.expanduser("~/.agents/approvals")
 TURN_APPROVALS = os.path.join(APPROVALS, "turn")
 SESSION_APPROVALS = os.path.join(APPROVALS, "session")  # <session>/<service>/<object id>, kept across messages
 APPROVAL_MINUTES = 15
 OBJECT_APPROVAL_HOURS = 24
+KIT_MOD_MARKER = "AGENTS_KIT_MOD"  # the mod sets it at session start; hook processes inherit it
 OBJECT_ID = re.compile(r"\w[\w.-]{0,199}")  # a file name of its own: never a path, never hidden
 
 PROFILES = os.environ.get("AGENTS_PROFILES_DIR") or os.path.expanduser("~/.agents/profiles")
@@ -216,8 +220,12 @@ def main():
     if object_approved(service, operation, objects, tool_input, payload.get("session_id")):
         log("guard_mcp", "allow-object", payload, f"{service}:{operation}:{','.join(object_ids(tool_input, objects))}")
         return 0
-    log("guard_mcp", "deny", payload, f"{service}:{operation}")
+    no_dialog = session_harness() == "claude-code" and not os.environ.get(KIT_MOD_MARKER)
+    log("guard_mcp", "deny", payload, f"{service}:{operation}" + (" (no dialog: kit mod not loaded)" if no_dialog else ""))
+    unavailable = ("approval dialog unavailable: kit mod not loaded in this Claude Code session "
+                   "(`~/.agents/install.sh --doctor` checks it's installed and enabled)")
     print(json.dumps({
+        **({"systemMessage": f"{service} write blocked; {unavailable}."} if no_dialog else {}),
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
@@ -227,8 +235,10 @@ def main():
                 + (f", and this write isn't to objects they approved writing to earlier in this session (in the last "
                    f"{OBJECT_APPROVAL_HOURS} h): a create always needs their approval" if objects else "")
                 + f". Show them exactly what you would write, then ask them "
-                f"to approve it by asking for it in their next message, or by running `touch ~/.agents/approvals/{service}` "
+                f"to approve it: their next message asking for it, or saying yes to your question if it offered this {service} "
+                f"write by name, does; so does running `touch ~/.agents/approvals/{service}` "
                 f"(valid {APPROVAL_MINUTES} minutes), and retry after they confirm. Never create that file yourself."
+                + (f" Tell the user: {unavailable}." if no_dialog else "")
             ),
         }
     }))

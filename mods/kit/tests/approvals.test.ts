@@ -122,6 +122,16 @@ test('an empty answer is a dismissed dialog, not words the user typed', async ($
   expect(argvs()).toEqual([APPROVE + ' needed'])
 })
 
+for (const [why, answer] of [['rejects', { deny: 'no one to ask' }], ['answers empty', '']] as const) {
+  test(`a dialog that ${why} tells the user in the transcript that the call stays blocked`, async ($, on) => {
+    const { logs } = stub(on, { answer })
+    await bash($)
+    const line = logs.find((l) => l.text.includes('approval dialog'))
+    expect(line?.text).toMatch(/^kit: the approval dialog for sql\.drop-table closed without an answer.*so the call stays blocked/)
+    expect(line?.to).not.toBe('debug')
+  })
+}
+
 for (const [why, needed] of [['nothing to approve', { exitCode: 0, stdout: '{"names": [], "what": "", "scope": ""}' }],
   ['bin/approve failing', { exitCode: 1, stdout: '', stderr: 'boom' }], ['bin/approve printing no JSON', { exitCode: 0, stdout: 'not json' }],
   ['bin/approve not starting', { deny: 'no process here' }]] as const) {
@@ -133,6 +143,23 @@ for (const [why, needed] of [['nothing to approve', { exitCode: 0, stdout: '{"na
     expect(calls.length).toBe(1)
   })
 }
+
+for (const [why, needed] of [['bin/approve failing', { exitCode: 1, stdout: '', stderr: 'boom' }],
+  ['bin/approve printing no JSON', { exitCode: 0, stdout: 'not json' }], ['bin/approve not starting', { deny: 'no process here' }]] as const) {
+  test(`${why} tells the user in the transcript that no dialog can ask`, async ($, on) => {
+    const { logs } = stub(on, { needed })
+    await bash($)
+    const line = logs.find((l) => l.text.startsWith('kit: approval dialog unavailable'))
+    expect(line?.text).toMatch(/so the call stays blocked/)
+    expect(line?.to).not.toBe('debug')
+  })
+}
+
+test('nothing to approve (another rule blocked it) logs nothing the user sees', async ($, on) => {
+  const { logs } = stub(on, { needed: { exitCode: 0, stdout: '{"names": [], "what": "", "scope": ""}' } })
+  await bash($)
+  expect(logs.filter((l) => l.to !== 'debug')).toEqual([])
+})
 
 test('a grant that fails leaves the block, runs nothing again and tells the user', async ($, on) => {
   const { calls, asked, argvs, logs } = stub(on, { grant: { exitCode: 1, stderr: "approve: couldn't write the approval: disk full" } })

@@ -27,7 +27,8 @@ export const FEATURES = [
     "hook": "tool.call",
     "description": "Ask the user in a dialog when a kit guard blocks a call they could approve",
     "capabilities": [
-      {"name": "A blocked MCP write or `DROP`/`TRUNCATE` command shown in a dialog: allowed once, until the user's next message, or kept blocked", "codex": "the user's next message naming the service or opening with `allow <statement>`, or `touch ~/.agents/approvals/<service>`"}
+      {"name": "A blocked MCP write or `DROP`/`TRUNCATE` command shown in a dialog: allowed once, until the user's next message, or kept blocked", "codex": "the user's next message naming the service, saying yes to the agent's question offering that write by name, or opening with `allow <statement>`; or `touch ~/.agents/approvals/<service>`"},
+      {"name": "A dialog that can't ask (`bin/approve` failed, or it closed without an answer) said in the transcript, and a block in a session without the mod says no dialog will show", "codex": "none: Codex has no dialog, and its blocks say how to approve"}
     ]
   },
   {
