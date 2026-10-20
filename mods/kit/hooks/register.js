@@ -495,7 +495,7 @@ async function askToLiftBlock($, e, next) {
   }
   if (!needed?.names?.length) return blocked
   const allowTurn = `Allow ${needed.scope} until my next message`
-  let unanswered = 'an empty answer'
+  let unanswered = ''
   const answer = await $.ui
     .ask(`A kit guard blocked this call: ${needed.what}.\n\n${previewOf(tool, input)}\n\nAllow it?`,
       { header: 'Approval', options: [ALLOW_ONCE, allowTurn, KEEP_BLOCKED] })
@@ -505,7 +505,7 @@ async function askToLiftBlock($, e, next) {
     })  // dismissed, interrupted, or a -p run with no one to ask: the block stands, as without the mod
   if (answer === null) {
     // The engine rejects a dismissal and a dialog it couldn't show alike: the line says what is known, not which.
-    $.ui.log(`kit: the approval dialog for ${needed.names.join(', ')} closed without an answer (${unanswered}), so the call stays blocked`)
+    $.ui.log(`kit: the approval dialog for ${needed.names.join(', ')} closed without an answer${unanswered && ` (${unanswered})`}, so the call stays blocked`)
     return blocked
   }
   const outcome = [ALLOW_ONCE, allowTurn, KEEP_BLOCKED].includes(answer) ? answer : 'answered in their own words'

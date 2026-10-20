@@ -228,7 +228,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | Pass button on each step before the merge, recorded as the user's verdict | `bin/staging mark <step> PASS --by user` in a terminal (the shell guard refuses it from the agent) |
 |  | Fail button on each step before the merge, recorded as the user's verdict | `bin/staging mark <step> FAIL --by user` in a terminal |
 | `tool.call` hook: Ask the user in a dialog when a kit guard blocks a call they could approve | A blocked MCP write or `DROP`/`TRUNCATE` command shown in a dialog: allowed once, until the user's next message, or kept blocked | the user's next message naming the service, saying yes to the agent's question offering that write by name, or opening with `allow <statement>`; or `touch ~/.agents/approvals/<service>` |
-|  | A dialog that can't ask (`bin/approve` failed, or it closed without an answer) said in the transcript, and a block in a session without the mod says no dialog will show | none: Codex has no dialog, and its blocks say how to approve |
+|  | A dialog that can't ask (`bin/approve` failed, or it closed without an answer) said in the transcript, and an MCP write block in a session without the mod says no dialog will show | none: Codex has no dialog, and its blocks say how to approve |
 | `kit:review-<lens>` agents: One reviewer agent type per self-review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/self-review/lenses.md` |
 
 The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.

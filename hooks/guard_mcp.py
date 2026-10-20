@@ -33,7 +33,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from hooklog import log, session_harness  # noqa: E402
+from hooklog import harness, log, session_harness  # noqa: E402
 
 APPROVALS = os.path.expanduser("~/.agents/approvals")
 TURN_APPROVALS = os.path.join(APPROVALS, "turn")
@@ -220,12 +220,15 @@ def main():
     if object_approved(service, operation, objects, tool_input, payload.get("session_id")):
         log("guard_mcp", "allow-object", payload, f"{service}:{operation}:{','.join(object_ids(tool_input, objects))}")
         return 0
-    no_dialog = session_harness() == "claude-code" and not os.environ.get(KIT_MOD_MARKER)
-    log("guard_mcp", "deny", payload, f"{service}:{operation}" + (" (no dialog: kit mod not loaded)" if no_dialog else ""))
-    unavailable = ("approval dialog unavailable: kit mod not loaded in this Claude Code session "
-                   "(`~/.agents/install.sh --doctor` checks it's installed and enabled)")
+    # Both: the payload tells a Codex hook apart, the environment a Claude Code session apart from a bare run.
+    no_dialog = harness(payload) == "claude-code" and session_harness() == "claude-code" \
+        and not os.environ.get(KIT_MOD_MARKER)
+    log("guard_mcp", "deny", payload, f"{service}:{operation}" + (" (no dialog: kit mod didn't start)" if no_dialog else ""))
+    unavailable = ("approval dialog unavailable: the kit mod didn't start in this Claude Code session (not installed "
+                   "or enabled, mods off, or it couldn't mark the session; `~/.agents/install.sh --doctor` checks it)")
     print(json.dumps({
-        **({"systemMessage": f"{service} write blocked; {unavailable}."} if no_dialog else {}),
+        **({"systemMessage": f"{service} write blocked; {unavailable}. To allow it, name {service} in your next "
+                             f"message, or say yes to the agent's question offering it."} if no_dialog else {}),
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
@@ -234,11 +237,11 @@ def main():
                 f"The user's message didn't ask for {service}"
                 + (f", and this write isn't to objects they approved writing to earlier in this session (in the last "
                    f"{OBJECT_APPROVAL_HOURS} h): a create always needs their approval" if objects else "")
-                + f". Show them exactly what you would write, then ask them "
-                f"to approve it: their next message asking for it, or saying yes to your question if it offered this {service} "
-                f"write by name, does; so does running `touch ~/.agents/approvals/{service}` "
-                f"(valid {APPROVAL_MINUTES} minutes), and retry after they confirm. Never create that file yourself."
-                + (f" Tell the user: {unavailable}." if no_dialog else "")
+                + f". Show them exactly what you would write and ask them to approve it. Their next message approves "
+                f"it if it asks for it, or says yes to your question offering this {service} write by name; so does "
+                f"their running `touch ~/.agents/approvals/{service}` (valid {APPROVAL_MINUTES} minutes). Retry after "
+                f"they confirm. Never create that file yourself."
+                + (f" No approval dialog will show: {unavailable}." if no_dialog else "")
             ),
         }
     }))
