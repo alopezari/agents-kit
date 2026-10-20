@@ -124,7 +124,7 @@ def sessions_join_by_repo_and_branch(base):
                                   "hours_to_pr": 2.0, "hours_to_merge": 24.0,
                                   "phases": {"build": {"out": 535, "cache_read": 0, "cache_write": 0, "minutes": 23.5}, "validate": {"out": 20, "cache_read": 0, "cache_write": 0, "minutes": 5}},
                                   "attention": {"prompts": 0, "questions": 0, "corrections": 0, "wait_minutes": 0, "reply_minutes": 0,
-                                                "coverage": "complete"}}, prs[0]["sessions"]
+                                                "coverage": "partial"}}, prs[0]["sessions"]
     counts = dict.fromkeys(("review_threads", "changes_requested", "red_pushes", "commits_after_first_review"), 0)
     assert outcomes.summarize([{**prs[0], **counts, "follow_ups": "pending"}])["sessions_joined"]["per_phase"]["validate"]["minutes"] == 5, \
         "phases on the PR's branch and its earlier names only, summed over its sessions in its repo"
@@ -212,10 +212,29 @@ def attention_per_pr_and_its_coverage(base):
     assert (waits["per_pr"]["wait_minutes"], waits["median_per_pr"]["wait_minutes"]) == (301, 2), waits
 
 
+def a_share_never_measured_is_not_zero(base):
+    prs = [{"repo": "o/shop", "branch": branch, "opened": "2026-10-02T00:00:00Z", "merged": "2026-10-03T00:00:00Z"}
+           for branch in ("old", "intake")]
+    claude = {"harness": "claude-code", "repos": {"o/shop": ["shop"]}, "start_iso": "2026-10-01T00:00:00Z", "minutes": 1,
+              "tokens": {"in": 1, "out": 1, "cache_read": 0}, "models": {}, "effort": []}
+    no_share = {"in": 1, "out": 5, "cache_read": 0, "cache_write": 0, "minutes": 3}
+    sessions = [{**claude, "branches": ["old"], "phases": {"old": {"build": no_share}}},  # a sessions file from before
+                {**claude, "branches": ["intake"], "phases": {"intake": {"build": {**dict.fromkeys(no_share, 0), "prompts": 1,
+                 "questions": 0, "corrections": 0, "wait_minutes": 0, "reply_minutes": 0}}}}]
+    outcomes.QUALITY_LOG = os.path.join(base, "quality.jsonl")
+    outcomes.attach_sessions(prs, sessions)
+    old, intake = (p["sessions"]["attention"]["coverage"] for p in prs)
+    assert (old, intake) == ("partial", "complete"), (old, intake)
+    counts = dict.fromkeys(("review_threads", "changes_requested", "red_pushes", "commits_after_first_review"), 0)
+    joined = outcomes.summarize([{**p, **counts, "follow_ups": "pending"} for p in prs])["sessions_joined"]
+    assert joined["prs_with_phases"] == 1, f"a PR that spent no tokens leaves the cost per phase alone: {joined}"
+
+
 RESULTS = []
 for test in (pr_metrics_count_people_not_me_or_bots, follow_ups_need_a_shared_file_and_a_fix_title,
              escapes_join_to_their_branch_and_lens, sessions_join_by_repo_and_branch, a_checkout_named_unlike_its_repo,
-             quality_log_names_the_repo_not_the_worktree, attention_per_pr_and_its_coverage):
+             quality_log_names_the_repo_not_the_worktree, attention_per_pr_and_its_coverage,
+             a_share_never_measured_is_not_zero):
     base = tempfile.mkdtemp(prefix="agents-test-outcomes-")
     try:
         test(base)

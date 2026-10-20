@@ -214,10 +214,45 @@ def the_users_attention_per_branch(home):
     assert totals["b"] == {"prompts": 1, "questions": 0, "corrections": 0, "wait_minutes": 90, "reply_minutes": 15}, \
         f"an away gap is all idle time but at most 15 reply minutes: {totals['b']}"
 
+def attention(phases):
+    return {b: {k: round(sum(p.get(k, 0) for p in ps.values()), 1) for k in ("prompts", "corrections", "wait_minutes")}
+            for b, ps in phases.items()}
+
+
+def what_the_user_did_not_type(home):
+    rows = [user(3, "build the thing", "a"),
+            *assistant(4, "m0", "a", [TEXT]),
+            {**user(10, "This session is being continued from a previous conversation.", "a"), "isCompactSummary": True},
+            {**user(11, "The lane plugin sent a message", "a"), "origin": {"kind": "plugin", "name": "lane"}},
+            user(12, "<bash-stdout>ok</bash-stdout>", "a"),
+            *assistant(12, "m1", "a", [TEXT, bash("make")]),
+            user(20, "[Request interrupted by user for tool use]", "a"),  # 8 minutes of the agent's work, not a wait
+            {**user(21, "no, the other file", "a"), "origin": {"kind": "human"}}]
+    assert attention(session(home, rows)["phases"]) == {"a": {"prompts": 3, "corrections": 2, "wait_minutes": 1}}
+
+
+def another_agents_run_is_not_the_user(home):
+    rows = [{**r, "entrypoint": "sdk-cli"} for r in [user(3, "Task: cap the review rounds", "a"),
+                                                       *assistant(4, "m0", "a", [TEXT]), user(9, "go on", "a")]]
+    assert attention(session(home, rows)["phases"]) == {"a": {"prompts": 0, "corrections": 0, "wait_minutes": 0}}
+
+
+def a_session_of_typed_commands(home):
+    rows = [user(3, "<command-message>validate</command-message>\n<command-name>/validate</command-name>", "a"),
+            *assistant(4, "m0", "a", [TEXT])]
+    found = session(home, rows)
+    assert attention(found["phases"]) == {"a": {"prompts": 1, "corrections": 0, "wait_minutes": 0}}
+    spec = importlib.util.spec_from_file_location("extract_sessions", os.path.join(KIT, "usage", "extract_sessions.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.summarize(found)["first_prompt"] == "", "the summary has no prompt text to quote, and doesn't fail"
+
+
 
 for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, branches_started_by_commands,
              writing_the_spec_marks_the_work_before_it, what_counts_as_starting_the_code, short_gaps_add_up,
-             the_users_attention_per_branch):
+             the_users_attention_per_branch, what_the_user_did_not_type, another_agents_run_is_not_the_user,
+             a_session_of_typed_commands):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:
