@@ -2776,6 +2776,9 @@ def coming_back_after_hours_asks_for_the_status_first(base):
     on_the_way_back = [claude("user", "<command-name>/model</command-name>", 0),
                        claude("user", "<local-command-stdout>Set model to opus</local-command-stdout>", 0),
                        claude("user", "<local-command-caveat>Caveat: …</local-command-caveat>", 0),
+                       claude("user", "<command-message>model</command-message>\n<command-name>/model</command-name>", 0),
+                       claude("user", "<bash-input>git status</bash-input>", 0),
+                       claude("user", "<bash-stdout>ok</bash-stdout><bash-stderr></bash-stderr>", 0),
                        claude("user", "This session is being continued…", 0) | {"isCompactSummary": True}]
     assert context(ask, ended, *on_the_way_back), "a command run on the way back isn't the conversation"
     assert context(ask, claude("user", ask, 0), session="r-none") is None, "no entry before the prompt: no gap to read"

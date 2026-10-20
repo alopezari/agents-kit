@@ -42,8 +42,9 @@ RETURN_TAIL_BYTES = 64 * 1024  # smaller than the approvals' tail: this one is r
 PROMPT_WRITTEN_SECONDS = 300  # the message being submitted, already written: an older one with the same text counts
 # Codex events that mark the conversation itself; task_started and the like are written as the new message arrives.
 CODEX_CONVERSATION_EVENTS = {"task_complete", "agent_message", "user_message", "turn_aborted"}
-# What Claude Code writes as user entries for a command run on the way back (/model, /compact): not the conversation.
-LOCAL_COMMAND = re.compile(r"\s*<(command-name|local-command-stdout|local-command-caveat)>")
+# What Claude Code writes as user entries for a command run on the way back (/model, /compact, `! git status`): not the
+# conversation. The same prefixes usage/extract_sessions.py's is_real_prompt leaves out.
+LOCAL_COMMAND = re.compile(r"\s*<(command-|local-command-|bash-)")
 RETURN_BRIEF = (
     "The user is back after {hours:.0f} hours away. Before answering, run `~/.agents/bin/reports brief` from the "
     "checkout of the branch this conversation was about (`~/.agents/bin/reports --branch <branch> brief` when that "
