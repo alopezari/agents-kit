@@ -9,7 +9,7 @@ const SWITCH_REFUSED = 3
 // ci-wait --once makes one GitHub round trip per check source, and one more for the no-CI probe when there are none,
 // each bounded at 30 s; a GitHub slower than this reads as couldn't read.
 const CI_TIMEOUT_MS = 90_000
-const STAMPS = [['verify', 'verify'], ['self-review', 'review'], ['validate', 'validate'], ['staging', 'staging']]
+const STAMPS = [['verify', 'verify'], ['self-review', 'review'], ['validate', 'validate']]
 const CI_OUTCOMES = { 0: 'passed', 1: 'failed', 2: 'running', 3: 'no checks', 4: 'unreadable', 5: 'none in this repo' }
 const REPORT_LINE = /^(ran|skipped|warning|error):/
 const VERIFY_TAIL_LINES = 8
@@ -38,13 +38,6 @@ let gatherAgain = false
 let verifyRun = { state: 'idle' }
 // A verify stopped at its deadline holds the button until its child is gone, so two never write one report.
 let verifyStopping = false
-// Marks run one at a time, in the order pressed, each shown as pending until it lands.
-let marking = Promise.resolve()
-let pendingMarks = []
-// { root, text }: shown while the pane shows that checkout, whatever its branch now: a refusal says the branch moved.
-let markFailure = null
-// A step's title is cut to this, so its result and evidence stay on the line.
-const TITLE_CHARS = 60
 
 async function run($, argv, cwd, timeoutMs = PROCESS_TIMEOUT_MS) {
   try {
@@ -92,50 +85,6 @@ async function verifyReportLines($, kit, root) {
   } catch (error) {
     return ["couldn't read: " + messageOf(error)]
   }
-}
-
-// { steps } for the guide's steps before the merge, or { failure } when bin/staging can't list them.
-async function stagingSteps($, kit, root) {
-  const listed = await run($, [kit + '/bin/staging', 'steps', '--json'], root)
-  if (listed.failure || listed.exitCode !== 0) return { failure: "couldn't read: " + failureOf(listed) }
-  try {
-    return { steps: JSON.parse(listed.stdout) }
-  } catch (error) {
-    return { failure: "couldn't read: bin/staging printed something not JSON: " + messageOf(error) }
-  }
-}
-
-function stepLine(step) {
-  const title = step.title.length > TITLE_CHARS ? step.title.slice(0, TITLE_CHARS - 1) + '…' : step.title
-  const result = step.result ? step.result + (step.by ? ' (' + step.by + ')' : '') : 'not marked'
-  const evidence = step.evidence.length ? step.evidence.map((path) => path.split('/').pop()).join(', ') : 'no evidence yet'
-  return [step.id + ' ' + title, result, evidence].join(' · ')
-}
-
-function markStep($, id, result) {
-  if (!shown?.root) return marking
-  // What the pressed button showed: a gathering can move the pane before this mark's turn comes.
-  const { root, branch } = shown
-  const label = id + ' ' + (result === 'PASS' ? 'Pass' : 'Fail')
-  pendingMarks.push(label)
-  $.ui.invalidate('ui.render')
-  marking = marking.then(async () => {
-    try {
-      const kit = await kitDir($)
-      // --branch: the checkout itself may have moved since the pane showed this step.
-      const marked = await run($, [kit + '/bin/staging', 'mark', id, result, '--by', 'user', '--branch', branch], root)
-      if (marked.failure || marked.exitCode !== 0) markFailure = { root, text: `Couldn't mark ${label}: ` + failureOf(marked) }
-      else if (markFailure?.root === root) markFailure = null
-    } finally {
-      pendingMarks.splice(pendingMarks.indexOf(label), 1)
-    }
-    await gather($)
-  }).catch((error) => {
-    // A broken chain would leave every later press doing nothing.
-    markFailure = { root, text: `Marked ${label}, or not: the pane failed while it ran: ` + messageOf(error) }
-    $.ui.invalidate('ui.render')
-  })
-  return marking
 }
 
 async function ciLine($, kit, root, head) {
@@ -238,10 +187,9 @@ async function collect($) {
         return { none: at.inMain ? 'Detached HEAD, and the main checkout is on the default branch: no change to follow.' : 'On the default branch: no change to follow.' }
       }
     }
-    const [stamps, report, staging, ci, context, gatheredAt] = await Promise.all([
+    const [stamps, report, ci, context, gatheredAt] = await Promise.all([
       Promise.all(STAMPS.map(([label, kind]) => stampLine($, kit, at.root, label, kind))),
       verifyReportLines($, kit, at.root),
-      stagingSteps($, kit, at.root),
       ciLine($, kit, at.root, at.head),
       contextLine($),
       $.clock.now(),
@@ -256,7 +204,6 @@ async function collect($) {
       branch: at.branch,
       heading: nameOf(at) + ' · gathered ' + timeOf(gatheredAt) + (moved ? ' · the checkout moved while gathering: Refresh' : ''),
       sections: [['Flow', flow], ['Stamps', stamps], ['Last verify report', report], ['CI and context', [ci, context]]],
-      staging,
     }
   }
 }
@@ -583,30 +530,6 @@ export function register(on) {
       ...(shown?.root ? [Button({ key: 'run-verify', label: 'Run verify', hotkey: 'v', plain: true, onPress: () => void runVerify($) })] : []),
       Button({ key: 'refresh', label: 'Refresh', hotkey: 'r', plain: true, onPress: () => void gather($) }),
     ]
-    // One row per step before the merge, each with its own Pass and Fail: what a press records is the user's.
-    // The buttons lead the row, so they line up whatever the step's line holds.
-    const staging = shown?.staging
-    const failure = markFailure && markFailure.root === shown?.root ? markFailure.text : null
-    const steps = staging?.steps ?? []
-    const stagingRows = !staging || (!staging.failure && !steps.length && !failure && !pendingMarks.length) ? [] : [
-      Text({ children: [' '] }),
-      Text({ dimColor: true, children: ['Staging before the merge'] }),
-      ...(pendingMarks.length ? [Text({ dimColor: true, children: ['Marking ' + pendingMarks.join(', ') + '…'] })] : []),
-      ...(failure ? [line(failure)] : []),
-      ...(staging.failure ? [line(staging.failure)] : steps.map((step) => Box({
-        flexDirection: 'row',
-        columnGap: 2,
-        children: [
-          ...['PASS', 'FAIL'].map((result) => Button({
-            key: `staging-${step.id}-${result}`,
-            label: result === 'PASS' ? 'Pass' : 'Fail',
-            plain: true,
-            onPress: () => void markStep($, step.id, result),
-          })),
-          Text({ bold: step.result === 'FAIL', wrap: 'wrap', children: [clip(stepLine(step))] }),
-        ],
-      }))),
-    ]
     // The buttons and the run they started come first: a long report scrolls the bottom of the pane away.
     return Box({
       flexDirection: 'column',
@@ -614,7 +537,6 @@ export function register(on) {
         ...top,
         Box({ flexDirection: 'row', columnGap: 2, children: buttons }),
         ...verifyLines().map(line),
-        ...stagingRows,
         ...sections,
       ],
     })

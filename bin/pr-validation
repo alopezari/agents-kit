@@ -2,7 +2,8 @@
 """Print a pull request's "## Validation" section from the branch's reports, so it states what they record.
 
   pr-validation    verify's verdict and what it ran, the self-review's findings, each validation check with its
-                   result and what wasn't run, the latest staging results, and each phase the user switched off
+                   result and what wasn't run, each step of the checks guide with its owner or its latest result,
+                   and each phase the user switched off
 
 Links become their text and paths under your home start with ~: the reports are local, the pull request isn't.
 Exits 1, printing nothing, when the verify or self-review report is missing and the user hasn't switched its phase off.
@@ -105,25 +106,40 @@ def validation_lines(text):
     return [public(line) for line in lines]
 
 
-def staging_lines(text, evidence):
-    # The latest round before the merge, up to the next section: ship appends the production results after it.
-    rounds = list(re.finditer(r"^## Results(?! after the deploy)([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S))
-    if not rounds:
-        before = re.search(r"^## Before the merge\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
-        if re.search(r"^## After the merge", text, re.M) and not (before and re.search(r"^### S\d", before.group(1), re.M)):
-            after = ", ".join(re.findall(r"^### (P\d+)\b", text, re.M)) or "none"
-            return [f"- Staging: none before the merge; after it: {after}."]
-        return ["- Staging: no results yet."]
-    heading, latest = rounds[-1].group(1), rounds[-1].group(2)
-    when = re.search(r"\(([^)]*)\)", heading)
-    steps = ", ".join(f"{first} {result}" for first, result, _, _ in review_stamp.result_rows(latest.splitlines(), evidence))
-    return [public(f"- Staging{f' (results of {when.group(1)})' if when else ''}: {steps or 'no step results'}.")]
+STEP = r"([MSP]\d+)\b"  # S: a step before the merge in a guide from before checks-guide
+
+
+def checks_lines(text, evidence):
+    """One line per step of the checks guide: its latest PASS or FAIL with that table's date, else who runs it."""
+    steps = {}
+    for step, name, body in re.findall(rf"^### {STEP}\.?[ \t]*([^\n]*)\n?(.*?)(?=^##|\Z)", text, re.M | re.S):
+        where = re.search(r"\*\*Where:?\*\*:?([^\n]*)", body)
+        steps[step] = {"name": name.strip(), "owner": "agent" if where and "agent" in where.group(1) else "you"}
+    for heading, table in re.findall(r"^## Results([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S):
+        when = re.search(r"\(([^)]*)\)", heading)
+        for first, result, _, _ in review_stamp.result_rows(table.splitlines(), evidence):
+            step = re.match(r"[*_]*" + STEP, first)
+            if step and result != "NOT RUN":
+                steps.setdefault(step.group(1), {"name": "", "owner": "you"})["result"] = \
+                    result + (f" ({when.group(1)})" if when else "")
+    if not steps:
+        return ["- Checks guide: no steps."]
+    lines = []
+    for step, info in steps.items():
+        section = "After the merge" if step.startswith("P") else "Before the merge (optional)"
+        named = f"{step} {info['name']}".strip()
+        if "result" in info:
+            lines.append(f"- {section}: {named}: {info['result']}.")
+        else:
+            lines.append(f"- {'Not run before the merge (optional)' if section != 'After the merge' else section}: "
+                         f"{named} ({info['owner']}).")
+    return [public(line) for line in sorted(lines, key=lambda line: line.startswith("- After"))]
 
 
 def main():
     verify, review, validation, guide, evidence = review_stamp.report_paths(
-        "verify", "review", "validation", "staging-guide", "evidence")
-    texts = {path: read(path) for path in (verify, review, validation, guide)}
+        "verify", "review", "validation", "checks-guide", "evidence")
+    texts = {path: read(path) for path in (verify, review, validation)}
     off, unreadable = phase_switches.phases_off_or_error(os.getcwd())
     missing = [path for path, phase in ((verify, "verify"), (review, "self-review")) if texts[path] is None and phase not in off]
     if missing:
@@ -132,13 +148,17 @@ def main():
                  + (f" ({unreadable}.)" if unreadable else ""))
     # A phase switched off stands in for its report: one left from before the switch may be stale.
     shown = {path: text for path, phase, text in ((verify, "verify", texts[verify]), (review, "self-review", texts[review]),
-             (validation, "validate", texts[validation]), (guide, "staging", texts[guide])) if phase not in off}
+             (validation, "validate", texts[validation])) if phase not in off}
     lines = verify_line(shown[verify]) if shown.get(verify) is not None else []
     lines += review_lines(shown[review]) if shown.get(review) is not None else []
     if shown.get(validation) is not None:
         lines += validation_lines(shown[validation])
-    if shown.get(guide) is not None:
-        lines += staging_lines(shown[guide], evidence)
+    try:
+        checks = read(guide)
+    except (OSError, UnicodeDecodeError) as error:  # shown, not fatal: the guide only informs the user's decision
+        lines.append(public(f"- Checks guide unreadable: {error}."))
+    else:
+        lines += checks_lines(checks, evidence) if checks is not None else []
     # A reviewer's own switch skips nothing when the other reviewer runs: the review's Not run line says when it did.
     lines += [f"- {phase.capitalize()}: skipped by the user ({off[phase]})."
               for phase in phase_switches.PHASES if phase in off and phase not in ("claude-review", "codex-review")]

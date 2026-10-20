@@ -84,9 +84,6 @@ RULES = [
 ]
 
 # Whether a command, or a word that is one (`bash -c '…'`), may hold the call: read its words only then.
-STAGING_MARK = re.compile(r"(?<![\w-])staging\b[\s\S]*\bmark\b")
-MARKS_AS_USER = ("`bin/staging mark --by user`: a step marked as the user's comes from their own action, the Pass or Fail "
-                 "button in /flow or the command in their terminal. Record your own verdict with `--by agent`.")
 APPROVE_GRANT = re.compile(r"(?<![\w-])approve\b[\s\S]*\b(grant|once)\b")
 GRANTS_APPROVAL = ("`bin/approve grant|once`: an approval comes from the user, in their message or in the dialog Claude "
                    "Code shows when a guard blocks a call, not from the agent.")
@@ -150,15 +147,6 @@ def runs_call(command, is_program, takes):
                 and runs_call(word, is_program, takes):
             return True
     return False
-
-
-def marks_as_user(command):
-    """`bin/staging mark … --by user` in the command, or in a word the shell runs as one."""
-    if not STAGING_MARK.search(command.replace(CONTINUATION, "")):
-        return None
-    by_user = (lambda args: args[:1] == ["mark"] and ("--by=user" in args
-                                                       or any(a == "--by" and b == "user" for a, b in zip(args, args[1:]))))
-    return MARKS_AS_USER if runs_call(command, lambda word, _: re.search(r"(?<![\w-])staging$", word), by_user) else None
 
 
 def switches_phase(command):
@@ -632,8 +620,7 @@ def pr_target(words):
 
 def unreviewed_pr(command, cwd):
     """Opening a PR requires a self-review stamp for the exact current change, measured against the branch the PR
-    targets, a validate stamp for a behavior change, and, unless it's a draft, the staging steps before the merge
-    passed; each unless the user switched its phase off."""
+    targets, and a validate stamp for a behavior change; each unless the user switched its phase off."""
     command = without_scripts(command)[0]
     creates = [m for m in re.finditer(COMMAND_START + PREFIXES + GH_PR + PR_CREATE + r"\b([^;&|\n]*)", shell_code(command))
                if not {"--help", "-h"} & set(pr_args(command, m, 1))]
@@ -665,60 +652,7 @@ def unreviewed_pr(command, cwd):
         return ("The change touches behavior but has no validation recorded for it. Run the validate skill "
                 "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run."
                 + order + store)
-    if any(not {"--draft", "-d"} & set(pr_args(command, match, 1)) for match in creates):
-        return staging_reason(cwd)  # a draft may wait for staging; any create in the command that isn't one may not
     return None
-
-
-def staging_reason(cwd):
-    """Why `review_stamp.py staging` holds the PR in cwd, or None when it passes or the user switched staging off; a
-    check that fails silently holds it too."""
-    off, unreadable = phase_switches.phases_off_or_error(cwd, time_left())
-    if "staging" in off:
-        return None
-    stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
-    result = subprocess.run([sys.executable, stamp, "staging"], cwd=cwd, capture_output=True, text=True,
-                            timeout=time_left())
-    if result.returncode == 0:
-        return None
-    return ((result.stdout.strip() or f"Couldn't read the staging results: {result.stderr.strip()[-300:] or 'no output'}")
-            + (f" {unreadable}." if unreadable else ""))
-
-
-def unready_pr(command, cwd):
-    """`gh pr ready` marks a PR ready for review: its staging steps before the merge must have passed, with evidence."""
-    command = without_scripts(command)[0]
-    code = shell_code(command)
-    readies = [m for m in re.finditer(COMMAND_START + PREFIXES + r"(" + GH_PR + r")ready\b([^;&|\n]*)", code)
-               if "--undo" not in pr_args(command, m, 2)]
-    if not readies:
-        return None
-    cwd = pr_checkout(command, cwd)
-    if not os.path.isdir(cwd):  # a hook that crashes lets the command through
-        return f"`gh pr ready`: its checkout {cwd} doesn't exist, so its staging results can't be checked."
-    here = subprocess.run(["git", "branch", "--show-current"], cwd=cwd, capture_output=True, text=True,
-                          timeout=time_left()).stdout.strip()
-    targets = set()
-    for match in readies:
-        if re.search(r"(?:^|\s)(?:-R|--repo)", match.group(1) + " " + match.group(2)):
-            return ("`gh pr ready --repo`: the staging results are checked in a checkout of the PR's branch. "
-                    "Run it there without --repo.")
-        targets.add(next((word for word in pr_args(command, match, 2) if not word.startswith("-")), None))
-    targets.discard(None)
-    if len(targets) > 1:  # each lookup may take its whole timeout, and the hook's own runs out at 10 s
-        return "One `gh pr ready` per command: run each PR's from its own branch's checkout."
-    for target in targets:
-        # A number, URL or branch names the PR; its staging results live under its branch.
-        try:
-            branch = subprocess.run(["gh", "pr", "view", target, "--json", "headRefName", "-q", ".headRefName"],
-                                    cwd=cwd, capture_output=True, text=True, timeout=min(5, time_left())).stdout.strip()
-        except (OSError, subprocess.TimeoutExpired):
-            branch = ""
-        if not branch or branch != here:
-            return (f"`gh pr ready {target}`: can't check its staging results from here (its branch is "
-                    f"{branch or 'unknown'}, this checkout is on {here or 'no branch'}). "
-                    "Run it from that branch's checkout.")
-    return staging_reason(cwd)
 
 
 # The one form both this check and pr_checkout() read the same way: a literal absolute path (no expansion or glob),
@@ -1621,8 +1555,8 @@ def main():
     try:
         cwd = os.path.realpath(cwd or os.getcwd())  # getcwd raises when the directory was deleted
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
-                  or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd) or unready_pr(command, cwd)
-                  or impeccable_files(command, cwd, payload.get("session_id")) or marks_as_user(command)
+                  or private_terms_in_kit_pr(command, cwd) or unreviewed_pr(command, cwd)
+                  or impeccable_files(command, cwd, payload.get("session_id"))
                   or grants_approval(command) or switches_phase(command) or touches_approvals(command, cwd))
         if not reason:
             code = code_text(command)

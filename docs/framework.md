@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **19 command-line tools**: a11y-check, approve, browse, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, staging, triage, wp-query-profile.
+- **18 command-line tools**: a11y-check, approve, browse, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -60,22 +60,20 @@ flowchart TD
   W -->|end of turn| SC{stop_checks + verify}
   SC -->|problem found, first time| W
   SC -->|clean| SR[self-review skill: lenses + second model]
-  SR --> V[validate skill: suite + local checks + staging guide]
-  V -->|manual tests needed| HO[Branch handed over: you run the staging guide]
-  HO -->|a step fails| W
-  HO -->|all steps pass| CP
-  V -->|no manual tests| CP[create-pr skill: evidence check, push, write-pr-description]
+  SR --> V[validate skill: suite + local checks + checks guide for what it couldn't run]
+  V --> CP[create-pr skill: evidence check, push, write-pr-description]
   CP --> PR{gh pr create}
   PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]
   PR -->|stamped| FP[follow-pr skill: first run waits for CI and bot reviews; later runs on demand]
   FP -->|fix needed| W
-  FP -->|ready to merge| MG{You merge}
+  FP -->|CI green, reviews answered| MG{You run more checks or merge}
+  MG -->|a check fails| W
   MG --> SH[ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]
 ```
 
-The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Merging the default branch keeps the self-review, validate and staging stamps when the branch's own diff is unchanged, and invalidates verify's: the tests run again on the merged code. Only running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no check (no `ran:` line) leaves a separate stamp, and the status line says "verify checked nothing".
+The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Merging the default branch keeps the self-review and validate stamps when the branch's own diff is unchanged, and invalidates verify's: the tests run again on the merged code. Only running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no check (no `ran:` line) leaves a separate stamp, and the status line says "verify checked nothing".
 
-When the change needs manual tests on staging, `validate` ends by handing you the branch: if the agent worked in a git worktree, it detaches it from the branch (only once everything is committed and pushed) so you can switch to the branch in your main checkout, and keeps the directory its session runs in. The spec, the reports, the staging guide and the review stamps live in the repository's shared `.git/agents/`, so they survive the hand-off: run `bin/reports` there. The PR is opened after you report the staging results, so its description carries them.
+Nothing waits for the checks guide: the PR description lists each of its steps with who runs it, or with its result once one is recorded, and you decide whether to run the optional ones before the merge. When you run a step and say so, the agent reads its evidence and adds the result to the guide, so the PR description shows it.
 
 ## Hooks
 
@@ -134,8 +132,7 @@ Every block, every approved or browser MCP call and every shell command a user's
 - Touching `~/.agents/approvals`, written out or relative to the working directory or a `cd` in the command: approvals for shared-system writes must come from the user. Naming it in a message, an echo or a search is text.
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
 - `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change, and while the PR's target isn't the base the stamps measured against (`review_stamp.py base`).
-- `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).
-- The last two lift for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, validate, staging; `bin/phase switches`); no other rule here can be switched off.
+- The last one lifts for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, validate; `bin/phase switches`); no other rule here can be switched off.
 
 It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, as does saying yes when the agent's last message asked to write to it by name, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. Where a profile also says which input fields name the object a write touches, and which field a create returns, the objects you approved writing to stay approved for that session for 24 hours: the agent can edit, comment on or attach to the issue it created for you in a later turn, but not create another without asking. In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them (`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in `personal-repos.txt`. For MCP writes and `DROP`/`TRUNCATE` commands, Claude Code's mod asks you right away instead, in a dialog that shows the blocked call: allowing it writes the approval your message would, for that one call or until your next message (`bin/approve`, which the shell guard refuses from the agent).
 
@@ -196,13 +193,13 @@ A repository that needs more (a Docker stack, known failing tests, project rules
 | Skill | Source | What it's for |
 |---|---|---|
 | `clarity` | https://github.com/addyosmani/clarity.git | Draft, rewrite or review prose other people will read, so it is specific and sounds like its author without inventing facts. |
-| `create-pr` | core | Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly. |
+| `create-pr` | core | Open the pull request once the change is reviewed and validated. Checks that verify, self-review, and validate passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly. |
 | `follow-pr` | core | Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs once right after create-pr (waiting for CI and bot reviews), then whenever the user asks to follow up on the PR. |
 | `impeccable` | https://github.com/pbakaus/impeccable.git, `.claude/skills/impeccable` at 508d7e8 | Design, critique, audit and polish frontend interfaces with a consistent visual direction, and keep an existing brand. |
 | `self-review` | core | Adversarial multi-lens review of your own diff before it goes to a human, using focused reviewers and a second model family, then verifying every finding before acting on it. Use before opening or updating a pull request, before declaring a non-trivial change done, or when asked to review the current branch. |
 | `ship` | core | See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, or, for a repo installed on this machine, deploys and runs the checks itself; prepares the rollback, and closes the loop (issue update, repo notes, local branch). Use when the user is about to deploy a merged PR, says it is deployed, or says a PR of a repo installed on this machine is merged. |
 | `spec` | core | Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the self-review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change. |
-| `validate` | core | Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, writes a step-by-step guide for whatever can only be tested on staging or production or after the merge, and hands the branch over for staging tests. Use for behavior changes before opening a PR, or when asked to test a change. |
+| `validate` | core | Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, and writes a step-by-step checks guide for whatever it couldn't run: optional steps the user can run before the merge, and the steps after it. Use for behavior changes before opening a PR, or when asked to test a change. |
 | `write-pr-description` | core | Write short, blunt, human-sounding pull request titles and descriptions that lead with functional impact and keep technical detail at architectural altitude, based on the actual code changes, repository context, issue requirements, validation evidence, and the repository's configured PR template. Use when opening, updating, or preparing a pull request. |
 
 Harnesses pick a skill by its description; you can also call one by name (`/spec` in Claude Code).
@@ -218,15 +215,12 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | `/flow off\|on <phase> [--repo\|--global]`, typed at the prompt, switches a phase for the branch, the repo or every repo | a message whose first line is `phase off\|on <phase> [branch\|repo\|global]` |
 |  | `/flow review-rounds <0-9> [--repo\|--global]`, typed at the prompt, sets how many re-checks the self-review runs after its first pass (1 when unset) | a message whose first line is `review-rounds <0-9> [branch\|repo\|global]`; `bin/phase review-rounds` reads it |
 |  | Follows the branch into the main checkout once validate detaches the session's own | the commands of this list, run from the main checkout |
-|  | Stamps (verify, self-review, validate, staging), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
+|  | Stamps (verify, self-review, validate), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
 |  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
 |  | CI of the pushed HEAD | `bin/ci-wait --once --no-log` |
 |  | Context use | nothing (Codex shows its own) |
 |  | Run verify button, without a turn, on the checkout the pane shows | `python3 ~/.agents/hooks/stop_checks.py verify` in a terminal |
 |  | Refresh button, and a refresh after each turn while the pane is open | running the commands above again |
-|  | The staging guide's steps before the merge, each with its latest result, who gave it, and its evidence files | `bin/staging steps --json` |
-|  | Pass button on each step before the merge, recorded as the user's verdict | `bin/staging mark <step> PASS --by user` in a terminal (the shell guard refuses it from the agent) |
-|  | Fail button on each step before the merge, recorded as the user's verdict | `bin/staging mark <step> FAIL --by user` in a terminal |
 | `tool.call` hook: Ask the user in a dialog when a kit guard blocks a call they could approve | A blocked MCP write or `DROP`/`TRUNCATE` command shown in a dialog: allowed once, until the user's next message, or kept blocked | the user's next message naming the service, saying yes to the agent's question offering that write by name, or opening with `allow <statement>`; or `touch ~/.agents/approvals/<service>` |
 |  | A dialog that can't ask (`bin/approve` failed, or it closed without an answer) said in the transcript, and an MCP write block in a session without the mod says no dialog will show | none: Codex has no dialog, and its blocks say how to approve |
 | `kit:review-<lens>` agents: One reviewer agent type per self-review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/self-review/lenses.md` |
@@ -273,7 +267,7 @@ docs            regenerate docs/framework.md
 docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the pre-commit hook)
 ```
 
-**`bin/evidence`**: Run a validation check and keep what it showed: evidence <id> <command> [args...] Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`, which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned. EVIDENCE_DIR saves there instead, from any directory: a staging guide's steps run outside the repository.
+**`bin/evidence`**: Run a validation check and keep what it showed: evidence <id> <command> [args...] Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`, which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned. EVIDENCE_DIR saves there instead, from any directory: a checks guide's steps run outside the repository.
 
 **`bin/free-branch`**: Free a pushed branch from its worktree, so the user can switch to it in the main checkout.
 
@@ -283,7 +277,7 @@ free-branch <worktree>
 
 **`bin/gh`**: Runs the real gh with git's per-host proxy. gh ignores git's `http.<url>.proxy`, so a host reachable only through a proxy (a SOCKS tunnel, for example) makes it hang. This finds the host a call targets, passes git's proxy for it as HTTPS_PROXY, and fails at once when that proxy isn't answering. Linked ahead of the real gh in PATH (install.sh --doctor shows how).
 
-**`bin/phase`**: Where the current branch is in the kit's flow, for the status line: spec → build → self-review → validate → staging → create-pr → PR open → ship.
+**`bin/phase`**: Where the current branch is in the kit's flow, for the status line: spec → build → self-review → validate → create-pr → PR open → ship.
 
 ```
 phase             print the cached phase at once; refresh it in the background when older than 15 s
@@ -320,22 +314,15 @@ quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --cate
 
 **`bin/repo-name`**: Print the repository's name as the kit knows it: the main checkout's directory name, the same from any worktree (Xirp, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.
 
-**`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree).
+**`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). (checks-guide: a branch's older staging-guide file, when it has only that)
 
 ```
-reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
+reports path <verify|review|validation|checks-guide|follow-pr>   where the stop hook or a skill saves that report
 reports path pr-body                             where create-pr and follow-pr save the PR description; left out of the listings
 reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 reports                                          every report that exists, with its path, the evidence, the phases off
 reports brief                                    the phase and one line per report, to pick a branch up in a new session
 reports --branch <name> …                        the same for another branch of this repo, without phase and switches
-```
-
-**`bin/staging`**: The staging guide's steps before the merge, and the PASS/FAIL row each one gets in its latest results.
-
-```
-staging steps --json                                   [{id, title, result, by, evidence}] for every S step
-staging mark <step> PASS|FAIL --by user|agent [--note <text>] [--branch <name>]
 ```
 
 **`bin/triage`**: Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.
