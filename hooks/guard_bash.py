@@ -34,10 +34,12 @@ MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
 # What can stand before a command's name and still run it: VAR=value assignments, and wrappers that run their
 # arguments, with the options that take a value. Each piece matches one way only: an ambiguous one backtracks
 # exponentially on a long env line and runs past the hook's timeout.
-ASSIGNMENT = r"""\w+=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+"""
+ASSIGNMENT = r"""\w+=(?:"[^"]*"|'[^']*'|[^\s"';&|])*\s+"""
 PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+)?"
-            r"|exec\s+(?:-a(?:\s+\S+|\S+)\s+|-[cl]+\s+|--\s+)*|time\s+(?:-[fo](?:\s+\S+|\S+)\s+|-[pv]+\s+|--\s+)*"
-            r"|env\s+(?:-[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir)=\S+\s+|-[i0v]+\s+|--\s+|-\s+)*)*")
+            r"|exec\s+(?:-a(?:\s+\S+|\S+)\s+|-[cl]+\s+|--\s+)*"
+            r"|time\s+(?:-[fo](?:\s+\S+|\S+)\s+|--(?:output|format)(?:=|\s+)\S+\s+|-[pva]+\s+|--(?:portability|verbose|append)\s+|--\s+)*"
+            r"|env\s+(?:-[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir|split-string)(?:=|\s+)\S+\s+|-[i0v]+\s+"
+            r"|--(?:ignore-environment|null|debug)\s+|--\s+|-\s+)*)*")
 # Where a command starts: after a separator, or after a shell keyword or brace (`then gh pr ready`, `{ gh pr ready; }`).
 COMMAND_START = r"(?:^|[;&|(\n`{]|\b(?:then|do|else|elif|if|while|until)\b|!)\s*"
 
@@ -263,12 +265,15 @@ UNKNOWN = object()
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 
 
-def dangerous_rm(command, cwd):
+def dangerous_rm(command, cwd, run_by=None):
     """Recursive deletes outside the working directory or temp dirs, each judged from where the `cd`s before it
     leave the shell (a subshell's cd ends with it), with the variables segments_with_values() knows substituted.
-    After a cd the guard can't resolve, a relative target is unresolved too."""
-    here, outer = cwd, []  # here is None after an unresolvable cd
+    After a cd the guard can't resolve, a relative target is unresolved too. A quoted string the command runs as a
+    command (bash -c, eval, trap) is judged the same way, run_by giving the directory and variables of its segment."""
+    here, known = run_by or (cwd, {})  # here is None after an unresolvable cd
+    outer, scripts = [], set(strings_running_rm(command))
     for segment, values in segments_with_values(without_scripts(command)[0]):
+        values = {**known, **values}
         stripped = segment.strip()
         outer += [here] * (len(stripped) - len(stripped.lstrip("(")))
         try:  # the subshell's parentheses only: a quoted "(old)" in a name stays
@@ -276,6 +281,9 @@ def dangerous_rm(command, cwd):
         except ValueError:
             tokens = []
         tokens, chdir = run_words(tokens)
+        runs_in = here
+        if chdir is not None and (here is not None or os.path.isabs(chdir)):  # relative to an unresolved cd: unresolved
+            runs_in = cd_into(here or cwd, chdir)
         if tokens and tokens[0] in ("cd", "pushd"):
             args = [t for t in tokens[1:] if t == "-" or not t.startswith("-")]
             target = (args[0] if args else "~").replace("${HOME}", "~").replace("$HOME", "~")
@@ -286,21 +294,33 @@ def dangerous_rm(command, cwd):
         elif tokens and os.path.basename(tokens[0]) == "rm":
             flags = "".join(t.lstrip("-") for t in tokens[1:] if t.startswith("-") and not t.startswith("--"))
             if "r" in flags.lower() or "--recursive" in tokens:
-                runs_in = here if chdir is None or here is None and not os.path.isabs(chdir) else cd_into(here or cwd, chdir)
-                denied = dangerous_rm_targets([t for t in tokens[1:] if t and not t.startswith("-")], runs_in, cwd)
+                targets = [t for t in tokens[1:] if t and not t.startswith("-")]
+                if run_by:
+                    # Run as text, an unresolved target is mostly what the caller passes in (find -exec sh -c '… "$1"').
+                    targets = [t for t in targets if not re.search(r"[$`]", t) and (runs_in is not None or os.path.isabs(t))]
+                denied = dangerous_rm_targets(targets, runs_in, cwd)
                 if denied:
                     return denied
+        if tokens and os.path.basename(tokens[0]) not in REMOTE_RUNNERS:
+            for a, b in quoted_spans(segment):
+                if segment[a + 1:b - 1] in scripts:
+                    script = PROCESS_QUOTES.sub("\n", segment[a + 1:b - 1].replace("\\n", "\n"))
+                    denied = dangerous_rm(script, cwd, (runs_in, values))
+                    if denied:
+                        return denied
         for _ in range(len(stripped) - len(stripped.rstrip(")"))):
             here = outer.pop() if outer else here
-    for script in runnable_strings(command):  # bash -c '…', eval, echo '…' | sh: judged from cwd, which only denies more
-        denied = dangerous_rm(script.replace("\\n", "\n"), cwd)
-        if denied:
-            return denied
     return None
 
 
+# Programs whose quoted commands run on another machine or in a container, where the local paths mean nothing.
+REMOTE_RUNNERS = {"ssh", "docker", "podman", "kubectl", "vagrant"}
+# Ruby's %x(…) and Perl's qx{…} or backticks around a command inside interpreter code.
+PROCESS_QUOTES = re.compile(r"%x[{(\[|]|\bqx\s*[{(\[/|]|`")
 # Wrappers that run the rest of their words, with their options that take a value (`env -u NAME`, `exec -a NAME`).
+# PREFIXES reads the same wrappers for the regex rules: keep the two in step.
 WRAPPER_VALUE_OPTIONS = {"env": "uCS", "time": "fo", "exec": "a", "command": "", "nohup": ""}
+WRAPPER_LONG_VALUE_OPTIONS = ("--unset", "--chdir", "--split-string", "--output", "--format")
 
 
 def run_words(tokens):
@@ -316,12 +336,14 @@ def run_words(tokens):
                 i += 1
                 if option == "--":
                     break
-                if option.startswith("--chdir="):
-                    chdir = option[len("--chdir="):]
-                elif len(option) > 1 and option[1] in WRAPPER_VALUE_OPTIONS[word]:
-                    value = option[2:] or (tokens[i] if i < len(tokens) else "")
-                    i += not option[2:]
-                    chdir = value if option[1] == "C" else chdir
+                long = option.startswith("--")
+                name, value = option.partition("=")[::2] if long else (option[:2], option[2:])
+                if name in WRAPPER_LONG_VALUE_OPTIONS or not long and len(name) > 1 and name[1] in WRAPPER_VALUE_OPTIONS[word]:
+                    if not value and not (long and "=" in option):
+                        value = tokens[i] if i < len(tokens) else ""
+                        i += 1
+                    if name in ("-C", "--chdir"):
+                        chdir = value if chdir is None else os.path.join(chdir, value)  # env -C / env -C usr: /usr
         elif word not in ("builtin", "{", "then", "do", "else", "elif", "if", "while", "until", "!") \
                 and not re.fullmatch(r"\w+=.*", word, re.S):
             return tokens[i - 1:], chdir
@@ -771,12 +793,14 @@ def without_prose(command):
     text, quoted strings included, so a quoted path still counts. Whatever this can't read for sure, it leaves whole:
     missing a write costs more than asking about a mention."""
     kept, heredocs, had_prose = [], [], False  # (delimiter, body is prose) of each heredoc still open, in order
+    shell = []  # the lines outside heredoc bodies
     for line in command.split("\n"):
         if heredocs:
             delimiter, prose = heredocs[0]
             if line.lstrip("\t") == delimiter:
                 heredocs.pop(0)
                 kept.append(line)
+                shell.append(line)
             elif prose:
                 kept.append("")
             elif "$(" in line or "`" in line:
@@ -785,6 +809,7 @@ def without_prose(command):
                 kept.append(line)
             continue
         kept.append(line)
+        shell.append(line)
         comment = re.search(r"(?:^|\s)#", line)  # a << after it is text
         heredocs = [(m.group(2) or m.group(3) or m.group(4), heredoc_body_is_prose(line, m))
                     for m in HEREDOC.finditer(line) if not comment or m.start() < comment.start()]
@@ -794,7 +819,7 @@ def without_prose(command):
     text = "\n".join(kept)
     if heredocs or RUNS_QUOTED_TEXT.search(text):
         return command  # a heredoc that never ends was only a mention of one
-    if had_prose and RUNS_SCRIPT_FILE.search(text) or written_files(text) & files_run(text):
+    if had_prose and RUNS_SCRIPT_FILE.search(text) or written_files("\n".join(shell)) & files_run("\n".join(shell)):
         return command  # the heredoc or echo may have written the script it runs
 
     spans = quoted_spans(text)
@@ -843,10 +868,10 @@ RUNS_SCRIPT_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))\s*(?:(?:command|exe
 # A redirection's & (2>&1, >&2, &>) joins no commands.
 REDIRECT_AMPERSAND = re.compile(r"(?<=[<>])&|&(?=>)")
 # A file a command writes: the target of > or >> (not >&2 nor a process substitution), or of tee.
-WRITES_FILE = re.compile(r"(?:(?<![<>&])\d*>>?|&>>?|\btee\s+(?:-\w+\s+)*)(?![&>(|])\s*(['\"]?)(?P<file>[^\s;&|<>()'\"]+)\1")
+WRITES_FILE = re.compile(r"(?:(?<![<>&\d])\d*>>?|&>>?|\btee\s+(?:-\w+\s+)*)(?![&>(|])\s*(['\"]?)(?P<file>[^\s;&|<>()'\"]+)\1")
 # The file a command runs: given to a shell, source or an interpreter, or run by its own path.
-RUNS_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))\s*(?:(?:command|exec|nohup)\s+)?(?P<runner>(?:(?:/[\w.-]+)*/)?(?:ba|z|da|k)?sh\s+"
-                       r"(?:-\w+\s+)*|source\s+|\.\s+|(?:/[\w.-]+)*/?(?:python[\d.]*|node|ruby|perl|php)\s+(?:-\w+\s+)*)?"
+RUNS_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))\s*" + PREFIXES + r"(?P<runner>(?:(?:/[\w.-]+)*/)?(?:ba|z|da|k)?sh\s+"
+                       r"(?:-[-\w]*\s+)*|source\s+|\.\s+|(?:/[\w.-]+)*/?(?:python[\d.]*|node|ruby|perl|php)\s+(?:-[-\w]*\s+)*)?"
                        r"(['\"]?)(?P<file>[^\s;&|<>()'\"-][^\s;&|<>()'\"]*)\2")
 
 
@@ -911,10 +936,11 @@ def without_scripts(command):
     bodies = None if RUNS_QUOTED_TEXT.search(text) else read_heredocs(lines)
     if bodies is None:
         return text, None
-    in_body, run = set(), {os.path.basename(f) for f in files_run(text)}
+    in_body = {i for start, end, _, _ in bodies for i in range(start, end)}
+    run = files_run("\n".join("" if i in in_body else line for i, line in enumerate(lines)))
+    names = re.compile("|".join(r"(?<![\w.-])" + re.escape(os.path.basename(f)) + r"(?![\w.-])" for f in run) or r"(?!)")
     for start, end, kind, _ in bodies:
-        in_body.update(range(start, end))
-        if kind == "script" and not any(name in "\n".join(lines[start:end]) for name in run):  # it may write one
+        if kind == "script" and not names.search("\n".join(lines[start:end])):  # naming a file it runs, it may write it
             lines[start:end] = [""] * (end - start)
     return "\n".join(lines), frozenset(in_body)
 
@@ -981,7 +1007,7 @@ def code_text(command):
     text, in_body = without_scripts(command)
     if in_body is None:
         return text
-    run = files_run(text)
+    run = files_run("\n".join("" if i in in_body else line for i, line in enumerate(text.split("\n"))))
 
     def text_in(segment, program, source):
         if program in ("echo", "printf") and written_files(source) & run:
@@ -990,8 +1016,9 @@ def code_text(command):
     return blank_strings(text, in_body, text_in)
 
 
-def runnable_strings(command):
-    """The inside of each quoted string code_text() keeps, which may run as a command, that holds an rm."""
+def strings_running_rm(command):
+    """The quoted strings holding an rm that code_text() reads as code: what a shell, eval or a spawning script may
+    run as a command."""
     text, code = without_scripts(command)[0], code_text(command)
     return [text[a + 1:b - 1] for a, b in quoted_spans(text)
             if code[a + 1:b - 1] == text[a + 1:b - 1] and re.search(r"\brm\s", text[a + 1:b - 1])]

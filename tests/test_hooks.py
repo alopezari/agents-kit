@@ -407,10 +407,26 @@ def guard_reads_through_wrappers_and_scripts(base):
         assert guard(cmd) == "allow", f"nothing guarded runs: {cmd!r}"
     for cmd in ["env -C / rm -rf usr", "env --chdir=/ rm -rf usr", "env -C/ rm -rf usr"]:
         assert guard(cmd, cwd="/usr/lib") == "deny", f"env -C moves the rm like a cd: {cmd!r}"
-    assert guard("env -C /tmp rm -rf x", cwd="/usr/lib") == "allow"
+    for cmd in ["env --chdir / rm -rf usr", "env -C / env -C usr rm -rf bin", "cd / && bash -c 'rm -rf usr'",
+                "env -C / bash -c 'rm -rf usr'"]:
+        assert guard(cmd, cwd="/usr/lib") == "deny", f"the delete runs where the cds and env -C leave it: {cmd!r}"
+    for cmd in ["env -C /tmp rm -rf x", "env -C /tmp -i rm -rf usr", "env --chdir /tmp rm -rf usr"]:
+        assert guard(cmd, cwd="/usr/lib") == "allow", f"the delete runs in /tmp: {cmd!r}"
+    for cmd in ["env --unset FOO rm -rf /usr", "env --unset FOO sudo ls", "env --chdir / sudo ls",
+                "time --output /tmp/t sudo ls", "env --ignore-environment sudo ls"]:
+        assert guard(cmd) == "deny", f"a long option's value is no command: {cmd!r}"
+    assert guard("command -v sudo") == "allow", "looking sudo up runs nothing"
     for cmd in ["bash -c 'rm -rf /usr'", "eval 'rm -rf /usr'", "echo 'rm -rf /usr' | bash", "sh -c \"cd / && rm -rf usr\"",
-                "python3 -c 'import os; os.system(\"rm -rf /usr\")'"]:
+                "python3 -c 'import os; os.system(\"rm -rf /usr\")'", "perl -e 'qx{rm -rf /usr}'",
+                "ruby -e '%x(rm -rf /usr)'", "ruby -e '`rm -rf /usr`'", "T=/usr; bash -c \"rm -rf $T\"",
+                "sudo bash -c 'rm -rf /usr'"]:
         assert guard(cmd) == "deny", f"a recursive delete in text that runs: {cmd!r}"
+    for cmd in ["tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; ls $tmp", "dir=build; bash -c \"rm -rf $dir\"",
+                "find . -name node_modules -prune -exec sh -c 'rm -rf \"$1\"' _ {} \\;", "D=/tmp/x; eval 'rm -rf \"$D\"'"]:
+        assert guard(cmd, cwd="/usr/lib") == "allow", f"the delete takes a known value, or what the caller passes: {cmd!r}"
+    for cmd in ["ssh web1 'rm -rf /var/www/releases/old'", "docker exec web sh -c 'rm -rf /app/cache'",
+                "kubectl exec pod -- sh -c 'rm -rf /data/cache'"]:
+        assert guard(cmd) == "allow", f"the delete runs on another machine or in a container: {cmd!r}"
     for cmd in ["grep -n 'rm -rf /usr' notes.md", "echo 'rm -rf /usr'", "git commit -m 'drop rm -rf /usr'",
                 "bash -c 'rm -rf /tmp/x'", "python3 -c 'print(\"rm -rf /usr\")'"]:
         assert guard(cmd) == "allow", f"a delete only mentioned, or a safe one: {cmd!r}"
@@ -423,14 +439,20 @@ def guard_reads_through_wrappers_and_scripts(base):
                 "cat > /tmp/p.py <<'EOF'\nimport os\nos.system('git branch -D old')\nEOF\npython3 /tmp/p.py",
                 "tee /tmp/x.js <<'EOF'\nrequire('child_process').execSync('git branch -D old')\nEOF\nnode /tmp/x.js",
                 "echo 'rm -rf /usr' 2>&1 | bash", "echo 'git branch -D old' 2>/dev/null >&2 | sh",
-                "cat <<'E' 2>&1 | bash\ngit branch -D old\nE", "printf 'git branch -D old' &>/dev/null | bash"]:
+                "cat <<'E' 2>&1 | bash\ngit branch -D old\nE", "printf 'git branch -D old' &>/dev/null | bash",
+                "echo 'git branch -D old' > /tmp/x.sh && source /tmp/x.sh", "echo 'git branch -D old' > /tmp/x.sh; . /tmp/x.sh",
+                "printf 'rm -rf /usr\\n' > /tmp/x.sh && env bash /tmp/x.sh",
+                "echo 'git branch -D old' > /tmp/x.py; python3 -- /tmp/x.py"]:
         assert guard(cmd) == "deny", f"text written, then run: {cmd!r}"
     for cmd in ["cat > notes.md <<'EOF'\ngit branch -D old\nEOF\ngit add notes.md",
                 "echo 'rm -rf /usr' 2>&1", "echo 'git branch -D old' >&2", "echo 'rm -rf /usr' &> /tmp/log",
                 "printf 'git branch -D old' > /tmp/n.md && cat /tmp/n.md",
                 "cat > /tmp/n.md <<'EOF'\ngit branch -D old\nEOF\npython3 -c 'print(1)'",
                 "cat > /tmp/n.md <<'EOF'\ngit branch -D old\nEOF\npython3 report.py",
-                "echo 'git branch -D old' > notes.md && node build.js"]:
+                "echo 'git branch -D old' > notes.md && node build.js",
+                "echo 'git branch -D old' > /tmp/x.sh; bash /tmp/y.sh", "echo 'git branch -D old' > /tmp/x; /tmp/y",
+                "python3 <<'P'\nr = (total/count)\nprint(\"then sudo apt install x\")\nP",
+                "python3 <<'P'\nx = (a/b)\nprint(\"git branch -D old\")\nP"]:
         assert guard(cmd) == "allow", f"text that nothing runs: {cmd!r}"
 
     for cmd in ["python3 -c 'import asyncio; asyncio.create_subprocess_shell(\"git branch -D old\")'",
@@ -439,7 +461,9 @@ def guard_reads_through_wrappers_and_scripts(base):
                 "ruby -e '%x(git branch -D old)'", "perl -e 'qx{git branch -D old}'",
                 "perl -e 'exec \"git branch -D old\"'", "ruby -e 'system \"git branch -D old\"'",
                 "python3 -c 'duckdb.sql(\"DROP TABLE x\")'", "node -e 'knex.raw(\"DROP TABLE x\")'",
-                "node -e 'prisma.$executeRaw(\"DROP TABLE x\")'", "node -e 'prisma.$queryRawUnsafe(\"DROP TABLE x\")'"]:
+                "node -e 'prisma.$executeRaw(\"DROP TABLE x\")'", "node -e 'prisma.$queryRawUnsafe(\"DROP TABLE x\")'",
+                "node -e 'prisma.$queryRaw(\"DROP TABLE x\")'", "node -e 'db.raw(\"DROP TABLE x\")'",
+                "duckdb -c 'DROP TABLE x'", "ruby -e 'Open3.popen3(\"git branch -D old\")'"]:
         assert guard(cmd) == "deny", f"a process or SQL call: {cmd!r}"
     for cmd in ["python3 -c 'print(\"git branch -D old\")'", "ruby -e 'puts \"git branch -D old\"'",
                 "perl -e 'print \"git branch -D old\"'", "node -e 'console.log(\"DROP TABLE x\")'",
@@ -1269,7 +1293,7 @@ def pr_gate_waits_for_staging(base):
                     "gh pr ready 12 --repo other/repo", "gh pr -R other/repo ready 12", 'gh pr ready "12"',
                     "gh -R other/repo pr ready 12", "gh pr ready -Rother/repo 12",
                     'gh pr create --head "$(git branch --show-current)" --title "Allow --draft PRs" --fill',
-                    "gh pr create --fill # --draft", "gh pr ready 12 # --undo"]:
+                    "gh pr create --fill # --draft", "gh pr ready 12 # --undo", "gh pr new --fill"]:
         assert decision(command) == "deny", f"staging is pending: {command}"
     gone = run_hook("guard_bash.py", {"tool_input": {"command": "gh pr ready"}, "cwd": os.path.join(base, "gone"),
                                       "session_id": "test"}, env={"PATH": fake + ":" + os.environ["PATH"]})
