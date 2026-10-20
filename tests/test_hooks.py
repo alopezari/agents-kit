@@ -254,6 +254,8 @@ def guard_blocks_irreversible(base):
         assert guard(cmd, cwd="/usr/lib") == "deny", f"never less safe than judging from cwd: {cmd}"
     started = child_cpu()
     assert guard(";" * 60000 + "x/" * 30000) == "allow" and child_cpu() - started < 3, "a long line must not stall the guard"
+    started = child_cpu()
+    assert guard("echo " + "1" * 64000) == "allow" and child_cpu() - started < 3, "a run of digits must not stall the guard"
     # An edit chained before a blocked step was lost without a word: the agent took it as done.
     d = run_hook("guard_bash.py", {"tool_input": {"command": "sed -i '' s/a/b/ notes.md && git push --force origin x"},
                                    "cwd": "/tmp", "session_id": "test"})
