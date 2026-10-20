@@ -95,6 +95,14 @@ Steps:
    Add an "Outcomes" section from outcomes.json: merged PRs since the kit per model and effort (from the sessions
    joined to each PR), with tokens and hours to merge per PR. This is the closest measure of finished work; set it
    against tokens per session in sessions.json. Small samples are evidence, not proof.
+   Add an "Attention" section from outcomes.json's sessions_joined.attention and each PR's sessions.attention: the
+   user's share of a merged PR (prompts, the agent's questions, corrections, wait_minutes idle until each reply,
+   reply_minutes with each gap capped at 15 minutes, a guess at the user's time rather than a measurement), baseline
+   against this period (since_kit covers the window field, not every PR since the kit), always with the complete,
+   partial and unknown PR counts, as means and medians cover complete PRs only; lead with the medians, as one
+   overnight wait skews a mean. Name the PRs and phases that took the most
+   prompts and wait, and what in them asked for the user (a question, a correction, a report to read). Hours to PR
+   and to merge are the cycle time to set it against. Few complete PRs make this evidence, not proof.
    Add an "Escapes" section from outcomes.json, set against its baseline:
    - At the PR stage: the escapes follow-pr logged (CI failures the change caused, review comments by people and bots)
      per merged PR, by category and verdict. For each confirmed escape, name the lens that should have caught it and

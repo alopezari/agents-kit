@@ -14,7 +14,10 @@ Per merged PR, from GitHub (github.com plus any host a profile lists in review-m
   sessions            agent sessions on the PR's branch in its repo (by origin remote): count, input+output tokens, wall-clock minutes
                       (idle time included), and hours from the first session to opening the PR and from
                       opening to merging; before the kit, only where transcripts still exist. "phases":
-                      tokens and active minutes per phase of the flow (Claude Code sessions only)
+                      tokens, active minutes and the user's share per phase of the flow (Claude Code sessions
+                      only). "attention": the user's share summed over those phases (see USER_SHARE), with
+                      coverage "complete", or "partial" when a joined session has no phases (Codex, or a Claude
+                      session that never named a branch) or predates the share, so its share is unknown
 Since the kit, also:
   escapes             follow-pr's logged CI failures and review comments (logs/quality.jsonl, kind "escape"),
                       each with whether the lens that should have caught it ran on that branch, under any of the
@@ -45,6 +48,9 @@ GH = os.path.expanduser("~/.agents/bin/gh")
 QUALITY_LOG = quality_log()
 BASELINE_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline.json")
 BOT = re.compile(r"\[bot\]$|copilot|coderabbit|claude|codex|gemini|github-actions|dependabot", re.I)
+# The user's share of a phase, from usage/extract_sessions.py's no_spending: prompts (typed commands too), the
+# agent's questions, corrections, minutes idle until each reply, and those gaps capped at its ACTIVE_GAP_MINUTES each.
+USER_SHARE = ("prompts", "questions", "corrections", "wait_minutes", "reply_minutes")
 FOLLOW_UP_TITLE = re.compile(r"\b(revert|fix|hotfix|regression|bug)", re.I)
 # Files nearly every PR touches; sharing only these doesn't make a later PR a follow-up.
 INCIDENTAL_FILE = re.compile(r"(^|/)(changelog[^/]*|readme[^/]*|package-lock\.json|composer\.lock|pnpm-lock\.yaml|yarn\.lock)$"
@@ -254,6 +260,11 @@ def attach_sessions(prs, sessions):
             continue
         first = min(parse_time(s["start_iso"]) for s in on_branch)
         opened, merged = parse_time(pr["opened"]), parse_time(pr["merged"])
+        phases = phases_on_branches(on_branch, names)
+        attention = {key: round(sum(spent.get(key, 0) for spent in phases.values()), 1) for key in USER_SHARE}
+        measured = all(s.get("phases") and all("prompts" in spent for ps in s["phases"].values() for spent in ps.values())
+                       for s in on_branch)  # a sessions file from before the share has phases, but no prompts in them
+        attention["coverage"] = "complete" if measured else "partial"
         pr["sessions"] = {
             "count": len(on_branch),
             "tokens": sum(s["tokens"].get("in", 0) + s["tokens"].get("out", 0) for s in on_branch),
@@ -263,12 +274,14 @@ def attach_sessions(prs, sessions):
             "effort": sorted({e for s in on_branch for e in s.get("effort", [])}),
             "hours_to_pr": round((opened - first).total_seconds() / 3600, 1),
             "hours_to_merge": round((merged - opened).total_seconds() / 3600, 1),
-            "phases": phases_on_branches(on_branch, names),
+            "phases": phases,
+            "attention": attention,
         }
 
 
 def phases_on_branches(sessions, branches):
-    """Tokens and active minutes per phase of the flow, summed over the sessions' turns on these branches."""
+    """Tokens, active minutes and the user's share per phase of the flow, summed over the sessions' turns on these
+    branches."""
     total = {}
     for session in sessions:
         for branch in branches:
@@ -284,9 +297,15 @@ def summarize(prs):
         values = list(values)
         return round(sum(values) / len(values), 2) if values else None
 
+    def median(values):
+        values = sorted(values)
+        return round((values[(len(values) - 1) // 2] + values[len(values) // 2]) / 2, 2) if values else None
+
     settled = [p for p in prs if isinstance(p.get("follow_ups"), list)]
     with_sessions = [p for p in prs if p.get("sessions")]
-    with_phases = [p for p in with_sessions if p["sessions"].get("phases")]
+    # A phase can hold prompts alone; the cost per phase stays over PRs that spent tokens.
+    with_phases = [p for p in with_sessions if any(spent.get("out") for spent in p["sessions"]["phases"].values())]
+    complete = [p for p in with_sessions if p["sessions"]["attention"]["coverage"] == "complete"]
     escapes = [e for p in prs for e in p.get("escapes", [])]
     return {
         "merged_prs": len(prs),
@@ -305,7 +324,13 @@ def summarize(prs):
                             "prs_with_phases": len(with_phases),
                             "per_phase": {phase: {key: mean(p["sessions"]["phases"].get(phase, {}).get(key, 0) for p in with_phases)
                                                   for key in ("out", "cache_read", "cache_write", "minutes")}
-                                          for phase in sorted({ph for p in with_phases for ph in p["sessions"]["phases"]})}},
+                                          for phase in sorted({ph for p in with_phases for ph in p["sessions"]["phases"]})},
+                            "attention": {"complete_prs": len(complete), "partial_prs": len(with_sessions) - len(complete),
+                                          "unknown_prs": len(prs) - len(with_sessions),
+                                          "per_pr": {key: mean(p["sessions"]["attention"][key] for p in complete) for key in USER_SHARE},
+                                          # An overnight wait dwarfs a day of quick replies: the mean alone misleads.
+                                          "median_per_pr": {key: median(p["sessions"]["attention"][key] for p in complete)
+                                                            for key in USER_SHARE}}},
     }
 
 
