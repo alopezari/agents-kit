@@ -44,6 +44,7 @@ SPANISH_OFFERS = {  # infinitive: first person present, first person subjunctive
     "apuntar": ("apunto", "apunte"), "editar": ("edito", "edite"), "cambiar": ("cambio", "cambie"),
     "borrar": ("borro", "borre"), "eliminar": ("elimino", "elimine"), "escribir": ("escribo", "escriba"),
     "marcar": ("marco", "marque"), "enlazar": ("enlazo", "enlace"), "adjuntar": ("adjunto", "adjunte")}
+NOUNS = ("archivo", "cambio", "registro")  # as often nouns: "¿Archivo de Linear, lo reviso?"
 ENGLISH_OFFERS = ("create", "file", "add", "post", "update", "comment", "close", "reopen", "move", "assign", "archive",
                   "submit", "edit", "change", "delete", "remove", "write", "mark", "attach", "rename", "label", "raise")
 SPANISH_ORDERS = ("crea", "publica", "sube", "registra", "apunta", "actualiza", "comenta", "cierra", "reabre",
@@ -56,12 +57,12 @@ WRITE_OFFER = re.compile(
     r"(?:(?:so|ok|okay|then|great|entonces|vale|bueno|y|and) )?(?:"
     rf"(?:quieres|prefieres|deseas|te parece bien|te parece) que {PRONOUN}"
     rf"(?:{'|'.join(subj for _, subj in SPANISH_OFFERS.values())})"
-    rf"|{PRONOUN}(?:{'|'.join(present for present, _ in SPANISH_OFFERS.values())})(?! que\b)"
+    rf"|{PRONOUN}(?:{'|'.join(present for present, _ in SPANISH_OFFERS.values() if present not in NOUNS)})(?! que\b)"
     rf"|{PRONOUN}(?:{'|'.join(verb[:-2] + {'ar': 'amos', 'er': 'emos', 'ir': 'imos'}[verb[-2:]] for verb in SPANISH_OFFERS)})"
     rf"|(?:puedo|podria|debo|deberia|me dejas|voy a|vamos a) (?:{'|'.join(SPANISH_OFFERS)}){CLITICS}"
     r"|(?:(?:do you |would you )?(?:want|like) me to|should i|shall i|can i|could i|may i|i can|i could|let me) "
     rf"(?:go ahead and |just |now )?(?:{'|'.join(ENGLISH_OFFERS)}))\b")
-YES_WORDS = (r"si|sip|yes|yep|yeah|yup|ok|okay|okey|vale|va|claro|dale|venga|adelante|perfecto|perfect|genial|great|sure|"
+YES_WORDS = (r"si|sip|yes|yep|yeah|yup|ok|okay|okey|vale|claro|dale|venga|adelante|perfecto|perfect|genial|great|sure|"
              r"bien|good|hazlo|do it|go ahead|go for it|please do|de acuerdo|por supuesto|of course|sounds good|"
              r"let'?s do it|absolutely|exacto|correcto|procede|proceed")
 FILLERS = r"bueno|pues|please|por favor|gracias|thanks|thank you|m+|u+h?m+|oh|ah|y|and|entonces|so|then|ahora|now"
@@ -129,7 +130,9 @@ def last_agent_message(transcript, prompt):
         if not isinstance(entry, dict):
             raise ValueError(f"line {len(lines) - number} of the tail isn't an entry")
         event = entry.get("payload")
-        if entry.get("type") == "event_msg" and isinstance(event, dict):  # Codex
+        if entry.get("type") == "event_msg":  # Codex
+            if not isinstance(event, dict):
+                return None
             if event.get("type") == "task_complete":
                 said = event.get("last_agent_message")
                 return said if isinstance(said, str) and not texts else None
@@ -137,14 +140,12 @@ def last_agent_message(transcript, prompt):
                                                         and not current_prompt(event.get("message"))):
                 return None
             continue
-        message = entry.get("message")
-        if entry.get("type") not in ("user", "assistant") or entry.get("isSidechain") or entry.get("isMeta") \
-                or not isinstance(message, dict):
+        if entry.get("type") not in ("user", "assistant") or entry.get("isSidechain") or entry.get("isMeta"):
             continue
-        content = message.get("content")
+        content = entry["message"].get("content") if isinstance(entry.get("message"), dict) else None
         blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
-        if not isinstance(blocks, list):
-            return None
+        if not isinstance(blocks, list) or (entry["type"] == "user" and not blocks):
+            return None  # a message this can't read could be anything, an older message of the user's too
         for block in reversed(blocks):
             kind = block.get("type") if isinstance(block, dict) else None
             if entry["type"] == "assistant" and kind == "text":
@@ -154,7 +155,7 @@ def last_agent_message(transcript, prompt):
             elif not (entry["type"] == "user" and kind == "text" and current_prompt(block.get("text"))):
                 # a tool call or its result, or the user's message that opened the agent's turn
                 return "\n\n".join(texts) if texts else None
-    return "\n\n".join(texts) if texts else None  # the tail began inside this run of the agent's text
+    return None if skipped else "\n\n".join(texts) or None  # the line the tail cut into could be more of this run
 
 
 def offered_services(message, services):
@@ -164,13 +165,17 @@ def offered_services(message, services):
     if not text.endswith("?"):
         return []
     body = text[:-1]
-    question = body[max([body.rfind("\n")] + [body.rfind(end + " ") for end in ".!?"]) + 1:]
+    ends = [match.end() for match in re.finditer(r"\n[ \t]*\n|[.!?]\s", body)]  # a paragraph or a sentence
+    question = body[ends[-1] if ends else 0:]
     said = plain(question).replace("’", "'")
     said = said[said.rfind("¿") + 1:]
     if re.search(r"\b(?:no|not|nunca|never|o|or)\b|n't\b", said) \
-            or not any(WRITE_OFFER.match(clause.strip()) for clause in said.split(",")):
+            or not any(WRITE_OFFER.match(clause.strip(" \t*_#>-")) for clause in re.split(r"[,:;\n]", said)):
         return []
-    return sorted(s for s in services if re.search(rf"(?<!\w){re.escape(s)}(?!\w)", question, re.I))
+    def named(text):
+        return sorted(s for s in services if re.search(rf"(?<!\w){re.escape(s)}(?!\w)", text, re.I))
+    # "Como Linear está caído, ¿la creo en GitHub?" offers GitHub; "En Linear, ¿la creo?" still offers Linear.
+    return named(question[question.rfind("¿") + 1:]) or named(question)
 
 
 def main():

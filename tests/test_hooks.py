@@ -541,7 +541,7 @@ def an_answer_to_the_agents_offer_approves_the_service_it_named(base):
                   "Sí, pero ahora no", "Si, pero no", "claro que no", "vale, mejor no", "yes but not now",
                   "ok never mind", "vale, déjalo", "sí, más tarde", "show me first", "Sí, pero enséñamela antes",
                   "please", "por favor", "please fix the test first", "Si quieres, primero arregla el test",
-                  "make it shorter", "haz el cambio en el test", "Si puedes, mira el CI", "pon el título en inglés",
+                  "make it shorter", "haz el cambio en el test", "si va bien", "Si puedes, mira el CI", "pon el título en inglés",
                   "open the test file", "ok, but use the Tracker instead"]:
         assert approves(reply, *proposal) == "deny", f"{reply!r} doesn't accept it"
     assert approves("sí", *history, said("He revisado el test: falla por un timeout.")) == "deny", "no proposal"
@@ -554,12 +554,15 @@ def an_answer_to_the_agents_offer_approves_the_service_it_named(base):
                      "Should I open the issue in Linear to check it?", "¿Quieres que no la cree en Linear?",
                      "¿Creo que está en Linear, la busco?", "¿La creo en Linear o en GitHub?",
                      "Did you already create it in Linear?", "I don't want to create it in Linear yet, ok?",
-                     'Él preguntó: "¿La creo en Linear?"', "¿Hay algo que quieras que cambie antes, o la creo en Linear?"]:
+                     'Él preguntó: "¿La creo en Linear?"', "¿Archivo de Linear, lo reviso?",
+                     "Como Linear está caído, ¿la creo en el Tracker?", "¿Hay algo que quieras que cambie antes, o la creo en Linear?"]:
         assert approves("sí", *history, said(question)) == "deny", f"{question!r} offers no write"
     for question, reply in [("¿La actualizo en Linear?", "sí"), ("¿La borro en Linear?", "bórrala"),
                             ("**¿La creo en Linear?**", "sí"), ("Should I create the issue in Linear?", "yes"),
-                            ("¿Puedo crearla en Linear con estos datos?", "adelante"), ("¿La creamos en Linear?", "venga"),
-                            ("Want me to file an issue in Linear for this?", "yes, go ahead")]:
+                            ("¿Puedo crearla en Linear con estos datos?", "adelante"), ("¿La creamos en Linear?", "venga"), ("En Linear, ¿la creo?", "sí"),
+                            ("Want me to file an issue in Linear for this?", "yes, go ahead"),
+                            ("**Should I create an issue in Linear?**", "yes"), ("Should I create\nan issue in Linear?", "yes"),
+                            ("Borrador listo:\n¿La creo\nen Linear?", "sí"), ("Draft ready:\n- Should I file it in Linear?", "ok")]:
         assert approves(reply, *history, said(question)) == "allow", f"{reply!r} to {question!r}"
     assert approves("sí", *history, said(offer + "\n\nTambién puedo dejarlo para luego, lo que prefieras.")) == "deny", \
         "the question isn't the last thing the agent said"
@@ -575,7 +578,9 @@ def an_answer_to_the_agents_offer_approves_the_service_it_named(base):
         "allow", "entries that aren't messages are skipped"
     assert approves("Do you want me to file it?", *history, said("Want me to file an issue in Linear for this?")) == "deny"
     assert approves("sí", *proposal, padding=2500) == "allow", "a recent exchange after megabytes of history"
-    assert approves("sí", *proposal, big_first=300_000) == "allow", "the line the tail cuts into is left out"
+    assert approves("sí", *proposal, big_first=300_000) == "allow", "a long tool result before the run is left out"
+    assert approves("sí", said(offer), big_first=300_000) == "deny", "the line the tail cuts into could be more of the message"
+    assert approves("sí", *history, said("z" * 300_000), said(offer)) == "deny", "a run of the agent's text longer than the tail"
     assert approves("sí", *history, said("z" * 300_000 + " ¿Quieres que la cree en Linear?")) == "deny", \
         "a last message longer than the tail read isn't read"
     started = time.monotonic()
@@ -595,7 +600,9 @@ def an_answer_to_the_agents_offer_approves_the_service_it_named(base):
     assert write() == "deny", "a transcript that isn't there"
     for broken in [["{not json", json.dumps(said(offer))[:-5]], [*proposal, json.dumps("a string")],
                    [*proposal, json.dumps([1, 2])], [*proposal, "[" * 100_000 + "]" * 100_000],
-                   [*proposal, {"type": "assistant", "message": {"content": {"text": "x"}}}]]:
+                   [*proposal, {"type": "assistant", "message": {"content": {"text": "x"}}}],
+                   [*proposal, {"type": "user", "message": None}], [*proposal, {"type": "assistant", "message": []}],
+                   [*proposal, {"type": "user", "message": {"content": []}}], [*proposal, {"type": "event_msg", "payload": "x"}]]:
         prompt("sí", transcript(*broken))
         assert write() == "deny", f"a corrupt transcript: {str(broken[-1])[:40]}"
     with open(os.path.join(base, "bin.jsonl"), "wb") as fh:
