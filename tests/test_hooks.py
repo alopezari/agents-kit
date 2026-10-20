@@ -6,6 +6,7 @@ Run: python3 ~/.agents/tests/test_hooks.py          every test, each in its own 
 """
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import concurrent.futures
+import datetime
 import json
 import os
 import re
@@ -2721,6 +2722,110 @@ def review_rounds(cwd):
     return int(rounds), where
 
 
+def coming_back_after_hours_asks_for_the_status_first(base):
+    repo = new_repo(base, "zz-return")
+    git(repo, "switch", "-q", "-c", "feature")
+    logs = os.path.join(base, "logs")
+    env = {**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, "HOME": base, "AGENTS_LOG_DIR": logs}
+    now = time.time()
+
+    def stamp(hours_ago, offset_hours=0):
+        zone = datetime.timezone(datetime.timedelta(hours=offset_hours))
+        at = datetime.datetime.fromtimestamp(now - hours_ago * 3600, zone)
+        return at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+    def claude(kind, text, hours_ago, offset_hours=0):
+        return {"type": kind, "message": {"role": kind, "content": [{"type": "text", "text": text}]},
+                "isSidechain": False, "timestamp": stamp(hours_ago, offset_hours)}
+
+    def codex(event, hours_ago, **fields):
+        return {"timestamp": stamp(hours_ago), "type": "event_msg", "payload": {"type": event, **fields}}
+
+    def context(text, *entries, raw=None, codex_turn=False, missing=False, session="r1"):
+        path = os.path.join(base, f"{session}.jsonl")
+        if not missing:
+            with open(path, "w", errors="surrogateescape") as fh:  # "\udcff" writes the byte 0xff
+                fh.writelines(json.dumps(e) + "\n" for e in entries)
+                fh.write(raw or "")
+        payload = {"prompt": text, "session_id": RUN + session, "cwd": repo, "transcript_path": path,
+                   "hook_event_name": "UserPromptSubmit", **({"turn_id": "turn-9"} if codex_turn else {})}
+        done = subprocess.run(["python3", H + "prompt_approvals.py"], input=json.dumps(payload), capture_output=True,
+                              text=True, timeout=10, env=env)
+        assert done.returncode == 0 and not done.stderr, done.stderr
+        return json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"] if done.stdout.strip() else None
+
+    ask = "¿Está ya terminado?"
+    ended = claude("assistant", "Blocked on me: merge #12 and deploy.", 8)
+    told = context(ask, claude("user", "fix the report", 9), ended)
+    assert told and "reports brief" in told and "Status" in told and "How sure" in told, told
+    assert "--branch" in told and "unknown" in told, "where to read it when the checkout is gone, and what if it fails"
+    assert context(ask, claude("assistant", "Done.", 7 + 59 / 60)) is None, "under the gap: nothing"
+    harness_now = {"type": "attachment", "timestamp": stamp(0), "attachment": {"type": "hook_additional_context"}}
+    assert context(ask, ended, claude("user", ask, 0), harness_now), \
+        "the prompt already written, and harness entries written with it, don't end the absence"
+    assert context(ask, claude("assistant", "Done.", 8, offset_hours=2)), "+02:00 is the same instant as Z"
+    assert context(ask, claude("assistant", "Done.", 7.9, offset_hours=-5)) is None
+    assert context(ask, codex("task_complete", 8, last_agent_message="Merge #12."), codex_turn=True)
+    assert context(ask, codex("task_complete", 8, last_agent_message="Merge #12."),
+                   codex("user_message", 0, message=ask), codex_turn=True), "Codex, the prompt already written"
+    assert context(ask, codex("task_complete", 7.5, last_agent_message="Merge #12."), codex_turn=True) is None
+    rollout_prompt = {"timestamp": stamp(0), "type": "response_item",
+                      "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": ask}]}}
+    assert context(ask, codex("task_complete", 8, last_agent_message="Merge #12."), rollout_prompt, codex_turn=True), \
+        "a rollout writes the prompt as a response item"
+    on_the_way_back = [claude("user", "<command-name>/model</command-name>", 0),
+                       claude("user", "<local-command-stdout>Set model to opus</local-command-stdout>", 0),
+                       claude("user", "<local-command-caveat>Caveat: …</local-command-caveat>", 0),
+                       claude("user", "<command-message>model</command-message>\n<command-name>/model</command-name>", 0),
+                       claude("user", "<bash-input>git status</bash-input>", 0),
+                       claude("user", "<bash-stdout>ok</bash-stdout><bash-stderr></bash-stderr>", 0),
+                       claude("user", "This session is being continued…", 0) | {"isCompactSummary": True}]
+    assert context(ask, ended, *on_the_way_back), "a command run on the way back isn't the conversation"
+    assert context(ask, claude("user", ask, 0), session="r-none") is None, "no entry before the prompt: no gap to read"
+    assert any(e.get("decision") == "return-gap-unreadable" and e.get("session") == RUN + "r-none"
+               for e in map(json.loads, open(os.path.join(logs, "hooks.jsonl")))), "and the log says why"
+    for written in ([], [claude("user", ask, 0)]):
+        assert context(ask, claude("assistant", "Done.", 9), claude("user", ask, 1), *written) is None, \
+            "the same words sent an hour ago are the last entry, not this message"
+        assert context(ask, codex("task_complete", 9, last_agent_message="Done."), codex("user_message", 1, message=ask),
+                       *[codex("user_message", 0, message=ask)] * bool(written), codex_turn=True) is None
+    assert context(ask, claude("assistant", "Done.", 7 + 59 / 60), claude("user", ask, 0)) is None
+    assert context(ask, codex("task_complete", 7 + 59 / 60, last_agent_message="Merge #12."), codex_turn=True) is None
+    assert context(ask, codex("task_complete", 7 + 59 / 60, last_agent_message="Merge #12."),
+                   codex("user_message", 0, message=ask), codex_turn=True) is None
+    side, meta = claude("assistant", "subagent", 0), claude("user", "<skill text>", 0)
+    side["isSidechain"], meta["isMeta"] = True, True
+    assert context(ask, ended, side, meta), "a subagent's or a skill's entries are not the conversation"
+    assert context(ask, codex("task_complete", 8, last_agent_message="Merge #12."), codex("task_started", 0),
+                   codex("token_count", 0), codex_turn=True), "events written as the new message arrives don't count"
+    zoneless = claude("assistant", "Done.", 0)
+    zoneless["timestamp"] = zoneless["timestamp"][:19]
+    assert context(ask, ended, zoneless), "a time with no zone is skipped, not read as UTC or local"
+    padding = [claude("assistant", "x" * 1000, 30) for _ in range(100)]
+    assert context(ask, *padding, ended), "a transcript longer than the tail: read from a whole line"
+    assert context(ask, *padding, claude("assistant", "Done.", 1)) is None
+
+    for name, kwargs in [("missing", {"missing": True}), ("corrupt", {"raw": "{not json\n"}),
+                         ("not-an-entry", {"raw": "[]\n"}), ("not-utf8", {"raw": "\udcff\n"}),
+                         ("unreadable-message", {"raw": json.dumps(claude("assistant", "x", 0) | {"message": {"content": 42}})
+                                                 + "\n"})]:
+        repo = new_repo(base, "zz-return-" + name)
+        git(repo, "switch", "-q", "-c", "feature")
+        told = context("phase off validate\nCrea una tarea en Linear para esto", ended, session="r-" + name, **kwargs)
+        assert told and "validate" in told and "reports brief" not in told, (name, told)
+        got = run_hook("guard_mcp.py", {"tool_name": "mcp__linear__save_issue", "tool_input": {}, "cwd": repo,
+                                        "session_id": RUN + "r-" + name}, env={"HOME": base, "AGENTS_LOG_DIR": logs})
+        assert got is None, f"{name}: the approval still takes effect: {got}"
+        lines = [json.loads(line) for line in open(os.path.join(logs, "hooks.jsonl"))]
+        assert any(e.get("decision") == "return-gap-unreadable" and RUN + "r-" + name in json.dumps(e) for e in lines), \
+            (name, lines[-3:])
+
+    repo = new_repo(base, "zz-return-both")
+    git(repo, "switch", "-q", "-c", "feature")
+    told = context("phase off validate\nsigue", claude("assistant", "Done.", 9), session="r-both")
+    assert "validate" in told and "reports brief" in told, f"both contexts: {told}"
+
+
 def a_review_rounds_line_sets_the_re_checks_by_scope(base):
     a, b = new_repo(base, "zz-rounds-a"), new_repo(base, "zz-rounds-b")
     for repo in (a, b):
@@ -3041,7 +3146,7 @@ def a_stacked_branch_is_measured_against_its_parent(base):
     assert git(repo, "config", "--get-regexp", r"branch\.renamed\.").stdout == "", "and goes with `git branch -D`"
 
 
-TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, a_review_rounds_line_sets_the_re_checks_by_scope,only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
+TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, coming_back_after_hours_asks_for_the_status_first, a_review_rounds_line_sets_the_re_checks_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
          guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,

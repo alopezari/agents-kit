@@ -17,7 +17,11 @@ Only the user's own messages reach this hook, so an agent can't grant itself one
 user has to accept it. Mentioning the service only to read from it approves writes for that turn too.
 The objects guard_mcp.py records a session's approved writes to outlast the user's messages: this hook only deletes
 the ones older than guard_mcp.OBJECT_APPROVAL_HOURS.
+When the message arrives RETURN_GAP_HOURS or more after the newest conversation entry in the transcript's tail, the
+hook tells the agent to run `~/.agents/bin/reports brief` and open its reply with Status, What it does and How sure.
+It runs no report itself, and a tail it can't read only leaves that out (logged as return-gap-unreadable).
 """
+import datetime
 import json
 import os
 import re
@@ -33,6 +37,20 @@ from hooklog import log  # noqa: E402
 
 STALE_SECONDS = 24 * 3600
 TRANSCRIPT_TAIL_BYTES = 256 * 1024  # this hook runs on every message: a transcript grows to hundreds of MB
+RETURN_GAP_HOURS = 8  # longer than a lunch or a meeting; the "is it done?" questions came after nights and weekends
+RETURN_TAIL_BYTES = 64 * 1024  # smaller than the approvals' tail: this one is read on every message
+PROMPT_WRITTEN_SECONDS = 300  # the message being submitted, already written: an older one with the same text counts
+# Codex events that mark the conversation itself; task_started and the like are written as the new message arrives.
+CODEX_CONVERSATION_EVENTS = {"task_complete", "agent_message", "user_message", "turn_aborted"}
+# What Claude Code writes as user entries for a command run on the way back (/model, /compact, `! git status`): not the
+# conversation. The same prefixes usage/extract_sessions.py's is_real_prompt leaves out.
+LOCAL_COMMAND = re.compile(r"\s*<(command-|local-command-|bash-)")
+RETURN_BRIEF = (
+    "The user is back after {hours:.0f} hours away. Before answering, run `~/.agents/bin/reports brief` from the "
+    "checkout of the branch this conversation was about (`~/.agents/bin/reports --branch <branch> brief` when that "
+    "checkout is gone or detached), and open your reply with **Status**, **What it does** and **How sure** for that "
+    "task, as AGENTS.md's Communication section describes them. When the brief fails or finds no reports, say the "
+    "status is unknown, and why.")
 # Written without accents, as plain() leaves text. An offer's verb opens its phrase ("¿la creo?", "¿quieres que la
 # cree?", "¿puedo crearla?", "want me to create…?"); a verb that offers a read as often ("abro", "open", "make", "log",
 # "dejo") is left out, and so are orders that as often revise the draft ("cambia", "add", "edit"): those approve nothing.
@@ -178,6 +196,59 @@ def offered_services(message, services):
     return named(question[question.rfind("¿") + 1:]) or named(question)
 
 
+def hours_away(transcript, prompt):
+    """Hours from the newest conversation entry in the transcript's tail, other than the user's `prompt` already
+    written, until now. Harness entries (attachments, hook output) don't count: they can be written as the prompt
+    arrives. Raises OSError, and ValueError on a corrupt tail or one with no such entry."""
+    with open(transcript, "rb") as fh:
+        skipped = max(0, os.fstat(fh.fileno()).st_size - RETURN_TAIL_BYTES)
+        fh.seek(skipped)
+        tail = fh.read(RETURN_TAIL_BYTES)
+    if skipped:
+        tail = tail.partition(b"\n")[2]  # the line the tail cut into
+    try:
+        lines = tail.decode().splitlines()
+    except UnicodeDecodeError:
+        raise ValueError("the transcript isn't UTF-8") from None
+    for number, line in enumerate(reversed(lines)):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except (ValueError, RecursionError):
+            raise ValueError(f"line {len(lines) - number} of the tail doesn't parse") from None
+        if not isinstance(entry, dict):
+            raise ValueError(f"line {len(lines) - number} of the tail isn't an entry")
+        event = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+        if entry.get("type") == "event_msg":  # Codex
+            if str(event.get("type")) not in CODEX_CONVERSATION_EVENTS:
+                continue
+            texts = [event.get("message")] if event.get("type") == "user_message" else []
+        elif entry.get("type") in ("user", "assistant") and not any(
+                entry.get(mark) for mark in ("isSidechain", "isMeta", "isCompactSummary")):
+            content = entry["message"].get("content") if isinstance(entry.get("message"), dict) else None
+            if not isinstance(content, (str, list)):
+                raise ValueError(f"line {len(lines) - number} of the tail has a message this can't read")
+            blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
+            texts = [b.get("text") for b in blocks if isinstance(b, dict) and b.get("type") == "text"]
+            if entry["type"] == "user" and any(isinstance(t, str) and LOCAL_COMMAND.match(t) for t in texts):
+                continue
+        else:
+            continue
+        try:
+            at = datetime.datetime.fromisoformat(str(entry.get("timestamp")).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if at.tzinfo is None:
+            continue  # a time with no zone could be hours off either way
+        seconds = time.time() - at.timestamp()
+        just_sent = any(isinstance(t, str) and t.strip() == prompt.strip() for t in texts)
+        if entry.get("type") != "assistant" and just_sent and seconds < PROMPT_WRITTEN_SECONDS:
+            continue
+        return seconds / 3600
+    raise ValueError("no timestamped conversation entry before the message in the tail")
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -211,7 +282,7 @@ def main():
     prompt = str(payload.get("prompt") or "")
     named = sorted(s for s in guard_mcp.guarded_services() if re.search(rf"(?<!\w){re.escape(s)}(?!\w)", prompt, re.I))
     transcript = payload.get("transcript_path")
-    if transcript and accepts(prompt):  # only then: most messages read no transcript
+    if transcript and accepts(prompt):  # only then: most messages read no more than the return check's tail
         try:
             offered = offered_services(last_agent_message(str(transcript), prompt), guard_mcp.guarded_services())
         except (OSError, ValueError) as error:
@@ -230,9 +301,21 @@ def main():
         log("prompt_approvals", "approve-turn", payload, ",".join(named))
     import phase_switches  # after the clearing, like guard_bash
     switched = phase_switches.apply_phase_line(prompt, payload.get("cwd") or os.getcwd())
+    told = []
     if switched:
         log("prompt_approvals", "phase-switch", payload, switched)
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": switched}}))
+        told.append(switched)
+    try:
+        hours = hours_away(str(transcript), prompt) if transcript else None
+    except (OSError, ValueError) as error:
+        hours = None
+        log("prompt_approvals", "return-gap-unreadable", payload, str(error))
+    if hours is not None and hours >= RETURN_GAP_HOURS:
+        log("prompt_approvals", "return-brief", payload, f"{hours:.1f}h")
+        told.append(RETURN_BRIEF.format(hours=hours))
+    if told:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
+                                                 "additionalContext": "\n\n".join(told)}}))
     return 0
 
 
