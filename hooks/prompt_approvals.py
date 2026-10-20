@@ -39,8 +39,11 @@ STALE_SECONDS = 24 * 3600
 TRANSCRIPT_TAIL_BYTES = 256 * 1024  # this hook runs on every message: a transcript grows to hundreds of MB
 RETURN_GAP_HOURS = 8  # longer than a lunch or a meeting; the "is it done?" questions came after nights and weekends
 RETURN_TAIL_BYTES = 64 * 1024  # smaller than the approvals' tail: this one is read on every message
+PROMPT_WRITTEN_SECONDS = 300  # the message being submitted, already written: an older one with the same text counts
 # Codex events that mark the conversation itself; task_started and the like are written as the new message arrives.
 CODEX_CONVERSATION_EVENTS = {"task_complete", "agent_message", "user_message", "turn_aborted"}
+# What Claude Code writes as user entries for a command run on the way back (/model, /compact): not the conversation.
+LOCAL_COMMAND = re.compile(r"\s*<(command-name|local-command-stdout|local-command-caveat)>")
 RETURN_BRIEF = (
     "The user is back after {hours:.0f} hours away. Before answering, run `~/.agents/bin/reports brief` from the "
     "checkout of the branch this conversation was about (`~/.agents/bin/reports --branch <branch> brief` when that "
@@ -194,8 +197,8 @@ def offered_services(message, services):
 
 def hours_away(transcript, prompt):
     """Hours from the newest conversation entry in the transcript's tail, other than the user's `prompt` already
-    written, until now; None when the tail holds no such entry. Harness entries (attachments, hook output) don't
-    count: they can be written as the prompt arrives. Raises OSError, and ValueError on a corrupt tail."""
+    written, until now. Harness entries (attachments, hook output) don't count: they can be written as the prompt
+    arrives. Raises OSError, and ValueError on a corrupt tail or one with no such entry."""
     with open(transcript, "rb") as fh:
         skipped = max(0, os.fstat(fh.fileno()).st_size - RETURN_TAIL_BYTES)
         fh.seek(skipped)
@@ -217,14 +220,17 @@ def hours_away(transcript, prompt):
             raise ValueError(f"line {len(lines) - number} of the tail isn't an entry")
         event = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
         if entry.get("type") == "event_msg":  # Codex
-            if event.get("type") not in CODEX_CONVERSATION_EVENTS or (
-                    event.get("type") == "user_message" and str(event.get("message") or "").strip() == prompt.strip()):
+            if str(event.get("type")) not in CODEX_CONVERSATION_EVENTS:
                 continue
-        elif entry.get("type") in ("user", "assistant") and not entry.get("isSidechain") and not entry.get("isMeta"):
+            texts = [event.get("message")] if event.get("type") == "user_message" else []
+        elif entry.get("type") in ("user", "assistant") and not any(
+                entry.get(mark) for mark in ("isSidechain", "isMeta", "isCompactSummary")):
             content = entry["message"].get("content") if isinstance(entry.get("message"), dict) else None
-            texts = [content] if isinstance(content, str) else [
-                b.get("text") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
-            if entry["type"] == "user" and any(isinstance(t, str) and t.strip() == prompt.strip() for t in texts):
+            if not isinstance(content, (str, list)):
+                raise ValueError(f"line {len(lines) - number} of the tail has a message this can't read")
+            blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
+            texts = [b.get("text") for b in blocks if isinstance(b, dict) and b.get("type") == "text"]
+            if entry["type"] == "user" and any(isinstance(t, str) and LOCAL_COMMAND.match(t) for t in texts):
                 continue
         else:
             continue
@@ -234,8 +240,11 @@ def hours_away(transcript, prompt):
             continue
         if at.tzinfo is None:
             continue  # a time with no zone could be hours off either way
-        return (time.time() - at.timestamp()) / 3600
-    return None
+        seconds = time.time() - at.timestamp()
+        if entry.get("type") != "assistant" and seconds < PROMPT_WRITTEN_SECONDS and any(isinstance(t, str) and t.strip() == prompt.strip() for t in texts):
+            continue
+        return seconds / 3600
+    raise ValueError("no timestamped conversation entry before the message in the tail")
 
 
 def main():
@@ -271,7 +280,7 @@ def main():
     prompt = str(payload.get("prompt") or "")
     named = sorted(s for s in guard_mcp.guarded_services() if re.search(rf"(?<!\w){re.escape(s)}(?!\w)", prompt, re.I))
     transcript = payload.get("transcript_path")
-    if transcript and accepts(prompt):  # only then: most messages read no transcript
+    if transcript and accepts(prompt):  # only then: most messages read no more than the return check's tail
         try:
             offered = offered_services(last_agent_message(str(transcript), prompt), guard_mcp.guarded_services())
         except (OSError, ValueError) as error:
@@ -294,15 +303,14 @@ def main():
     if switched:
         log("prompt_approvals", "phase-switch", payload, switched)
         told.append(switched)
-    if transcript:
-        try:
-            hours = hours_away(str(transcript), prompt)
-        except (OSError, ValueError) as error:
-            hours = None
-            log("prompt_approvals", "return-gap-unreadable", payload, str(error))
-        if hours is not None and hours >= RETURN_GAP_HOURS:
-            log("prompt_approvals", "return-brief", payload, f"{hours:.1f}h")
-            told.append(RETURN_BRIEF.format(hours=hours))
+    try:
+        hours = hours_away(str(transcript), prompt) if transcript else None
+    except (OSError, ValueError) as error:
+        hours = None
+        log("prompt_approvals", "return-gap-unreadable", payload, str(error))
+    if hours is not None and hours >= RETURN_GAP_HOURS:
+        log("prompt_approvals", "return-brief", payload, f"{hours:.1f}h")
+        told.append(RETURN_BRIEF.format(hours=hours))
     if told:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
                                                  "additionalContext": "\n\n".join(told)}}))

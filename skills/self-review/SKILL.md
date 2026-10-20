@@ -109,7 +109,7 @@ Log every lens that ran, the cross-model passes included, confirmed meaning a fi
 
 When a lens ran in both model families in step 2, add `--shared` to both rows: how many of that row's confirmed findings the other family also reported, a defect both found counting once per row. Claude confirms A and B, Codex confirms B and C: `--shared 1` on both. It is what the monthly job weighs the cross-model pass by, so leave it out when the other family's pass failed or was skipped: no `--shared` means unknown, not zero. Log each re-check round from step 4 as `correctness-recheck`, without `--shared`, so its findings don't count toward the first pass's.
 
-Save the report to `$(~/.agents/bin/reports path review)`. Put it in the final message too (see AGENTS.md → Communication). Use this shape; it can go straight into the PR's validation notes:
+Save the report to `$(~/.agents/bin/reports path review)`. Put its verdict and counts in the final message, as AGENTS.md → Communication asks; the full tables stay in the file. Use this shape; it can go straight into the PR's validation notes:
 
 ```
 Self-review (risk: standard; lenses: correctness, tests, maintainability, security; cross-model: codex; re-check rounds: 1 (default))

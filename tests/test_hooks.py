@@ -2744,7 +2744,7 @@ def coming_back_after_hours_asks_for_the_status_first(base):
     def context(text, *entries, raw=None, codex_turn=False, missing=False, session="r1"):
         path = os.path.join(base, f"{session}.jsonl")
         if not missing:
-            with open(path, "w") as fh:
+            with open(path, "w", errors="surrogateescape") as fh:  # "\udcff" writes the byte 0xff
                 fh.writelines(json.dumps(e) + "\n" for e in entries)
                 fh.write(raw or "")
         payload = {"prompt": text, "session_id": RUN + session, "cwd": repo, "transcript_path": path,
@@ -2769,9 +2769,43 @@ def coming_back_after_hours_asks_for_the_status_first(base):
     assert context(ask, codex("task_complete", 8, last_agent_message="Merge #12."),
                    codex("user_message", 0, message=ask), codex_turn=True), "Codex, the prompt already written"
     assert context(ask, codex("task_complete", 7.5, last_agent_message="Merge #12."), codex_turn=True) is None
-    assert context(ask, claude("user", ask, 0)) is None, "no entry before the prompt: no gap to read"
+    rollout_prompt = {"timestamp": stamp(0), "type": "response_item",
+                      "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": ask}]}}
+    assert context(ask, codex("task_complete", 8, last_agent_message="Merge #12."), rollout_prompt, codex_turn=True), \
+        "a rollout writes the prompt as a response item"
+    on_the_way_back = [claude("user", "<command-name>/model</command-name>", 0),
+                       claude("user", "<local-command-stdout>Set model to opus</local-command-stdout>", 0),
+                       claude("user", "<local-command-caveat>Caveat: …</local-command-caveat>", 0),
+                       claude("user", "This session is being continued…", 0) | {"isCompactSummary": True}]
+    assert context(ask, ended, *on_the_way_back), "a command run on the way back isn't the conversation"
+    assert context(ask, claude("user", ask, 0), session="r-none") is None, "no entry before the prompt: no gap to read"
+    assert any(e.get("decision") == "return-gap-unreadable" and e.get("session") == RUN + "r-none"
+               for e in map(json.loads, open(os.path.join(logs, "hooks.jsonl")))), "and the log says why"
+    for written in ([], [claude("user", ask, 0)]):
+        assert context(ask, claude("assistant", "Done.", 9), claude("user", ask, 1), *written) is None, \
+            "the same words sent an hour ago are the last entry, not this message"
+        assert context(ask, codex("task_complete", 9, last_agent_message="Done."), codex("user_message", 1, message=ask),
+                       *[codex("user_message", 0, message=ask)] * bool(written), codex_turn=True) is None
+    assert context(ask, claude("assistant", "Done.", 7 + 59 / 60), claude("user", ask, 0)) is None
+    assert context(ask, codex("task_complete", 7 + 59 / 60, last_agent_message="Merge #12."), codex_turn=True) is None
+    assert context(ask, codex("task_complete", 7 + 59 / 60, last_agent_message="Merge #12."),
+                   codex("user_message", 0, message=ask), codex_turn=True) is None
+    side, meta = claude("assistant", "subagent", 0), claude("user", "<skill text>", 0)
+    side["isSidechain"], meta["isMeta"] = True, True
+    assert context(ask, ended, side, meta), "a subagent's or a skill's entries are not the conversation"
+    assert context(ask, codex("task_complete", 8, last_agent_message="Merge #12."), codex("task_started", 0),
+                   codex("token_count", 0), codex_turn=True), "events written as the new message arrives don't count"
+    zoneless = claude("assistant", "Done.", 0)
+    zoneless["timestamp"] = zoneless["timestamp"][:19]
+    assert context(ask, ended, zoneless), "a time with no zone is skipped, not read as UTC or local"
+    padding = [claude("assistant", "x" * 1000, 30) for _ in range(100)]
+    assert context(ask, *padding, ended), "a transcript longer than the tail: read from a whole line"
+    assert context(ask, *padding, claude("assistant", "Done.", 1)) is None
 
-    for name, kwargs in [("missing", {"missing": True}), ("corrupt", {"raw": "{not json\n"})]:
+    for name, kwargs in [("missing", {"missing": True}), ("corrupt", {"raw": "{not json\n"}),
+                         ("not-an-entry", {"raw": "[]\n"}), ("not-utf8", {"raw": "\udcff\n"}),
+                         ("unreadable-message", {"raw": json.dumps(claude("assistant", "x", 0) | {"message": {"content": 42}})
+                                                 + "\n"})]:
         repo = new_repo(base, "zz-return-" + name)
         git(repo, "switch", "-q", "-c", "feature")
         told = context("phase off validate\nCrea una tarea en Linear para esto", ended, session="r-" + name, **kwargs)
