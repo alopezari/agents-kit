@@ -1,0 +1,2 @@
+- The quality log records how many confirmed findings both model families reported (`quality-log lens … --shared N`), and the monthly review mining reports what the cross-model pass finds that the same-model one doesn't.
+- `quality-log` refuses a lens name no lens has, and records a lens heading such as "Performance and scale" under its key.
