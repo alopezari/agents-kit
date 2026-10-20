@@ -385,6 +385,8 @@ def run_words(tokens):
                 i += 1
                 if option == "--":
                     break
+                if word == "command" and option in ("-v", "-V"):
+                    return [], chdir  # it only looks the names up
                 long = option.startswith("--")
                 if long:
                     name, value = option.partition("=")[::2]

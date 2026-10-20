@@ -415,6 +415,9 @@ def guard_reads_through_wrappers_and_scripts(base):
         assert guard(cmd, cwd="/usr/lib") == "deny", f"the delete runs where the cds and env -C leave it: {cmd!r}"
     for cmd in ["env -C /tmp rm -rf x", "env -C /tmp -i rm -rf usr", "env --chdir /tmp rm -rf usr"]:
         assert guard(cmd, cwd="/usr/lib") == "allow", f"the delete runs in /tmp: {cmd!r}"
+    for cmd in ["command -v rm -rf /usr", "command -V rm -rf /usr"]:
+        assert guard(cmd) == "allow", f"command -v only looks the names up: {cmd!r}"
+    assert guard("command -p rm -rf /usr") == "deny"
     for cmd in ["env --unset FOO rm -rf /usr", "env --unset FOO sudo ls", "env --chdir / sudo ls",
                 "time --output /tmp/t sudo ls", "env --ignore-environment sudo ls", "env -iu PATH rm -rf /usr",
                 "env -iu PATH sudo ls"]:
