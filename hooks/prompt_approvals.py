@@ -241,7 +241,8 @@ def hours_away(transcript, prompt):
         if at.tzinfo is None:
             continue  # a time with no zone could be hours off either way
         seconds = time.time() - at.timestamp()
-        if entry.get("type") != "assistant" and seconds < PROMPT_WRITTEN_SECONDS and any(isinstance(t, str) and t.strip() == prompt.strip() for t in texts):
+        just_sent = any(isinstance(t, str) and t.strip() == prompt.strip() for t in texts)
+        if entry.get("type") != "assistant" and just_sent and seconds < PROMPT_WRITTEN_SECONDS:
             continue
         return seconds / 3600
     raise ValueError("no timestamped conversation entry before the message in the tail")
