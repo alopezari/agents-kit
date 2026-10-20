@@ -5,6 +5,7 @@ backups/
 approvals/
 monitors/state/
 review-mining/runs/
+review-mining/evals/
 review-mining/last-success
 review-mining/baseline.json
 usage/*.json

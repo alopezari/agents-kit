@@ -167,9 +167,50 @@ def other_kit_layouts_keep_their_rows_in_the_kit(base):
     assert os.path.exists(os.path.join(worktree, "logs", "quality.jsonl")), os.listdir(worktree)
 
 
+def records_each_findings_outcome(base):
+    home = setup(base)
+    assert log(home, "lens", "correctness", "--findings", "8", "--confirmed", "5", "--model", "claude", "--shared", "2",
+               "--outcomes", "fixed=3,wrong=2,intentional=1,pre-existing=1,open=1").returncode == 0
+    assert log(home, "lens", "tests", "--findings", "2", "--confirmed", "2").returncode == 0, "outcomes stay optional"
+    with_outcomes, without = entries(home)
+    assert with_outcomes["outcomes"] == {"fixed": 3, "wrong": 2, "intentional": 1, "minor": 0, "pre-existing": 1,
+                                         "open": 1, "uncertain": 0}, with_outcomes
+    assert with_outcomes["shared"] == 2, "--shared and --outcomes are checked and written together"
+    assert "outcomes" not in without, without
+
+
+def refuses_malformed_outcomes(base):
+    """Each case adds up to --findings and matches --confirmed, so only the rule it names can refuse it."""
+    home = setup(base)
+    lens = ["lens", "correctness", "--findings", "3", "--confirmed", "3", "--outcomes"]
+    for args, message in [
+        ([*lens, "fixed=2,noise=1"], "isn't one of"),
+        ([*lens, "fixed=2,minor=x"], "isn't a whole number"),
+        ([*lens, "fixed=4,minor=-1"], "isn't a whole number"),
+        ([*lens, "fixed=1,fixed=1,minor=2"], "given twice"),
+        ([*lens, "fixed=3,minor"], "has no count"),
+        ([*lens, ""], "isn't one of"),
+        ([*lens, "fixed=2,minor=2"], "add up to 4, not --findings 3"),
+        ([*lens, "fixed=1,wrong=2"], "count 1 confirmed, not --confirmed 3"),
+        ([*lens, "fixed=3", "--outcomes", "minor=3"], "--outcomes is given twice"),
+    ]:
+        out = log(home, *args)
+        assert out.returncode == 2 and message in out.stderr, (args, out)
+    assert entries(home) == [], "nothing was written"
+
+
+def a_lens_with_no_findings_logs_without_outcomes(base):
+    home = setup(base)
+    assert log(home, "lens", "correctness", "--findings", "0", "--confirmed", "0").returncode == 0
+    assert log(home, "lens", "correctness", "--findings", "0", "--confirmed", "0", "--outcomes", "fixed=0").returncode == 0
+    without, zeros = entries(home)
+    assert "outcomes" not in without and set(zeros["outcomes"].values()) == {0}, (without, zeros)
+
+
 for test in (writes_well_formed_entries, records_the_findings_the_other_model_shared, keeps_lens_names_to_the_lenses_there_are,
              refuses_malformed_entries, a_session_on_a_worktree_logs_to_the_main_checkout,
-             other_kit_layouts_keep_their_rows_in_the_kit):
+             other_kit_layouts_keep_their_rows_in_the_kit, records_each_findings_outcome,
+             refuses_malformed_outcomes, a_lens_with_no_findings_logs_without_outcomes):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)

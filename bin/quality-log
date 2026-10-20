@@ -2,7 +2,7 @@
 """Record what a review lens or test type produced, and what got past them, so the monthly job can keep
 only perspectives that pay off.
 
-  quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--shared N] [--criteria N] [--map-items N]
+  quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--shared N] [--criteria N] [--map-items N] [--outcomes fixed=N,wrong=N,...]
   quality-log test <type> --issues N [--secs S] [--notes "..."]
   quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 
@@ -25,6 +25,9 @@ import time
 
 KIT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")
 TAXONOMY = os.path.join(KIT, "review-mining", "taxonomy.md")
+# What became of each finding a lens raised: the self-review skill, step 4, defines each one.
+OUTCOMES = ("fixed", "wrong", "intentional", "minor", "pre-existing", "open", "uncertain")
+CONFIRMED_OUTCOMES = ("fixed", "minor", "pre-existing", "open")
 sys.path.insert(0, os.path.join(KIT, "hooks"))
 from hooklog import session_harness  # noqa: E402
 from review_stamp import quality_log  # noqa: E402
@@ -72,6 +75,19 @@ def parse(argv):
             raise argparse.ArgumentTypeError(f"{value!r} isn't a whole number")
         return int(value)
 
+    def outcomes(value):
+        counts, seen = dict.fromkeys(OUTCOMES, 0), set()
+        for key, sep, number in (pair.partition("=") for pair in value.split(",")):
+            if key not in OUTCOMES:
+                raise argparse.ArgumentTypeError(f"{key!r} isn't one of {', '.join(OUTCOMES)}")
+            if not sep:
+                raise argparse.ArgumentTypeError(f"{key!r} has no count: give it as {key}=N")
+            if key in seen:
+                raise argparse.ArgumentTypeError(f"{key!r} is given twice")
+            seen.add(key)
+            counts[key] = count(number)
+        return counts
+
     lens = kinds.add_parser("lens", allow_abbrev=False)
     lens.add_argument("name", type=lens_name)
     lens.add_argument("--findings", type=count, required=True)
@@ -81,6 +97,7 @@ def parse(argv):
     lens.add_argument("--shared", type=count)
     lens.add_argument("--criteria", type=count)
     lens.add_argument("--map-items", type=count)
+    lens.add_argument("--outcomes", type=outcomes)
     test = kinds.add_parser("test", allow_abbrev=False)
     test.add_argument("name", type=name)
     test.add_argument("--issues", type=count, required=True)
@@ -99,6 +116,16 @@ def parse(argv):
         if parsed.shared > parsed.confirmed:
             parser.error(f"--shared {parsed.shared} is more than --confirmed {parsed.confirmed}")
     args = vars(parsed)
+    if args.get("outcomes"):
+        # argparse keeps a repeated flag's last value, which would drop the first one's counts.
+        if sum(arg.split("=")[0] == "--outcomes" for arg in argv) > 1:
+            parser.error("--outcomes is given twice")
+        counts = args["outcomes"]
+        if sum(counts.values()) != args["findings"]:
+            parser.error(f"--outcomes add up to {sum(counts.values())}, not --findings {args['findings']}")
+        confirmed = sum(counts[key] for key in CONFIRMED_OUTCOMES)
+        if confirmed != args["confirmed"]:
+            parser.error(f"--outcomes count {confirmed} confirmed, not --confirmed {args['confirmed']}")
     return args.pop("kind"), args.pop("name"), {k: v for k, v in args.items() if v is not None}
 
 

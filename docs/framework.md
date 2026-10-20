@@ -312,7 +312,7 @@ prune-merged [--dry-run]
 **`bin/quality-log`**: Record what a review lens or test type produced, and what got past them, so the monthly job can keep only perspectives that pay off.
 
 ```
-quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--shared N] [--criteria N] [--map-items N]
+quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--shared N] [--criteria N] [--map-items N] [--outcomes fixed=N,wrong=N,...]
 quality-log test <type> --issues N [--secs S] [--notes "..."]
 quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 ```
@@ -355,7 +355,7 @@ wp-query-profile --php 'my_function_under_test( 20 );' [--user 1]
 
 ## Periodic operations
 
-`install.sh` renders the templates in `launchd/`, and those in each profile's, into `~/Library/LaunchAgents/` and loads them, each labelled `com.<user>.<job>`. No kit job applies changes to the kit's tracked files: they write reports and proposals under `research/` for you to review, and keep their own state in git-ignored directories. Review mining classifies review comments from the repositories profiles list in `review-mining/repos.txt`; without one, it skips that step and reports only your pull requests' outcomes and the kit's own logs.
+`install.sh` renders the templates in `launchd/`, and those in each profile's, into `~/Library/LaunchAgents/` and loads them, each labelled `com.<user>.<job>`. No kit job applies changes to the kit's tracked files: they write reports and proposals under `research/` for you to review, and keep their own state in git-ignored directories. Review mining classifies review comments from the repositories profiles list in `review-mining/repos.txt`; without one, it skips that step and reports only your pull requests' outcomes and the kit's own logs. It also replays the review eval cases follow-pr records (`review-mining/eval.py`, cases in the git-ignored `review-mining/evals/`) against both reviewers.
 
 | Job | When | Runs | What it does |
 |---|---|---|---|

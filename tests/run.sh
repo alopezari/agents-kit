@@ -46,7 +46,7 @@ sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wra
   "semgrep|semgrep rules" "phase|flow phase" "quality-log|quality log input"
   "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree" "prune-merged|remove merged worktrees and branches"
   "pr-validation|pull request validation section" "staging|staging results" "approve|approvals from a dialog" "spec|spec lint and second reading" "browse|browser A/B harness"
-  "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes"
+  "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes" "review-eval|review evals"
   "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
   "doctor|install doctor" "kit-home|every test refuses another checkout")
@@ -76,6 +76,7 @@ section_browse() { python3 test_browse.py; }
 section_verify_changed() { python3 test_verify_changed.py; }
 section_deps() { python3 test_deps.py; }
 section_outcomes() { python3 test_outcomes.py; }
+section_review_eval() { python3 test_review_eval.py; }
 section_sessions() { python3 test_extract_sessions.py; }
 section_triage() {
   local f=0

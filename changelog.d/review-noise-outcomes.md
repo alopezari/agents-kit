@@ -1,0 +1,1 @@
+- The self-review logs what became of every finding (`quality-log lens … --outcomes fixed=N,wrong=N,…`): fixed, wrong, intentional, minor, pre-existing, open or uncertain. The monthly job reports each lens's and model's noise rate and pre-existing share from them.

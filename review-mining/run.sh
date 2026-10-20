@@ -49,6 +49,14 @@ python3 "$HOME/.agents/usage/extract_sessions.py" 200 "$RUN/sessions.json" > "$R
 # Every session, not the 200 above: joining sessions to merged PRs needs the ones before the kit too.
 python3 "$HOME/.agents/usage/extract_sessions.py" 100000 "$RUN/sessions-all.json" > /dev/null 2>&1 || true
 python3 "$BASE/outcomes.py" "$SINCE" "$RUN/sessions-all.json" "$RUN/outcomes.json" > "$RUN/outcomes.log" 2>&1 || true
+# Replay the escaped bugs against both reviewers: up to 10 bug and 10 clean cases each, about one review pass per case.
+# The two models run side by side: one after the other can take hours before the analysis starts.
+for model in codex claude; do
+  { python3 "$BASE/eval.py" run --model "$model" --limit 10 || echo "eval.py run --model $model failed with exit $?"; } \
+    > "$RUN/evals-$model.txt" 2>&1 &
+done
+wait
+cat "$RUN/evals-codex.txt" "$RUN/evals-claude.txt" > "$RUN/evals.txt"
 
 cat > "$RUN/prompt.md" <<EOF
 You are updating the evidence behind a set of coding-agent instructions.
@@ -60,11 +68,13 @@ Inputs (read them from disk):
 - $HOME/.agents/AGENTS.md: the current global instructions.
 - $HOME/.agents/research/review-findings.md: the previous analysis, when a profile provides one.
 - $HOME/.agents/logs/hooks.jsonl: every hook block/nudge (hook, decision, session, cwd, detail).
-- $HOME/.agents/logs/quality.jsonl: one line per review lens or test type run (tier, findings/confirmed or issues, secs, model), per escape follow-pr logged, and per branch rename (kind "rename": name is the old branch, to the new one; not a perspective).
+- $HOME/.agents/logs/quality.jsonl: one line per review lens or test type run (tier, findings/confirmed or issues, secs, model, and for a lens the outcomes of its findings), per escape follow-pr logged, and per branch rename (kind "rename": name is the old branch, to the new one; not a perspective).
 - $HOME/.agents/logs/browser-ab.jsonl: A/B test of browser tools in the validate skill (assign/call/finish events per run).
 - $RUN/sessions.json: my last 200 agent sessions (harness, model, effort, tokens, advisor_calls, prompts, correction_signals).
 
 - $HOME/.agents/research/health/*.md: weekly health reports from this month.
+- $RUN/evals.txt: this month's review evals, per model and lens: recall over escaped bugs replayed against the
+  reviewers, Important findings per clean case, errors and skips, beside the previous run's numbers.
 - $RUN/outcomes.json: my merged PRs since the kit started and in a baseline window before it (see $BASE/outcomes.py
   for every field), with per-period summaries; $RUN/outcomes.log has its errors, if any.
 $COMMENT_NOTE
@@ -78,7 +88,7 @@ Steps:
    c. a regression or property test the team could add;
    d. required evidence in the self-review lenses ($HOME/.agents/skills/self-review/lenses.md);
    e. a sentence in AGENTS.md, only when nothing above fits. Keep AGENTS.md short.
-4. From quality.jsonl, add a short "Review and test perspectives" section: per lens and test type, how often triage selected it, findings vs confirmed findings, and time. The spec lens is the spec's second reading: it runs with every spec, not from triage, so it has no trigger to tighten. Lines named correctness-recheck are the self-review's re-check rounds, not triage selections: report them apart from correctness. Its lines carry the spec's number of acceptance criteria: set specs outside 3–6 against the rest by C.requirement escapes on the same branch, and propose making the lint fail outside that range only when the gap shows across several PRs. Lines logged since the Change map existed also carry map_items, its number of items (0 for none): compare confirmed Correctness findings per PR with a map against PRs without one, joining a spec logged on a session branch to its PR through the rename lines, and leave out lines without the field. Lens lines with a "shared" field measure the cross-model pass: from those lines only, per lens and per reviewer role (harness claude-code with model codex is Codex as the second reader; harness codex with model claude the reverse), give each family's confirmed findings the other didn't report (confirmed minus shared) and minutes per such finding, writing "none unique" instead of dividing by zero; a line without the field is unknown overlap, never zero. Recommend dropping or merging a perspective with no confirmed findings over ~20 runs, and tightening a trigger (in ~/.agents/bin/triage) that fires often with nothing found. Propose these as diffs.
+4. From quality.jsonl, add a short "Review and test perspectives" section: per lens and test type, how often triage selected it, findings vs confirmed findings, and time. The spec lens is the spec's second reading: it runs with every spec, not from triage, so it has no trigger to tighten. Lines named correctness-recheck are the self-review's re-check rounds, not triage selections: report them apart from correctness. Its lines carry the spec's number of acceptance criteria: set specs outside 3–6 against the rest by C.requirement escapes on the same branch, and propose making the lint fail outside that range only when the gap shows across several PRs. Lines logged since the Change map existed also carry map_items, its number of items (0 for none): compare confirmed Correctness findings per PR with a map against PRs without one, joining a spec logged on a session branch to its PR through the rename lines, and leave out lines without the field. Lens lines with a "shared" field measure the cross-model pass: from those lines only, per lens and per reviewer role (harness claude-code with model codex is Codex as the second reader; harness codex with model claude the reverse), give each family's confirmed findings the other didn't report (confirmed minus shared) and minutes per such finding, writing "none unique" instead of dividing by zero; a line without the field is unknown overlap, never zero. Lens lines logged since outcomes existed carry an outcomes object (not the merged-PR outcomes of outcomes.json), what became of each finding (fixed, wrong, intentional, minor, pre-existing, open, uncertain): per lens and model, over the lines that carry it, give the noise rate (the sum of wrong plus intentional over the sum of findings), the pre-existing share and the minor share over the same sum, n/a when that sum is 0, and how many lines had no outcomes. A lens or model whose noise stays high across several PRs gets a proposed fix to its questions in lenses.md; a high pre-existing share means reviewers read old code instead of the change. Recommend dropping or merging a perspective with no confirmed findings over ~20 runs, and tightening a trigger (in ~/.agents/bin/triage) that fires often with nothing found. Propose these as diffs.
    From browser-ab.jsonl, add a short "Browser A/B" section per tool: runs, commands per run, output bytes per run (context cost), failed calls, wall time, checks passed/completed, tool issues and notes. Also count, from hooks.jsonl (decision "browser-mcp"), sessions that drove a browser through an MCP instead of bin/browse, and which of them look like validation: those runs are missing from the test. The test ends on 2026-11-05 or at 10 finished runs per tool, whichever comes first. Recommend one tool only when both tools have at least 10 finished runs; otherwise report the result as inconclusive, give the counts, and propose a new end date (and, if MCP bypasses explain the gap, how to stop them).
    From hooks.jsonl, add a short "Hooks" section: which rules fired, how often, which look like false positives (the agent or the user worked around them) and which caught real problems; propose removing or narrowing noisy rules.
    From sessions.json, add a short "Models and effort" section: sessions per model/effort, how often the advisor (Fable) was consulted and whether sessions that used it had fewer correction signals, how sessions that used effort "auto" compare, and which tasks look over- or under-provisioned. Compare cost per completed task, never per token. Treat it as evidence, not proof.
@@ -100,6 +110,12 @@ Steps:
      first review, real follow-ups) between baseline and since_kit, with the PR counts. Few PRs since the kit make
      any difference noise; say so instead of drawing a conclusion. The baseline counts every PR; the kit numbers can't
      beat it by excluding hard ones.
+   Add a "Review evals" section from evals.txt: per model and lens, recall and Important findings per clean case
+   beside the previous run's, and whether the cases were the same. When they were and recall fell or false alarms rose,
+   name the changes to lenses.md, bundle.sh or the models since the previous run and propose reverting the likely
+   cause. Then name up to three merged PRs from outcomes.json with no escapes and follow_ups settled with none you
+   counted, as clean-case candidates, each with the command for a person to fill in and run (never add cases yourself):
+   \`$BASE/eval.py add --checkout <the repo's checkout> --sha <merge commit> --base <its first parent> --lens Correctness --goal "<PR title>" --clean\`.
    Add a "Cost per merged PR" section from the sessions joined to PRs: tokens (input+output; cache reads separately),
    wall-clock minutes (idle included), hours from the first session to the PR and from the PR to the merge, per
    period and per model and effort where sessions.json has them. Compare cost per merged PR, never per session.

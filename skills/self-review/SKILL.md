@@ -100,10 +100,11 @@ The stop hook re-runs `verify` when you finish; run it by hand (`python3 ~/.agen
 python3 ~/.agents/hooks/review_stamp.py write
 ```
 
-Log every lens that ran, confirmed meaning a finding that survived step 3. The monthly job uses this to retire lenses that never pay off:
+Log every lens that ran, the cross-model passes included, confirmed meaning a finding that survived step 3. The monthly job uses this to retire lenses that never pay off, and the outcomes to measure each reviewer's noise: give every finding exactly one, by what became of it, not by the severity the reviewer gave it. `fixed`: confirmed and fixed. `wrong`: rejected, the scenario can't happen. `intentional`: rejected, the behavior is deliberate or outside the check's threat model. `minor`: confirmed, not worth acting on (a Nit dropped, past the cap or from a re-check). `pre-existing`: confirmed Pre-existing. `open`: confirmed and not minor, left Open for the human. `uncertain`: left uncertain, even on the report's Open line. They add up to the findings, and fixed, minor, pre-existing and open to the confirmed ones; leave out the ones at 0, and with no findings give `--outcomes fixed=0`:
 
 ```bash
-~/.agents/bin/quality-log lens <name> --findings <N> --confirmed <M> --secs <S> --model <claude|codex> [--shared <K>]
+~/.agents/bin/quality-log lens <name> --findings <N> --confirmed <M> --secs <S> --model <claude|codex> [--shared <K>] \
+  --outcomes fixed=<N>,wrong=<N>,intentional=<N>,minor=<N>,pre-existing=<N>,open=<N>,uncertain=<N>
 ```
 
 When a lens ran in both model families in step 2, add `--shared` to both rows: how many of that row's confirmed findings the other family also reported, a defect both found counting once per row. Claude confirms A and B, Codex confirms B and C: `--shared 1` on both. It is what the monthly job weighs the cross-model pass by, so leave it out when the other family's pass failed or was skipped: no `--shared` means unknown, not zero. Log each re-check round from step 4 as `correctness-recheck`, without `--shared`, so its findings don't count toward the first pass's.
