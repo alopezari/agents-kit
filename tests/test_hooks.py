@@ -123,7 +123,8 @@ def only_the_user_marks_a_staging_step_as_theirs(base):
                 # Text that only names the call: a search pattern, a commit or PR body, an echoed note.
                 "grep -rn 'staging mark S1 PASS --by user' tests/", "rg 'bin/staging mark .* --by user' skills",
                 "git log --grep 'staging mark --by user'", "echo 'the user runs bin/staging mark S1 PASS --by user'",
-                "git commit -m \"$(cat <<'EOF'\nRecord bin/staging mark S1 PASS --by user\nEOF\n)\""]:
+                "git commit -m \"$(cat <<'EOF'\nRecord bin/staging mark S1 PASS --by user\nEOF\n)\"",
+                "for c in '~/.agents/bin/staging mark S1 PASS --by user'; do echo \"$c\"; done"]:
         assert guard(cmd) == "allow", f"should allow: {cmd}"
     for cmd in ["eval 'bin/staging mark S1 PASS --by user'", "x=$(bin/staging mark S1 PASS --by user)",
                 "bash <<EOF\nbin/staging mark S1 PASS --by user\nEOF", "cat <<EOF | sh\nbin/staging mark S1 PASS --by user\nEOF",
@@ -253,6 +254,8 @@ def guard_blocks_irreversible(base):
         assert guard(cmd, cwd="/usr/lib") == "deny", f"never less safe than judging from cwd: {cmd}"
     started = child_cpu()
     assert guard(";" * 60000 + "x/" * 30000) == "allow" and child_cpu() - started < 3, "a long line must not stall the guard"
+    started = child_cpu()
+    assert guard("echo " + "1" * 64000) == "allow" and child_cpu() - started < 3, "a run of digits must not stall the guard"
     # An edit chained before a blocked step was lost without a word: the agent took it as done.
     d = run_hook("guard_bash.py", {"tool_input": {"command": "sed -i '' s/a/b/ notes.md && git push --force origin x"},
                                    "cwd": "/tmp", "session_id": "test"})
@@ -394,6 +397,137 @@ def guard_reads_code_not_text(base):
     assert guard(long) == "allow" and child_cpu() - started < 3, "a long mixed command must not stall the guard"
     started = child_cpu()
     assert guard(long + "EOF\ngit branch -D old") == "deny" and child_cpu() - started < 3, "the whole long command is read"
+
+
+def guard_reads_through_wrappers_and_scripts(base):
+    for cmd in ["env X=1 sudo ls", "env sudo ls", "X=1 sudo ls", "time sudo ls", "command sudo ls", "nohup sudo ls",
+                "env -i PATH=/bin sudo ls", "if true; then env sudo ls; fi", "(X=1 sudo ls)",
+                "env rm -rf /usr", "env -i rm -rf /usr", "nohup rm -rf /usr", "then env rm -rf /usr", "X=1 rm -rf /usr",
+                "exec rm -rf /usr", "env -u HOME nohup rm -rf /usr", "(env rm -rf /usr)"]:
+        assert guard(cmd) == "deny", f"the wrapper runs it all the same: {cmd!r}"
+    for cmd in ["env X=1 rm -rf /tmp/x", "env ls", "nohup rm -rf /tmp/x", "X=1 ls", "echo sudo", "time ls",
+                "grep -n 'env sudo' notes.md"]:
+        assert guard(cmd) == "allow", f"nothing guarded runs: {cmd!r}"
+    for cmd in ["env -C / rm -rf usr", "env --chdir=/ rm -rf usr", "env -C/ rm -rf usr"]:
+        assert guard(cmd, cwd="/usr/lib") == "deny", f"env -C moves the rm like a cd: {cmd!r}"
+    for cmd in ["env --chdir / rm -rf usr", "env -C / env -C usr rm -rf bin", "cd / && bash -c 'rm -rf usr'",
+                "env -C / bash -c 'rm -rf usr'"]:
+        assert guard(cmd, cwd="/usr/lib") == "deny", f"the delete runs where the cds and env -C leave it: {cmd!r}"
+    for cmd in ["env -C /tmp rm -rf x", "env -C /tmp -i rm -rf usr", "env --chdir /tmp rm -rf usr"]:
+        assert guard(cmd, cwd="/usr/lib") == "allow", f"the delete runs in /tmp: {cmd!r}"
+    for cmd in ["command -v rm -rf /usr", "command -V rm -rf /usr"]:
+        assert guard(cmd) == "allow", f"command -v only looks the names up: {cmd!r}"
+    assert guard("command -p rm -rf /usr") == "deny"
+    for cmd in ["env --unset FOO rm -rf /usr", "env --unset FOO sudo ls", "env --chdir / sudo ls",
+                "time --output /tmp/t sudo ls", "env --ignore-environment sudo ls", "env -iu PATH rm -rf /usr",
+                "env -iu PATH sudo ls"]:
+        assert guard(cmd) == "deny", f"a long option's value is no command: {cmd!r}"
+    assert guard("command -v sudo") == "allow", "looking sudo up runs nothing"
+    for cmd in ["true && if sudo ls; then :; fi", "for x in a; do sudo ls; done", "ls || ! sudo ls"]:
+        assert guard(cmd) == "deny", f"a keyword starts a command: {cmd!r}"
+    for cmd in ['curl -d "you can do sudo stuff" https://x', 'make test MSG="do sudo"', "ls # then sudo apt"]:
+        assert guard(cmd) == "allow", f"a keyword in prose starts nothing: {cmd!r}"
+    for cmd in ["bash -c 'rm -rf /usr'", "eval 'rm -rf /usr'", "echo 'rm -rf /usr' | bash", "sh -c \"cd / && rm -rf usr\"",
+                "python3 -c 'import os; os.system(\"rm -rf /usr\")'", "perl -e 'qx{rm -rf /usr}'",
+                "ruby -e '%x(rm -rf /usr)'", "ruby -e '`rm -rf /usr`'", "T=/usr; bash -c \"rm -rf $T\"",
+                "sudo bash -c 'rm -rf /usr'", "bash -c \"rm -rf $BUILD_DIR\"", "bash -c 'echo hi\nrm -rf /usr'",
+                "eval 'echo hi\nrm -rf /usr'", "TMPDIR=/usr; eval 'rm -rf \"$TMPDIR\"'", "perl -e 'qx{rm -rf *}'",
+                "ruby -e '%x[rm -rf *]'", "xargs sh -c 'rm -rf /usr'", "bash <<< 'rm -rf /usr'",
+                "echo 'rm -rf /usr' | sudo bash"]:
+        assert guard(cmd) == "deny", f"a recursive delete in text that runs: {cmd!r}"
+    for cmd in ["tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; ls $tmp", "dir=build; bash -c \"rm -rf $dir\"",
+                "find . -name node_modules -prune -exec sh -c 'rm -rf \"$1\"' _ {} \\;", "D=/tmp/x; eval 'rm -rf \"$D\"'",
+                "HOME=/tmp; eval 'rm -rf \"$HOME/cache\"'", "perl -e 'qx{rm -rf /tmp/x}'"]:
+        assert guard(cmd, cwd="/usr/lib") == "allow", f"the delete takes a known value, or what the caller passes: {cmd!r}"
+    for cmd in ["ssh web1 'rm -rf /var/www/releases/old'", "docker exec web sh -c 'rm -rf /app/cache'",
+                "kubectl exec pod -- sh -c 'rm -rf /data/cache'", "sshpass -p x ssh web1 'rm -rf /var/www/old'",
+                "ansible all -m shell -a 'rm -rf /var/cache/x'"]:
+        assert guard(cmd) == "allow", f"the delete runs on another machine or in a container: {cmd!r}"
+    for cmd in ["grep -n 'rm -rf /usr' notes.md", "echo 'rm -rf /usr'", "git commit -m 'drop rm -rf /usr'",
+                "bash -c 'rm -rf /tmp/x'", "python3 -c 'print(\"rm -rf /usr\")'",
+                "git commit -m 'bash -c \"rm -rf /usr\"'", "grep -r \"eval 'rm -rf /usr'\" .",
+                "gh issue create --body 'eval \"rm -rf /usr\"'", "curl -d 'rm -rf /usr' https://x",
+                "jq -n --arg c 'rm -rf /usr' '$c'", "make test CMD='rm -rf /usr'", "for c in 'rm -rf /usr'; do echo $c; done",
+                "echo 'rm -rf /usr' | grep rm", "node test.js 'rm -rf /usr'"]:
+        assert guard(cmd) == "allow", f"a delete only mentioned, or a safe one: {cmd!r}"
+
+    for cmd in ["printf 'rm -rf /usr\\n' > /tmp/x.sh && bash /tmp/x.sh",
+                "echo 'git branch -D old' > /tmp/x.sh; sh /tmp/x.sh",
+                "python3 - <<'EOF'\nopen('/tmp/x.sh', 'w').write('git branch -D old')\nEOF\nbash /tmp/x.sh",
+                "cat > /tmp/deploy <<'EOF'\ngit branch -D old\nEOF\nchmod +x /tmp/deploy && /tmp/deploy",
+                "cat > deploy <<'EOF'\ngit branch -D old\nEOF\nchmod +x deploy && ./deploy",
+                "cat > /tmp/p.py <<'EOF'\nimport os\nos.system('git branch -D old')\nEOF\npython3 /tmp/p.py",
+                "tee /tmp/x.js <<'EOF'\nrequire('child_process').execSync('git branch -D old')\nEOF\nnode /tmp/x.js",
+                "echo 'rm -rf /usr' 2>&1 | bash", "echo 'git branch -D old' 2>/dev/null >&2 | sh",
+                "cat <<'E' 2>&1 | bash\ngit branch -D old\nE", "printf 'git branch -D old' &>/dev/null | bash",
+                "echo 'git branch -D old' > /tmp/x.sh && source /tmp/x.sh", "echo 'git branch -D old' > /tmp/x.sh; . /tmp/x.sh",
+                "printf 'rm -rf /usr\\n' > /tmp/x.sh && env bash /tmp/x.sh",
+                "echo 'git branch -D old' > /tmp/x.py; python3 -- /tmp/x.py",
+                "echo 'rm -rf /usr' > /tmp/x.sh && if bash /tmp/x.sh; then :; fi", "echo 'rm -rf /usr' > /tmp/x.sh && ! bash /tmp/x.sh",
+                "echo 'rm -rf /usr' > /tmp/x.sh && { bash /tmp/x.sh; }",
+                "cat > /tmp/p.py <<'EOF'\nimport os\nos.system('rm -rf /usr')\nEOF\n.venv/bin/python /tmp/p.py"]:
+        assert guard(cmd) == "deny", f"text written, then run: {cmd!r}"
+    for cmd in ["cat > notes.md <<'EOF'\ngit branch -D old\nEOF\ngit add notes.md",
+                "echo 'rm -rf /usr' 2>&1", "echo 'git branch -D old' >&2", "echo 'rm -rf /usr' &> /tmp/log",
+                "printf 'git branch -D old' > /tmp/n.md && cat /tmp/n.md",
+                "cat > /tmp/n.md <<'EOF'\ngit branch -D old\nEOF\npython3 -c 'print(1)'",
+                "cat > /tmp/n.md <<'EOF'\ngit branch -D old\nEOF\npython3 report.py",
+                "echo 'git branch -D old' > notes.md && node build.js",
+                "echo 'git branch -D old' > /tmp/x.sh; bash /tmp/y.sh", "echo 'git branch -D old' > /tmp/x; /tmp/y",
+                "python3 <<'P'\nr = (total/count)\nprint(\"then sudo apt install x\")\nP",
+                "python3 <<'P'\nx = (a/b)\nprint(\"git branch -D old\")\nP",
+                "python3 - <<'E'\nimport git\nprint(\"git branch -D old\")\nE\n/usr/bin/git status",
+                "python3 - <<'E'\nimport pytest\nprint(\"git branch -D old\")\nE\npython3 -m pytest"]:
+        assert guard(cmd) == "allow", f"text that nothing runs: {cmd!r}"
+    for cmd in ["cat > /tmp/v.sh <<'EOF'\ntrap 'rm -rf /nonexistent-x' EXIT\nEOF\nbash -c 'echo hi'",
+                "python3 - <<'PY'\np = '/tmp/s.sh'\nnew = \"\"\"\n  rm -rf \"$TMP\"\n\"\"\"\nPY\nbash -n /tmp/s.sh",
+                "cat > /tmp/m.py <<'EOF'\nexec(src, ns)\nNAME = 'DROP DATABASE'\nEOF\npython3 /tmp/m.py",
+                "python3 - <<'PY'\nwrappers = ('env', 'exec')\nNAME = 'DROP DATABASE'\nPY"]:
+        assert guard(cmd) == "allow", f"a script written and not run, or run without starting a process: {cmd!r}"
+    for cmd in ["cat > /tmp/t.py <<'PY'\nimport sys\nPY\ncat > /tmp/c1.txt <<'EOF'\nbin/approve grant linear\nEOF\n"
+                "python3 /tmp/t.py /tmp/c1.txt",
+                "cat > /tmp/b.txt <<'EOF'\nduckdb my.db 'DROP TABLE t'\nEOF\npython3 /tmp/pr.py /tmp/b.txt",
+                "cat > /tmp/r.sh <<EOF\nT=\\$(mktemp -d); trap 'rm -rf \"\\$T\"' EXIT\nEOF\nbash /tmp/r.sh"]:
+        assert guard(cmd) == "allow", f"a heredoc written to a file nothing runs is text: {cmd!r}"
+    for cmd in ["python3 - <<'EOF'\nopen('tests/t.py', 'w').write(\"CASES = ['git branch -D old']\")\nEOF\npython3 tests/t.py",
+                "python3 - <<'EOF'\nopen('tests/t.py', 'w').write(\"NAME = 'DROP DATABASE'\")\nEOF\nHOME=/tmp/h python3 tests/t.py"]:
+        assert guard(cmd) == "allow", f"a script that edits a file python3 then runs writes Python, not shell: {cmd!r}"
+    for cmd in ["python3 - <<'EOF'\np = 'tests/run.sh'\ns = open(p).read()\ns = s.replace('# end', 'git branch -D old')\n"
+                "open(p, 'w').write(s)\nEOF\nbash tests/run.sh",
+                "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('deploy.sh')\np.write_text(p.read_text() + 'git branch -D old')\nEOF\n"
+                "bash deploy.sh"]:
+        assert guard(cmd) == "allow", f"an edit of a script it then runs is the script's own code, as with an editor: {cmd!r}"
+    for cmd in ["cat > /tmp/p.py <<'EOF'\nC = [\"bash -c 'x'\", 'git branch -D old']\nprint(C)\nEOF\npython3 /tmp/p.py",
+                "python3 - <<'EOF'\nC = ['grep -qx \"D\" f', 'git branch -D old']\nEOF",
+                "python3 - <<'EOF'\nNOTE = 'Open3 is Ruby; git branch -D old'\nEOF",
+                "perl - <<'EOF'\nmy @c = ('grep -qx \"D\" f', 'git branch -D old');\nEOF"]:
+        assert guard(cmd) == "allow", f"an interpreter script's strings are text: {cmd!r}"
+    for cmd in ["cat > /tmp/x.sh <<'EOF'\nbash -c 'rm -rf /usr'\nEOF\nbash /tmp/x.sh",
+                "ruby - <<'EOF'\nOpen3.capture2('git branch -D old')\nEOF",
+                "perl - <<'EOF'\nqx{git branch -D old};\nEOF"]:
+        assert guard(cmd) == "deny", f"a script that runs its strings: {cmd!r}"
+    for cmd in ["cat > /tmp/x.sql <<'EOF'\nDROP TABLE t;\nEOF\npsql -f /tmp/x.sql",
+                "cat > /tmp/x.sh <<'EOF'\nbin/approve grant linear\nEOF\ncat > /tmp/n.txt <<'EOF'\nhi\nEOF\nbash /tmp/x.sh",
+                "cat > /tmp/r.sh <<EOF\nT=/usr; trap 'rm -rf \"\\$T\"' EXIT\nEOF\nbash /tmp/r.sh"]:
+        assert guard(cmd) == "deny", f"a heredoc written to a file the command runs is code: {cmd!r}"
+    for cmd in ["cat > /tmp/t.py <<'EOF'\nprint('then sudo apt install x')\nEOF\npython3 /tmp/t.py",
+                "S=/tmp/notes.sh; python3 - \"$S\" <<'PY'\n# edits notes.sh\nnew = '''\n  rm -rf \"$TMP\"\n'''\nPY"]:
+        assert guard(cmd, cwd="/tmp") == "allow", f"a Python script's strings are text unless it starts a process: {cmd!r}"
+
+    for cmd in ["python3 -c 'import asyncio; asyncio.create_subprocess_shell(\"git branch -D old\")'",
+                "python3 -c 'asyncio.create_subprocess_exec(*\"git reset --hard\".split())'",
+                "ruby -e 'Open3.capture2(\"git branch -D old\")'", "ruby -e 'spawn(\"git branch -D old\")'",
+                "ruby -e '%x(git branch -D old)'", "perl -e 'qx{git branch -D old}'",
+                "perl -e 'exec \"git branch -D old\"'", "ruby -e 'system \"git branch -D old\"'",
+                "python3 -c 'duckdb.sql(\"DROP TABLE x\")'", "node -e 'knex.raw(\"DROP TABLE x\")'",
+                "node -e 'prisma.$executeRaw(\"DROP TABLE x\")'", "node -e 'prisma.$queryRawUnsafe(\"DROP TABLE x\")'",
+                "node -e 'prisma.$queryRaw(\"DROP TABLE x\")'", "node -e 'db.raw(\"DROP TABLE x\")'",
+                "duckdb -c 'DROP TABLE x'", "ruby -e 'Open3.popen3(\"git branch -D old\")'"]:
+        assert guard(cmd) == "deny", f"a process or SQL call: {cmd!r}"
+    for cmd in ["python3 -c 'print(\"git branch -D old\")'", "ruby -e 'puts \"git branch -D old\"'",
+                "perl -e 'print \"git branch -D old\"'", "node -e 'console.log(\"DROP TABLE x\")'",
+                "python3 -c 'x = \"DROP TABLE x\"'"]:
+        assert guard(cmd) == "allow", f"text a program only prints: {cmd!r}"
 
 
 def guard_mcp_linear(base):
@@ -973,7 +1107,8 @@ def pr_gate_review_and_validation(base):
             "command gh pr create --fill", "env GH_HOST=x gh pr create --fill", "env -i PATH=/bin gh pr create --fill",
             "nohup gh pr create --fill", "time gh pr create --fill", "exec gh pr create --fill", "command -- gh pr create --fill",
             "env -u GH_TOKEN gh pr create --fill", "exec -a gh gh pr create --fill", "time -f %E gh pr create --fill",
-            "exec -aSlip gh pr create --fill", "env -uGH_TOKEN gh pr create --fill"]
+            "exec -aSlip gh pr create --fill", "env -uGH_TOKEN gh pr create --fill", "gh pr new --fill",
+            "env X=1 gh pr new --fill"]
     for command in runs:
         assert guard(command, repo) == "deny", f"the shell runs gh here: {command!r}"
     inert = ["cat <<EOF\n EOF\ngh pr create --fill\nEOF", "cat <<'END-MARK'\ngh pr create --fill\nEND-MARK",
@@ -992,6 +1127,7 @@ def pr_gate_review_and_validation(base):
     assert guard("env X=1 evidence A1 gh pr create --fill", repo) == "deny"
     write_stamp(repo, "validate")
     assert guard("gh pr create --fill", repo) == "allow"
+    assert guard("gh pr new --fill", repo) == "allow", "gh's alias passes the same gate"
     open(os.path.join(repo, "CHANGELOG.md"), "w").write("- A line (#12).\n")
     assert guard("gh pr create --fill", repo) == "allow", "the changelog line CI checks doesn't invalidate the stamps"
     os.makedirs(os.path.join(repo, "changelog.d"))
@@ -1216,7 +1352,7 @@ def pr_gate_waits_for_staging(base):
                     "gh pr ready 12 --repo other/repo", "gh pr -R other/repo ready 12", 'gh pr ready "12"',
                     "gh -R other/repo pr ready 12", "gh pr ready -Rother/repo 12",
                     'gh pr create --head "$(git branch --show-current)" --title "Allow --draft PRs" --fill',
-                    "gh pr create --fill # --draft", "gh pr ready 12 # --undo"]:
+                    "gh pr create --fill # --draft", "gh pr ready 12 # --undo", "gh pr new --fill"]:
         assert decision(command) == "deny", f"staging is pending: {command}"
     gone = run_hook("guard_bash.py", {"tool_input": {"command": "gh pr ready"}, "cwd": os.path.join(base, "gone"),
                                       "session_id": "test"}, env={"PATH": fake + ":" + os.environ["PATH"]})
@@ -1338,6 +1474,9 @@ def pr_gate_follows_worktrees(base):
         write_stamp(wt, kind)
     assert guard(f"cd {wt} && gh pr create --fill", main) == "allow"
     assert guard("gh pr create --head feat/x --fill", main) == "allow"
+    open(os.path.join(main, "app.py"), "a").write("z = 3\n")
+    assert guard("gh pr new --fill", main) == "deny"
+    assert guard("gh pr new --head feat/x --fill", main) == "allow", "gh's alias acts on the --head worktree too"
 
 
 def codex_pr_commands_name_their_checkout(base):
@@ -1369,6 +1508,9 @@ def codex_pr_commands_name_their_checkout(base):
                     "env GH_HOST=github.com gh pr create --fill", "if true; then gh pr create --fill; fi", "{ gh pr edit 5 --title x; }",
                     f"cd {repo} && {{ cd /tmp; gh pr create --fill; }}", f"cd {repo} && command cd /tmp && gh pr create --fill"]:
         assert "33986" in codex(command), f"the PR's checkout isn't the one checked: {command!r}"
+    assert "33986" in codex("gh pr new --fill"), "gh's alias for create"
+    for command in ["gh pr create --help", "gh pr new -h"]:
+        assert codex(command) == "allow", f"help opens no PR: {command!r}"
     assert codex(f"cd {repo} && gh pr create --fill") == "allow"
     assert codex(f'cd "{repo}" && git push && gh pr create --fill') == "allow"
     assert codex("gh pr view 5") == "allow", "only the commands the PR checks judge"
@@ -2902,7 +3044,7 @@ def a_stacked_branch_is_measured_against_its_parent(base):
 TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, a_review_rounds_line_sets_the_re_checks_by_scope,only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
-         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
+         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,

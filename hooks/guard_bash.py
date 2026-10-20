@@ -31,6 +31,18 @@ import private_terms  # noqa: E402
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
 
+# What can stand before a command's name and still run it: VAR=value assignments, and wrappers that run their
+# arguments, with the options that take a value. Each piece matches one way only: an ambiguous one backtracks
+# exponentially on a long env line and runs past the hook's timeout.
+ASSIGNMENT = r"""\w+=(?:"[^"]*"|'[^']*'|[^\s"';&|])*\s+"""
+PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+)?"
+            r"|exec\s+(?:-a(?:\s+\S+|\S+)\s+|-[cl]+\s+|--\s+)*"
+            r"|time\s+(?:-[fo](?:\s+\S+|\S+)\s+|--(?:output|format)(?:=|\s+)\S+\s+|-[pva]+\s+|--(?:portability|verbose|append)\s+|--\s+)*"
+            r"|env\s+(?:-[i0v]*[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir|split-string)(?:=|\s+)\S+\s+|-[i0v]+\s+"
+            r"|--(?:ignore-environment|null|debug)\s+|--\s+|-\s+)*)*")
+# Where a command starts: after a separator, and any shell keywords after it (`; then gh pr ready`, `{ gh pr ready; }`).
+COMMAND_START = r"(?:^|[;&|(\n`{])\s*(?:(?:then|do|else|elif|if|while|until)\s+|!\s*)*"
+
 GIT = r"\bgit\s+(?:(?:-C|-c)\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
 PROTECTED_BRANCHES = r"(main|master|trunk|develop|production|release(/[\w.-]+)?)"
 DATABASE_STATEMENT = r"\bDROP{space}+(DATABASE|TABLE|SCHEMA)\b|\bTRUNCATE{space}+TABLE\b"
@@ -65,7 +77,7 @@ RULES = [
                        "`allow DROP DATABASE` (or the statement needed)."),
     (r"\bwp\s+(db\s+(drop|reset|clean)|site\s+(empty|delete))\b", "`wp db drop|reset|clean`, `wp site empty|delete`: destroys WordPress data."),
     (r"\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z)?sh\b", "`curl … | sh`: pipes a download straight into a shell."),
-    (r"(^|[;&|]\s*)sudo\b", "`sudo`: runs with root privileges."),
+    (COMMAND_START + PREFIXES + r"sudo\b", "`sudo`: runs with root privileges."),
     (r"\b(make|npm\s+run|pnpm(\s+run)?|yarn(\s+run)?|composer(\s+run)?)\s+[\w:.-]*(deploy|release|sync_db|ssh_prod)",
      "`make|npm run|composer … deploy|release|sync_db|ssh_prod`: deploys, releases or touches production."),
     (r"\bchmod\s+(-R\s+)?777\b", "`chmod 777`: world-writable permissions."),
@@ -116,9 +128,10 @@ def shell_words(command):
 def runs_call(command, is_program, takes):
     """Whether the shell runs a program is_program(word, the word before) names, with arguments takes(args) accepts,
     in the command or in a word the shell may run as one (`bash -c '…'`, `eval`, `… | sh`, `$(…)`). A word is text only
-    when a known program just reads or prints it: a reader's pattern, git's or gh's arguments (a message, a title), what
-    echo or printf prints where no pipe or `$(…)` takes it; even there a `$(…)` or backticks the shell would run is read. A
-    quoted heredoc written to a file, or a `$(cat <<'EOF' …)` body, is only text."""
+    when a known program just reads or prints it: a reader's pattern, git's or gh's arguments (a message, a title), a
+    `for … in` list, what echo or printf prints where no pipe or `$(…)` takes it; even there a `$(…)` or backticks the
+    shell would run is read. A quoted heredoc written to a file the command doesn't run, or a `$(cat <<'EOF' …)` body,
+    is only text."""
     text = HEREDOC_BODY.sub("$(cat", without_prose(command)).replace(CONTINUATION, "")
     words = shell_words(text.replace("\n", ";"))  # a new line starts a new command, whatever the last one was
     substitutes = bool(re.search(r"\$\(|`", shell_code(command)))  # none in single quotes: there they're text
@@ -132,7 +145,7 @@ def runs_call(command, is_program, takes):
         end = (words[i + 1 + len(rest):i + 2 + len(rest)] or [""])[0]
         output_used = (end.startswith("|") and end != "||") or end.startswith(")")  # a pipe, or $(…) around it
         git_runs = program == "git" and (before in ("-x", "--exec") or "=!" in word or word.startswith("!"))  # an alias
-        text = program in READERS or (program in ("git", "gh") and not git_runs) or (program in ("echo", "printf") and not output_used)
+        text = program in READERS or program == "for" or (program in ("git", "gh") and not git_runs) or (program in ("echo", "printf") and not output_used)
         if word != command and (not text or (substitutes and ("$(" in word or "`" in word))) \
                 and runs_call(word, is_program, takes):
             return True
@@ -253,20 +266,43 @@ UNKNOWN = object()
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 
 
-def dangerous_rm(command, cwd):
+def dangerous_rm(command, cwd, run_by=None):
     """Recursive deletes outside the working directory or temp dirs, each judged from where the `cd`s before it
     leave the shell (a subshell's cd ends with it), with the variables segments_with_values() knows substituted.
-    After a cd the guard can't resolve, a relative target is unresolved too."""
-    here, outer = cwd, []  # here is None after an unresolvable cd
-    for segment, values in segments_with_values(without_scripts(command)[0]):
+    After a cd the guard can't resolve, a relative target is unresolved too. A quoted string the command runs as a
+    command (bash -c, eval, trap) is judged the same way, run_by giving the directory and variables of its segment."""
+    here, known = run_by or (cwd, None)  # here is None after an unresolvable cd
+    # An unquoted heredoc writes \$T as $T: T=\$(mktemp -d) there makes a temp dir. Elsewhere a target with $ is
+    # unresolved anyway.
+    command = command.replace("\\$", "$")
+    text, scripts = without_scripts(command)[0], set(strings_running_rm(command))
+    # Found in the whole text: a string spanning lines spans segments too, and runs from the one it starts in.
+    runs = [(a, b) for a, b in quoted_spans(text) if text[a + 1:b - 1] in scripts]
+    run_files = files_run(text)
+    lines = text.split("\n")
+    heredocs = read_heredocs(lines) or ()
+    spawning = {i for first, end, kind, _ in heredocs if kind == "spawns" for i in range(first, end)}
+    # A body only written to files the command doesn't run is text: its trap or eval runs nowhere yet.
+    written_only = {i for first, end, kind, _ in heredocs
+                    if kind == "other" and (written := written_files(lines[first - 1])) and not written & run_files
+                    for i in range(first, end)}
+    # Code an interpreter runs (python3 -c '… os.system("rm …")') runs its strings wherever they stand in it.
+    code_spawns = run_by is not None and bool(SPAWNS.search(text))
+    outer, at, line, next_run = [], 0, 0, 0
+    for segment, values in segments_with_values(text, known):
+        start = text.find(segment, at)
+        line += text.count("\n", at, start)
+        at = start + len(segment)
         stripped = segment.strip()
         outer += [here] * (len(stripped) - len(stripped.lstrip("(")))
         try:  # the subshell's parentheses only: a quoted "(old)" in a name stays
             tokens = [expand(t, values) for t in shlex.split(stripped.lstrip("(").rstrip(")"))]
         except ValueError:
             tokens = []
-        while tokens and tokens[0] in ("builtin", "command", "{", "then", "do", "else", "!", "time"):
-            tokens = tokens[1:]
+        tokens, chdir = run_words(tokens)
+        runs_in = here
+        if chdir is not None and (here is not None or os.path.isabs(chdir)):  # relative to an unresolved cd: unresolved
+            runs_in = cd_into(here or cwd, chdir)
         if tokens and tokens[0] in ("cd", "pushd"):
             args = [t for t in tokens[1:] if t == "-" or not t.startswith("-")]
             target = (args[0] if args else "~").replace("${HOME}", "~").replace("$HOME", "~")
@@ -277,12 +313,96 @@ def dangerous_rm(command, cwd):
         elif tokens and os.path.basename(tokens[0]) == "rm":
             flags = "".join(t.lstrip("-") for t in tokens[1:] if t.startswith("-") and not t.startswith("--"))
             if "r" in flags.lower() or "--recursive" in tokens:
-                denied = dangerous_rm_targets([t for t in tokens[1:] if t and not t.startswith("-")], here, cwd)
+                targets = [t for t in tokens[1:] if t and not t.startswith("-")]
+                if run_by:
+                    # Run as text, the caller's arguments are what it passes in (find -exec sh -c '… "$1"').
+                    targets = [t for t in targets if not re.search(r"\$\{?[\d@*#]", t) and (runs_in is not None or os.path.isabs(t))]
+                denied = dangerous_rm_targets(targets, runs_in, cwd)
+                if denied:
+                    return denied
+        runs_strings = None
+        while next_run < len(runs) and runs[next_run][0] < at:
+            a, b = runs[next_run]
+            next_run += 1
+            if runs_strings is None:  # from the words before the segment's first string: a segment can hold thousands
+                try:
+                    words = run_words(shlex.split(text[start:a]))[0]
+                except ValueError:
+                    words = []
+                runs_strings = code_spawns or line in spawning or (
+                    line not in written_only and runs_its_strings(words, segment, text[at:], run_files))
+            if runs_strings:
+                script = PROCESS_QUOTE.sub(lambda m: "\n" + "".join(g or "" for g in m.group(1, 2, 3, 5, 6)) + "\n",
+                                           text[a + 1:b - 1].replace("\\n", "\n"))
+                denied = dangerous_rm(script, cwd, (runs_in, values))
                 if denied:
                     return denied
         for _ in range(len(stripped) - len(stripped.rstrip(")"))):
             here = outer.pop() if outer else here
+        line += segment.count("\n")
     return None
+
+
+def runs_its_strings(words, segment, rest, run_files):
+    """Whether a segment may run its quoted strings as commands, read from its words before them: a shell (bash -c,
+    bash <<<, xargs sh -c), eval, trap or an interpreter given code, or an echo piped to one (rest is the text after
+    the segment) or into a file the command runs. Never on another machine or in a container: ssh, docker exec."""
+    names = [os.path.basename(w) for w in words]
+    if any(name in REMOTE_RUNNERS for name in names):
+        return False
+    for i, name in enumerate(names):
+        if re.fullmatch(r"(?:ba|z|da|k)?sh|eval|trap", name):
+            return True
+        interpreter = re.fullmatch(INTERPRETER, name)
+        flags = interpreter and CODE_FLAGS[interpreter.group(1).rstrip("0123456789.")]
+        if flags and any(re.fullmatch(rf"-(?:{flags})", w) for w in words[i + 1:]):
+            return True
+    return bool(PIPED_TO_RUNNER.match(rest) or written_files(segment) & run_files)
+
+
+# A pipe into a shell or interpreter, which runs what it reads; after a 2>&1 the segment ends at the &.
+PIPED_TO_RUNNER = re.compile(r"(?:&\d*\s*)?\|(?!\|)\s*" + PREFIXES + r"(?:sudo\s+(?:-\S+\s+)*)?(?:\S*/)?(?:(?:ba|z|da|k)?sh|xargs|python[\d.]*|node|ruby|perl|php)(?:\s|$)")
+# Programs whose quoted commands run on another machine or in a container, where the local paths mean nothing.
+REMOTE_RUNNERS = {"ssh", "docker", "podman", "kubectl", "vagrant", "ansible"}
+# Ruby's %x(…) and Perl's qx{…} or backticks around a command inside interpreter code.
+PROCESS_QUOTE = re.compile(r"(?:%x|\bqx\s*)(?:\(([^)]*)\)|\{([^}]*)\}|\[([^\]]*)\]|([/|])(.*?)\4)|`([^`]*)`")
+# Wrappers that run the rest of their words, with their options that take a value (`env -u NAME`, `exec -a NAME`).
+# PREFIXES reads the same wrappers for the regex rules: keep the two in step.
+WRAPPER_VALUE_OPTIONS = {"env": "uCS", "time": "fo", "exec": "a", "command": "", "nohup": ""}
+WRAPPER_LONG_VALUE_OPTIONS = ("--unset", "--chdir", "--split-string", "--output", "--format")
+
+
+def run_words(tokens):
+    """The words the shell runs once the keywords, VAR=value assignments and wrappers before them step aside, and the
+    directory `env -C` runs them in (None when no wrapper moves)."""
+    chdir, i = None, 0
+    while i < len(tokens):
+        word = tokens[i]
+        i += 1
+        if word in WRAPPER_VALUE_OPTIONS:
+            while i < len(tokens) and tokens[i].startswith("-"):
+                option = tokens[i]
+                i += 1
+                if option == "--":
+                    break
+                if word == "command" and option in ("-v", "-V"):
+                    return [], chdir  # it only looks the names up
+                long = option.startswith("--")
+                if long:
+                    name, value = option.partition("=")[::2]
+                else:  # flags grouped up to the first that takes a value: -iu NAME
+                    at = next((j for j, c in enumerate(option[1:], 1) if c in WRAPPER_VALUE_OPTIONS[word]), len(option))
+                    name, value = "-" + option[at:at + 1], option[at + 1:]
+                if name in WRAPPER_LONG_VALUE_OPTIONS if long else name != "-":
+                    if not value and not (long and "=" in option):
+                        value = tokens[i] if i < len(tokens) else ""
+                        i += 1
+                    if name in ("-C", "--chdir"):
+                        chdir = value if chdir is None else os.path.join(chdir, value)  # env -C / env -C usr: /usr
+        elif word not in ("builtin", "{", "then", "do", "else", "elif", "if", "while", "until", "!") \
+                and not re.fullmatch(r"\w+=.*", word, re.S):
+            return tokens[i - 1:], chdir
+    return [], chdir
 
 
 def dangerous_rm_targets(targets, here, cwd):
@@ -347,7 +467,7 @@ def time_left():
 
 def pr_checkout(command, cwd):
     """The checkout `gh pr create` or `gh pr ready` acts on: a `cd <dir>` before it, else the worktree holding --head."""
-    before = re.split(r"\b" + GH_PR + r"(?:create|ready)\b", command)[0]
+    before = re.split(r"\b" + GH_PR + r"(?:" + PR_CREATE + r"|ready)\b", command)[0]
     cds = re.findall(r"(?:^|[;&|]\s*)cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|]+)", before)
     runs_in = cwd
     for target in cds:
@@ -441,13 +561,6 @@ def shell_code(command):
     return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(masked) else masked
 
 
-# What can stand before a command's name and still run it: VAR=value assignments, and wrappers that run their
-# arguments, with the options that take a value. Each piece matches one way only: an ambiguous one backtracks
-# exponentially on a long env line and runs past the hook's timeout.
-ASSIGNMENT = r"""\w+=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+"""
-PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+)?"
-            r"|exec\s+(?:-a(?:\s+\S+|\S+)\s+|-[cl]+\s+|--\s+)*|time\s+(?:-[fo](?:\s+\S+|\S+)\s+|-[pv]+\s+|--\s+)*"
-            r"|env\s+(?:-[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir)=\S+\s+|-[i0v]+\s+|--\s+|-\s+)*)*")
 # bin/evidence <id> runs the rest of its line. A one-character lookbehind, with its path cut in Python: a path
 # pattern tried after every separator was quadratic on a long line.
 EVIDENCE_RUNNER = re.compile(r"(?<![^\s;&|(`/])evidence\s+(['\"]?)[A-Za-z0-9][\w.-]*\1\s+")
@@ -467,11 +580,10 @@ def without_evidence_runner(command):
 ENV_CLEARED = re.compile(r"\benv\s+(?:\S+\s+)*?(?:-[0v]*i[0v]*|--ignore-environment|-)\s")
 
 
-# Where a command starts: after a separator, or after a shell keyword or brace (`then gh pr ready`, `{ gh pr ready; }`).
-COMMAND_START = r"(?:^|[;&|(\n`{]|\b(?:then|do|else|elif|if|while|until)\b|!)\s*"
 # gh's --repo may come before or after `pr`, attached or not: `gh -R owner/repo pr ready 12`, `gh pr -Rowner/repo ready`.
 REPO_FLAG = r"(?:(?:-R|--repo)(?:=|\s+)?\S+\s+)?"
 GH_PR = r"gh\s+" + REPO_FLAG + r"pr\s+" + REPO_FLAG
+PR_CREATE = r"(?:create|new)"  # `gh pr new` is gh's alias for create
 
 
 def pr_args(command, match, group):
@@ -523,7 +635,7 @@ def unreviewed_pr(command, cwd):
     targets, a validate stamp for a behavior change, and, unless it's a draft, the staging steps before the merge
     passed; each unless the user switched its phase off."""
     command = without_scripts(command)[0]
-    creates = [m for m in re.finditer(COMMAND_START + PREFIXES + GH_PR + r"create\b([^;&|\n]*)", shell_code(command))
+    creates = [m for m in re.finditer(COMMAND_START + PREFIXES + GH_PR + PR_CREATE + r"\b([^;&|\n]*)", shell_code(command))
                if not {"--help", "-h"} & set(pr_args(command, m, 1))]
     if not creates:
         return None
@@ -614,7 +726,7 @@ def unready_pr(command, cwd):
 ABSOLUTE_CD_FIRST = re.compile(r"""cd[ \t]+((?:~[\w.-]*)?/[^\s;&|()$`'"\\*?\[]*|"/[^"$`\\]*"|'/[^']*')[ \t]*&&""")
 # Anywhere, not only in command position: a wrapper, `then` or `{` in front must not hide it, and a false match only
 # asks for the cd form.
-GH_PR_WORDS = re.compile(r"\b" + GH_PR + r"(?:create|edit|ready)\b")
+GH_PR_WORDS = re.compile(r"\b" + GH_PR + r"(create|new|edit|ready)\b([^;&|\n]*)")
 CD_WORD = re.compile(r"(?<![\w/.-])(?:cd|pushd|popd)(?![\w/.-])")
 
 
@@ -623,7 +735,8 @@ def pr_checkout_unknown(command, payload):
     checks would judge the wrong checkout unless the command starts by cd-ing to an existing absolute path, and
     neither cds again nor backgrounds the chain. Guards against a model's slip, not a hostile one."""
     code = shell_code(command)
-    if harness(payload) != "codex" or not GH_PR_WORDS.search(code):
+    if harness(payload) != "codex" or not any(m.group(1) in ("edit", "ready") or not {"--help", "-h"} & set(pr_args(command, m, 2))
+                                              for m in GH_PR_WORDS.finditer(code)):
         return None
     first = ABSOLUTE_CD_FIRST.match(command)
     if first and os.path.isdir(os.path.expanduser(first.group(1).strip("\"'"))):
@@ -702,8 +815,9 @@ def line_layout(line):
         elif c == ")" and opened:
             closes[opened.pop()] = i
     substitutions = [(i - 1, closes.get(i)) for i in range(1, len(masked)) if masked[i - 1:i + 1] == "$("]
+    masked = REDIRECT_AMPERSAND.sub(" ", masked)
     starts = [0] + [m.end() for m in re.finditer(r"&&|\|\||[;|(&]", masked)]
-    ends = [m.start() for m in re.finditer(r"&&|\|\||[;&]", line)] + [len(line)]
+    ends = [m.start() for m in re.finditer(r"&&|\|\||[;&]", REDIRECT_AMPERSAND.sub(" ", line))] + [len(line)]
     return masked, substitutions, starts, ends, [i for i, c in enumerate(line) if c == "|"]
 
 
@@ -733,38 +847,59 @@ def without_prose(command):
     message or an echoed sentence isn't read as a write: impeccable_files() takes its targets from the command's own
     text, quoted strings included, so a quoted path still counts. Whatever this can't read for sure, it leaves whole:
     missing a write costs more than asking about a mention."""
-    kept, heredocs, had_prose = [], [], False  # (delimiter, body is prose) of each heredoc still open, in order
+    # (delimiter, the files a prose body is written to, else None) of each heredoc still open, in order
+    kept, heredocs, had_prose = [], [], False
+    shell, rest = [], []  # the lines outside heredoc bodies; the same without the commands writing a prose body
+    prose_lines = []  # (index in kept, the files its body is written to) of each prose body line
     for line in command.split("\n"):
         if heredocs:
-            delimiter, prose = heredocs[0]
+            delimiter, writes = heredocs[0]
             if line.lstrip("\t") == delimiter:
                 heredocs.pop(0)
                 kept.append(line)
-            elif prose:
-                kept.append("")
+                shell.append(line)
+                rest.append(line)
+            elif writes is not None:
+                prose_lines.append((len(kept), writes))
+                kept.append(line)
             elif "$(" in line or "`" in line:
                 return command  # an unquoted body expands, quotes and all
             else:
                 kept.append(line)
             continue
         kept.append(line)
+        shell.append(line)
         comment = re.search(r"(?:^|\s)#", line)  # a << after it is text
-        heredocs = [(m.group(2) or m.group(3) or m.group(4), heredoc_body_is_prose(line, m))
-                    for m in HEREDOC.finditer(line) if not comment or m.start() < comment.start()]
-        had_prose |= any(prose for _, prose in heredocs)
+        heredocs, header = [], line
+        for m in HEREDOC.finditer(line):
+            if comment and m.start() >= comment.start():
+                continue
+            writes = None
+            if heredoc_body_is_prose(line, m):  # its command: from the separator before it to the one after
+                a = max(line.rfind(c, 0, m.start()) for c in ";&|") + 1
+                b = min([i for i in (line.find(c, m.end()) for c in ";&|") if i >= 0] or [len(line)])
+                writes = written_files(line[a:b])
+                header = header[:a] + " " * (b - a) + header[b:]
+            heredocs.append((m.group(2) or m.group(3) or m.group(4), writes))
+        rest.append(header)
+        had_prose |= any(writes is not None for _, writes in heredocs)
         if heredocs and line.endswith("\\"):
             return command  # the header goes on, redirects and all, on the next line
+    run = files_run("\n".join(shell))
+    for i, writes in prose_lines:
+        if not writes & run:  # a body written to a script the command runs is code, not prose
+            kept[i] = ""
     text = "\n".join(kept)
     if heredocs or RUNS_QUOTED_TEXT.search(text):
         return command  # a heredoc that never ends was only a mention of one
-    if had_prose and RUNS_SCRIPT_FILE.search(text):
-        return command  # the heredoc may have written the script it runs
+    if had_prose and RUNS_SCRIPT_FILE.search(text) or written_files("\n".join(rest)) & run:
+        return command  # the heredoc or echo may have written the script it runs
 
     spans = quoted_spans(text)
     masked = list(text)
     for start, end in spans:
         masked[start:end] = "q" * (end - start)
-    masked = "".join(masked).replace(CONTINUATION, "  ")  # the lines a continuation joins are one command
+    masked = REDIRECT_AMPERSAND.sub(" ", "".join(masked).replace(CONTINUATION, "  "))  # continued lines are one command
     # Each command judged once: per string, its slice of a long command would make this quadratic. No cut at a
     # parenthesis: what an echo prints inside $(...) or <(...) is fed to another command.
     cuts = [0] + [i for m in re.finditer(r"&&|\|\||[;&\n]", masked) for i in m.span()] + [len(masked)]
@@ -792,16 +927,54 @@ INTERPRETER = r"(?:\S*/)?(python[\d.]*|node|ruby|perl|php)"
 INTERPRETER_RECEIVER = re.compile(LEADING_ASSIGNMENTS + INTERPRETER + r"(?:\s|$)")
 # Interpreter code that starts a process: its strings may run as a command. Named only inside a string, it still
 # counts, which only denies more.
-SPAWNS = re.compile(r"\bos\.(?:system|exec\w*|spawn\w*)\b|\bsubprocess\b|\bpopen\b|child_process|"
-                    r"\bexec(?:[lv]p?e?)?\s*\(|(?<![\w-])system\s*[(\"'\[]|shell_exec|passthru|proc_open|pty\.spawn", re.I)
+PROCESS_CALLS = (r"\bos\.(?:system|exec\w*|spawn\w*)\b|\bsubprocess\b|\bpopen\b|\bexec(?:[lv]p?e?)?(?:\s*[(\[]|\s+[\"'])|"
+                 r"(?<![\w-])system\s*[(\"'\[]|pty\.spawn|create_subprocess_\w+|\bspawn\s*\(")
+# Calls only one language makes: in a Python string, Open3 or grep -qx "…" is only a word.
+LANGUAGE_PROCESS_CALLS = {"node": r"child_process", "ruby": r"\bOpen3\b|%x[{(\[|]", "perl": r"(?<![\w-])qx\s*[{(\[/|'\"]",
+                          "php": r"shell_exec|passthru|proc_open"}
+SPAWNS = re.compile("|".join([PROCESS_CALLS, *LANGUAGE_PROCESS_CALLS.values()]), re.I)
+SPAWNS_IN = {language: re.compile(PROCESS_CALLS + "|" + calls, re.I) for language, calls in LANGUAGE_PROCESS_CALLS.items()}
+PYTHON_SPAWNS = re.compile(PROCESS_CALLS, re.I)
 SHELL_BACKTICKS = re.compile(r"ruby|perl|php")
+READS_FILE = re.compile(r"\.read(?:_text|_bytes)?\s*\(|readFileSync|File\.read|file_get_contents")
+# Python's exec() runs Python code, not a process: exec("x = 1") in a test helper starts nothing.
+PYTHON_EXEC = re.compile(r"(?<![\w.])exec\s*\(")
 # The flag that makes an interpreter's next argument its code: its other arguments are data a script may run.
 CODE_FLAGS = {"python": "c", "node": "e|p|-eval|-print", "ruby": "e", "perl": "e|E", "php": "r"}
 SQL_USED = re.compile(r"\b(?:psql|mysqli?|mariadb|sqlite3|psycopg2?|pymysql)|\bwp\s+db\s+(?:query|cli)\b|\.(?:execute|query)\s*\(|"
-                      r"exec_driver_sql")
+                      r"exec_driver_sql|\bduckdb\b|\.raw\s*\(|\$(?:execute|query)Raw(?:Unsafe)?\b")
 # A command that runs a script file: a heredoc it writes to a file may be that script.
 RUNS_SCRIPT_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))\s*(?:(?:command|exec)\s+)?(?:(?:(?:/[\w.-]+)*/)?(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*[^\s<-]|source\s|\.\s+\S|"
                               r"\.{0,2}/\S+\.sh\b)")
+# A redirection's & (2>&1, >&2, &>) joins no commands.
+REDIRECT_AMPERSAND = re.compile(r"(?<=[<>])&|&(?=>)")
+# A file a command writes: the target of > or >> (not >&2 nor a process substitution), or of tee.
+WRITES_FILE = re.compile(r"(?:(?<![<>&\d])\d*>>?|&>>?|\btee\s+(?:-\w+\s+)*)(?![&>(|])\s*(['\"]?)(?P<file>[^\s;&|<>()'\"]+)\1")
+# The file a command runs: given to a shell, source or an interpreter, or run by its own path.
+RUNS_FILE = re.compile(COMMAND_START + PREFIXES + r"(?![!{]|(?:if|then|do|else|elif|while|until)(?:\s|$))(?P<runner>(?:(?:/[\w.-]+)*/)?(?:ba|z|da|k)?sh\s+"
+                       r"(?:-(?!\w*n)\w+\s+|--[-\w]+\s+)*|source\s+|\.\s+|(?:[\w.~-]*/)*(?:python[\d.]*|node|ruby|perl|php)\s+(?:-(?![mce]\s)[-\w]+\s+)*)?"
+                       r"(['\"]?)(?!\w+=)(?P<file>[^\s;&|<>()'\"-][^\s;&|<>()'\"]*)\2")
+
+
+def written_files(text):
+    """The files the text's commands write, as given (./ dropped); /dev/null and the like are not files."""
+    return {m.group("file").removeprefix("./") for m in WRITES_FILE.finditer(text) if not m.group("file").startswith("/dev/")}
+
+
+@functools.lru_cache(maxsize=8)
+def files_run(text):
+    """The script files the text's commands run, as given (./ dropped): a bare name only when a runner is given it,
+    since a shell looks the name up in PATH. `bash -n` only reads the file for its syntax."""
+    return {m.group("file").removeprefix("./") for m in RUNS_FILE.finditer(text) if m.group("runner") or "/" in m.group("file")}
+
+
+@functools.lru_cache(maxsize=8)
+def files_interpreted(text):
+    """{file: interpreter} for the script files the text's commands give an interpreter (python3 x.py)."""
+    return {m.group("file").removeprefix("./"): interpreter.group(1) for m in RUNS_FILE.finditer(text)
+            if (interpreter := re.match(INTERPRETER + r"\s", m.group("runner") or ""))}
+
+
 # Programs whose quoted arguments are only text: what they read, match or print.
 TEXT_PROGRAMS = READERS | {"sed", "git", "gh", "echo", "printf"}
 TEXT_HINT = ("The match is in quoted text or a heredoc body: the guard reads that text as a command because something "
@@ -811,12 +984,16 @@ TEXT_HINT = ("The match is in quoted text or a heredoc body: the guard reads tha
 
 def starts_process(code, interpreter):
     """Whether interpreter code may start a process, so its strings may run as a command."""
-    return bool(SPAWNS.search(code) or (SHELL_BACKTICKS.match(interpreter) and "`" in code))
+    if interpreter.startswith("python"):
+        code = PYTHON_EXEC.sub("", code)
+    spawns = SPAWNS_IN.get(interpreter, PYTHON_SPAWNS)
+    return bool(spawns.search(code) or (SHELL_BACKTICKS.match(interpreter) and "`" in code))
 
 
 def read_heredocs(lines):
     """(first body line, end, kind, interpreter) of each heredoc in the lines; kind is "script" for a quoted body only
-    an interpreter reads that starts no process, "spawns" when it starts one, else "other". A heredoc that never
+    an interpreter reads, fed to it or written to a file the lines give it, that starts no process, "spawns" when it
+    starts one, else "other". A heredoc that never
     ends runs to the last line. None when a header goes on past its line, which this doesn't read."""
     found, queue = [], []  # queue: [delimiter, header line, match, first body line] of each heredoc still open
     for i, line in enumerate(lines):
@@ -833,12 +1010,16 @@ def read_heredocs(lines):
         if queue and line.endswith("\\"):
             return None
     found += [q[1:] + [len(lines)] for q in queue]
+    in_body = {i for _, _, start, end in found for i in range(start, end)}
+    interpreted = files_interpreted("\n".join("" if i in in_body else line for i, line in enumerate(lines)))
     bodies = []
     for header, m, start, end in found:
         program = heredoc_feeds(header, m, INTERPRETER_RECEIVER)
+        program = program.group(1) if program else next(
+            (interpreted[f] for f in written_files(header) if f in interpreted and not m.group(4)), "")
         body = "\n".join(lines[start:end])
-        kind = "other" if not program else "spawns" if starts_process(body, program.group(1)) else "script"
-        bodies.append((start, end, kind, program.group(1) if program else ""))
+        kind = "other" if not program else "spawns" if starts_process(body, program) else "script"
+        bodies.append((start, end, kind, program))
     return bodies
 
 
@@ -849,13 +1030,23 @@ def without_scripts(command):
     heredoc can't be read: then nothing more is blanked."""
     text = without_prose(command)
     lines = text.split("\n")
-    bodies = None if RUNS_QUOTED_TEXT.search(text) else read_heredocs(lines)
+    bodies = read_heredocs(lines)
     if bodies is None:
         return text, None
-    in_body = set()
+    in_body = {i for start, end, _, _ in bodies for i in range(start, end)}
+    shell = "\n".join("" if i in in_body else line for i, line in enumerate(lines))
+    if RUNS_QUOTED_TEXT.search(shell):  # in a heredoc body, eval or sh -c is that body's own code or text
+        return text, None
+    # Only a file a shell runs reads the script's strings as commands: one edited, then run by python3, is Python.
+    run = files_run(shell) - files_interpreted(shell).keys()
+    # An absolute path by its whole spelling: a script that imports git writes no /usr/bin/git.
+    names = re.compile("|".join(r"(?<![\w.-])" + re.escape(f if f.startswith("/") else os.path.basename(f)) + r"(?![\w.-])"
+                                for f in run) or r"(?!)")
     for start, end, kind, _ in bodies:
-        in_body.update(range(start, end))
-        if kind == "script":
+        body = "\n".join(lines[start:end])
+        # Naming a file it runs, it may write it; reading a file too, it edits one, and adds that file's own code
+        # as an editor would, which the guard never reads either.
+        if kind == "script" and (not names.search(body) or READS_FILE.search(body)):
             lines[start:end] = [""] * (end - start)
     return "\n".join(lines), frozenset(in_body)
 
@@ -870,7 +1061,7 @@ def blank_strings(text, in_body, text_in):
     masked = list(shell)
     for start, end in spans:
         masked[start:end] = "q" * (end - start)
-    masked = "".join(masked).replace(CONTINUATION, "  ")
+    masked = REDIRECT_AMPERSAND.sub(" ", "".join(masked).replace(CONTINUATION, "  "))
     cuts = [0] + [i for m in re.finditer(r"&&|\|\||[;&|\n]", masked) for i in m.span()] + [len(masked)]
     starts, out, judged = cuts[::2], list(shell), {}
     for start, end in spans:
@@ -920,7 +1111,28 @@ def code_text(command):
     """The command as the RULES read it: without its prose, its interpreter scripts, and the strings of programs that
     only read or print them (text_strings())."""
     text, in_body = without_scripts(command)
-    return text if in_body is None else blank_strings(text, in_body, text_strings)
+    return text if in_body is None else blank_text_strings(text, in_body)
+
+
+def blank_text_strings(text, in_body):
+    """blank_strings() of the strings text_strings() calls only text, keeping those an echo or printf writes to a
+    script the text runs."""
+    run = files_run("\n".join("" if i in in_body else line for i, line in enumerate(text.split("\n"))))
+
+    def text_in(segment, program, source):
+        if program in ("echo", "printf") and written_files(source) & run:
+            return lambda string: False  # it writes a script the command runs
+        return text_strings(segment, program, source)
+    return blank_strings(text, in_body, text_in)
+
+
+def strings_running_rm(command):
+    """The quoted strings holding an rm that a shell, eval or a spawning script may run as a command: those
+    blank_text_strings() keeps, even where code_text() keeps every string (a `git commit -m` beside an eval runs none)."""
+    text, in_body = without_scripts(command)
+    code = blank_text_strings(text, in_body or frozenset())
+    return [text[a + 1:b - 1] for a, b in quoted_spans(text)
+            if code[a + 1:b - 1] == text[a + 1:b - 1] and re.search(r"\brm\s", text[a + 1:b - 1])]
 
 
 def bare_code(command):
@@ -1029,18 +1241,19 @@ def chained_by(separator):
     return "&" if separator.strip() == "&" else ";"
 
 
-def segments_with_values(text):
+def segments_with_values(text, inherited=None):
     """Each segment the text splits into at ; & | and new lines, with the variables known to hold a value when it
     runs, then ("", the values known at the end). A variable is known after an assignment that surely ran: a
     segment of only assignments, outside a subshell, $(…), compound command, pipeline or background job, at the start,
     after ; or a new line, or earlier in the same && chain. One set some other way too (twice, by read or a loop, ${X:=…}) stays unknown. $HOME and
-    $TMPDIR come from the hook's environment unless the command sets them."""
+    $TMPDIR come from the hook's environment unless the command sets them, or all from inherited: the values known
+    where the text runs as a command (eval)."""
     names = ASSIGNED_NAME.findall(text)
     unsure = {name for name in names if names.count(name) > 1} if len(names) < 200 else set(names)
     unsure |= {n for pair in re.findall(r"\b(?:for|select)\s+(\w+)|\$\{(\w+):?=", text) for n in pair if n}
     for words in re.findall(r"\b(?:read|mapfile|readarray|getopts|printf\s+-v|unset)\b([^;&|\n]*)", text):
         unsure |= set(re.findall(r"\w+", words))
-    base = {"HOME": os.path.expanduser("~"), "TMPDIR": os.environ.get("TMPDIR")}
+    base = dict(inherited) if inherited is not None else {"HOME": os.path.expanduser("~"), "TMPDIR": os.environ.get("TMPDIR")}
     for name in set(names) | unsure:
         base.pop(name, None)
     known, chain, parens, compound = {}, {}, 0, 0
@@ -1275,7 +1488,7 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
     def quote_around(pos):
         return next(((start, end) for start, end in spans if start < pos < end), None)
 
-    for match in re.finditer(r"(?:^|[;&|(\n`])\s*(" + PREFIXES + r")" + GH_PR + r"(?:create|edit)\b", code):
+    for match in re.finditer(r"(?:^|[;&|(\n`])\s*(" + PREFIXES + r")" + GH_PR + r"(?:" + PR_CREATE + r"|edit)\b", code):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
         # The cds are found in the code, where a quote may read as ; around eval's argument, and read from the command.
@@ -1415,7 +1628,7 @@ def main():
             code = code_text(command)
             for pattern, why in RULES:
                 # A SQL client or driver runs the quoted statements and scripts every other rule reads as text.
-                if re.search(pattern, command if pattern == DATABASE_DESTROY and SQL_USED.search(command) else code):
+                if re.search(pattern, command if pattern == DATABASE_DESTROY and SQL_USED.search(without_prose(command)) else code):
                     if pattern == DATABASE_DESTROY:
                         approved = approved_database_grants(command, payload.get("session_id"))
                         if approved:

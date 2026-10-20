@@ -1,0 +1,6 @@
+- The shell guard sees `sudo` and a recursive `rm` behind `env` (with its options), `VAR=value`, `command`, `nohup`, `exec` or `time`, and moves the `rm` with `env -C dir` as it does with a `cd`. `command -v` only looks names up, so it runs nothing.
+- A recursive `rm` inside text that runs counts too: `bash -c '…'`, `eval`, `trap`, `echo '…' | bash`, `%x()`, `qx{}`, backticks or a spawning script, judged from the directory and variables the outer command sets. A delete sent to `ssh`, `docker`, `podman`, `kubectl`, `vagrant` or `ansible` runs elsewhere and is not judged as local.
+- Text written to a file by `cat`, `tee`, `echo`, `printf` or a script heredoc counts as code when the same command runs that file by a shell, an interpreter or its own path. A script that reads a file and writes it back is an edit, like an editor's, and the strings an interpreter script only holds or prints stay text.
+- The `&` of a redirection (`2>&1`) no longer splits a command, so `… 2>&1 | bash` is read as one pipe and `echo … 2>&1` as one echo.
+- `gh pr new` passes the same PR gates as `gh pr create`, and Codex's checkout rule lets `gh pr create --help` through.
+- `asyncio.create_subprocess_*`, `spawn(`, Ruby `Open3` and `%x()`, Perl `qx{}`, PHP's `shell_exec`, duckdb, `.raw(` and Prisma's raw queries count as process or SQL calls, each process name only in its own language.
