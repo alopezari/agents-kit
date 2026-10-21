@@ -14,12 +14,15 @@ import time
 
 TRIAGE = os.path.expanduser("~/.agents/bin/triage")
 GIT_SENSE = ["cwd = pr_checkout(command, cwd)", "git checkout -b fix", "- uses: actions/checkout@v4",
-             "# the main checkout serves the stack", "for path in known_checkouts():", "git_checkout(command, cwd)",
+             "$msg = 'the main checkout serves the stack';", "for path in known_checkouts():", "git_checkout(command, cwd)",
              "def pr_checkout_unknown(command, payload):", "repo = phase_switches.checkout(os.getcwd())[0]",
              "def checkout(cwd, timeout=5):", "in_checkout(root, review_stamp.fingerprint)",
              "check_checkout(root, session, payload)", "const head = await checkout($, cwd);"]
+# "// Redirect to the checkout page" and "// Render the checkout-page" are comments since B3, which must not fire: their
+# code versions stay here, so the checkout-page exception to GIT_CHECKOUT keeps a test.
 SHOP_SENSE = ["return wc_get_checkout_url();", "'wc-blocks-checkout',", "if ( is_checkout() ) {",
-              "// Redirect to the checkout page", "git checkout-free refund( $order );", "// Render the checkout-page",
+              "git checkout-free refund( $order );", "echo 'Redirect to the checkout page';",
+              "echo 'Render the checkout-page';",
               "function remember_checkout_details() { return get_checkout_url(); }", "process_checkout(cart, cwd)",
               "renderCheckout(root);", "goToCheckout(path)", "$this->checkout(path)", "router.push(checkout(path))",
               "new Checkout(root, opts)", "cart.checkout(root)", "self.checkout(cwd, order)", "return checkout(root, cart);",
@@ -587,4 +590,194 @@ for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP
     ok = payments_signal(line) == expected
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} {'payments' if expected else 'no payments'}: {line}")
+
+
+def labels(result):
+    return {reason.split(" (")[0] for reason in result["reasons"]}
+
+
+# The lines that made B1 (#120) and B2 (#121) high: prose a script prints, and an object key.
+for label, after in [("B1's prose line in a heredoc", {"review-prompt.sh": "cat <<'EOF'\n  permissions, payments, schema or migration, "
+                                                       "public API or hooks, caching, scheduled jobs) or more than 400 changed\nEOF\n"}),
+                     ("B2's capabilities key", {"features.js": 'export const F = {\n    "capabilities": [\n      "read"]};\n'})]:
+    result = triage_change({}, after)
+    ok = result["diff_tier"] == "standard" and not result["reasons"]
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} not high on {label}: {result['diff_tier']} {result['reasons']}")
+
+# A whole-line comment, by the file's language, raises nothing; the same trigger as code does. (path, comment, code, label)
+COMMENTS = [("auth.js", "// guards with current_user_can( first", "if (current_user_can('edit')) {}", "auth or permissions"),
+            ("auth.ts", "/* current_user_can( is checked upstream */", "if (current_user_can('edit')) {}", "auth or permissions"),
+            ("auth.php", " * Uses current_user_can() for the check.", "if ( current_user_can( 'edit' ) ) {}", "auth or permissions"),
+            ("auth.php", "# current_user_can( was here", "if ( current_user_can( 'edit' ) ) {}", "auth or permissions"),
+            ("shop.php", "// Redirect to the checkout page", "wp_safe_redirect( wc_get_checkout_url() );", "payments or orders"),
+            ("shop.php", "// Render the checkout-page", "echo wc_get_checkout_url();", "payments or orders"),
+            ("job.py", "# wp_schedule_event( runs it later", "wp_schedule_event(1, 'hourly', 'x')", "scheduled jobs"),
+            ("job.sh", "# wp_schedule_event( nightly", "wp eval 'wp_schedule_event(1);'", "scheduled jobs"),
+            ("q.sql", "-- ALTER TABLE orders later", "ALTER TABLE orders ADD x int;", "schema or data migration"),
+            ("page.html", "<!-- current_user_can( -->", "<script>if (current_user_can(1)) {}</script>", "auth or permissions"),
+            ("ci.yml", "# set_transient( old", "run: set_transient(1)", "caching"),
+            ("ci.yml", "#[x] wp_cron nightly", "run: wp_cron", "scheduled jobs"),
+            ("auth.py", "#[auth] current_user_can( here", "current_user_can(u)", "auth or permissions"),
+            ("AUTH.PHP", "// current_user_can( later", "current_user_can( 'x' );", "auth or permissions"),
+            ("Makefile", "# wp_cron nightly", "\twp eval 'wp_cron();'", "scheduled jobs"),
+            ("q.sql", "--ALTER TABLE orders later", "ALTER TABLE orders ADD x int;", "schema or data migration"),
+            ("job.lua", "--wp_schedule_event(1)", "wp_schedule_event(1)", "scheduled jobs"),
+            ("job.lua", "--[[ current_user_can( ]]", "current_user_can(1)", "auth or permissions"),
+            ("shop.css", "/* checkout styles */", ".checkout { color: red; }", "payments or orders"),
+            ("auth.go", "// current_user_can( later", "if current_user_can(u) {}", "auth or permissions"),
+            ("pay.rs", "/// process_payment( docs", "process_payment(order);", "payments or orders"),
+            ("Pay.java", " * Calls process_payment( first", "process_payment(order);", "payments or orders"),
+            ("pay.c", " * @param payment_id the order", "int payment_id = 0;", "payments or orders"),
+            ("db.c", "/* ALTER TABLE x */", "run(\"ALTER TABLE x ADD y int\");", "schema or data migration"),
+            ("pay.rb", "# process_payment( later", "process_payment(order)", "payments or orders"),
+            ("wp.toml", "# wp_cron = true", "wp_cron = true", "scheduled jobs"),
+            ("feed.xml", "<!-- current_user_can( -->", "<x>current_user_can(1)</x>", "auth or permissions"),
+            ("cart.twig", "<!-- checkout -->", "<a href=\"{{ checkout_url }}\">", "payments or orders"),
+            ("App.vue", "<!-- current_user_can( -->", "if (current_user_can(1)) {}", "auth or permissions"),
+            ("cart.js", "// Render {{ checkout_url }} in the template.", "renderCheckout(root);", "payments or orders"),
+            ("db.py", "# ALTER TABLE x */ then check it", "run('ALTER TABLE x ADD y int')", "schema or data migration"),
+            ("pay.js", "/* process_payment(x); */ // must be idempotent", "process_payment(x);", "payments or orders")]
+for path, comment, code, label in COMMENTS:
+    quiet, loud = triage_change({}, {path: comment + "\n"}), triage_change({}, {path: code + "\n"})
+    signalled = sorted(set(quiet["lenses"]) & {"security", "performance", "compatibility", "operability", "data-privacy"})
+    ok = not quiet["reasons"] and not signalled and label in labels(loud)
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {path}: a comment raises nothing ({quiet['reasons']}, lenses {signalled}), code raises {label} ({loud['reasons']})")
+# A comment prefix that is code in that language stays code.
+for path, code, label in [("pay.c", "#define CHARGE stripe_charge(x)", "payments or orders"),
+                          ("pay.c", "*payment_total = 0;", "payments or orders"), ("pay.c", "--payment_count;", "payments or orders"),
+                          ("attr.php", "#[Route('/x')] function f() { process_payment(1); }", "payments or orders"),
+                          ("tool", "#!/usr/local/bin/stripe-cli", "payments or orders"),
+                          ("pay.c", "*payment = value;", "payments or orders"), ("pay.c", "*payment = charge(order,", "payments or orders"),
+                          ("pay.c", "* result = process_payment(order);", "payments or orders"),
+                          ("gen.js", "* process_payment(order) { return charge(order); }", "payments or orders"),
+                          ("pay.c", "*/ int login_count;", "auth or permissions"),
+                          ("t.php", "/* translators: %s: name */ if ( current_user_can( 'x' ) ) {", "auth or permissions"),
+                          ("t.php", "<!-- debug: <?php current_user_can( 'x' ); ?> -->", "auth or permissions"),
+                          ("page.html", "<!-- wp:woocommerce/checkout -->", "payments or orders"),
+                          ("cart.php", '<!-- wp:woocommerce/checkout {"align":"wide"} /-->', "payments or orders"),
+                          ("mail.rb", '  #{process_payment(order)} was charged"', "payments or orders"),
+                          ("cart.php", "<!-- <?php echo wc_get_checkout_url(); ?> -->", "payments or orders")]:
+    result = triage_change({}, {path: code + "\n"})
+    ok = label in labels(result)
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {path}: `{code}` is code, raises {label}: {result['reasons']}")
+
+# A bare word fires only in a code shape, not as a word in prose, a string or a key. (label, code, prose)
+SHAPES = [("auth or permissions", ("auth.php", "user_has_capability( $u );"), ("msg.py", 'msg = "Needs the capability to edit"')),
+          ("auth or permissions", ("auth.php", "add_action( 'wp_login', 'f' );"), ("msg.py", 'print("Lets you log in, or login later")')),
+          ("payments or orders", ("pay.php", "process_payment( $order );"), ("say.sh", 'echo "payments, schema or migration"')),
+          ("schema or data migration", ("db.py", "run_migration(db)"), ("cli.py", 'help = "schema or migration"')),
+          ("scheduled jobs", ("job.php", "wp_cron();"), ("log.js", 'log("Cron runs nightly, see the acronym")')),
+          ("auth or permissions", ("auth.py", "login(user)"), ("auth.py", "after a login (or a refresh) the token rotates")),
+          ("auth or permissions", ("auth.php", "echo $capability;"), ("msg.py", 'msg = "Note:login flows"')),
+          ("payments or orders", ("pay.js", "return createPayment;"), ("pay.py", "payments are retried (see below)")),
+          ("schema or data migration", ("db.py", "x = [MigrationRunner]"), ("db.py", '"""Runs the migration (if any) first."""')),
+          ("public API or hooks", ("api.js", "app.post('/orders', create)"), ("api.js", "const port = app.get('port');")),
+          ("public API or hooks", ("api.js", r"router.get(/^\/users\/\d+$/, list);"), ("api.js", "app.get(name);")),
+          ("scheduled jobs", ("nightly.yml", "  - cron: '@daily'"), ("help.js", 'const help = {"cron": "5 fields separated by spaces"};'))]
+# Every identifier shape of criterion 3 fires. (label, path, code)
+for label, path, code in [("payments or orders", "pay.js", "payment.status = 'paid';"),
+                          ("scheduled jobs", "job.js", "cron.schedule('* * * * *', run);"),
+                          ("schema or data migration", "0002.py", "migrations.RemoveField(model_name='user', name='email'),"),
+                          ("auth or permissions", "form.js", "const x = loginForm;"),
+                          ("payments or orders", "pay.js", "x = [PaymentIntent];"),
+                          ("auth or permissions", "auth.py", "login = authenticate(user)"),
+                          ("auth or permissions", "cpt.php", "'capability' => 'manage_options',"),
+                          ("auth or permissions", "cpt.php", "'capabilities' => array( 'edit_post' => 'edit_book' ),"),
+                          ("payments or orders", "Payment.php", "class Payment extends Model {"),
+                          ("schema or data migration", "m.php", "return new class extends Migration"),
+                          ("scheduled jobs", "nightly.yml", "    - cron: '0 3 * * *'"),
+                          ("scheduled jobs", "Job.java", '@Scheduled(cron = "0 0 * * * *")'),
+                          ("public API or hooks", "api.js", 'app.get(["/a", "/b"], list);')]:
+    result = triage_change({}, {path: code + "\n"})
+    ok = label in labels(result)
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} `{code}` raises {label}: {result['reasons']}")
+for label, (code_path, code), (prose_path, prose) in SHAPES:
+    loud, quiet = triage_change({}, {code_path: code + "\n"}), triage_change({}, {prose_path: prose + "\n"})
+    ok = label in labels(loud) and not quiet["reasons"]
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {label}: `{code}` raises it ({loud['reasons']}), `{prose}` raises nothing ({quiet['reasons']})")
+
+# Each label still fires on its own, in WordPress and elsewhere.
+for label, samples in [("auth or permissions", [("a.php", "current_user_can('x');"), ("views.py", "@login_required")]),
+                       ("payments or orders", [("o.php", "$o = wc_get_order( $id );"), ("pay.py", "stripe.charges.create(amount=1)")]),
+                       ("schema or data migration", [("db.php", "dbDelta( $sql );"), ("m.sql", "ALTER TABLE users ADD age int;")]),
+                       ("public API or hooks", [("api.php", "register_rest_route( 'a', 'b' );"), ("app.py", '@app.route("/users")'),
+                                                ("api.js", "router.get('/users', list)")]),
+                       ("caching", [("c.php", "set_transient( 'k', 1 );"), ("c.py", 'cache_key = f"user:{uid}"')]),
+                       ("scheduled jobs", [("j.php", "wp_schedule_event( time(), 'hourly', 'h' );"), ("j.sh", "crontab -l")])]:
+    for path, code in samples:
+        result = triage_change({}, {path: code + "\n"})
+        ok = labels(result) == {label}
+        fail |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} `{code}` raises {label} alone: {result['reasons']}")
+
+# The other selections read the same lines: a comment selects none of them, the same trigger as code does.
+for path, trigger, where, key in [("q.php", "$wpdb->get_results( $q );", "lenses", "security"),
+                                  ("q.php", "$wpdb->get_results( $q );", "tests", "query budget"),
+                                  ("db.php", "dbDelta( $sql );", "tests", "migration round-trip"),
+                                  ("re.py", 'P = re.compile(r"(a+)+$")', "tests", "regex worst-case timing"),
+                                  ("f.js", "function parsePrice(text) {}", "tests", "property-based")]:
+    prefix = "# " if path.endswith(".py") else "// "
+    quiet, loud = triage_change({}, {path: prefix + trigger + "\n"}), triage_change({}, {path: trigger + "\n"})
+    ok = key not in quiet[where] and key in loud[where]
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {key}: not selected by a comment, selected by `{trigger}`")
+for prose, code in [('help = "schema or migration"', "run_migration(db)")]:
+    quiet, loud = triage_change({}, {"cli.py": prose + "\n"}), triage_change({}, {"cli.py": code + "\n"})
+    ok = "migration round-trip" not in quiet["tests"] and "migration round-trip" in loud["tests"]
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} migration round-trip: not selected by `{prose}`, selected by `{code}`")
+
+# A long line that almost matches a code shape is scanned in linear time: quality-log gives triage 60 seconds.
+for filler in ["a" * 50000, "a_" * 25000]:
+    started = time.monotonic()
+    result = triage_change({}, {"bundle.js": f'const payload = "{filler}";\n'})
+    took = time.monotonic() - started
+    ok = took < 5 and not result["reasons"]
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} a {len(filler)}-character line of {filler[:2]!r}… is triaged in {took:.1f}s (< 5s)")
+
+
+def triage_untracked(untracked):
+    """triage with no --range on a committed docs change plus untracked files ({path: text})."""
+    with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
+        def git(*args):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True)
+        git("init", "-q", "-b", "main")
+        open(os.path.join(repo, "README.md"), "w").write("# Shop\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "base")
+        open(os.path.join(repo, "README.md"), "w").write("# Shop\n\nSells things.\n")
+        for path, text in untracked.items():
+            open(os.path.join(repo, path), "w").write(text)
+        out = subprocess.run([TRIAGE, "--json"], cwd=repo, capture_output=True, text=True, timeout=60)
+        return json.loads(out.stdout)
+
+
+stream = "".join('{"type": "assistant", "text": "current_user_can( and wp_cron capabilities"}\n' for _ in range(500))
+result = triage_untracked({"stream.jsonl": stream, "err.log": "wp_cron failed\n"})
+ok = (result["diff_tier"], result["reasons"], result["files"]) == ("low", [], 1) and result["changed_lines"] < 50
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} an untracked log leaves the triage: {result['diff_tier']}, {result['files']} file(s), "
+      f"{result['changed_lines']} lines, {result['reasons']}")
+result = triage_untracked({"stream.jsonl": stream, "auth.php": "if ( current_user_can( 'edit' ) ) {}\n"})
+ok = result["diff_tier"] == "high" and labels(result) == {"auth or permissions"} and "auth.php" in " ".join(result["reasons"])
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} an untracked source file beside it still counts: {result['diff_tier']} {result['reasons']}")
+result = triage_untracked({f"run.{ext}": "current_user_can( and wp_cron\n" for ext in ("jsonl", "ndjson", "log", "out", "err", "LOG")})
+ok = (result["diff_tier"], result["reasons"], result["files"]) == ("low", [], 1)
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} every untracked data extension leaves the triage: {result['diff_tier']} {result['files']} {result['reasons']}")
+result = triage_untracked({"notes.log.php": "current_user_can( 'x' );\n"})
+ok = labels(result) == {"auth or permissions"}
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} an untracked source file named like a log still counts: {result['reasons']}")
+result = triage_change({}, {"debug.log": "current_user_can( 'x' );\n"})
+ok = labels(result) == {"auth or permissions"}
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} a tracked log still counts: {result['reasons']}")
 sys.exit(fail)
