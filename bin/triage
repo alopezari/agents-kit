@@ -356,8 +356,10 @@ def triage(rng=None):
         found = []
         for p, l in lines:
             m = next((m for m in rx.finditer(l) if not (m.group(0).lower() == "checkout" and GIT_CHECKOUT.search(l))), None)
-            if m and len(found) < limit:
+            if m:
                 found.append(f"{p}{where}: `{m.group(0)}`")
+                if len(found) == limit:
+                    break
         return found
 
     high = []
