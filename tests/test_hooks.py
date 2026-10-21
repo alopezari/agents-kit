@@ -21,7 +21,7 @@ import traceback
 # A HOME of our own: the tests add repo overlays and write hook logs, and must never touch the real ones.
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-hooks-home-")
-os.environ.pop("EVIDENCE_DIR", None)  # set when a staging step runs this suite: the tests' evidence would land there
+os.environ.pop("EVIDENCE_DIR", None)  # set when a guide's step runs this suite: the tests' evidence would land there
 os.environ.pop("AGENTS_LOG_DIR", None)  # the tests read the hook log in their own HOME
 os.environ.pop("AGENTS_PROFILES_DIR", None)  # set by a caller, the user's after-turn scripts would run on every stop
 os.environ.pop("AGENTS_AFTER_TURN", None)  # inherited from an after-turn's session, no after-turn test could start one
@@ -102,37 +102,6 @@ def test(fn):
 
 
 # --- guard_bash ------------------------------------------------------------------------------
-def only_the_user_marks_a_staging_step_as_theirs(base):
-    for cmd in ["~/.agents/bin/staging mark S1 PASS --by user", "bin/staging mark S2 FAIL --by=user",
-                "cd /x && $HOME/.agents/bin/staging mark S1 PASS --note ok --by 'user'", "staging mark S1 PASS --by user",
-                "~/.agents/bin/staging mark S1 PASS --note '200; cached | twice' --by user",
-                "~/.agents/bin/staging mark S1 PASS \\\n  --by user", '"/Users/me/.agents/bin/staging" mark S1 PASS --by user',
-                "~/.agents/bin/evidence S1 bash -c '~/.agents/bin/staging mark S1 PASS --by user'",
-                "~/.agents/bin/staging mark S1 PASS --note 'paid\nrefunded' --by user",
-                "bash -c '~/.agents/bin/staging mark S1 PASS --note \"x;y\" --by user'",
-                "bash -c \"bin/staging mark S1 PASS --note '200; cached | twice' --by user\"",
-                'bin/staging mark S1 PASS "--by" "user"', "(bin/staging mark S1 PASS --by user)",
-                "bin/staging \\\n  mark S1 PASS --by user", "bash -c 'bin/staging \\\n mark S1 PASS --by user'",
-                "bin/staging >/dev/null mark S1 PASS --by user", "bin/staging mark S1 PASS --by >/dev/null user",
-                "bin/staging ma\\\nrk S1 PASS --by user",
-                "bin/staging mark S1 PASS --by=user>/dev/null"]:
-        assert guard(cmd) == "deny", f"should deny: {cmd}"
-    for cmd in ["~/.agents/bin/staging mark S1 PASS --by agent --note 'the user said S1 passed'",
-                "~/.agents/bin/staging mark S1 FAIL --by agent --note '200; cached | user saw it'",
-                "~/.agents/bin/staging mark S1 FAIL --by agent --note 'agrees with --by user'",
-                "~/.agents/bin/staging steps --json", "git switch staging && git log --by-user",
-                # Text that only names the call: a search pattern, a commit or PR body, an echoed note.
-                "grep -rn 'staging mark S1 PASS --by user' tests/", "rg 'bin/staging mark .* --by user' skills",
-                "git log --grep 'staging mark --by user'", "echo 'the user runs bin/staging mark S1 PASS --by user'",
-                "git commit -m \"$(cat <<'EOF'\nRecord bin/staging mark S1 PASS --by user\nEOF\n)\"",
-                "for c in '~/.agents/bin/staging mark S1 PASS --by user'; do echo \"$c\"; done"]:
-        assert guard(cmd) == "allow", f"should allow: {cmd}"
-    for cmd in ["eval 'bin/staging mark S1 PASS --by user'", "x=$(bin/staging mark S1 PASS --by user)",
-                "bash <<EOF\nbin/staging mark S1 PASS --by user\nEOF", "cat <<EOF | sh\nbin/staging mark S1 PASS --by user\nEOF",
-                "bash -e -c 'bin/staging mark S1 PASS --by user'", "sh -c \"bin/staging mark S1 PASS --by user\""]:
-        assert guard(cmd) == "deny", f"a shell still runs it: {cmd}"
-
-
 def the_agent_stays_out_of_the_approvals(base):
     kit = os.path.expanduser("~/.agents")
     os.makedirs(os.path.join(kit, "approvals", "turn"), exist_ok=True)
@@ -216,9 +185,9 @@ def only_the_user_grants_an_approval_in_a_dialog(base):
                 "echo \"bin/approve once s1 x\" | tee run.sh | sh", "bash -c -- 'bin/approve grant s1 x'",
                 "ksh -c 'bin/approve grant s1 x'", "python3 -c \"os.system('bin/approve grant s1 x')\"",
                 "watch -n1 'bin/approve grant s1 x'", "sh -c \"$(echo 'bin/approve grant s1 x')\"",
-                "source <(echo 'bin/approve grant s1 x')", "echo 'bin/staging mark S1 PASS --by user' | bash",
+                "source <(echo 'bin/approve grant s1 x')",
                 "git status\nbash -c 'bin/approve grant s1 x'", "ls\nsh -c \"bin/approve once s1 x\"",
-                "echo hi\neval 'bin/approve grant s1 x'", "grep foo bar\nbash -c 'bin/staging mark S1 PASS --by user'",
+                "echo hi\neval 'bin/approve grant s1 x'",
                 "echo done\nwatch -n1 'bin/approve grant s1 x'", "git rebase -x 'bin/approve grant s1 x' HEAD~1",
                 "git -c alias.z='!bin/approve grant s1 x' z", "git config alias.g '!bin/approve grant x' && git g"]:
         assert guard(cmd) == "deny", f"a shell still runs it: {cmd}"
@@ -1268,12 +1237,12 @@ def validate_stamp_needs_evidence(base):
                           cwd=repo, capture_output=True, text=True)
     with open(os.path.join(evidence, "A8.txt")) as fh:
         assert "last" in fh.read(), "the saved output is complete"
-    elsewhere = os.path.join(base, "staging-evidence")
+    elsewhere = os.path.join(base, "guide-evidence")
     os.makedirs(elsewhere)
-    outside = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "S1", "echo", "from staging"], cwd=base,
+    outside = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "M1", "echo", "from the guide"], cwd=base,
                              capture_output=True, text=True, env={**os.environ, "EVIDENCE_DIR": elsewhere})
-    assert outside.returncode == 0 and "from staging" in open(os.path.join(elsewhere, "S1.txt")).read(), outside.stderr
-    unset_dir = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "S2", "true"], cwd=base, capture_output=True, text=True,
+    assert outside.returncode == 0 and "from the guide" in open(os.path.join(elsewhere, "M1.txt")).read(), outside.stderr
+    unset_dir = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "M2", "true"], cwd=base, capture_output=True, text=True,
                                env={**os.environ, "EVIDENCE_DIR": ""})
     assert unset_dir.returncode == 74 and "EVIDENCE_DIR" in unset_dir.stderr, "an empty EVIDENCE_DIR means step 0 failed"
     escaped = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "../out", "true"], cwd=repo, capture_output=True)
@@ -1319,125 +1288,33 @@ def validate_stamp_needs_evidence(base):
     assert "A1.txt" in listed and "b1.png" in listed and "\x89PNG" not in listed, listed
 
 
-def pr_gate_waits_for_staging(base):
+def unrun_checks_never_hold_the_pr(base):
     repo = new_repo(base)
-    git(repo, "switch", "-q", "-c", "feat/staged")
+    git(repo, "switch", "-q", "-c", "feat/checks")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     for kind in ("review", "validate"):
         write_stamp(repo, kind)
-    reports = os.path.expanduser("~/.agents/bin/reports")
-    guide = subprocess.run([reports, "path", "staging-guide"], cwd=repo, capture_output=True, text=True).stdout.strip()
-    evidence = subprocess.run([reports, "path", "evidence"], cwd=repo, capture_output=True, text=True).stdout.strip()
-    fake = os.path.join(base, "fake-gh")
-    os.makedirs(fake)
-    with open(os.path.join(fake, "gh"), "w") as fh:
-        fh.write("#!/bin/sh\n[ \"$1 $2 $3\" = \"pr view 12\" ] && echo feat/staged\n"
-                 "[ \"$1 $2 $3\" = \"pr view 13\" ] && echo someone-else\nexit 0\n")
-    os.chmod(os.path.join(fake, "gh"), 0o755)
-
-    def reason(command):
-        d = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": "test"},
-                     env={"PATH": fake + ":" + os.environ["PATH"]})
-        return d["hookSpecificOutput"]["permissionDecisionReason"] if d else None
+    guide = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "checks-guide"], cwd=repo,
+                           capture_output=True, text=True).stdout.strip()
+    with open(guide, "w") as fh:
+        fh.write("# Guide\n## Before the merge (optional)\n### M1. Try it on a phone\n## After the merge\n### P1. Backfill\n")
 
     def decision(command):
-        return "deny" if reason(command) else "allow"
+        return "deny" if run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": "test"}) else "allow"
 
-    steps = "# Guide\n## Before the merge\n### S1. Deploy\n### S2. Check\n## After the merge\n### P1. Backfill\n"
-    head = "\n## Results (2026-09-30)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
-    with open(guide, "w") as fh:
-        fh.write(steps)
-    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", f"cd {repo} && ~/.agents/bin/evidence A1 gh pr ready",
-                    "gh pr create --fill; gh pr create --draft --head other", "gh pr ready --undo && gh pr ready 12",
-                    f"cd {repo} && gh pr ready && cd /tmp", "if true; then gh pr ready; fi", "{ gh pr ready; }",
-                    "gh pr ready 12 --repo other/repo", "gh pr -R other/repo ready 12", 'gh pr ready "12"',
-                    "gh -R other/repo pr ready 12", "gh pr ready -Rother/repo 12",
-                    'gh pr create --head "$(git branch --show-current)" --title "Allow --draft PRs" --fill',
-                    "gh pr create --fill # --draft", "gh pr ready 12 # --undo", "gh pr new --fill"]:
-        assert decision(command) == "deny", f"staging is pending: {command}"
-    gone = run_hook("guard_bash.py", {"tool_input": {"command": "gh pr ready"}, "cwd": os.path.join(base, "gone"),
-                                      "session_id": "test"}, env={"PATH": fake + ":" + os.environ["PATH"]})
-    assert gone and "doesn't exist" in gone["hookSpecificOutput"]["permissionDecisionReason"], "a crash would allow"
-    for heading in ("## Before the merge \n", "## Before the merge ##\n"):
-        with open(guide, "w") as fh:
-            fh.write(steps.replace("## Before the merge\n", heading))
-        assert decision("gh pr ready") == "deny", f"steps under {heading!r} still count"
-    with open(guide, "w") as fh:
-        fh.write(steps)
-
-    def write_staging():
-        return subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "staging"], cwd=repo,
-                              capture_output=True, text=True)
-
-    refused = write_staging()
-    assert refused.returncode == 2 and "without a PASS" in refused.stdout + refused.stderr, refused
-    for command in ["gh pr create --draft --fill", "gh pr create -d --fill", "gh pr ready --undo", "gh pr view 12"]:
-        assert decision(command) == "allow", command
-    with open(os.path.join(evidence, "S1.txt"), "w") as fh:
-        fh.write("$ deploy\nexit 0\n")
-    with open(guide, "w") as fh:
-        fh.write(steps + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | looked fine |\n")
-    assert decision("gh pr ready") == "deny", "a PASS with no saved evidence"
-    with open(os.path.join(evidence, "S2.txt"), "w") as fh:
-        fh.write("$ check\nexit 0\n")
-    with open(guide, "w") as fh:
-        fh.write(steps + "\n## Results (2026-09-30)\n\n| Step | Result | Observation |\n|---|---|---|\n"
-                 "| S1 | PASS | S1.txt |\n| S2 | PASS | S2.txt |\n")
-    assert decision("gh pr ready") == "deny", "a results table without an Evidence column proves nothing"
-    with open(guide, "w") as fh:
-        fh.write(steps + head + "| S1 | PASSING | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n")
-    assert decision("gh pr ready") == "deny", "PASSING isn't PASS"
-    with open(guide, "w") as fh:
-        fh.write(steps + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n")
-    assert "re-run" in (reason("gh pr ready") or ""), "results nobody stamped for this change"
-    assert write_staging().returncode == 0
-    open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
-    assert "re-run" in (reason("gh pr ready") or ""), "an edit after the staging run"
-    for kind in ("review", "validate"):
-        write_stamp(repo, kind)
-    assert "re-run" in (reason("gh pr create --fill") or ""), "on every path the gate holds"
-    assert write_staging().returncode == 0, "re-stamped once the affected steps passed again"
-    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", 'gh pr ready "12"', "if true; then gh pr ready; fi",
-                    "gh pr ready 2>&1", "gh pr ready > ready.log", "gh pr ready 12 2> err.log", "gh pr ready 12; gh pr ready 12"]:
-        assert decision(command) == "allow", f"every S step passed with evidence: {command}"
-    for command in ["gh pr ready 12 --repo o/r", "gh pr -R o/r ready 12", "gh -R o/r pr ready 12", "gh pr ready -Ro/r 12"]:
-        assert "--repo" in (reason(command) or ""), f"staging passed, but not checked for that repo: {command}"
-    assert "someone-else" in (reason('gh pr ready "13"') or ""), "a quoted target is still the target"
-    assert "unknown" in (reason("gh pr ready 99") or ""), "a PR gh can't find"
-    assert "One `gh pr ready`" in (reason("gh pr ready 12; gh pr ready 13") or ""), "one lookup per command"
-    with open(guide, "a") as fh:
-        fh.write("\n## Results after the deploy (2026-10-01)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
-                 "| P1 | PASS | [out](e/S1.txt) |\n")
-    assert decision("gh pr ready") == "allow", "ship's table after the deploy isn't the staging results"
-    for rows, expected in [("| S1 | FAIL | [out](e/S1.txt) |\n| S1 | PASS | [out](e/S1.txt) |\n", "allow"),
-                           ("| S1 | PASS | [out](e/S1.txt) |\n| S1 | FAIL | [out](e/S1.txt) |\n", "deny")]:
-        with open(guide, "w") as fh:
-            fh.write(steps + head + rows + "| S2 | PASS | [out](e/S2.txt) |\n")
-        assert decision("gh pr ready") == expected, f"a step's last row decides: {rows!r}"
-    with open(guide, "w") as fh:
-        fh.write(steps + head + "| S1 | FAIL | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n"
-                 "\n## Notes\n\n| Step | Result | Evidence |\n|---|---|---|\n| S1 | PASS | [out](e/S1.txt) |\n")
-    assert "FAIL" in (reason("gh pr ready") or ""), "the round ends at the next section: a later table can't hide a FAIL"
-    with open(guide, "wb") as fh:
-        fh.write(b"# Guide\n## Before the merge\n### S1. \xff\xfe\n")
-    assert "Couldn't read the staging results" in (reason("gh pr ready") or ""), "a check that crashes holds the PR"
-    with open(guide, "w") as fh:
-        fh.write("# Guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")
-    assert decision("gh pr ready") == "allow", "only after-merge steps"
-    with open(guide, "w") as fh:
-        fh.write("# Guide\n## After the merge\n### P1. Backfill\n")
-    assert decision("gh pr ready") == "allow", "no Before-the-merge part at all"
-    if os.geteuid() != 0:  # root reads it anyway
-        os.chmod(guide, 0)
-        try:
-            assert decision("gh pr ready") == "deny", "a guide that can't be read isn't a guide that passed"
-        finally:
-            os.chmod(guide, 0o644)
-    assert decision("gh pr ready 13") == "deny", "another branch's PR can't be checked from this checkout"
+    for command in ["gh pr create --fill", "gh pr ready", "gh pr ready 12", "gh pr ready 12 --repo o/r"]:
+        assert decision(command) == "allow", f"the user decides on unrun checks: {command}"
+    with open(os.path.join(os.path.dirname(guide), os.path.basename(guide).replace("checks-guide-", "staging-guide-")), "w") as fh:
+        fh.write("# Staging guide\n## Before the merge\n### S1. Deploy\n## Results (2026-10-01)\n\n"
+                 "| Step | Result | Evidence |\n|---|---|---|\n| S1 | FAIL | `S1.txt` |\n")
     os.remove(guide)
-    assert decision("gh pr create --fill") == "allow", "no guide, no staging"
-    nothing = write_staging()
-    assert nothing.returncode == 2 and "no staging guide" in nothing.stdout + nothing.stderr, nothing
+    for command in ["gh pr create --fill", "gh pr ready 12"]:
+        assert decision(command) == "allow", f"nor does an older guide's failed staging step: {command}"
+    for args in (["staging"], ["write", "--kind", "staging"], ["check", "--kind", "staging"], ["write", "--kind", "reveiw"]):
+        done = subprocess.run(["python3", H + "review_stamp.py", *args], cwd=repo, capture_output=True, text=True)
+        assert done.returncode == 2 and "Unknown" in done.stderr, f"a removed or mistyped stamp is refused: {args} {done.stderr}"
+    open(os.path.join(repo, "app.py"), "a").write("y = 3\n")
+    assert decision("gh pr create --fill") == "deny", "the self-review gate still holds an unreviewed change"
 
 
 def guard_fails_closed(base):
@@ -1498,7 +1375,7 @@ def codex_pr_commands_name_their_checkout(base):
     assert "33986" in codex("gh pr edit 5 --title x")
     assert "33986" in codex("command gh pr create --fill"), "a wrapper doesn't hide it"
     assert "33986" in codex("gh pr -R o/r create --fill"), "nor gh's --repo flag"
-    assert "33986" in codex("gh pr ready 12"), "marking ready checks the checkout too"
+    assert codex("gh pr ready 12") == "allow", "marking ready reads no checkout, so it needs no cd"
     # Each of these leaves the PR in the unknown workdir, or somewhere the gate would read differently.
     for command in ["cd sub && gh pr create --fill", f"cd {repo}; gh pr create --fill", f"false && cd {repo}; gh pr create --fill",
                     f"cd {repo} | gh pr create --fill", f"cd {repo} && cd - && gh pr create --fill", f"  cd {repo} && gh pr create --fill",
@@ -1533,14 +1410,14 @@ def reports_survive_worktree_removal(base):
     git(wt, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "change")
     subprocess.run(["python3", H + "review_stamp.py", "write"], cwd=wt, capture_output=True)
     reports = os.path.expanduser("~/.agents/bin/reports")
-    guide = subprocess.run([reports, "path", "staging-guide"], cwd=wt, capture_output=True, text=True).stdout.strip()
-    open(guide, "w").write("# Staging guide\n")
+    guide = subprocess.run([reports, "path", "checks-guide"], cwd=wt, capture_output=True, text=True).stdout.strip()
+    open(guide, "w").write("# Checks guide\n")
     git(main, "worktree", "remove", wt)
     git(main, "switch", "-q", "feat/z")
     shown = subprocess.run([reports], cwd=main, capture_output=True, text=True).stdout
-    assert "# Staging guide" in shown, f"guide written at {guide} is gone after removing the worktree"
+    assert "# Checks guide" in shown, f"guide written at {guide} is gone after removing the worktree"
     stamped = subprocess.run(["python3", H + "review_stamp.py", "check"], cwd=main).returncode == 0
-    assert stamped, "the self-review stamp must survive the hand-off so the PR can be opened from the main checkout"
+    assert stamped, "the self-review stamp must survive removing the worktree so the PR can be opened from the main checkout"
 
 
 def reports_brief_gives_one_line_per_report(base):
@@ -1579,9 +1456,9 @@ def reports_reads_another_branch(base):
     def run(*args, cwd=main):
         return subprocess.run([reports, *args], cwd=cwd, capture_output=True, text=True)
     git(main, "switch", "-q", "-c", "feat/ship")
-    on_branch = {kind: run("path", kind).stdout.strip() for kind in ("staging-guide", "evidence", "pr-body")}
+    on_branch = {kind: run("path", kind).stdout.strip() for kind in ("checks-guide", "evidence", "pr-body")}
     assert os.path.basename(on_branch["pr-body"]) == "pr-body-main-feat~ship.md", on_branch
-    open(on_branch["staging-guide"], "w").write("# Checks after the merge\n")
+    open(on_branch["checks-guide"], "w").write("# Checks after the merge\n")
     open(os.path.join(on_branch["evidence"], "P1.txt"), "w").write("loaded\n")
     git(main, "switch", "-q", "trunk")
     wt = os.path.join(base, "wt")
@@ -1601,7 +1478,7 @@ def reports_reads_another_branch(base):
         shown = run("--branch", "feat/ship", cwd=cwd).stdout
         assert "# Checks after the merge" in shown and "P1.txt" in shown, shown
         brief = run("--branch", "feat/ship", "brief", cwd=cwd)
-        assert brief.returncode == 0 and on_branch["staging-guide"] in brief.stdout and "phase:" not in brief.stdout \
+        assert brief.returncode == 0 and on_branch["checks-guide"] in brief.stdout and "phase:" not in brief.stdout \
             and "bin/reports --branch feat/ship" in brief.stdout, brief
     git(main, "branch", "feat/it's")
     hint = run("--branch", "feat/it's", "brief").stdout
@@ -2618,13 +2495,13 @@ def a_phase_line_switches_phases_by_scope(base):
         git(repo, "switch", "-q", "-c", "feature")
     said = phase_line("phase off validate\nGo ahead with the fix.", a)
     assert "validate" in said and "branch" in said, said
-    assert phases_off(a) == {"validate": "branch", "staging": "validate off"}, phases_off(a)
+    assert phases_off(a) == {"validate": "branch"}, phases_off(a)
     assert phases_off(b) == {}, "the same branch name in another repo keeps its phases"
     git(a, "switch", "-q", "-c", "other")
     assert phases_off(a) == {}, "a branch switch stays on its branch"
     phase_line("Phase off verify repo", a)
     git(a, "switch", "-q", "feature")
-    assert phases_off(a) == {"validate": "branch", "staging": "validate off", "verify": "repo"}, phases_off(a)
+    assert phases_off(a) == {"validate": "branch", "verify": "repo"}, phases_off(a)
     worktree = os.path.join(base, "zz-phase-a-wt")
     git(a, "worktree", "add", "-q", worktree, "other")
     assert phases_off(worktree) == {"verify": "repo"}, "a worktree is the same repo"
@@ -2633,12 +2510,19 @@ def a_phase_line_switches_phases_by_scope(base):
     phase_line("phase on self-review", b)
     assert phases_off(b) == {}, "a branch's on overrides a global off"
     assert phases_off(a)["self-review"] == "global"
-    phase_line("phase on staging", a)
-    assert phases_off(a)["staging"] == "validate off", "validate off takes staging off whatever staging says"
+    said = phase_line("phase off staging", a)
+    assert said and "Unknown phase `staging`" in said and "staging" not in phases_off(a), "staging left the core flow"
+    stored = os.path.join(PHASE_STORE, "global.json")
+    kept = open(stored).read()
+    with open(stored, "w") as fh:
+        json.dump({**json.loads(kept), "staging": "off"}, fh)  # switched off before staging left the flow
+    assert phases_off(a) == {"self-review": "global", "validate": "branch", "verify": "repo"}, phases_off(a)
+    with open(stored, "w") as fh:
+        fh.write(kept)
     shown = subprocess.run([os.path.expanduser("~/.agents/bin/reports")], cwd=a, capture_output=True, text=True).stdout
     assert "phases the user switched off" in shown and "validate: off (branch)" in shown, shown
     brief = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "brief"], cwd=a, capture_output=True, text=True).stdout
-    assert "off: self-review (global), validate (branch), staging (validate off), verify (repo)\n" in brief, brief
+    assert "off: self-review (global), validate (branch), verify (repo)\n" in brief, brief
     git(a, "tag", "feature")
     assert phases_off(a)["validate"] == "branch", "a tag named like the branch doesn't move its switches"
 
@@ -2685,10 +2569,10 @@ def a_phase_line_switches_phases_by_scope(base):
     # Two sessions switching at once both keep their switch.
     switching = [subprocess.Popen(["python3", H + "prompt_approvals.py"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                   text=True, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
-                 for _ in ("follow-pr", "audit", "staging")]
-    for process, phase in zip(switching, ("follow-pr", "audit", "staging")):
+                 for _ in ("follow-pr", "audit", "second-model")]
+    for process, phase in zip(switching, ("follow-pr", "audit", "second-model")):
         process.communicate(json.dumps({"prompt": f"phase off {phase} global", "session_id": RUN + phase, "cwd": a}))
-    assert {"follow-pr", "audit", "staging", "ci", "self-review"} <= set(stored_switches()["global.json"])
+    assert {"follow-pr", "audit", "second-model", "ci", "self-review"} <= set(stored_switches()["global.json"])
 
     store = os.path.join(PHASE_STORE, "global.json")
     assert guard(f"echo '{{}}' > {store}", a) == "deny", "the agent can't write a switch from the shell"
@@ -2895,7 +2779,7 @@ def only_the_user_runs_the_switch_cli(base):
                               env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
 
     done = cli("off", "validate", "repo")
-    assert done.returncode == 0 and phases_off(repo) == {"validate": "repo", "staging": "validate off"}, done.stdout
+    assert done.returncode == 0 and phases_off(repo) == {"validate": "repo"}, done.stdout
     said = done.stdout.strip()
     assert said.startswith("Switched validate off for every branch of zz-phase-cli. Phases off here now:"), said
     assert phase_line("phase off validate repo", repo) == (f"The user's `phase off` line: {said} Confirm it to the user in "
@@ -2957,18 +2841,6 @@ def pr_gate_skips_the_phases_switched_off(base):
     write_stamp(repo, "validate")
     assert reason("gh pr create --fill") is None
 
-    guide = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "staging-guide"], cwd=repo,
-                           capture_output=True, text=True).stdout.strip()
-    with open(guide, "w") as fh:
-        fh.write("# Guide\n## Before the merge\n### S1. Deploy\n")
-    assert reason("gh pr create --fill") and reason("gh pr ready"), "staging steps before the merge hold the PR"
-    assert reason("gh pr ready 123"), "a PR named by number is checked from its branch's checkout"
-    phase_line("phase off staging", repo)
-    for command in ("gh pr create --fill", "gh pr ready"):
-        assert reason(command) is None, f"staging off holds nothing: {command}"
-    assert reason("gh pr ready 123"), "another PR is checked from its own branch's checkout, with its own switches"
-    phase_line("phase on staging", repo)
-    assert reason("gh pr ready"), "back on, staging holds again"
 
     # The gate reads the switches of the checkout the PR is opened from, not the session's.
     other = new_repo(base, "zz-phase-other")
@@ -3147,12 +3019,12 @@ def a_stacked_branch_is_measured_against_its_parent(base):
 
 
 TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, coming_back_after_hours_asks_for_the_status_first, a_review_rounds_line_sets_the_re_checks_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
-         guard_blocks_irreversible, only_the_user_marks_a_staging_step_as_theirs, only_the_user_grants_an_approval_in_a_dialog,
+         guard_blocks_irreversible, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
          guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, pr_gate_waits_for_staging, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

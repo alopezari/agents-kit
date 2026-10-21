@@ -3,7 +3,7 @@
 # Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the
 # command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`,
 # which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned.
-# EVIDENCE_DIR saves there instead, from any directory: a staging guide's steps run outside the repository.
+# EVIDENCE_DIR saves there instead, from any directory: a checks guide's steps run outside the repository.
 set -uo pipefail
 if [ $# -lt 2 ]; then
   echo "usage: evidence <id> <command> [args...]" >&2

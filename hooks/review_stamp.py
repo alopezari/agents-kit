@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """Record or check that a skill ran on the exact current change.
 
-  review_stamp.py write [--kind review|validate|staging]   # end of self-review / validate / recording staging
-                                                   # results; verify stamps come only from its runner
-                                                   # (stop_checks.py), through record_verify(); validate needs a
-                                                   # report whose PASS/FAIL rows name their evidence, and staging
-                                                   # every step before the merge passed with evidence
-  review_stamp.py check [--kind review|validate|staging|verify|verify-empty]   # exit 1 if the change differs from the stamped one
-  review_stamp.py staging                          # exit 1 if the staging guide has steps before the merge without
-                                                   # a PASS backed by saved evidence, or passed for an earlier change
+  review_stamp.py write [--kind review|validate]   # end of self-review / validate; verify stamps come only from
+                                                   # its runner (stop_checks.py), through record_verify(); validate
+                                                   # needs a report whose PASS/FAIL rows name their evidence
+  review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
   review_stamp.py branch-key                       # the current branch as it appears in those file names
@@ -18,12 +14,10 @@
 
 A stamp covers every file that differs from the merge-base with the branch's base (the default branch, or the
 parent of a stacked branch: branch_base), except the changelog, so committing stamped changes keeps it valid
-and any later edit invalidates it. Review,
-validate and staging stamps hold the branch's diff, so merging the default branch keeps them unless it
-moves the changed lines or their context; verify's holds the files' content, so the tests run again. Stamps live in the repository's shared git dir, per branch
+and any later edit invalidates it. Review and validate stamps hold the branch's diff, so merging the default branch
+keeps them unless it moves the changed lines or their context; verify's holds the files' content, so the tests run again. Stamps live in the repository's shared git dir, per branch
 (.git/agents/stamps/<branch key>/), never in the tree: they survive removing the worktree they were
-written in, so the PR can be opened from the main checkout after a staging hand-off. They also
-follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
+written in, so they are still read from the main checkout once create-pr frees the branch. They also follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
 """
 import hashlib
 import json
@@ -44,6 +38,8 @@ NOT_BEHAVIOR = re.compile(
 # CI checks the changelog entry, and it is often written last: adding it re-runs nothing.
 NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?\Z|(^|/)changelog\.d/[^/]+\.md\Z", re.I)
 VERIFY_KINDS = ("verify", "verify-empty")
+STAMP_KINDS = ("review", "validate", *VERIFY_KINDS)
+COMMANDS = ("check", "write", "base", "branch-key", "follow-renames", "needs-validate")
 
 
 def git(*args, cwd=None):
@@ -191,13 +187,13 @@ def change_fingerprint():
 
 
 def fingerprint_for(kind):
-    # Verify reruns the tests on the code as it is, the default branch's changes included; review, validation and
-    # staging judged the branch's own change, which a merge of the default branch doesn't alter.
+    # Verify reruns the tests on the code as it is, the default branch's changes included; review and validation
+    # judged the branch's own change, which a merge of the default branch doesn't alter.
     return fingerprint() if kind in VERIFY_KINDS else change_fingerprint()
 
 
 # Files skills/spec/path.sh and bin/reports name <kind>-<repo>-<branch key>.md, next to the spec.
-REPORT_KINDS = ("spec", "verify", "review", "validation", "staging-guide", "follow-pr", "pr-body")
+REPORT_KINDS = ("spec", "verify", "review", "validation", "checks-guide", "staging-guide", "follow-pr", "pr-body")
 
 
 def branch_file_names(repo, key):
@@ -389,61 +385,6 @@ def rows_without_evidence():
     return []
 
 
-def staging_phase(guide, evidence, stamped):
-    """None when there is no guide, or every step before the merge passed with saved evidence and the staging stamp
-    covers the current change (stamped); otherwise the staging phase, as the status line shows it. Raises OSError
-    when the guide exists but can't be read."""
-    try:
-        with open(guide) as fh:
-            text = fh.read()
-    except FileNotFoundError:
-        return None
-    rounds = re.split(r"^## Results(?! after the deploy)", text, flags=re.M)  # ship's table holds P steps only
-    # The round ends at the next section: a later table must not overwrite its rows.
-    latest = re.split(r"^## ", rounds[-1], maxsplit=1, flags=re.M)[0] if len(rounds) > 1 else ""
-    if re.search(r"^## (Before|After) the merge", text, re.M):
-        before_merge = re.search(r"^## Before the merge\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
-        steps = re.findall(r"^### (S\d+)\b", before_merge.group(1), re.M) if before_merge else []
-        if not steps:
-            return None  # every step comes after the merge: the ship skill runs them
-        # Only a table with Result and Evidence columns counts: "no FAIL line" in the evidence isn't a failure.
-        results = {first: (result, backed) for first, result, _, backed in result_rows(latest.splitlines(), evidence)}
-        if any(results.get(step, ("",))[0] == "FAIL" for step in steps):
-            return "staging: fix"
-        if not all(results.get(step, ("",))[0] == "PASS" for step in steps):
-            return "staging (you)"
-        if not all(results[step][1] for step in steps):
-            return "staging: no evidence"
-        return None if stamped else "staging: re-run"
-    # A guide from before the split mixed steps that need production: a PASS or FAIL in its latest results settles it.
-    results = re.findall(r"^\|\s*[^|]*\|\s*\**(PASS|FAIL)\b", latest, re.M) or re.findall(r"\b(PASS|FAIL)\b", latest)
-    if not results:
-        return "staging (you)"
-    return "staging: fix" if "FAIL" in results else None
-
-
-def staging_unfinished(stamped):
-    """Why the pull request can't be ready yet for the staging guide, or None."""
-    guide, evidence = report_paths("staging-guide", "evidence")
-    if not guide or not evidence:
-        return "Couldn't find this branch's staging guide (bin/reports failed), so its results can't be checked."
-    try:
-        phase = staging_phase(guide, evidence, stamped)
-    except OSError as error:
-        return f"Couldn't read the staging guide: {error}"
-    reasons = {
-        "staging (you)": "has steps before the merge without a PASS. Ask the user to run them and record the results "
-                         "from their evidence (validate skill, step 7), or open the PR with --draft.",
-        "staging: fix": "has a step before the merge that FAILed: fix it and have it re-run.",
-        "staging: no evidence": "has PASS results whose Evidence cell names no saved file in " + evidence + ": each "
-                                "step saves its output through bin/evidence, or a screenshot.",
-        "staging: re-run": "passed for an earlier version of the change, or its results were never stamped: ask the "
-                           "user which steps the changes since touch and have them re-run (validate skill, step 7), "
-                           "then `python3 ~/.agents/hooks/review_stamp.py write --kind staging`.",
-    }
-    return f"The staging guide ({guide}) {reasons[phase]}" if phase else None
-
-
 def record_verify(kind, checked_fingerprint):
     """Leave only this verify run's stamp: kind on the fingerprint it checked, or none when kind is None (it failed).
     Raises OSError when a stamp can't be written or removed, after trying every removal."""
@@ -469,6 +410,11 @@ def main():
     args = sys.argv[1:]
     kind = args[args.index("--kind") + 1] if "--kind" in args else "review"
     command = args[0] if args else "check"
+    if command not in COMMANDS or kind not in STAMP_KINDS:
+        print(f"Unknown {'command' if command not in COMMANDS else 'stamp kind'} "
+              f"`{command if command not in COMMANDS else kind}`: the commands are {', '.join(COMMANDS)}, "
+              f"and the kinds {', '.join(STAMP_KINDS)}.", file=sys.stderr)
+        return 2
     if command == "write" and kind in VERIFY_KINDS:
         print("A verify stamp comes only from running verify: run `python3 ~/.agents/hooks/stop_checks.py verify`, "
               "which stamps the change when it passes.", file=sys.stderr)
@@ -498,25 +444,12 @@ def main():
     if command == "follow-renames":
         follow_branch_renames()
         return 0
-    if command == "staging":
-        unfinished = staging_unfinished(stamp_matches("staging", change_fingerprint()))
-        if unfinished:
-            print(unfinished)
-        return 1 if unfinished else 0
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
     unbacked = rows_without_evidence() if command == "write" and kind == "validate" else []
     if unbacked:
         print("\n".join(unbacked), file=sys.stderr)
         return 2
-    if command == "write" and kind == "staging":
-        unfinished = staging_unfinished(stamped=True)
-        if unfinished:
-            print(unfinished, file=sys.stderr)
-            return 2
-        if not os.path.exists(report_paths("staging-guide")[0]):
-            print("This branch has no staging guide: there are no staging results to stamp.", file=sys.stderr)
-            return 2
     if command == "write":
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
         with open(stamp_path(kind), "w") as fh:

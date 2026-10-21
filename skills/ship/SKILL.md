@@ -20,7 +20,7 @@ Whatever the deploy, the guide's "After the merge" steps marked as yours are you
 Write the guide in the validate skill's step 6 format: numbered steps, each with **Why**, **Where**, a copy-paste **Run** block with real values, **Expected** and **If not**. Step 0 lists access, tunnel or VPN, and an `export` block with the values later steps reuse.
 
 - **Deploy:** the repository's deploy steps, from `~/.agents/repos/<repo>/notes.md` or the repo's own docs. If neither says how, ask the user instead of guessing.
-- **Light verification, read-only:** a status check of the affected pages or endpoints, one real happy path that changes nothing, the log lines or error rates to watch, and for how long. Start from the staging guide's "After the merge" steps (`~/.agents/bin/reports`): they are the checks that needed production. Cut anything that writes unless the guide says it's the point (a backfill, a scoring run), and keep their `~/.agents/bin/evidence P1 …` form so the results come back as files.
+- **Light verification, read-only:** a status check of the affected pages or endpoints, one real happy path that changes nothing, the log lines or error rates to watch, and for how long. Start from the checks guide's "After the merge" steps (`~/.agents/bin/reports`): they are the checks that needed production. Cut anything that writes unless the guide says it's the point (a backfill, a scoring run), and keep their `~/.agents/bin/evidence P1 …` form so the results come back as files.
 - **When to roll back:** the exact signal (status code, error line, metric) that means "revert now".
 
 Check every command you can before handing it over: `--help` for flags, a dry run, or the same read-only command against staging.
@@ -34,7 +34,7 @@ Before the user deploys, give the rollback in the same format:
 
 ## 3. Close the loop
 
-When the user says the deploy is done, or you ran it, read the verification steps' evidence and append a `## Results after the deploy (<date>)` table to the staging guide, with one row per P step (`| Step | Result | Evidence |`), the observation that decided it and a link to its file by its absolute path. When every step passed:
+When the user says the deploy is done, or you ran it, read the verification steps' evidence and append a `## Results after the deploy (<date>)` table to the checks guide, with one row per P step (`| Step | Result | Evidence |`), the observation that decided it and a link to its file by its absolute path. When every step passed:
 
 - **Issue:** draft the update (what shipped, the PR link, how it was verified in production). Writing to a tracker needs the user's approval; the MCP guard enforces it.
 - **Repo notes:** a trap that cost time in this change (a flaky check, a missing setup step, a deploy surprise) goes into `~/.agents/repos/<repo>/notes.md`, or better, into a check.

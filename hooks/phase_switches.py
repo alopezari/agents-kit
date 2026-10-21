@@ -6,8 +6,8 @@ The user switches a phase with the first line of a message, `phase off <phase> [
 runs through `phase_switches.py set`. The store is in ~/.agents/approvals, which guard_bash.py and
 guard_files.py keep the agent out of: only the user switches a phase.
 
-The narrowest switch set wins (branch over repo over global), and validate off takes staging off: a staging guide
-comes out of validation. A skip writes no stamp, so a phase switched back on needs a real one again.
+The narrowest switch set wins (branch over repo over global). A skip writes no stamp, so a phase switched back on
+needs a real one again.
 
 The same files hold how many re-check rounds the self-review runs after its first pass, set the same ways with
 `review-rounds <0-9> [branch|repo|global]` or `/flow review-rounds …`, and read with `bin/phase review-rounds`.
@@ -27,7 +27,7 @@ import design_files  # noqa: E402
 import review_stamp  # noqa: E402
 from hooklog import log  # noqa: E402
 
-PHASES = ("spec", "self-review", "validate", "staging", "verify", "ci", "follow-pr", "audit", "second-model", "claude-review", "codex-review")
+PHASES = ("spec", "self-review", "validate", "verify", "ci", "follow-pr", "audit", "second-model", "claude-review", "codex-review")
 SCOPES = ("branch", "repo", "global")
 STORE = os.path.join(design_files.APPROVALS_DIR, "phases")
 PHASE_LINE = re.compile(r"\A[ \t]*phase[ \t]+(off|on)(?=\s|\Z)(.*)", re.I)
@@ -104,10 +104,7 @@ def phases_off_in(repo, branch):
     for scope, path in store_files(repo, branch):
         # A phase a newer kit added isn't an error: an older hook running beside it must not hold every gate.
         state.update({phase: (value, scope) for phase, value in read(path).items() if phase in PHASES})
-    off = {phase: scope for phase, (value, scope) in state.items() if value == "off"}
-    if "validate" in off:
-        off["staging"] = "validate off"
-    return off
+    return {phase: scope for phase, (value, scope) in state.items() if value == "off"}
 
 
 def review_rounds(cwd, timeout=5):

@@ -1,6 +1,7 @@
 #!/bin/bash
-# Review and testing reports for the current repo and branch, stored next to the spec (outside the tree).
-#   reports path <verify|review|validation|staging-guide|follow-pr>   where the stop hook or a skill saves that report
+# Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). A branch
+# with only a guide saved under its older name, staging-guide, reads it as its checks-guide.
+#   reports path <verify|review|validation|checks-guide|follow-pr>   where the stop hook or a skill saves that report
 #   reports path pr-body                             where create-pr and follow-pr save the PR description; left out of the listings
 #   reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 #   reports                                          every report that exists, with its path, the evidence, the phases off
@@ -22,16 +23,25 @@ else
   other_branch=0
 fi
 
+report_file() {
+  # Guides written before checks-guide were named staging-guide: a branch with only that one keeps reading it.
+  if [ "$1" = checks-guide ] && [ ! -f "$dir/checks-guide-$suffix.md" ] && [ -f "$dir/staging-guide-$suffix.md" ]; then
+    echo "$dir/staging-guide-$suffix.md"
+  else
+    echo "$dir/$1-$suffix.md"
+  fi
+}
+
 if [ "${1:-}" = "path" ]; then
   case "${2:-}" in
-    verify|review|validation|staging-guide|follow-pr) echo "$dir/$2-$suffix.md" ;;
+    verify|review|validation|checks-guide|follow-pr) report_file "$2" ;;
     pr-body)
       # Every detached checkout would share one file, and a PR edit could send another PR's description.
       [ $other_branch = 1 ] || [ -n "$(git branch --show-current)" ] \
         || { echo "reports path pr-body needs a branch: run it from the PR branch's checkout, or pass --branch <name>" >&2; exit 2; }
       echo "$dir/$2-$suffix.md" ;;
     evidence) mkdir -p "$dir/evidence-$suffix"; echo "$dir/evidence-$suffix" ;;
-    *) echo "usage: reports path <verify|review|validation|staging-guide|follow-pr|pr-body|evidence>" >&2; exit 2 ;;
+    *) echo "usage: reports path <verify|review|validation|checks-guide|follow-pr|pr-body|evidence>" >&2; exit 2 ;;
   esac
   exit 0
 fi
@@ -43,8 +53,8 @@ if [ "${1:-}" = "brief" ]; then
     switches="$("$HOME/.agents/bin/phase" switches 2>&1)" || switches="unknown (bin/phase switches failed: $switches)"
     [ -z "$switches" ] || echo "off: $(sed 's/: off (/ (/' <<<"$switches" | paste -sd, - | sed 's/,/, /g')"
   fi
-  for kind in spec verify review validation staging-guide follow-pr; do
-    f="$dir/$kind-$suffix.md"
+  for kind in spec verify review validation checks-guide follow-pr; do
+    f="$(report_file "$kind")"
     [ -f "$f" ] || continue
     case $kind in
       spec) line="$(head -1 "$f" | sed 's/^# //')" ;;
@@ -57,7 +67,7 @@ counts = collections.Counter(row[1] for row in review_stamp.result_rows(open(sys
 print(", ".join(f"{counts[r]} {r}" for r in ("PASS", "FAIL", "NOT RUN")))
 PY
 )" ;;
-      staging-guide) line="$(grep -q '^## Results' "$f" && echo 'results recorded' || echo 'no results yet')" ;;
+      checks-guide) line="$(grep -q '^## Results' "$f" && echo 'results recorded' || echo 'no results yet')" ;;
       follow-pr) line="$(grep '^Status:' "$f" | tail -1 || true)"; line="${line:-no Status line yet}" ;;
       *) line="$(head -1 "$f")" ;;
     esac
@@ -68,8 +78,8 @@ PY
 fi
 
 found=0
-for kind in spec verify review validation staging-guide follow-pr; do
-  f="$dir/$kind-$suffix.md"
+for kind in spec verify review validation checks-guide follow-pr; do
+  f="$(report_file "$kind")"
   [ -f "$f" ] || continue
   found=1
   printf '\n===== %s — %s =====\n\n' "$kind" "$f"

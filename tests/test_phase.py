@@ -101,42 +101,19 @@ def walks_the_flow(base):
     stamp(repo, "validate")
     assert phase(repo) == "create-pr"
 
-    guide = os.path.join(os.path.dirname(spec), "staging-guide-" + os.path.basename(spec)[len("spec-"):])
-    open(guide, "w").write("# Staging guide\n## Before the merge\n### S1. Deploy\n## After the merge\n### P1. Backfill\n## Results (2026-09-23)\n")
-    assert phase(repo) == "staging (you)", "a Results heading with no results is still pending"
-    two = "# Staging guide\n## Before the merge\n### S1. Deploy\n### S2. Check\n## After the merge\n### P1. Backfill\n"
-    head = "\n## Results (2026-09-23)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
-    for rows, expected, why in [
-            ("| S1 | PASS | [out](e/S1.txt) |\n", "staging (you)", "S2 has no result yet"),
-            ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | NOT RUN | Expected PASS; waiting for access |\n", "staging (you)", "NOT RUN is pending"),
-            ("| S1 | PASS | no FAIL line |\n| S2 | NOT RUN | need to check there is no FAIL line |\n", "staging (you)", "only the Result column counts"),
-            ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | FAIL | [out](e/S2.txt) |\n", "staging: fix", "a FAIL row"),
-            ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n", "staging: no evidence", "no saved files"),
-            ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n", "staging: re-run",
-             "every S step passed, but no staging stamp covers this change")]:
-        if expected == "staging: re-run":
-            evidence = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "evidence")
-            for name in ("S1.txt", "S2.txt"):
-                open(os.path.join(evidence, name), "w").write("$ step\nexit 0\n")
-        open(guide, "w").write(two + head + rows)
-        assert phase(repo) == expected, why
-    passed = two + head + "| S1 | PASS | [out](e/S1.txt) |\n| S2 | PASS | [out](e/S2.txt) |\n"
-    stamp(repo, "staging")
-    assert phase(repo) == "create-pr", "every S step passed for this exact change"
-    os.remove(os.path.join(repo, ".git", "agents", "stamps", "feature~cart", "staging.stamp"))  # the guides below need none
-    open(guide, "w").write("# Staging guide\n## Before the merge\nNothing staging can prove.\n## After the merge\n### P1. Backfill\n")
-    assert phase(repo) == "create-pr", "a guide with steps only after the merge doesn't hold the PR"
-    open(guide, "w").write("# Staging guide\n1. Check the cart\n")
-    assert phase(repo) == "staging (you)"
-    open(guide, "a").write("\n## Results (2026-09-24)\n1. FAIL: total wrong\n")
-    assert phase(repo) == "staging: fix"
-    open(guide, "a").write("\n## Results (2026-09-25)\n1. PASS\n")
-    assert phase(repo) == "create-pr", "only the latest round of results counts"
-    table = "\n## Results (2026-09-26)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
-    open(guide, "a").write(table + "| S1 | PASS | no FAIL line in [output](e/S1.txt) |\n| S2 | FAIL | total wrong: [output](e/S2.txt) |\n")
-    assert phase(repo) == "staging: fix", "a FAIL row"
-    open(guide, "a").write(table + "| S1 | PASS | no FAIL line in [output](e/S1.txt) |\n| S2 | PASS | [output](e/S2.txt) |\n")
-    assert phase(repo) == "create-pr", "a PASS row whose evidence mentions FAIL is still a pass"
+    guide = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "checks-guide")
+    for text, why in [
+            ("# Checks guide\n## Before the merge (optional)\n### M1. Try it on a phone\n## After the merge\n### P1. Backfill\n",
+             "steps the user may run don't hold the PR"),
+            ("# Checks guide\n## Before the merge (optional)\n### M1. Try it on a phone\n\n## Results (2026-10-21)\n\n"
+             "| Step | Result | Evidence |\n|---|---|---|\n| M1 | FAIL | [out](e/M1.txt) |\n", "nor does a FAIL: the user decides")]:
+        open(guide, "w").write(text)
+        assert phase(repo) == "create-pr", why
+    os.remove(guide)
+    legacy = guide.replace("checks-guide-", "staging-guide-")
+    open(legacy, "w").write("# Staging guide\n## Before the merge\n### S1. Deploy\n## After the merge\n### P1. Backfill\n")
+    assert phase(repo) == "create-pr", "an older staging guide, unrun, is only a guide now"
+    os.remove(legacy)
 
     open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
     assert phase(repo) == "build", "an edit after the stamps sends the change back to build"
@@ -145,24 +122,12 @@ def walks_the_flow(base):
     os.makedirs(fake)
     open(os.path.join(fake, "gh"), "w").write('#!/bin/sh\necho "$PR_STATE"\n')
     os.chmod(os.path.join(fake, "gh"), 0o755)
-    open(guide.replace("staging-guide-", "follow-pr-"), "w").write("# follow-pr\n")
+    open(guide.replace("checks-guide-", "follow-pr-"), "w").write("# follow-pr\n")
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "PR_STATE": "OPEN"}
     assert phase(repo, env) == "PR open · redo verify, self-review, validate", "z = 3 is covered by no check"
     for kind in ("verify", "review", "validate"):
         stamp(repo, kind)
-    assert phase(repo, env) == "PR open"
-    open(guide, "w").write(passed)
-    stamp(repo, "staging")
-    open(os.path.join(repo, "app.py"), "a").write("w = 4\n")
-    for kind in ("verify", "review", "validate"):
-        stamp(repo, kind)
-    assert phase(repo, env) == "PR open · redo staging", "w = 4 came after the staging run"
-    for rows in ("| S1 | PASS | [out](e/S1.txt) |\n| S2 | FAIL | [out](e/S2.txt) |\n", "| S1 | PASS | [out](e/S1.txt) |\n"):
-        open(guide, "w").write(two + head + rows)
-        assert phase(repo, env) == "PR open · redo staging", f"a re-run that hasn't passed yet: {rows!r}"
-    open(guide, "w").write(passed)
-    stamp(repo, "staging")
-    assert phase(repo, env) == "PR open"
+    assert phase(repo, env) == "PR open", "a guide's unrun steps are no redo"
     env["PR_STATE"] = "MERGED"
     assert phase(repo, env) == "PR open", "the PR state is cached for a few minutes, not asked on every refresh"
     os.remove(os.path.join(repo, ".git", "agents", "phase", "feature~cart.json"))
@@ -170,7 +135,7 @@ def walks_the_flow(base):
 
 
 def pr_opened_without_follow_pr(base):
-    # A PR opened by hand has no follow-pr report; its staging guide without results showed "staging (you)".
+    # A PR opened by hand has no follow-pr report: its phase comes from GitHub, once the branch is pushed.
     repo = new_repo(base)
     sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
     spec = sh(repo, SPEC_PATH)
@@ -178,14 +143,13 @@ def pr_opened_without_follow_pr(base):
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     for kind in ("verify", "review", "validate"):
         stamp(repo, kind)
-    open(spec.replace("spec-shop-", "staging-guide-shop-"), "w").write("# Staging guide\n1. Check the cart\n")
     fake = os.path.join(base, "bin")
     os.makedirs(fake)
     open(os.path.join(fake, "gh"), "w").write('#!/bin/sh\necho "$PR_STATE"\necho called >> "$GH_CALLS"\n')
     os.chmod(os.path.join(fake, "gh"), 0o755)
     calls = os.path.join(base, "gh-calls")
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "PR_STATE": "OPEN", "GH_CALLS": calls}
-    assert phase(repo, env) == "staging (you)", "a branch that was never pushed has no PR"
+    assert phase(repo, env) == "create-pr", "a branch that was never pushed has no PR"
     assert not os.path.exists(calls), "and gh isn't asked about it"
 
     remote = os.path.join(base, "remote.git")
@@ -195,7 +159,7 @@ def pr_opened_without_follow_pr(base):
     sh(repo, "git", "fetch", "-q", "origin")
     sh(repo, "git", "branch", "-q", "--set-upstream-to", "origin/trunk")
     os.remove(os.path.join(repo, ".git", "agents", "phase", "feature~cart.json"))
-    assert phase(repo, env) == "staging (you)" and not os.path.exists(calls), \
+    assert phase(repo, env) == "create-pr" and not os.path.exists(calls), \
         "tracking origin/trunk, as a branch started from it does, isn't being pushed"
     sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "cart")
     sh(repo, "git", "push", "-q", "-u", "origin", "feature/cart")
@@ -204,8 +168,8 @@ def pr_opened_without_follow_pr(base):
     assert phase(repo, env) == "PR open"
     env["PR_STATE"] = ""
     os.remove(os.path.join(repo, ".git", "agents", "phase", "feature~cart.json"))
-    assert phase(repo, env) == "staging (you)", "a pushed branch with no PR is still in the flow"
-    assert phase(repo, env) == "staging (you)"
+    assert phase(repo, env) == "create-pr", "a pushed branch with no PR is still in the flow"
+    assert phase(repo, env) == "create-pr"
     assert len(open(calls).read().split()) == 2, "no PR is cached like any other answer"
 
 
@@ -229,22 +193,6 @@ def no_spec_is_flagged_not_a_gate(base):
     assert phase(repo) == "validate (no spec)"
 
 
-def staging_hand_off_shows_despite_stale_checks(base):
-    repo = new_repo(base)
-    sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
-    spec = sh(repo, SPEC_PATH)
-    open(spec, "w").write("# Spec\n")
-    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
-    stamp(repo, "review")
-    open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
-    stamp(repo, "validate")
-    open(spec.replace("spec-shop-", "staging-guide-shop-"), "w").write("# Staging guide\n1. Check the cart\n")
-    assert phase(repo) == "staging (you) · redo verify, self-review", \
-        "the session waits on the user's staging test; the stale checks are listed, not shown as the phase"
-    open(os.path.join(repo, "app.py"), "a").write("w = 4\n")
-    assert phase(repo) == "build", "a guide for an older change is not a hand-off"
-
-
 def red_verify_after_self_review_stays_at_the_furthest_step(base):
     repo = new_repo(base)
     sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
@@ -259,8 +207,10 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     sh(repo, "git", "checkout", "-q", "-b", "session/wary-falcon")
     spec = sh(repo, SPEC_PATH)
     open(spec, "w").write("# SHOP-1: the spec\n")
-    guide = spec.replace("spec-shop-", "staging-guide-shop-")
-    open(guide, "w").write("# Staging guide\n")
+    guide = spec.replace("spec-shop-", "checks-guide-shop-")
+    open(guide, "w").write("# Checks guide\n")
+    legacy = spec.replace("spec-shop-", "staging-guide-shop-")
+    open(legacy, "w").write("# Staging guide\n")
     body = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "pr-body")
     assert body == spec.replace("spec-shop-", "pr-body-shop-"), body
     open(body, "w").write("Shop totals round once.\n")
@@ -278,6 +228,7 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     assert os.path.basename(moved) == "spec-shop-shop-1~final.md", moved
     assert open(moved).read() == "# SHOP-1: the spec\n" and not os.path.exists(spec)
     assert os.path.exists(guide.replace("session~wary-falcon", "shop-1~final")), "reports move with the spec"
+    assert os.path.exists(legacy.replace("session~wary-falcon", "shop-1~final")), "an older staging guide moves too"
     assert open(body.replace("session~wary-falcon", "shop-1~final")).read() == "Shop totals round once.\n", \
         "so does the PR description"
     assert not os.path.exists(body)
@@ -405,19 +356,17 @@ def switched_off_phases_leave_the_flow(base):
     assert phase(repo) == "self-review · off: spec, verify", phase(repo)
     switch(repo, "phase off self-review repo")
     switch(repo, "phase off validate global")
-    open(sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "staging-guide"), "w").write(
-        "# Guide\n## Before the merge\n### S1. Deploy\n")
-    assert phase(repo) == "create-pr · off: spec, self-review, validate, staging, verify", phase(repo)
+    assert phase(repo) == "create-pr · off: spec, self-review, validate, verify", phase(repo)
     switch(repo, "phase on verify")
-    assert phase(repo) == "build · off: spec, self-review, validate, staging", phase(repo)
+    assert phase(repo) == "build · off: spec, self-review, validate", phase(repo)
     assert sh(repo, PHASE, "switches").splitlines() == [
-        "spec: off (branch)", "self-review: off (repo)", "validate: off (global)", "staging: off (validate off)"]
+        "spec: off (branch)", "self-review: off (repo)", "validate: off (global)"]
     sh(repo, "git", "checkout", "-q", "trunk")
-    assert sh(repo, PHASE, "switches") == "self-review: off (repo)\nvalidate: off (global)\nstaging: off (validate off)", \
+    assert sh(repo, PHASE, "switches") == "self-review: off (repo)\nvalidate: off (global)", \
         "the default branch has its repo's and the global switches"
 
 
-TESTS = (switched_off_phases_leave_the_flow, status_line_names_the_branch, walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate, staging_hand_off_shows_despite_stale_checks,
+TESTS = (switched_off_phases_leave_the_flow, status_line_names_the_branch, walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate,
          red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
          a_rename_log_that_cannot_be_written_leaves_the_spec_path,
          slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,

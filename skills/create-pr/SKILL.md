@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: Open the pull request once the change is reviewed and validated. Checks that verify, self-review, validate and any staging tests passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly.
+description: Open the pull request once the change is reviewed and validated. Checks that verify, self-review, and validate passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly.
 ---
 
 # Create PR
@@ -16,13 +16,10 @@ Run from the checkout that has the branch. Each line must hold, or the listed st
 | Verify passed on this change | `python3 ~/.agents/hooks/review_stamp.py check --kind verify` | Let the stop hook run verify (or run `python3 ~/.agents/hooks/stop_checks.py verify`), fix what it finds. If only `--kind verify-empty` passes, verify checked nothing: the evidence is the tests you ran instead, named in the description, never "verify passed" |
 | Self-review covers this change | `python3 ~/.agents/hooks/review_stamp.py check` | Run the `self-review` skill |
 | Validated, for behavior changes | `python3 ~/.agents/hooks/review_stamp.py needs-validate && python3 ~/.agents/hooks/review_stamp.py check --kind validate` | Run the `validate` skill |
-| Staging passed for this change, when the guide has steps before the merge | `python3 ~/.agents/hooks/review_stamp.py staging` | Ask the user to run the guide, or the steps the changes since touch, then record the results from its evidence and write the staging stamp (validate, step 7) |
 
-A row whose phase `~/.agents/bin/phase switches` lists (verify, self-review, validate, staging) is skipped: the user switched it off, and `bin/pr-validation` puts that in the description. The shell guard enforces the two stamps on `gh pr create`, and the staging results on `gh pr create` without `--draft` and on `gh pr ready` (`python3 ~/.agents/hooks/review_stamp.py staging` says what's missing); this table catches the rest before you get there.
+A row whose phase `~/.agents/bin/phase switches` lists (verify, self-review, validate) is skipped: the user switched it off, and `bin/pr-validation` puts that in the description. The shell guard enforces the two stamps on `gh pr create`; this table catches the rest before you get there.
 
 The stamps measure the change against `python3 ~/.agents/hooks/review_stamp.py base`, and the guard denies a PR whose target differs from it. When the PR should target another branch (a stacked branch whose parent wasn't detected, or the default branch for one that was), record the target first, `git config branch."$(git branch --show-current)".agentsBase <target>`. When the change measured against it differs, the stamps go stale: re-run the self-review and validate on the change it shows.
-
-One exception: when the repo can only deploy to staging from a PR (its notes say so), open the PR as a draft with the staging results pending, say so in the description, and mark it ready when they pass.
 
 ## 2. Push
 
@@ -32,7 +29,7 @@ git push -u origin "$(git branch --show-current)"
 
 ## 3. Write the title and description
 
-Run the `write-pr-description` skill. Give it the evidence, so the validation section is concrete: `~/.agents/bin/reports` prints the verify, self-review and validation reports and the staging results. Start the validation section from `~/.agents/bin/pr-validation`, which builds it from those reports. Shorten its wording or merge its lines, but keep every verdict and count it prints, and add no result it doesn't show: a count written from memory is how a description ends up claiming more than was tested. Link the issue with the repository's syntax, and give it the spec's `## Decisions` for the approach: a reviewer sees the alternative that was rejected, and why, without asking. Both come from the spec (`~/.agents/skills/spec/path.sh`).
+Run the `write-pr-description` skill. Give it the evidence, so the validation section is concrete: `~/.agents/bin/reports` prints the verify, self-review and validation reports and the checks guide. Start the validation section from `~/.agents/bin/pr-validation`, which builds it from those reports. Shorten its wording or merge its lines, but keep every verdict and count it prints, and add no result it doesn't show: a count written from memory is how a description ends up claiming more than was tested. Link the issue with the repository's syntax, and give it the spec's `## Decisions` for the approach: a reviewer sees the alternative that was rejected, and why, without asking. Both come from the spec (`~/.agents/skills/spec/path.sh`).
 
 Write the description to the branch's own file, at the path `~/.agents/bin/reports path pr-body` prints. Below, `<body file>` is that path, written out (see step 4).
 
@@ -50,7 +47,7 @@ gh pr create --base <base> --head "$(git branch --show-current)" --title "<title
 
 `<base>` is the branch `review_stamp.py base` prints, without its `origin/`, written out: the guard reads the command's text, so a `$(...)` there names no branch, and for a pull request to the kit no description file either. Run it as a command of its own, after the stamps were written and the description file saved in earlier commands: the guard reads both before anything in the command runs.
 
-Add `--draft` only in the exception from step 1. Print the PR URL.
+Print the PR URL.
 
 ## 5. Hand over to follow-pr
 
@@ -69,7 +66,7 @@ It removes a worktree you created and detaches the one the session runs in (the 
 ## Report
 
 ```
-PR:        <url> (ready | draft: <why>)
+PR:        <url>
 Branch:    free (<worktree removed | detached>; `cd <main checkout> && git switch <branch>`) | in the main checkout
-Evidence:  verify <PASS | FAIL | checked nothing: <tests run instead>> · self-review <stamp ok> · validate <stamp ok | not needed: tests/docs only> · staging <all PASS | none needed | pending: draft>
+Evidence:  verify <PASS | FAIL | checked nothing: <tests run instead>> · self-review <stamp ok> · validate <stamp ok | not needed: tests/docs only>
 ```

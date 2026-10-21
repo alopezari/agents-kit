@@ -35,6 +35,13 @@ def write(repo, kind, text):
         fh.write(text)
 
 
+def write_legacy_guide(repo, text):
+    """A guide saved under its name from before checks-guide."""
+    path = sh(repo, REPORTS, "path", "checks-guide").stdout.strip()
+    with open(os.path.join(os.path.dirname(path), os.path.basename(path).replace("checks-guide-", "staging-guide-")), "w") as fh:
+        fh.write(text)
+
+
 def builds_the_section_from_every_report(base):
     repo = new_repo(base)
     evidence = sh(repo, REPORTS, "path", "evidence").stdout.strip()
@@ -53,11 +60,14 @@ def builds_the_section_from_every_report(base):
                               "\n| # | Check | Result | Evidence |\n|---|---|---|---|\n"
                               "| B1 | Admin list loads | NOT RUN | |\n\n"
                               "Not run: B1 needs the payment sandbox.\n")
-    write(repo, "staging-guide", "# Staging guide\n\n## Before the merge\n\n### S1 Pay\n\n### S2 Refund\n\n"
-                                 "## Results (2026-09-30)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
-                                 "| S1 | FAIL | s1.txt |\n| S2 | PASS | s2.txt |\n\n"
-                                 "## Results (2026-10-01)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
-                                 "| S1 | PASS | s1.txt |\n| S2 | PASS | s2.txt |\n")
+    write(repo, "checks-guide", "# Checks guide\n\n## Before the merge (optional)\n\n### M1. Pay on a phone\n\n"
+                                "### M2. Refund in the [sandbox](https://pay.test)\n\n### M3. Try it in Safari\n\n"
+                                "## After the merge\n\n### P1. Backfill the totals\n\n**Where:** the agent, on this machine\n\n"
+                                "### P2. Watch the error log\n\n**Where:** you, on the production host with ssh-agent running\n\n"
+                                "## Results (2026-09-30)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
+                                "| M1 | FAIL | m1.txt |\n| M2 | PASS | m2.txt |\n\n"
+                                "## Results (2026-10-01)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
+                                "| M1 | PASS | m1.txt |\n| M2 | NOT RUN | run it again after the fix |\n| M3 | NOT RUN | no Mac at hand |\n")
     out = sh(repo, PR_VALIDATION)
     assert out.returncode == 0, out
     expected = """## Validation
@@ -72,7 +82,11 @@ def builds_the_section_from_every_report(base):
   - A2 FAIL: A tampered total is rejected, see the log and ~/notes/e2.txt
   - B1 NOT RUN: Admin list loads
   - Not run: B1 needs the payment sandbox.
-- Staging (results of 2026-10-01): S1 PASS, S2 PASS.
+- Before the merge (optional): M1 Pay on a phone: PASS (2026-10-01).
+- Not run before the merge (optional): M2 Refund in the sandbox (you).
+- Not run before the merge (optional): M3 Try it in Safari (you).
+- After the merge: P1 Backfill the totals (agent).
+- After the merge: P2 Watch the error log (you).
 """
     assert out.stdout == expected, out.stdout
 
@@ -110,7 +124,7 @@ def keeps_qualified_verdicts_and_bounded_sections(base):
     write(repo, "validation", f"| # | Check | Result | Evidence |\n|---|---|---|---|\n"
                               f"| A1 | Saved to [the log]({HOME}/work(copy)/acme/log.txt) and [the trace][t] | PASS | a1.txt |\n"
                               "\nNot run:\n## Details\n")
-    write(repo, "staging-guide", "# Staging guide\n\n## Before the merge\n\n### S1 Pay\n\n"
+    write_legacy_guide(repo, "# Staging guide\n\n## Before the merge\n\n### S1 Pay\n\n"
                                  "## Results (2026-09-30)\n\n| Step | Result | Evidence |\n|---|---|---|\n| S1 | PASS | s1.txt |\n\n"
                                  "## Results after the deploy (2026-10-02)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
                                  "| P1 | FAIL | p1.txt |\n")
@@ -118,21 +132,65 @@ def keeps_qualified_verdicts_and_bounded_sections(base):
     assert out.stdout == ("## Validation\n\n- Verify: PASS, but nothing was checked.\n"
                           "- Self-review (risk: low; lenses: correctness): 0 fixed, 0 rejected, 0 open.\n"
                           "- Validation, 1 check: 1 PASS.\n  - A1 PASS: Saved to the log and the trace\n"
-                          "- Staging (results of 2026-09-30): S1 PASS.\n"), out.stdout
-    with open(sh(repo, REPORTS, "path", "staging-guide").stdout.strip(), "a") as fh:
-        fh.write("\n## Results (2026-10-01)")
-    assert sh(repo, PR_VALIDATION).stdout.endswith("- Staging (results of 2026-10-01): no step results.\n"), \
-        "a latest round at the end of the file, still empty, isn't the earlier PASS"
+                          "- Before the merge (optional): S1 Pay: PASS (2026-09-30).\n"
+                          "- After the merge: P1: FAIL (2026-10-02).\n"), "an older staging guide's S steps count as M: " + out.stdout
+    with open(sh(repo, REPORTS, "path", "checks-guide").stdout.strip(), "a") as fh:
+        fh.write("\n## Results (2026-10-03)")
+    assert "S1 Pay: PASS (2026-09-30)" in sh(repo, PR_VALIDATION).stdout, "an empty later round leaves the last result"
+    listed, brief = sh(repo, REPORTS).stdout, sh(repo, REPORTS, "brief").stdout
+    assert "### S1 Pay" in listed and "staging-guide-" in brief, "the listing and the brief show an older guide: " + brief
+    legacy = sh(repo, REPORTS, "path", "checks-guide").stdout.strip()
+    with open(legacy.replace("/staging-guide-", "/checks-guide-"), "w") as fh:
+        fh.write("# Checks guide\n\n## After the merge\n\n### P1. Backfill\n")
+    out = sh(repo, PR_VALIDATION).stdout
+    assert "staging-guide-" in legacy and "S1" not in out and "- After the merge: P1 Backfill (you).\n" in out, "a new guide wins over the older one: " + out
+    assert "### S1 Pay" not in sh(repo, REPORTS).stdout, "in the listing too"
 
 
-def a_guide_with_only_steps_after_the_merge_claims_no_pending_staging(base):
+def a_guide_with_only_steps_after_the_merge_lists_them(base):
     repo = new_repo(base)
     write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
     write(repo, "review", "Self-review (risk: low; lenses: correctness)\nFixed:\nRejected: none.\n")
-    write(repo, "staging-guide", "# Checks after the merge\n\n## Before the merge\n\nNothing here.\n\n"
-                                 "## After the merge\n\n### P1. Load the job\n\n### P2. One full run\n")
+    write(repo, "checks-guide", "# Checks after the merge\n\n## Before the merge (optional)\n\nNothing here.\n\n"
+                                "## After the merge\n\n### P1. Load the job\n\n- **Where:** the agent, on this machine\n\n"
+                                "### P2. One full run\n")
     out = sh(repo, PR_VALIDATION)
-    assert out.stdout.endswith("- Staging: none before the merge; after it: P1, P2.\n"), out.stdout
+    assert out.stdout.endswith("- After the merge: P1 Load the job (agent).\n- After the merge: P2 One full run (you).\n"), \
+        out.stdout
+    write(repo, "checks-guide", "# Checks guide\n\n## After the merge\n\n### P1. Load the job\n\nWhere: the agent, on this machine\n\n"
+                                "### P2. Restart it\n\n**Where:** you, in ~/.agents\n\n"
+                                "## Before the merge (optional)\n\n### M1. Pay on a phone\n\n"
+                                "## Results (2026-10-01)\n\n| Step | Result | Evidence |\n|---|---|---|\n"
+                                "| P1a | PASS | p1a.txt |\n| P1b | PASS | p1b.txt |\n| P2a | PASS | p2a.txt |\n| P2b | FAIL | p2b.txt |\n")
+    out = sh(repo, PR_VALIDATION)
+    assert out.stdout.endswith("- Not run before the merge (optional): M1 Pay on a phone (you).\n"
+                               "- After the merge: P1 Load the job: PASS (2026-10-01).\n"
+                               "- After the merge: P2 Restart it: FAIL (2026-10-01).\n"), \
+        "sub-steps add up to their step, any FAIL failing it, and the steps before the merge come first: " + out.stdout
+    sh(repo, "sh", "-c", f"printf '| P1 | NOT RUN | |\\n' >> '{sh(repo, REPORTS, 'path', 'checks-guide').stdout.strip()}'")
+    assert "- After the merge: P1 Load the job (agent).\n" in sh(repo, PR_VALIDATION).stdout, "a plain Where: names its owner too"
+    sh(repo, "sh", "-c", f"printf '\\n## Results (2026-10-02)\\n\\n| Step | Result | Evidence |\\n|---|---|---|\\n| P2b | PASS | p2b.txt |\\n' >> '{sh(repo, REPORTS, 'path', 'checks-guide').stdout.strip()}'")
+    assert "- After the merge: P2 Restart it: PASS (2026-10-02).\n" in sh(repo, PR_VALIDATION).stdout, "a rerun sub-step replaces its own row"
+    sh(repo, "sh", "-c", f"printf '\\n## Results (2026-10-03)\\n\\n| Step | Result | Evidence |\\n|---|---|---|\\n| P2a | FAIL | p2a.txt |\\n| P2b | PASS | p2b.txt |\\n' >> '{sh(repo, REPORTS, 'path', 'checks-guide').stdout.strip()}'")
+    sh(repo, "sh", "-c", f"printf '\\n## Results (2026-10-04)\\n\\n| Step | Result | Evidence |\\n|---|---|---|\\n| P2b | PASS | p2b.txt |\\n' >> '{sh(repo, REPORTS, 'path', 'checks-guide').stdout.strip()}'")
+    assert "- After the merge: P2 Restart it: FAIL (2026-10-04).\n" in sh(repo, PR_VALIDATION).stdout, \
+        "a sibling's FAIL from an earlier table still fails the step"
+
+
+def says_when_the_guide_has_no_steps_or_cannot_be_read(base):
+    repo = new_repo(base)
+    write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
+    write(repo, "review", "Self-review (risk: low; lenses: correctness)\nFixed:\nRejected: none.\n")
+    assert "guide" not in sh(repo, PR_VALIDATION).stdout.lower(), "no guide: nothing to say"
+    write(repo, "checks-guide", "# Checks guide\n\nEverything ran locally.\n")
+    out = sh(repo, PR_VALIDATION)
+    assert out.returncode == 0 and out.stdout.endswith("- Checks guide: no steps.\n"), out.stdout
+    guide = sh(repo, REPORTS, "path", "checks-guide").stdout.strip()
+    os.remove(guide)
+    os.makedirs(guide)
+    out = sh(repo, PR_VALIDATION)
+    assert out.returncode == 0 and "- Checks guide unreadable: " in out.stdout and "Is a directory" in out.stdout, \
+        "visible, and it doesn't stop the section: " + out.stdout + out.stderr
 
 
 def counts_findings_listed_under_their_label(base):
@@ -183,8 +241,9 @@ def names_the_phases_the_user_switched_off(base):
         out = section()
         assert out.returncode == 0, out.stderr
         for line in ("- Verify: ", "- Self-review: skipped by the user (branch).", "- Validate: skipped by the user (global).",
-                     "- Staging: skipped by the user (validate off).", "- Second-model: skipped by the user (repo)."):
+                     "- Second-model: skipped by the user (repo)."):
             assert out.stdout.count(line) == 1, (line, out.stdout)
+        assert "Staging" not in out.stdout, out.stdout
         write(repo, "validation", "| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | old | + | PASS | a |\n")
         os.remove(sh(repo, REPORTS, "path", "verify").stdout.strip())
         assert section().returncode == 1, "verify's report is missing and its phase is on"
@@ -192,6 +251,8 @@ def names_the_phases_the_user_switched_off(base):
         out = section()
         assert out.returncode == 0 and "- Verify: skipped by the user (branch)." in out.stdout, out.stdout + out.stderr
         assert "A1" not in out.stdout and "1 PASS" not in out.stdout, f"a report from before the switch isn't shown: {out.stdout}"
+        write(repo, "checks-guide", "# Checks guide\n\n## After the merge\n\n### P1. Backfill\n")
+        assert "P1" not in section().stdout, "nor the checks guide validate wrote before it was switched off"
         switch("phase off claude-review global")
         assert "Claude-review" not in section().stdout, "Codex reviewed this Claude Code change: nothing was skipped"
         write(repo, "review", "Fixed:     x — a.py:1\nNot run:   cross-model, codex-review switched off by the user — /tmp/x\n")
@@ -207,7 +268,7 @@ def names_the_phases_the_user_switched_off(base):
 for test in (names_the_phases_the_user_switched_off, builds_the_section_from_every_report, counts_open_findings_and_skips_absent_reports,
              lists_pre_existing_findings_only_when_there_are_some,
              keeps_qualified_verdicts_and_bounded_sections,
-             a_guide_with_only_steps_after_the_merge_claims_no_pending_staging,
+             a_guide_with_only_steps_after_the_merge_lists_them, says_when_the_guide_has_no_steps_or_cannot_be_read,
              counts_findings_listed_under_their_label, a_missing_verify_or_review_fails_naming_it):
     base = tempfile.mkdtemp(prefix="agents-test-pr-validation-")
     try:

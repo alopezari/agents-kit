@@ -297,24 +297,21 @@ def render():
     w("  W -->|every MCP call| GM{guard_mcp}\n  GM -->|shared write without approval| B")
     w("  W -->|every file edit| PE[post_edit: syntax check]\n  PE -->|syntax error| W")
     w("  W -->|end of turn| SC{stop_checks + verify}\n  SC -->|problem found, first time| W\n  SC -->|clean| SR[self-review skill: lenses + second model]")
-    w("  SR --> V[validate skill: suite + local checks + staging guide]")
-    w("  V -->|manual tests needed| HO[Branch handed over: you run the staging guide]\n  HO -->|a step fails| W")
-    w("  HO -->|all steps pass| CP\n  V -->|no manual tests| CP[create-pr skill: evidence check, push, write-pr-description]")
+    w("  SR --> V[validate skill: suite + local checks + checks guide for what it couldn't run]")
+    w("  V --> CP[create-pr skill: evidence check, push, write-pr-description]")
     w("  CP --> PR{gh pr create}\n  PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]")
     w("  PR -->|stamped| FP[follow-pr skill: first run waits for CI and bot reviews; later runs on demand]\n  FP -->|fix needed| W")
-    w("  FP -->|ready to merge| MG{You merge}\n  MG --> SH[ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]\n```\n")
+    w("  FP -->|CI green, reviews answered| MG{You run more checks or merge}\n  MG -->|a check fails| W\n  MG --> SH[ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]\n```\n")
     w("The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up "
       "in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a "
       "stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Merging "
-      "the default branch keeps the self-review, validate and staging stamps when the branch's own diff is unchanged, "
+      "the default branch keeps the self-review and validate stamps when the branch's own diff is unchanged, "
       "and invalidates verify's: the tests run again on the merged code. Only "
       "running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no "
       "check (no `ran:` line) leaves a separate stamp, and the status line says \"verify checked nothing\".\n")
-    w("When the change needs manual tests on staging, `validate` ends by handing you the branch: if the agent worked in "
-      "a git worktree, it detaches it from the branch (only once everything is committed and pushed) so you can switch "
-      "to the branch in your main checkout, and keeps the directory its session runs in. The spec, the reports, the staging guide and the review stamps live in the repository's "
-      "shared `.git/agents/`, so they survive the hand-off: run `bin/reports` there. The PR is opened after you report "
-      "the staging results, so its description carries them.\n")
+    w("Nothing waits for the checks guide: the PR description lists each of its steps with who runs it, or with its "
+      "result once one is recorded, and you decide whether to run the optional ones before the merge. When you run a step and say so, the agent reads its evidence "
+      "and adds the result to the guide, so the PR description shows it.\n")
 
     w("## Hooks\n")
     w("| Harness | Event | Applies to | Script | Timeout (s) |\n|---|---|---|---|---|")
@@ -335,10 +332,8 @@ def render():
     w("- Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.")
     w("- `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change, and "
       "while the PR's target isn't the base the stamps measured against (`review_stamp.py base`).")
-    w("- `gh pr ready`, and `gh pr create` without `--draft`, until every staging step before the merge has a PASS "
-      "backed by saved evidence, recorded for the current change (`review_stamp.py write --kind staging`).")
-    w("- The last two lift for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, validate, "
-      "staging; `bin/phase switches`); no other rule here can be switched off.\n")
+    w("- The last one lifts for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, "
+      "validate; `bin/phase switches`); no other rule here can be switched off.\n")
     w("It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your "
       "approval: naming the service in your message approves it until your next one, as does saying yes when the "
       "agent's last message asked to write to it by name, and otherwise you create a "
