@@ -178,12 +178,16 @@ def diff_path(field):
     return ast.literal_eval(field) if field.startswith('"') else field
 
 
+# The parser reads paths after a/ and b/, which diff.noprefix or diff.mnemonicPrefix in the user's config would change.
+DIFF_PREFIXES = ("--src-prefix=a/", "--dst-prefix=b/")
+
+
 def collect(rng, merge_base):
     if rng:
-        diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", rng)
+        diff = git("-c", "core.quotePath=false", "diff", *DIFF_PREFIXES, "--unified=0", "--no-color", rng)
         untracked = []
     else:
-        diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", merge_base)
+        diff = git("-c", "core.quotePath=false", "diff", *DIFF_PREFIXES, "--unified=0", "--no-color", merge_base)
         untracked = [p for p in git("ls-files", "-z", "--others", "--exclude-standard").split("\0") if p]
     data_files = [p for p in untracked if DATA_FILE.search(p)]
     files, added, removed, renamed_from = {}, [], [], {}
@@ -217,7 +221,7 @@ def collect(rng, merge_base):
             added.append((path, line[1:]))
         elif line.startswith("-"):
             removed.append((old_path, line[1:]))
-    for p in (p for p in untracked if p not in data_files):
+    for p in (p for p in untracked if not DATA_FILE.search(p)):
         try:
             lines = open(p, errors="ignore").read().splitlines()
         except OSError:
@@ -347,18 +351,18 @@ def triage(rng=None):
                "untracked_data_files": len(data_files), "untracked_data_sample": data_files[:SKIPPED_SAMPLE]}
     reasons, lenses, tests = [], {"correctness": ["always"]}, {"unit (verify)": ["always"]}
 
-    def hits(pattern, lines=code_added, limit=3):
+    def hits(pattern, lines=code_added, limit=3, where=""):
         rx = re.compile(pattern, re.I)
         found = []
         for p, l in lines:
             m = next((m for m in rx.finditer(l) if not (m.group(0).lower() == "checkout" and GIT_CHECKOUT.search(l))), None)
             if m and len(found) < limit:
-                found.append(f"{p}: `{m.group(0)}`")
+                found.append(f"{p}{where}: `{m.group(0)}`")
         return found
 
     high = []
     for label, rx in HIGH_RISK.items():
-        h = hits(rx, limit=1) or [found.replace(": `", ", removed: `", 1) for found in hits(rx, code_removed, limit=1)]
+        h = hits(rx, limit=1) or hits(rx, code_removed, limit=1, where=", removed")
         if h:
             high.append(f"{label} ({h[0]})")
     if changed_lines > 400:
@@ -495,6 +499,11 @@ def lens_briefs():
     return [{"key": key_of[title], "title": title, "brief": body.strip()} for title, body in zip(sections[::2], sections[1::2])]
 
 
+def printable(path):
+    """A path on one line of text output: a control character, legal in a file name, is shown escaped."""
+    return re.sub(r"[\x00-\x1f\x7f]", lambda m: repr(m.group(0))[1:-1], path)
+
+
 def main():
     args = sys.argv[1:]
     if "--lens-briefs" in args:
@@ -521,7 +530,7 @@ def main():
     parts = [f"{comments} comment line{'s' * (comments != 1)}"] if comments else []
     if data:
         more = f" and {data - SKIPPED_SAMPLE} more" if data > SKIPPED_SAMPLE else ""
-        parts.append(f"{data} untracked data file{'s' * (data != 1)} ({', '.join(skipped['untracked_data_sample'])}{more})")
+        parts.append(f"{data} untracked data file{'s' * (data != 1)} ({', '.join(map(printable, skipped['untracked_data_sample']))}{more})")
     if parts:
         print(f"Skipped: {'; '.join(parts)}")
     for r in result["reasons"]:

@@ -806,9 +806,15 @@ with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
     git("commit", "-q", "-m", "base")
     open(os.path.join(repo, "auth.php"), "w").write("<?php\nsave();\n")
     result = json.loads(subprocess.run([TRIAGE, "--json"], cwd=repo, capture_output=True, text=True, timeout=60).stdout)
+    os.remove(os.path.join(repo, "auth.php"))
+    git("config", "diff.noprefix", "true")
+    deleted = json.loads(subprocess.run([TRIAGE, "--json"], cwd=repo, capture_output=True, text=True, timeout=60).stdout)
 ok = labels(result) == {"auth or permissions"}
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} an uncommitted deletion of an auth check raises auth or permissions: {result['reasons']}")
+ok = labels(deleted) == {"auth or permissions"} and deleted["files"] == 1
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} an uncommitted file deletion counts, whatever diff.noprefix says: {deleted['files']} {deleted['reasons']}")
 body = "".join(f"\tstep_{n}();\n" for n in range(20))
 result = triage_change({"auth.php": "<?php\nif ( current_user_can( 'edit' ) ) {\n" + body + "}\n"},
                        {"auth.php": None, "docs/auth.md": "<?php\n" + body + "}\n"})
@@ -850,6 +856,16 @@ ok = (skipped.get("comment_lines"), skipped.get("untracked_data_files"), sorted(
     1, 2, ["err.log", "stream.jsonl"])
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} --json reports what was skipped: {skipped}")
+result = triage_untracked({f"run{n}.log": "x\n" for n in range(7)})
+ok = (result["skipped"]["untracked_data_files"], len(result["skipped"]["untracked_data_sample"])) == (7, 5)
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} --json names at most 5 of 7 skipped logs: {result['skipped']}")
+# A removed comment counts as skipped; a comment in a test or doc file isn't one triage would have read.
+result = triage_change({"auth.php": "<?php\n// old note\nsave();\n", "tests/test_a.py": "# old\nx = 1\n"},
+                       {"auth.php": "<?php\nsave();\n", "tests/test_a.py": "x = 1\n", "docs/a.py": "# new\n"})
+ok = result["skipped"]["comment_lines"] == 1
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} a removed comment is counted, test and doc comments aren't: {result['skipped']}")
 
 
 def triage_text(untracked):
@@ -868,11 +884,14 @@ def triage_text(untracked):
 
 many = {f"run{n}.log": "x\n" for n in range(7)}
 for case, untracked, expected in [
-        ("logs and a comment", {**many, "a.py": "# wp_cron later\nx = 1\n"}, "Skipped: 1 comment line; 7 untracked data files ("),
+        ("logs and a comment", {**many, "a.py": "# wp_cron later\nx = 1\n"},
+         "Skipped: 1 comment line; 7 untracked data files (run0.log, run1.log, run2.log, run3.log, run4.log and 2 more)"),
+        ("comments only", {"a.py": "# one\n# two\nx = 1\n"}, "Skipped: 2 comment lines"),
+        ("one log only", {"run\n2026.log": "x\n"}, "Skipped: 1 untracked data file (run\\n2026.log)"),
         ("nothing skipped", {"a.py": "x = 1\n"}, None)]:
     out = triage_text(untracked)
-    line = next((l for l in out.splitlines() if l.startswith("Skipped:")), None)
-    ok = line is None if expected is None else bool(line) and line.startswith(expected) and line.endswith("and 2 more)")
+    lines = [l for l in out.splitlines() if l.startswith("Skipped:")]
+    ok = lines == ([] if expected is None else [expected])
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} text output with {case}: {line!r}")
 sys.exit(fail)
