@@ -7,7 +7,7 @@
   triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/kit-review/lenses.md
 
 The kit-review and kit-validate skills run the lenses and tests this selects. Every rule is a regex
-over changed paths or added code lines (a whole-line comment isn't one), so a selection can always be traced back to its signal. Without --range, the
+over changed paths or added code lines (a whole-line comment isn't one; the high-risk labels read removed ones too), so a selection can always be traced back to its signal. Without --range, the
 branch's spec, by its Risk line, can raise the diff's tier, never lower it: the tier is the higher of the two.
 """
 import ast
@@ -164,6 +164,7 @@ def nested_quantifier(line):
 BUDGET = {"low": "< 5 min", "standard": "<= 20 min", "high": "<= 45 min"}
 TIERS = ("low", "standard", "high")
 SPEC_LOOKUP_SECS = 10
+SKIPPED_SAMPLE = 5
 
 
 def git(*args, cwd=None):
@@ -177,18 +178,23 @@ def diff_path(field):
     return ast.literal_eval(field) if field.startswith('"') else field
 
 
+# The parser reads paths after a/ and b/, which diff.noprefix or diff.mnemonicPrefix in the user's config would change.
+DIFF_PREFIXES = ("--src-prefix=a/", "--dst-prefix=b/")
+
+
 def collect(rng, merge_base):
     if rng:
-        diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", rng)
+        diff = git("-c", "core.quotePath=false", "diff", *DIFF_PREFIXES, "--unified=0", "--no-color", rng)
         untracked = []
     else:
-        diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", merge_base)
-        untracked = [p for p in git("ls-files", "-z", "--others", "--exclude-standard").split("\0") if p and not DATA_FILE.search(p)]
-    files, added, removed, renamed_from = {}, [], 0, {}
-    path, header, source = None, False, None
+        diff = git("-c", "core.quotePath=false", "diff", *DIFF_PREFIXES, "--unified=0", "--no-color", merge_base)
+        untracked = [p for p in git("ls-files", "-z", "--others", "--exclude-standard").split("\0") if p]
+    data_files = [p for p in untracked if DATA_FILE.search(p)]
+    files, added, removed, renamed_from = {}, [], [], {}
+    path, old_path, header, source = None, None, False, None
     for line in diff.split("\n"):  # not splitlines(): an unquoted path may hold U+2028
         if line.startswith("diff --git "):
-            path, header = None, True
+            path, old_path, header = None, None, True
         elif line.startswith("@@"):
             header = False
         elif header and line.startswith("rename from "):  # a pure rename has no ---/+++ lines at all
@@ -205,23 +211,24 @@ def collect(rng, merge_base):
                 files.setdefault(path, 0)
         elif header and line.startswith("--- "):
             old = diff_path(line[4:])
-            if old.startswith("a/"):
-                files.setdefault(old[2:], 0)
+            old_path = old[2:] if old.startswith("a/") else None
+            if old_path:
+                files.setdefault(old_path, 0)
         elif header:
             continue
         elif path and line.startswith("+"):
             files[path] += 1
             added.append((path, line[1:]))
         elif line.startswith("-"):
-            removed += 1
-    for p in untracked:
+            removed.append((old_path, line[1:]))
+    for p in (p for p in untracked if not DATA_FILE.search(p)):
         try:
             lines = open(p, errors="ignore").read().splitlines()
         except OSError:
             continue
         files[p] = len(lines)
         added += [(p, l) for l in lines]
-    return files, added, removed, renamed_from
+    return files, added, removed, renamed_from, data_files
 
 
 # Files that declare dependencies, by name. deps.txt is the kit's own list of programs.
@@ -331,25 +338,33 @@ def php_min():
 def triage(rng=None):
     base, base_why = (None, "") if rng else branch_base()
     merge_base = None if rng else git("merge-base", "HEAD", base).strip() or "HEAD"
-    files, added, removed, renamed_from = collect(rng, merge_base)
-    changed_lines = sum(files.values()) + removed
+    files, added, removed, renamed_from, data_files = collect(rng, merge_base)
+    changed_lines = sum(files.values()) + len(removed)
     behavior = [p for p in files if not TEST_OR_DOC.search(p)]
     style_only = bool(behavior) and all(STYLE_FILE.search(p) for p in behavior)
-    code_added = [(p, l) for p, l in added if not TEST_OR_DOC.search(p) and not is_comment(p, l)]
+    behavior_added = [(p, l) for p, l in added if not TEST_OR_DOC.search(p)]
+    code_added = [(p, l) for p, l in behavior_added if not is_comment(p, l)]
+    # Deleting or commenting out a risk check is as risky as adding one; only the high-risk labels read these.
+    behavior_removed = [(p, l) for p, l in removed if p and not TEST_OR_DOC.search(p)]
+    code_removed = [(p, l) for p, l in behavior_removed if not is_comment(p, l)]
+    skipped = {"comment_lines": len(behavior_added) - len(code_added) + len(behavior_removed) - len(code_removed),
+               "untracked_data_files": len(data_files), "untracked_data_sample": data_files[:SKIPPED_SAMPLE]}
     reasons, lenses, tests = [], {"correctness": ["always"]}, {"unit (verify)": ["always"]}
 
-    def hits(pattern, lines=code_added, limit=3):
+    def hits(pattern, lines=code_added, limit=3, where=""):
         rx = re.compile(pattern, re.I)
         found = []
         for p, l in lines:
             m = next((m for m in rx.finditer(l) if not (m.group(0).lower() == "checkout" and GIT_CHECKOUT.search(l))), None)
-            if m and len(found) < limit:
-                found.append(f"{p}: `{m.group(0)}`")
+            if m:
+                found.append(f"{p}{where}: `{m.group(0)}`")
+                if len(found) == limit:
+                    break
         return found
 
     high = []
     for label, rx in HIGH_RISK.items():
-        h = hits(rx, limit=1)
+        h = hits(rx, limit=1) or hits(rx, code_removed, limit=1, where=", removed")
         if h:
             high.append(f"{label} ({h[0]})")
     if changed_lines > 400:
@@ -412,7 +427,7 @@ def triage(rng=None):
 
     return {"tier": tier, "spec_tier": spec_tier, "diff_tier": diff_tier, "spec_reason": spec_reason, "spec_note": spec_note,
             "budget": BUDGET[tier], "changed_lines": changed_lines, "files": len(files),
-            "reasons": reasons, "lenses": lenses, "tests": tests,
+            "reasons": reasons, "lenses": lenses, "tests": tests, "skipped": skipped,
             "cross_model": cross_model(tier), "base": base, "base_why": base_why}
 
 
@@ -486,6 +501,11 @@ def lens_briefs():
     return [{"key": key_of[title], "title": title, "brief": body.strip()} for title, body in zip(sections[::2], sections[1::2])]
 
 
+def printable(path):
+    """A path on one line of text output: a control character, legal in a file name, is shown escaped."""
+    return re.sub(r"[\x00-\x1f\x7f]", lambda m: repr(m.group(0))[1:-1], path)
+
+
 def main():
     args = sys.argv[1:]
     if "--lens-briefs" in args:
@@ -507,6 +527,14 @@ def main():
               f"Spec's reason: {result['spec_reason']}")
     if result["base_why"]:
         print(f"Base: {result['base']} ({result['base_why']})")
+    skipped = result["skipped"]
+    comments, data = skipped["comment_lines"], skipped["untracked_data_files"]
+    parts = [f"{comments} comment line{'s' * (comments != 1)}"] if comments else []
+    if data:
+        more = f" and {data - SKIPPED_SAMPLE} more" if data > SKIPPED_SAMPLE else ""
+        parts.append(f"{data} untracked data file{'s' * (data != 1)} ({', '.join(map(printable, skipped['untracked_data_sample']))}{more})")
+    if parts:
+        print(f"Skipped: {'; '.join(parts)}")
     for r in result["reasons"]:
         print(f"  high-risk signal: {r}")
     print("Review lenses:")
