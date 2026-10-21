@@ -14,14 +14,15 @@ import time
 
 TRIAGE = os.path.expanduser("~/.agents/bin/triage")
 GIT_SENSE = ["cwd = pr_checkout(command, cwd)", "git checkout -b fix", "- uses: actions/checkout@v4",
-             "# the main checkout serves the stack", "for path in known_checkouts():", "git_checkout(command, cwd)",
+             "$msg = 'the main checkout serves the stack';", "for path in known_checkouts():", "git_checkout(command, cwd)",
              "def pr_checkout_unknown(command, payload):", "repo = phase_switches.checkout(os.getcwd())[0]",
              "def checkout(cwd, timeout=5):", "in_checkout(root, review_stamp.fingerprint)",
              "check_checkout(root, session, payload)", "const head = await checkout($, cwd);"]
-# A comment about a checkout is not a checkout: "// Redirect to the checkout page" and "// Render the checkout-page" were
-# shop samples until comments stopped counting (B3), and are now among the comments that must not fire.
+# "// Redirect to the checkout page" and "// Render the checkout-page" are comments since B3, which must not fire: their
+# code versions stay here, so the checkout-page exception to GIT_CHECKOUT keeps a test.
 SHOP_SENSE = ["return wc_get_checkout_url();", "'wc-blocks-checkout',", "if ( is_checkout() ) {",
-              "git checkout-free refund( $order );",
+              "git checkout-free refund( $order );", "echo 'Redirect to the checkout page';",
+              "echo 'Render the checkout-page';",
               "function remember_checkout_details() { return get_checkout_url(); }", "process_checkout(cart, cwd)",
               "renderCheckout(root);", "goToCheckout(path)", "$this->checkout(path)", "router.push(checkout(path))",
               "new Checkout(root, opts)", "cart.checkout(root)", "self.checkout(cwd, order)", "return checkout(root, cart);",
@@ -636,9 +637,10 @@ COMMENTS = [("auth.js", "// guards with current_user_can( first", "if (current_u
             ("App.vue", "<!-- current_user_can( -->", "if (current_user_can(1)) {}", "auth or permissions")]
 for path, comment, code, label in COMMENTS:
     quiet, loud = triage_change({}, {path: comment + "\n"}), triage_change({}, {path: code + "\n"})
-    ok = not quiet["reasons"] and label in labels(loud)
+    signalled = sorted(set(quiet["lenses"]) & {"security", "performance", "compatibility", "operability", "data-privacy"})
+    ok = not quiet["reasons"] and not signalled and label in labels(loud)
     fail |= not ok
-    print(f"{'ok  ' if ok else 'FAIL'} {path}: a comment raises nothing ({quiet['reasons']}), code raises {label} ({loud['reasons']})")
+    print(f"{'ok  ' if ok else 'FAIL'} {path}: a comment raises nothing ({quiet['reasons']}, lenses {signalled}), code raises {label} ({loud['reasons']})")
 # A comment prefix that is code in that language stays code.
 for path, code, label in [("pay.c", "#define CHARGE stripe_charge(x)", "payments or orders"),
                           ("pay.c", "*payment_total = 0;", "payments or orders"), ("pay.c", "--payment_count;", "payments or orders"),
@@ -651,7 +653,9 @@ for path, code, label in [("pay.c", "#define CHARGE stripe_charge(x)", "payments
                           ("t.php", "/* translators: %s: name */ if ( current_user_can( 'x' ) ) {", "auth or permissions"),
                           ("t.php", "<!-- debug: <?php current_user_can( 'x' ); ?> -->", "auth or permissions"),
                           ("page.html", "<!-- wp:woocommerce/checkout -->", "payments or orders"),
-                          ("cart.php", '<!-- wp:woocommerce/checkout {"align":"wide"} /-->', "payments or orders")]:
+                          ("cart.php", '<!-- wp:woocommerce/checkout {"align":"wide"} /-->', "payments or orders"),
+                          ("mail.rb", '  #{process_payment(order)} was charged"', "payments or orders"),
+                          ("cart.php", "<!-- <?php echo wc_get_checkout_url(); ?> -->", "payments or orders")]:
     result = triage_change({}, {path: code + "\n"})
     ok = label in labels(result)
     fail |= not ok

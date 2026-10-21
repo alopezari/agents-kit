@@ -27,12 +27,12 @@ DATA_FILE = re.compile(r"\.(jsonl|ndjson|log|out|err)$", re.I)
 UI_FILE = re.compile(r"\.(jsx?|tsx?|vue|svelte|astro|css|scss|sass|less|html|twig|mustache)$|(^|/)(templates?|views?|blocks?|components?)/", re.I)
 
 # A whole-line comment, told by the file's language. Each language lists only its own prefixes, since another's is
-# code there: C's #define and --n, PHP's #[Attribute], a shebang.
+# code there: C's #define and --n, PHP's #[Attribute], a shebang, Ruby's #{} in a string.
 SLASH_COMMENT = r"//|/\*|\*(?=\s|/|$)"
 COMMENT_BY_EXT = {ext: re.compile(rf"\s*(?:{prefixes})") for exts, prefixes in [
     ("c h cc cpp hpp cs java kt swift go rs js jsx mjs cjs ts tsx mts cts css scss less dart scala", SLASH_COMMENT),
     ("php", rf"{SLASH_COMMENT}|#(?![!\[])|<!--"),
-    ("sh bash zsh py rb pl yml yaml toml r ps1 conf", "#(?!!)"), ("", "#(?!!)"),  # "": scripts, Makefile, Dockerfile
+    ("sh bash zsh py rb pl yml yaml toml r ps1 conf", "#(?![!{])"), ("", "#(?![!{])"),  # "": Makefile, Dockerfile
     ("sql lua hs", "--"),
     ("html htm xml svg twig mustache hbs erb", "<!--"), ("vue svelte astro", f"{SLASH_COMMENT}|<!--"),
 ] for ext in (exts.split() or [""])}
