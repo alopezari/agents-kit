@@ -649,7 +649,7 @@ for path, code, label in [("pay.c", "#define CHARGE stripe_charge(x)", "payments
                           ("pay.c", "*payment_total = 0;", "payments or orders"), ("pay.c", "--payment_count;", "payments or orders"),
                           ("attr.php", "#[Route('/x')] function f() { process_payment(1); }", "payments or orders"),
                           ("tool", "#!/usr/local/bin/stripe-cli", "payments or orders"),
-                          ("pay.c", "*payment = value;", "payments or orders"),
+                          ("pay.c", "*payment = value;", "payments or orders"), ("pay.c", "*payment = charge(order,", "payments or orders"),
                           ("pay.c", "* result = process_payment(order);", "payments or orders"),
                           ("gen.js", "* process_payment(order) { return charge(order); }", "payments or orders"),
                           ("pay.c", "*/ int login_count;", "auth or permissions"),
