@@ -106,8 +106,8 @@ prompt="$({ gh issue view <n> --comments && cat <notes on linked PRs and threads
 
 For a Linear issue, or a request that only exists in the conversation, write all of it to a file in your scratch directory and redirect that in instead. If the script fails, fix what it says (usually no spec yet) rather than sending the reviewer an empty prompt. Then:
 
-- **Running on a Claude model →** Codex: `codex exec --ephemeral --skip-git-repo-check -s read-only - <<<"$prompt"`
-- **Running on an OpenAI model →** Claude: `claude -p --allowedTools "Read,Grep,Glob" --disallowedTools "Edit,Write" <<<"$prompt"`
+- **Running on a Claude model →** Codex: `codex exec --ephemeral --skip-git-repo-check -s read-only -m gpt-6.1-sol -c model_reasoning_effort=high - <<<"$prompt"`
+- **Running on an OpenAI model →** Claude: `claude -p --model opus --effort high --allowedTools "Read,Grep,Glob" --disallowedTools "Edit,Write" <<<"$prompt"`
 
 Verify each finding as the review does: **confirmed** (the request says so, quoted) → fix the spec; **rejected** → one line on why; **uncertain** → an open question for the user. Then run the lint again, and log the reading so the monthly job can weigh it:
 
@@ -125,6 +125,6 @@ If the other CLI isn't installed or fails, say so when you show the spec and go 
 
 ## Afterwards
 
-Build test first: for each criterion whose `verify:` can be an automated test, write that test before the code and run it. It must fail for the reason the criterion names, not on a missing symbol or a setup error; then implement until it passes. Keep the failing output: the review's Tests lens asks for it.
+In Claude Code with the kit plugin, the build goes to `kit:build-<tier>` for the Risk line's tier (AGENTS.md → Pull requests); it follows the same rule. Build test first: for each criterion whose `verify:` can be an automated test, write that test before the code and run it. It must fail for the reason the criterion names, not on a missing symbol or a setup error; then implement until it passes. Keep the failing output: the review's Tests lens asks for it.
 
 The `kit-review` skill reads this spec. Its Correctness lens checks every acceptance criterion against the diff, and every change in the diff against the criteria, and the PR description can list them as what was verified. If the scope changes while building, update the spec first.

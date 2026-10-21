@@ -659,6 +659,14 @@ const LENSES = [
   { key: 'ux-a11y-i18n', title: 'UX, accessibility and i18n', brief: 'You are reviewing what a person sees.' },
 ]
 
+const BUILDERS = [
+  { name: 'build-low', model: 'sonnet', effort: 'medium' },
+  { name: 'build-standard', model: 'sonnet', effort: 'high' },
+  { name: 'build-high', model: 'opus', effort: 'high' },
+]
+const KIT_AGENTS = [...BUILDERS.map((builder) => builder.name), 'validate-runner', 'pr-description']
+const reviewers = (registered) => registered.filter((spec) => spec.name.startsWith('review-'))
+
 // A session start with triage answering `triage`, and each agent.register answered by `answer`.
 async function startWithReviewers($, on, triage: Run, answer = (spec) => ({ value: { agent: 'kit:' + spec.name } })) {
   const registered = []
@@ -680,8 +688,8 @@ async function startWithReviewers($, on, triage: Run, answer = (spec) => ({ valu
 
 test('session start registers one reviewer per lens bin/triage prints, briefed with its text and without edit tools', async ($, on) => {
   const { registered, logged, cwds, timeouts } = await startWithReviewers($, on, { exitCode: 0, stdout: JSON.stringify(LENSES) })
-  expect(registered.map((spec) => spec.name)).toEqual(['review-correctness', 'review-ux-a11y-i18n'])
-  for (const [spec, lens] of registered.map((spec, i) => [spec, LENSES[i]])) {
+  expect(reviewers(registered).map((spec) => spec.name)).toEqual(['review-correctness', 'review-ux-a11y-i18n'])
+  for (const [spec, lens] of reviewers(registered).map((spec, i) => [spec, LENSES[i]])) {
     expect(spec.prompt).toContain('one lens: ' + lens.title)
     expect(spec.prompt).toContain(lens.brief)
     expect(spec.prompt).toContain('never edit')
@@ -690,12 +698,13 @@ test('session start registers one reviewer per lens bin/triage prints, briefed w
     expect(spec.description).toContain(lens.title)
     expect(spec.tools).toEqual(['Read', 'Grep', 'Glob', 'Bash'])
     expect(spec.omitClaudeMd).toBe(true)
+    expect([spec.model, spec.effort]).toEqual(['opus', 'high'])
   }
   expect([cwds, timeouts]).toEqual([[KIT], [30_000]])
   expect(logged).toEqual([])
   // Every agent the mod registers carries a prefix features.js lists.
   const prefixes = FEATURES.filter((feature) => feature.agentPrefix).map((feature) => feature.agentPrefix + '-')
-  expect(prefixes).toEqual(['review-'])
+  expect(prefixes).toEqual(['review-', 'build-', 'validate-', 'pr-'])
   expect(registered.every((spec) => prefixes.some((prefix) => spec.name.startsWith(prefix)))).toBe(true)
 })
 
@@ -707,7 +716,7 @@ for (const [why, triage, cause] of [
 ] as const) {
   test(`when ${why}, no reviewer is registered and the session starts, with one debug line saying why`, async ($, on) => {
     const { registered, logged } = await startWithReviewers($, on, triage)
-    expect(registered).toEqual([])
+    expect(registered.map((spec) => spec.name)).toEqual(KIT_AGENTS)
     expect(logged.length).toBe(1)
     expect(logged[0].text).toMatch(cause)
     expect(logged[0].to).toBe('debug')
@@ -717,7 +726,7 @@ for (const [why, triage, cause] of [
 test('a reviewer the host refuses is logged, and the next one is still registered', async ($, on) => {
   const answer = (spec) => (spec.name === 'review-correctness' ? { deny: 'schema: bad name' } : { value: { agent: 'kit:' + spec.name } })
   const { registered, logged } = await startWithReviewers($, on, { exitCode: 0, stdout: JSON.stringify(LENSES) }, answer)
-  expect(registered.map((spec) => spec.name)).toEqual(['review-correctness', 'review-ux-a11y-i18n'])
+  expect(reviewers(registered).map((spec) => spec.name)).toEqual(['review-correctness', 'review-ux-a11y-i18n'])
   expect(logged.length).toBe(1)
   expect(logged[0].text).toMatch(/review-correctness.*schema: bad name/)
   expect(logged[0].to).toBe('debug')
@@ -733,6 +742,7 @@ test('session start marks the process, so guard_mcp knows a dialog can ask, befo
 test('a marker the host refuses to set is a debug line, and the session still starts with /flow', async ($, on) => {
   const logged: { text: string; to: string }[] = []
   const { started } = stub(on, { [TRIAGE_ARGV]: { exitCode: 0, stdout: '[]' } }, { env: { deny: 'no env here' } })
+  on('agent.register', ($, e) => ({ value: { agent: 'kit:' + e.name } }))
   on('ui.log', ($, e) => {
     logged.push({ text: e.text, to: e.to })
     return { value: undefined }
@@ -752,11 +762,54 @@ test('the reviewers are registered before the session starts, so its first turn 
   })
   on('session.start', () => ({ cwd: ROOT }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT })
-  expect(registered).toEqual(['review-correctness', 'review-ux-a11y-i18n'])
+  expect(registered).toEqual([...KIT_AGENTS, 'review-correctness', 'review-ux-a11y-i18n'])
+})
+
+test('session start registers one builder per risk tier, on its model and effort, with every tool and CLAUDE.md', async ($, on) => {
+  const { registered } = await startWithReviewers($, on, { exitCode: 0, stdout: '[]' })
+  const builders = registered.filter((spec) => spec.name.startsWith('build-'))
+  expect(builders.map(({ name, model, effort }) => ({ name, model, effort }))).toEqual(BUILDERS)
+  for (const spec of builders) {
+    expect(spec.tools).toBeUndefined()
+    expect(spec.omitClaudeMd).toBeUndefined()
+    expect(spec.prompt).toContain('test first')
+    expect(spec.prompt).toContain('spec')
+    expect(spec.description).toContain(spec.name.slice('build-'.length))
+  }
+})
+
+test('the validate runner runs checks on Sonnet, writes no edits to the repo and leaves the verdict to the session', async ($, on) => {
+  const { registered } = await startWithReviewers($, on, { exitCode: 0, stdout: '[]' })
+  const runner = registered.find((spec) => spec.name === 'validate-runner')
+  expect([runner.model, runner.effort]).toEqual(['sonnet', 'medium'])
+  expect(runner.tools).toEqual(['Read', 'Grep', 'Glob', 'Bash', 'Write'])
+  expect(runner.omitClaudeMd).toBeUndefined()
+  expect(runner.prompt).toContain('bin/evidence')
+  expect(runner.prompt).toContain('outside the working tree')
+  expect(runner.prompt).toContain('never a PASS or FAIL')
+})
+
+test('the PR description is written on Sonnet from the kit-write-pr-description skill, into a file, opening nothing', async ($, on) => {
+  const { registered } = await startWithReviewers($, on, { exitCode: 0, stdout: '[]' })
+  const writer = registered.find((spec) => spec.name === 'pr-description')
+  expect([writer.model, writer.effort]).toEqual(['sonnet', 'medium'])
+  expect(writer.tools).toEqual(['Read', 'Grep', 'Glob', 'Bash', 'Write'])
+  expect(writer.omitClaudeMd).toBeUndefined()
+  expect(writer.prompt).toContain('~/.agents/skills/kit-write-pr-description/SKILL.md')
+  expect(writer.prompt).toContain('body file')
+  expect(writer.prompt).toContain('never open')
+})
+
+test('a builder the host refuses is logged, and the rest of the agents are still registered', async ($, on) => {
+  const answer = (spec) => (spec.name === 'build-low' ? { deny: 'unknown model' } : { value: { agent: 'kit:' + spec.name } })
+  const { registered, logged } = await startWithReviewers($, on, { exitCode: 0, stdout: JSON.stringify(LENSES) }, answer)
+  expect(registered.map((spec) => spec.name)).toEqual([...KIT_AGENTS, 'review-correctness', 'review-ux-a11y-i18n'])
+  expect(logged).toEqual([{ text: expect.stringMatching(/build-low.*unknown model/), to: 'debug' }])
 })
 
 test('a triage that never answers holds the session start up for 2 s at most', async ($, on) => {
   const { clock } = stub(on, {}, { process: () => new Promise(() => {}) })
+  on('agent.register', ($, e) => ({ value: { agent: 'kit:' + e.name } }))
   const logged = []
   on('ui.log', ($, e) => {
     logged.push(e)
@@ -770,7 +823,7 @@ test('a triage that never answers holds the session start up for 2 s at most', a
   await clock.advance(1)
   await start
   expect(started).toBe(true)
-  expect(logged).toEqual([{ text: 'kit: review agents: still registering after 2 s, so the session started without them', to: 'debug' }])
+  expect(logged).toEqual([{ text: 'kit: kit agents: still registering after 2 s, so the session started without them', to: 'debug' }])
 })
 
 test('once the session is detached, the pane follows the branch the user took in the main checkout', async ($, on) => {

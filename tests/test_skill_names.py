@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The kit's own skills go by their kit- names, and nothing the agent reads still sends it to a former or retired one."""
+"""The kit's own skills go by their kit- names, nothing the agent reads still sends it to a former or retired one, and
+every call to the other model family pins its model and effort."""
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import glob
 import os
@@ -16,6 +17,9 @@ FORMER = r"(?:spec|self-review|validate|create-pr|follow-pr|ship|write-pr-descri
 SENDS_TO_FORMER = re.compile(rf"(?<![\w/-])`?{FORMER}`?(?:(?:,| and| or) `?{FORMER}`?)* skills?\b|\brun `{FORMER}`|`/{FORMER}\b|(?:skills|\.\.)/{FORMER}(?![\w-])")
 # The review's former name, kept on purpose: the stamp file, the phase alias, old reports' header.
 KEPT = re.compile(r"self-review\.stamp|FORMER_NAMES|\(Self-review\|Review\)|\"Self-review\" heads")
+# The other model family's readings run on one known setup, whatever the user's own default is. A call is the command
+# followed by its flags, so prose naming "step 2's `claude -p` command" isn't one.
+CROSS_MODEL_PINS = {"codex exec -": "-m gpt-6.1-sol -c model_reasoning_effort=high", "claude -p -": "--model opus --effort high"}
 READ_BY_THE_AGENT = ["AGENTS.md", "README.md", "skills/kit-*/**/*", "hooks/*.py", "bin/*", "mods/kit/hooks/*.js", "deps.txt"]
 
 failed = False
@@ -44,4 +48,14 @@ print(f"FAIL kit-ship doesn't name the ship.md sections {missing}" if missing el
 failed |= bool(stale)
 print(("FAIL a former skill name is still read by the agent:\n     " + "\n     ".join(stale)) if stale
       else "ok   no instruction, message or path names a former skill")
+unpinned = []
+for path in glob.glob(os.path.join(KIT, "skills", "kit-*", "**", "*"), recursive=True):
+    if not os.path.isfile(path):
+        continue
+    for n, line in enumerate(open(path).read().splitlines(), 1):
+        unpinned += [f"{os.path.relpath(path, KIT)}:{n}: {call.rstrip(' -')} without {pin}" for call, pin in CROSS_MODEL_PINS.items()
+                     if call in line and pin not in line]
+failed |= bool(unpinned)
+print(("FAIL a cross-model call doesn't pin its model and effort:\n     " + "\n     ".join(unpinned)) if unpinned
+      else "ok   every codex exec and claude -p in the skills pins its model and effort")
 sys.exit(1 if failed else 0)

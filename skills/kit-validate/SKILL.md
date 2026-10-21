@@ -56,6 +56,8 @@ Where `verify` already runs the whole unit suite (the repo notes say so), the ve
 
 Every check leaves evidence the user can open instead of re-running it, in the branch's evidence directory: `EV="$(~/.agents/bin/reports path evidence)"`. Run each check through `~/.agents/bin/evidence <id> <command> [args...]`: it prints the output and keeps the exit code, and saves `$EV/<id>.txt` with the command, directory, time, exit code and full output. It takes argv, so a pipe or a script piped to a container goes in `bash -c '...'`. For a UI state, save a screenshot as `$EV/<id>-<state>.png`. A unit-test run behind a PASS is evidence too: run it through `bin/evidence`.
 
+In Claude Code with the kit plugin, hand the runs to `kit:validate-runner`, which runs on Sonnet: give it each check's id and command, with the scratch directory for its scripts. It reports what each printed, with no verdict; you judge each one against what you expected, from its evidence file. In Codex, or with the plugin off, run them yourself.
+
 Make every check repeatable in one command, because a fix sends you back to re-run it. A check that needs setup (a throwaway worktree or clone, seeded data, a fake HOME) is a script outside the tree that sets up, runs and cleans up after itself, and is passed whole to `bin/evidence`. One that only works while a setup from an earlier command is still around fails, or saves the wrong output, once that setup is gone.
 
 - **PHP inside WordPress:** pipe a throwaway script to `wp eval-file -` inside the container, so nothing lands in the working tree (the script must start with `<?php`). Give it a small helper and one line per check:

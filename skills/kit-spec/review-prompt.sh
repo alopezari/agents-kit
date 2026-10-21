@@ -1,7 +1,7 @@
 #!/bin/bash
 # Print a self-contained prompt for a second reading of the spec: the brief, the request (read from stdin) and the
 # current branch's spec, so a reviewer from the other model family needs no tool access to read them.
-# Usage: gh issue view 12 --comments | review-prompt.sh | codex exec --ephemeral --skip-git-repo-check -s read-only -
+# Usage: gh issue view 12 --comments | review-prompt.sh | codex exec --ephemeral --skip-git-repo-check -s read-only -m gpt-6.1-sol -c model_reasoning_effort=high -
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 request=$(cat)

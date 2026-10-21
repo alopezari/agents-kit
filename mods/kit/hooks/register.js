@@ -27,9 +27,15 @@ const NEEDS_ATTENTION = /couldn't read|^Couldn't|^CI: failed|^Run verify.* faile
 // out of lenses.md. No edit tools is a convenience for the reviewer, not a guard (Bash can still write): the hooks
 // run for subagents too.
 const REVIEWER_TOOLS = ['Read', 'Grep', 'Glob', 'Bash']
+// The build runs on the model and effort of the spec's risk tier; the session plans, delegates and fixes.
+const BUILDERS = [
+  { tier: 'low', model: 'sonnet', effort: 'medium' },
+  { tier: 'standard', model: 'sonnet', effort: 'high' },
+  { tier: 'high', model: 'opus', effort: 'high' },
+]
 // Registering takes tens of milliseconds and must land before the first turn (`claude -p` starts one at once), so the
 // session start waits for it, but never longer than this.
-const REVIEWERS_WAIT_MS = 2_000
+const AGENTS_WAIT_MS = 2_000
 
 // What the pane draws. One gathering runs at a time: a request during one gathers again once it ends.
 let shown = null
@@ -331,6 +337,69 @@ function reviewerPrompt(lens) {
   ].join('\n')
 }
 
+const BUILDER_PROMPT = [
+  "You build one change in the kit's flow, as the session that delegated it would: you have its tools and its",
+  'CLAUDE.md, and its hooks run for you. You do not see its conversation: the spawn prompt gives the goal, the spec',
+  "path when there is one, and any correction the user made. Read the spec, the code it touches and the repository's",
+  'AGENTS.md or CLAUDE.md first. Build test first: for each acceptance criterion whose verify: can be an automated',
+  'test, write the test, run it and see it fail for the reason the criterion names, then implement until it passes.',
+  'Keep to the spec; when the work needs something it does not say, stop and report that instead of widening the',
+  'change. Commit nothing. Report the files you changed, each test you ran with the failing output before the code',
+  'and the passing output after, and every departure from the spec, with why.',
+].join('\n')
+
+const RUNNER_PROMPT = [
+  "You run the local checks of the kit's validation that the spawn prompt lists, each with its id and command. Run",
+  'each one through `~/.agents/bin/evidence <id> <command>`, so its output is saved; a check that needs setup is a',
+  'script you write outside the working tree (the scratch directory the prompt names) that sets up, runs and cleans',
+  'up. Never edit the repository, and never print a secret. For each check, report its id, exit code, evidence file',
+  'and the output line that bears on what it checks, never a PASS or FAIL verdict: the session judges each one',
+  'against what it expected. A check that could not run is reported as such, with the error.',
+].join('\n')
+
+const DESCRIBER_PROMPT = [
+  "You write the title and description of the kit's pull request for the change the spawn prompt names. Read",
+  '`~/.agents/skills/kit-write-pr-description/SKILL.md` and follow it, with the evidence it asks for: the reports',
+  '`~/.agents/bin/reports` prints, the validation section `~/.agents/bin/pr-validation` builds, and the spec the spawn',
+  'prompt names. Write the description to the body file the spawn prompt names, and report the title and that path.',
+  'You never open, edit or comment on a pull request, and never push: the session does.',
+].join('\n')
+
+// Registered whatever triage does: a build, a validation run or a description needs no lens briefs.
+async function registerWorkers($) {
+  const workers = [
+    ...BUILDERS.map(({ tier, model, effort }) => ({
+      name: 'build-' + tier,
+      description: `Builds a change whose spec's Risk line is ${tier}` + (tier === 'standard' ? ', or that has no spec' : '') +
+        `, on ${model} at ${effort} effort. Give it the goal, the spec path and any correction the user made.`,
+      prompt: BUILDER_PROMPT,
+      model,
+      effort,
+    })),
+    {
+      name: 'validate-runner',
+      description: "Runs the validation's local checks through bin/evidence and reports what each printed, without a " +
+        'verdict. Give it each check id with its command, and a scratch directory.',
+      prompt: RUNNER_PROMPT,
+      tools: ['Read', 'Grep', 'Glob', 'Bash', 'Write'],
+      model: 'sonnet',
+      effort: 'medium',
+    },
+    {
+      name: 'pr-description',
+      description: "Writes the pull request's title and description into a file, from the kit's reports and the spec. Give " +
+        'it the spec path, the base branch and the body file to write.',
+      prompt: DESCRIBER_PROMPT,
+      tools: ['Read', 'Grep', 'Glob', 'Bash', 'Write'],
+      model: 'sonnet',
+      effort: 'medium',
+    },
+  ]
+  for (const spec of workers) {
+    await $.agent.register(spec).catch((error) => $.ui.log(`kit: ${spec.name} not registered: ` + messageOf(error), { to: 'debug' }))
+  }
+}
+
 async function registerReviewers($) {
   const kit = await kitDir($)
   const briefs = await run($, [kit + '/bin/triage', '--lens-briefs'], kit)
@@ -355,6 +424,8 @@ async function registerReviewers($) {
         prompt: reviewerPrompt(lens),
         tools: REVIEWER_TOOLS,
         omitClaudeMd: true,
+        model: 'opus',
+        effort: 'high',
       })
       .catch((error) => $.ui.log(`kit: review-${lens.key} not registered: ` + messageOf(error), { to: 'debug' }))
   }
@@ -485,12 +556,13 @@ export function register(on) {
     const flow = FEATURES.find((feature) => feature.command === 'flow')
     await $.command.register({ name: 'flow', description: flow.description, argumentHint: '[off|on <phase> | review-rounds <0-9> [--repo|--global]]', immediate: true })
     const waited = new AbortController()
-    const registering = registerReviewers($)
-      .catch((error) => $.ui.log('kit: review agents: ' + messageOf(error), { to: 'debug' }))
+    const registering = registerWorkers($)
+      .then(() => registerReviewers($))
+      .catch((error) => $.ui.log('kit: kit agents: ' + messageOf(error), { to: 'debug' }))
       .finally(() => waited.abort())
-    const timer = $.clock.sleep(REVIEWERS_WAIT_MS, { signal: waited.signal }).then(() => 'timed out', () => 'registered')
+    const timer = $.clock.sleep(AGENTS_WAIT_MS, { signal: waited.signal }).then(() => 'timed out', () => 'registered')
     if ((await Promise.race([registering.then(() => 'registered'), timer])) === 'timed out') {
-      await $.ui.log('kit: review agents: still registering after 2 s, so the session started without them', { to: 'debug' })
+      await $.ui.log('kit: kit agents: still registering after 2 s, so the session started without them', { to: 'debug' })
     }
     return next(e)
   })
