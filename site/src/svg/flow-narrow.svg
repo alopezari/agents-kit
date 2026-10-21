@@ -1,6 +1,7 @@
-<svg class="only-narrow" viewBox="0 0 320 418" role="img" aria-label="The flow as a vertical line: spec, build, self-review, validate, create-pr, follow-pr, merge by you after any optional checks, ship">
+<svg class="only-narrow" viewBox="0 0 320 418" role="img" aria-label="The flow as a vertical line: spec, build, self-review, validate, create-pr, follow-pr, merge by you after any optional checks (the flow ends here), then ship, only when you ask">
 <g font-family="JetBrains Mono, monospace" font-size="14" fill="#E8E6DF">
-<line x1="30" y1="20" x2="30" y2="392" stroke="#C6EC5A" stroke-width="2"></line>
+<line x1="30" y1="20" x2="30" y2="332" stroke="#C6EC5A" stroke-width="2"></line>
+<line x1="30" y1="344" x2="30" y2="374" stroke="#8A8F88" stroke-width="2" stroke-dasharray="3 4"></line>
 <rect x="22" y="12" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="25">spec</text>
 <rect x="22" y="64" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="77">build</text>
 <rect x="22" y="116" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="129">self-review</text><text x="220" y="129" font-size="12" fill="#8A8F88">stamp</text>
@@ -8,6 +9,6 @@
 <rect x="22" y="220" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="233">create-pr</text><text x="220" y="233" font-size="12" fill="#FF9B73">gated</text>
 <rect x="22" y="272" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="285">follow-pr</text>
 <rect x="22" y="324" width="16" height="16" fill="#FF9B73" stroke="#FF9B73" stroke-width="2"></rect><text x="54" y="337" fill="#FF9B73">merge · you</text>
-<rect x="22" y="376" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="389">ship</text>
+<rect x="22" y="376" width="16" height="16" fill="#0E100F" stroke="#8A8F88" stroke-width="2" stroke-dasharray="3 3"></rect><text x="54" y="389">ship</text><text x="220" y="389" font-size="12" fill="#8A8F88">on request</text>
 </g>
 </svg>

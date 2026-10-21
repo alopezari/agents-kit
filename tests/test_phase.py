@@ -131,7 +131,7 @@ def walks_the_flow(base):
     env["PR_STATE"] = "MERGED"
     assert phase(repo, env) == "PR open", "the PR state is cached for a few minutes, not asked on every refresh"
     os.remove(os.path.join(repo, ".git", "agents", "phase", "feature~cart.json"))
-    assert phase(repo, env) == "ship"
+    assert phase(repo, env) == "merged", "ship is on demand, not the next step"
 
 
 def pr_opened_without_follow_pr(base):

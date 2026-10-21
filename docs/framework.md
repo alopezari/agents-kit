@@ -68,7 +68,8 @@ flowchart TD
   FP -->|fix needed| W
   FP -->|CI green, reviews answered| MG{You run more checks or merge}
   MG -->|a check fails| W
-  MG --> SH[ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]
+  MG --> M[Merged: the flow ends]
+  M -.->|only when you ask| SH[ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]
 ```
 
 The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Merging the default branch keeps the self-review and validate stamps when the branch's own diff is unchanged, and invalidates verify's: the tests run again on the merged code. Only running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no check (no `ran:` line) leaves a separate stamp, and the status line says "verify checked nothing".
@@ -197,7 +198,7 @@ A repository that needs more (a Docker stack, known failing tests, project rules
 | `follow-pr` | core | Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs once right after create-pr (waiting for CI and bot reviews), then whenever the user asks to follow up on the PR. |
 | `impeccable` | https://github.com/pbakaus/impeccable.git, `.claude/skills/impeccable` at 508d7e8 | Design, critique, audit and polish frontend interfaces with a consistent visual direction, and keep an existing brand. |
 | `self-review` | core | Adversarial multi-lens review of your own diff before it goes to a human, using focused reviewers and a second model family, then verifying every finding before acting on it. Use before opening or updating a pull request, before declaring a non-trivial change done, or when asked to review the current branch. |
-| `ship` | core | See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, or, for a repo installed on this machine, deploys and runs the checks itself; prepares the rollback, and closes the loop (issue update, repo notes, local branch). Use when the user is about to deploy a merged PR, says it is deployed, or says a PR of a repo installed on this machine is merged. |
+| `ship` | core | See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, or, for a repo installed on this machine, deploys and runs the checks itself; prepares the rollback, and closes the loop (issue update, repo notes, local branch). Runs only when the user asks for it: to deploy or verify a merged PR, or to install a merged PR of a repo installed on this machine. Hearing that a PR is merged or deployed is not that request. |
 | `spec` | core | Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the self-review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change. |
 | `validate` | core | Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, and writes a step-by-step checks guide for whatever it couldn't run: optional steps the user can run before the merge, and the steps after it. Use for behavior changes before opening a PR, or when asked to test a change. |
 | `write-pr-description` | core | Write short, blunt, human-sounding pull request titles and descriptions that lead with functional impact and keep technical detail at architectural altitude, based on the actual code changes, repository context, issue requirements, validation evidence, and the repository's configured PR template. Use when opening, updating, or preparing a pull request. |
@@ -277,7 +278,7 @@ free-branch <worktree>
 
 **`bin/gh`**: Runs the real gh with git's per-host proxy. gh ignores git's `http.<url>.proxy`, so a host reachable only through a proxy (a SOCKS tunnel, for example) makes it hang. This finds the host a call targets, passes git's proxy for it as HTTPS_PROXY, and fails at once when that proxy isn't answering. Linked ahead of the real gh in PATH (install.sh --doctor shows how).
 
-**`bin/phase`**: Where the current branch is in the kit's flow, for the status line: spec → build → self-review → validate → create-pr → PR open → ship.
+**`bin/phase`**: Where the current branch is in the kit's flow, for the status line: spec → build → self-review → validate → create-pr → PR open → merged.
 
 ```
 phase             print the cached phase at once; refresh it in the background when older than 15 s

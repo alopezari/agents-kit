@@ -258,7 +258,8 @@ def fresh_session_notice(session, payload):
         label = json.load(open(os.path.join(common_dir, "agents", "phase", review_stamp.branch_key(branch) + ".json")))["label"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    if not label.startswith(("PR open", "ship")):
+    merged = label.startswith(("merged", "ship"))  # "ship": a cache bin/phase wrote before it named the state merged
+    if not (merged or label.startswith("PR open")):
         return None
     tokens = context_tokens(transcript)
     if tokens <= CONTEXT_NUDGE_TOKENS:
@@ -270,7 +271,7 @@ def fresh_session_notice(session, payload):
     except OSError:
         return None
     log("stop_checks", "fresh-session", payload, f"{branch} {tokens // 1000}K")
-    state = "is merged" if label.startswith("ship") else "is open"
+    state = "is merged" if merged else "is open"
     return (f"This session's context is {tokens // 1000}K tokens, re-read on every turn, and {branch}'s PR {state}. "
             "Follow it up or start the next change in a new session: `~/.agents/bin/reports brief` there picks it up.")
 

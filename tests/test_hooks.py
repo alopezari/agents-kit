@@ -1514,8 +1514,10 @@ def stop_suggests_a_fresh_session_once_the_pr_is_open(base):
     assert stop_with("early", "self-review", 300_000) is None, "mid-change a new session would re-read everything"
     assert stop_with("edge", "PR open", 150_000) is None, "over 150K, not at it"
     assert stop_with("below-window", "PR open", 160_000), "compaction at a 200K window comes before any higher threshold"
-    merged = stop_with("merged", "ship", 300_000)
+    merged = stop_with("merged", "merged", 300_000)
     assert merged and "is merged" in merged["systemMessage"], merged
+    cached = stop_with("cached", "ship", 300_000)
+    assert cached and "is merged" in cached["systemMessage"], "a cache written before the rename still reads as merged"
 
 
 def stop_suggests_a_fresh_session_for_the_next_change(base):

@@ -1,11 +1,13 @@
 ---
 name: ship
-description: See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, or, for a repo installed on this machine, deploys and runs the checks itself; prepares the rollback, and closes the loop (issue update, repo notes, local branch). Use when the user is about to deploy a merged PR, says it is deployed, or says a PR of a repo installed on this machine is merged.
+description: See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, or, for a repo installed on this machine, deploys and runs the checks itself; prepares the rollback, and closes the loop (issue update, repo notes, local branch). Runs only when the user asks for it: to deploy or verify a merged PR, or to install a merged PR of a repo installed on this machine. Hearing that a PR is merged or deployed is not that request.
 ---
 
 # Ship
 
-The PR is merged; now it has to work in production. The user deploys and runs every production step: you prepare the guide, the rollback and the follow-up. Never deploy, write to production or SSH into it yourself.
+Run this only when the user asks for it ("ship", "install", a deploy guide, a production check): the core flow ends at the merge. When they only say a PR is merged or deployed, report its status and list what ship would do as optional, without running any of it or asking.
+
+Now it has to work in production. The user deploys and runs every production step: you prepare the guide, the rollback and the follow-up. Never deploy, write to production or SSH into it yourself.
 
 ```bash
 gh pr view <n> --json number,url,state,mergedAt,mergeCommit,headRefName
