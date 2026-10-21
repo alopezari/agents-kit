@@ -41,8 +41,8 @@ PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+
             r"|env\s+(?:-[i0v]*[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir|split-string)(?:=|\s+)\S+\s+|-[i0v]+\s+"
             r"|--(?:ignore-environment|null|debug)\s+|--\s+|-\s+)*)*")
 # Where a command starts: after a separator, and any shell keywords after it (`; then gh pr ready`, `{ gh pr ready; }`).
-# [^\S\n], not \s: a newline starts a command itself, and \s* made each blank line re-read every one after it.
-COMMAND_START = r"(?:^|[;&|(\n`{])[^\S\n]*(?:(?:then|do|else|elif|if|while|until)\s+|!\s*)*"
+# [^\S\n], not \s: a newline starts a command itself, and \s there would make each line re-read every line after it.
+COMMAND_START = r"(?:^|[;&|(\n`{])[^\S\n]*(?:(?:then|do|else|elif|if|while|until)[^\S\n]+|![^\S\n]*)*"
 
 GIT = r"\bgit\s+(?:(?:-C|-c)\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
 PROTECTED_BRANCHES = r"(main|master|trunk|develop|production|release(/[\w.-]+)?)"

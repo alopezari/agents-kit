@@ -367,25 +367,36 @@ def guard_reads_code_not_text(base):
     assert guard(long) == "allow" and child_cpu() - started < 3, "a long mixed command must not stall the guard"
     started = child_cpu()
     assert guard(long + "EOF\ngit branch -D old") == "deny" and child_cpu() - started < 3, "the whole long command is read"
-    # Each blank line once re-read every blank line after it: a closed 16,000-line body took 26 s.
-    started = child_cpu()
-    guard("ls")
-    startup = child_cpu() - started
-    for body in ("x\n", "\n", "  \n", "s = 'git push --force'\n"):
+    # Each line once re-read every blank line after it: a closed 16,000-line body took 26 s.
+    heredoc, script = "cat <<'EOF'\n{}EOF\nls", "python3 - <<'EOF'\n{}EOF\nls"
+    for shape, body in ((heredoc, "x\n"), (heredoc, "\n"), (heredoc, "  \n"), (script, "s = 'git push --force'\n"),
+                        ("{}ls", "!\n"), ("{}ls", "then\n")):
         cost = {}
-        for lines in (4000, 16000):
+        for lines in (2000, 8000):
             started = child_cpu()
-            assert guard(("python3 - <<'EOF'\n" if "s =" in body else "cat <<'EOF'\n") + body * lines + "EOF\nls") == "allow"
-            cost[lines] = child_cpu() - started - startup
-        assert cost[16000] < 1.5 and cost[16000] < 8 * max(cost[4000], 0.05), f"cost must grow linearly in {body!r}: {cost}"
+            assert guard(shape.format(body * lines)) == "allow"
+            cost[lines] = child_cpu() - started
+        assert cost[8000] < 1.5 and cost[8000] < 6 * cost[2000], f"cost must grow linearly in {body!r}: {cost}"
     blank = "\n\n  \n\t\n"
     for after in ("sudo ls", "git branch -D old"):
         assert reason("cat <<'EOF'\nx\nEOF" + blank + after) == reason(after) != "", f"blank lines hide nothing: {after}"
-    shell_script = "cat > /tmp/s.sh <<'EOF'\ngit branch -D old\nEOF\n"
-    assert reason(shell_script + blank + "bash /tmp/s.sh") == reason(shell_script + "bash /tmp/s.sh") != "", \
-        "a script a shell runs after blank lines is still read as commands"
+    prose = "cat > /tmp/o.md <<'EOF'\ngit branch -D old\nEOF\n"
+    assert reason(prose + blank + "bash /tmp/s.sh") == reason(prose + "bash /tmp/s.sh") != "", \
+        "a script a shell runs after blank lines may be the heredoc, so it is still read as commands"
+    spawns = "cat > /tmp/s.py <<'EOF'\nimport os\nos.system('git branch -D old')\nEOF\n"
+    assert reason(spawns + blank + "python3 /tmp/s.py") == reason(spawns + "python3 /tmp/s.py") != "", \
+        "a script python3 runs after blank lines is still read"
     assert guard("cat > /tmp/s.py <<'EOF'\ns = 'git branch -D old'\nEOF\n" + blank + "python3 /tmp/s.py") == "allow", \
-        "and one python3 runs after blank lines is still Python"
+        "and read as Python"
+
+
+def guard_command_starts_stay_on_their_line(base):
+    # The gh pr, cd and GH_REPO readers only meet a long command in a kit checkout or a push, so the shape is checked here.
+    source = open(H + "guard_bash.py").read()
+    crossing = re.compile(r"\[(?!\^)[^\[\]]*\\n[^\[\]]*\][^\[\]\n\"]{0,30}?\\s[*+]")
+    found = [f"guard_bash.py:{source[:m.start()].count(chr(10)) + 1}: {m.group(0)}" for m in crossing.finditer(source)]
+    assert not found, "whitespace after a class holding \\n must be [^\\S\\n]:\n" + "\n".join(found)
+    assert crossing.search(r'r"(?:^|[;&|\n]\s*)(cd)"') and not crossing.search(r'r"(?:^|[;&|\n])[^\S\n]*cd"')
 
 
 def guard_reads_through_wrappers_and_scripts(base):
@@ -2160,7 +2171,7 @@ def guard_records_the_pushed_checkout(base):
     assert recorded(f'git --no-pager -C "{other}" push') == [there]
     assert recorded(f'git push; cd "{other}"; git push') == sorted([here, there])
     assert recorded(f"  cd {other.replace(' ', chr(92) + ' ')} && git push") == [there]
-    assert recorded(f'cd "{other}"\n\n  \ngit push') == [there], "a cd before blank lines still counts"
+    assert recorded(f'git status\n\n  \ncd "{other}"\n\n\tgit push') == [there], "a cd between blank lines still counts"
     assert recorded(f'(cd "{other}" && git status); git push') == [here], "a subshell's cd stays in the subshell"
     assert recorded("git status && echo 'git push'") == [], "a push only in quoted text isn't one"
     for prose in ["cat > \"$(echo /tmp/n.md)\" <<'EOF'\nthen git push\nEOF",
@@ -3093,7 +3104,7 @@ def a_stacked_branch_is_measured_against_its_parent(base):
 TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, the_old_self_review_name_still_switches_the_review, coming_back_after_hours_asks_for_the_status_first, a_review_rounds_line_sets_the_re_checks_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
-         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
+         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
