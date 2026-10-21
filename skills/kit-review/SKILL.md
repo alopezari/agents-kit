@@ -39,26 +39,26 @@ Give each reviewer: the lens text, the base ref, the task or PR goal in one or t
 
 A repository can have a review guide, `~/.agents/repos/$(~/.agents/bin/repo-name)/review.md`, in the user's overlay next to `notes.md`: what failure looks like there, what to skip, a different nit cap. Every reviewer applies it, and it wins over these instructions where they conflict. `bundle.sh` includes it and the `kit:review-*` agents read it themselves; give a general subagent its path, and read it yourself on the Low tier.
 
-In Claude Code with the kit plugin, each lens is an agent type: spawn `kit:review-<lens>`, with triage's name for the lens (`kit:review-correctness`, `kit:review-ux-a11y-i18n`). It already holds the lens text, has no edit tools and leaves out CLAUDE.md, so give it the rest of the list above. `bundle.sh` below takes the lens's heading instead (`Correctness`, `"Performance and scale"`). Where that type isn't listed (Codex, or the plugin off), give a general subagent the lens text too.
+In Claude Code with the kit plugin, each lens is an agent type, on Opus at high effort: spawn `kit:review-<lens>`, with triage's name for the lens (`kit:review-correctness`, `kit:review-ux-a11y-i18n`). It already holds the lens text, has no edit tools and leaves out CLAUDE.md, so give it the rest of the list above. `bundle.sh` below takes the lens's heading instead (`Correctness`, `"Performance and scale"`). Where that type isn't listed (Codex, or the plugin off), give a general subagent the lens text too.
 
 The Correctness lens always runs, at every risk level, and its tables go into the final report. Also run the repo's personal checks when they exist, with `python3 ~/.agents/hooks/stop_checks.py verify`, which runs `~/.agents/repos/<repo>/verify` and stamps a pass.
 
 ### Cross-model reviewer
 
-Skipped when `second-model`, or the reviewer's own phase, is switched off (see the top). Otherwise, use the other model family from the model you're running on. Commit the change first: step 4's re-check uses that commit as its base.
+Skipped when `second-model`, or the reviewer's own phase, is switched off (see the top). Otherwise, use the other model family from the model you're running on, with the model and effort the commands below pin, so every reading runs on one known setup. Commit the change first: step 4's re-check uses that commit as its base.
 
 - **Running on a Claude model →** Codex. Pass the whole change in the prompt; Codex's own command runner can fail in non-interactive runs, and a reviewer that can't read the code returns nothing. A pass takes about ten minutes, so start it as a background command (in Claude Code, `run_in_background`) as soon as the diff is ready, and run the same-model lenses meanwhile; for behavior changes, start validate's local checks too. When it finishes, read only its `## Found` section (its tables and findings); the rest is its working, and every line read stays in context. No section means the pass failed: read the error file and report it as a failed reviewer, not as no findings:
   ```bash
   out=$(mktemp "${TMPDIR:-/tmp}/codex-review.XXXXXX")   # background command:
   ~/.agents/skills/kit-review/bundle.sh <base> Correctness "<goal>" \
-    | codex exec --ephemeral --skip-git-repo-check -s read-only - > "$out" 2> "$out.err"
+    | codex exec --ephemeral --skip-git-repo-check -s read-only -m gpt-6.1-sol -c model_reasoning_effort=high - > "$out" 2> "$out.err"
   awk '/^## Found$/ { section = "" } { section = section $0 "\n" } END { if (section ~ /^## Found/) printf "%s", section }' "$out"
   ```
   Run it once per lens you send cross-model. For a very large diff, split it by directory and review the riskiest parts.
 - **Running on an OpenAI model (Codex) →** Claude, from the same bundle, so it gets the same instructions:
   ```bash
   ~/.agents/skills/kit-review/bundle.sh <base> Correctness "<goal>" \
-    | claude -p --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)" \
+    | claude -p --model opus --effort high --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)" \
       --disallowedTools "Edit,Write"
   ```
 
