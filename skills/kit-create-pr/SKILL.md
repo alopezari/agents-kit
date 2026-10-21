@@ -1,6 +1,6 @@
 ---
-name: create-pr
-description: Open the pull request once the change is reviewed and validated. Checks that verify, self-review, and validate passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly.
+name: kit-create-pr
+description: Open the pull request once the change is reviewed and validated. Checks that verify, review, and validate passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the kit-write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly.
 ---
 
 # Create PR
@@ -14,12 +14,12 @@ Run from the checkout that has the branch. Each line must hold, or the listed st
 | Check | Command | If it fails |
 |---|---|---|
 | Verify passed on this change | `python3 ~/.agents/hooks/review_stamp.py check --kind verify` | Let the stop hook run verify (or run `python3 ~/.agents/hooks/stop_checks.py verify`), fix what it finds. If only `--kind verify-empty` passes, verify checked nothing: the evidence is the tests you ran instead, named in the description, never "verify passed" |
-| Self-review covers this change | `python3 ~/.agents/hooks/review_stamp.py check` | Run the `self-review` skill |
-| Validated, for behavior changes | `python3 ~/.agents/hooks/review_stamp.py needs-validate && python3 ~/.agents/hooks/review_stamp.py check --kind validate` | Run the `validate` skill |
+| Review covers this change | `python3 ~/.agents/hooks/review_stamp.py check` | Run the `kit-review` skill |
+| Validated, for behavior changes | `python3 ~/.agents/hooks/review_stamp.py needs-validate && python3 ~/.agents/hooks/review_stamp.py check --kind validate` | Run the `kit-validate` skill |
 
-A row whose phase `~/.agents/bin/phase switches` lists (verify, self-review, validate) is skipped: the user switched it off, and `bin/pr-validation` puts that in the description. The shell guard enforces the two stamps on `gh pr create`; this table catches the rest before you get there.
+A row whose phase `~/.agents/bin/phase switches` lists (verify, review, validate) is skipped: the user switched it off, and `bin/pr-validation` puts that in the description. The shell guard enforces the two stamps on `gh pr create`; this table catches the rest before you get there.
 
-The stamps measure the change against `python3 ~/.agents/hooks/review_stamp.py base`, and the guard denies a PR whose target differs from it. When the PR should target another branch (a stacked branch whose parent wasn't detected, or the default branch for one that was), record the target first, `git config branch."$(git branch --show-current)".agentsBase <target>`. When the change measured against it differs, the stamps go stale: re-run the self-review and validate on the change it shows.
+The stamps measure the change against `python3 ~/.agents/hooks/review_stamp.py base`, and the guard denies a PR whose target differs from it. When the PR should target another branch (a stacked branch whose parent wasn't detected, or the default branch for one that was), record the target first, `git config branch."$(git branch --show-current)".agentsBase <target>`. When the change measured against it differs, the stamps go stale: re-run the review and validate on the change it shows.
 
 ## 2. Push
 
@@ -29,7 +29,7 @@ git push -u origin "$(git branch --show-current)"
 
 ## 3. Write the title and description
 
-Run the `write-pr-description` skill. Give it the evidence, so the validation section is concrete: `~/.agents/bin/reports` prints the verify, self-review and validation reports and the checks guide. Start the validation section from `~/.agents/bin/pr-validation`, which builds it from those reports. Shorten its wording or merge its lines, but keep every verdict and count it prints, and add no result it doesn't show: a count written from memory is how a description ends up claiming more than was tested. Link the issue with the repository's syntax, and give it the spec's `## Decisions` for the approach: a reviewer sees the alternative that was rejected, and why, without asking. Both come from the spec (`~/.agents/skills/spec/path.sh`).
+Run the `kit-write-pr-description` skill. Give it the evidence, so the validation section is concrete: `~/.agents/bin/reports` prints the verify, review and validation reports and the checks guide. Start the validation section from `~/.agents/bin/pr-validation`, which builds it from those reports. Shorten its wording or merge its lines, but keep every verdict and count it prints, and add no result it doesn't show: a count written from memory is how a description ends up claiming more than was tested. Link the issue with the repository's syntax, and give it the spec's `## Decisions` for the approach: a reviewer sees the alternative that was rejected, and why, without asking. Both come from the spec (`~/.agents/skills/kit-spec/path.sh`).
 
 Write the description to the branch's own file, at the path `~/.agents/bin/reports path pr-body` prints. Below, `<body file>` is that path, written out (see step 4).
 
@@ -51,7 +51,7 @@ Print the PR URL.
 
 ## 5. Hand over to follow-pr
 
-Unless `~/.agents/bin/phase switches` lists `follow-pr` (then tell the user the PR is open and theirs to follow up), run the `follow-pr` skill in the same session (its first run): it waits for the pushed commit's CI with `~/.agents/bin/ci-wait` and reads the bot reviews that come with it. After that, the user runs it on demand.
+Unless `~/.agents/bin/phase switches` lists `follow-pr` (then tell the user the PR is open and theirs to follow up), run the `kit-follow-pr` skill in the same session (its first run): it waits for the pushed commit's CI with `~/.agents/bin/ci-wait` and reads the bot reviews that come with it. After that, the user runs it on demand.
 
 ## 6. Free the branch
 
@@ -68,5 +68,5 @@ It removes a worktree you created and detaches the one the session runs in (the 
 ```
 PR:        <url>
 Branch:    free (<worktree removed | detached>; `cd <main checkout> && git switch <branch>`) | in the main checkout
-Evidence:  verify <PASS | FAIL | checked nothing: <tests run instead>> · self-review <stamp ok> · validate <stamp ok | not needed: tests/docs only>
+Evidence:  verify <PASS | FAIL | checked nothing: <tests run instead>> · review <stamp ok> · validate <stamp ok | not needed: tests/docs only>
 ```

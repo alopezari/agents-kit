@@ -290,22 +290,22 @@ def render():
     w("")
 
     w("## The life of a task\n")
-    for skill in ("spec", "self-review", "validate", "create-pr", "write-pr-description", "follow-pr", "ship"):
-        require(f"skills/{skill}/SKILL.md")
-    w("```mermaid\nflowchart TD\n  T[Issue or request] --> SP[spec skill: acceptance criteria, second reading]\n  SP --> W[Agent edits code]")
+    for skill in ("spec", "review", "validate", "create-pr", "write-pr-description", "follow-pr", "ship"):
+        require(f"skills/kit-{skill}/SKILL.md")
+    w("```mermaid\nflowchart TD\n  T[Issue or request] --> SP[kit-spec skill: acceptance criteria, second reading]\n  SP --> W[Agent edits code]")
     w("  W -->|every shell command| G{guard_bash}\n  G -->|irreversible| B[Blocked with the reason]")
     w("  W -->|every MCP call| GM{guard_mcp}\n  GM -->|shared write without approval| B")
     w("  W -->|every file edit| PE[post_edit: syntax check]\n  PE -->|syntax error| W")
-    w("  W -->|end of turn| SC{stop_checks + verify}\n  SC -->|problem found, first time| W\n  SC -->|clean| SR[self-review skill: lenses + second model]")
-    w("  SR --> V[validate skill: suite + local checks + checks guide for what it couldn't run]")
-    w("  V --> CP[create-pr skill: evidence check, push, write-pr-description]")
-    w("  CP --> PR{gh pr create}\n  PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]")
-    w("  PR -->|stamped| FP[follow-pr skill: first run waits for CI and bot reviews; later runs on demand]\n  FP -->|fix needed| W")
-    w("  FP -->|CI green, reviews answered| MG{You run more checks or merge}\n  MG -->|a check fails| W\n  MG --> M[Merged: the flow ends]\n  M -.->|only when you ask| SH[ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]\n```\n")
+    w("  W -->|end of turn| SC{stop_checks + verify}\n  SC -->|problem found, first time| W\n  SC -->|clean| SR[kit-review skill: lenses + second model]")
+    w("  SR --> V[kit-validate skill: suite + local checks + checks guide for what it couldn't run]")
+    w("  V --> CP[kit-create-pr skill: evidence check, push, kit-write-pr-description]")
+    w("  CP --> PR{gh pr create}\n  PR -->|no stamp for this exact change| G2[Blocked: run kit-review / kit-validate]")
+    w("  PR -->|stamped| FP[kit-follow-pr skill: first run waits for CI and bot reviews; later runs on demand]\n  FP -->|fix needed| W")
+    w("  FP -->|CI green, reviews answered| MG{You run more checks or merge}\n  MG -->|a check fails| W\n  MG --> M[Merged: the flow ends]\n  M -.->|only when you ask| SH[kit-ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]\n```\n")
     w("The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up "
-      "in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a "
+      "in its report under **Blocked on me** instead of looping. Review, validate and a green verify each leave a "
       "stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Merging "
-      "the default branch keeps the self-review and validate stamps when the branch's own diff is unchanged, "
+      "the default branch keeps the review and validate stamps when the branch's own diff is unchanged, "
       "and invalidates verify's: the tests run again on the merged code. Only "
       "running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no "
       "check (no `ran:` line) leaves a separate stamp, and the status line says \"verify checked nothing\".\n")
@@ -330,9 +330,9 @@ def render():
     w("- Touching `~/.agents/approvals`, written out or relative to the working directory or a `cd` in the command: "
       "approvals for shared-system writes must come from the user. Naming it in a message, an echo or a search is text.")
     w("- Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.")
-    w("- `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change, and "
+    w("- `gh pr create` until the review (and, for behavior changes, validate) stamp matches the change, and "
       "while the PR's target isn't the base the stamps measured against (`review_stamp.py base`).")
-    w("- The last one lifts for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, "
+    w("- The last one lifts for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (review, "
       "validate; `bin/phase switches`); no other rule here can be switched off.\n")
     w("It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your "
       "approval: naming the service in your message approves it until your next one, as does saying yes when the "
@@ -384,10 +384,10 @@ def render():
     w("| Skill | Source | What it's for |\n|---|---|---|")
     for name, source, description in skill_rows:
         w(f"| `{name}` | {cell(source)} | {cell(description)} |")
-    w("\nHarnesses pick a skill by its description; you can also call one by name (`/spec` in Claude Code).\n")
+    w("\nHarnesses pick a skill by its description; you can also call one by name (`/kit-spec` in Claude Code).\n")
 
     w("## Claude Code mod\n")
-    w("Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code, defines the self-review's reviewer agents, runs the kit's tools "
+    w("Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code, defines the review's reviewer agents, runs the kit's tools "
       "without a turn and asks you about a blocked call you could approve. It owns no state and no safety: it shows "
       "and runs what the rest of the kit does, and the hooks still decide what is blocked, so Codex, "
       "and a session without the mod, get the same flow. Each capability names what Codex has instead.\n")

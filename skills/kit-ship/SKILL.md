@@ -1,5 +1,5 @@
 ---
-name: ship
+name: kit-ship
 description: See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, or, for a repo installed on this machine, deploys and runs the checks itself; prepares the rollback, and closes the loop (issue update, repo notes, local branch). Runs only when the user asks for it: to deploy or verify a merged PR, or to install a merged PR of a repo installed on this machine. Hearing that a PR is merged or deployed is not that request.
 ---
 
@@ -19,7 +19,7 @@ Whatever the deploy, the guide's "After the merge" steps marked as yours are you
 
 ## 1. Deploy and verification guide
 
-Write the guide in the validate skill's step 6 format: numbered steps, each with **Why**, **Where**, a copy-paste **Run** block with real values, **Expected** and **If not**. Step 0 lists access, tunnel or VPN, and an `export` block with the values later steps reuse.
+Write the guide in the kit-validate skill's step 6 format: numbered steps, each with **Why**, **Where**, a copy-paste **Run** block with real values, **Expected** and **If not**. Step 0 lists access, tunnel or VPN, and an `export` block with the values later steps reuse.
 
 - **Deploy:** the repository's deploy steps, from `~/.agents/repos/<repo>/notes.md` or the repo's own docs. If neither says how, ask the user instead of guessing.
 - **Light verification, read-only:** a status check of the affected pages or endpoints, one real happy path that changes nothing, the log lines or error rates to watch, and for how long. Start from the checks guide's "After the merge" steps (`~/.agents/bin/reports`): they are the checks that needed production. Cut anything that writes unless the guide says it's the point (a backfill, a scoring run), and keep their `~/.agents/bin/evidence P1 …` form so the results come back as files.

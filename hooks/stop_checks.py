@@ -53,7 +53,7 @@ CONTEXT_NUDGE_TOKENS = 150_000
 NEW_CHANGE_NUDGE_TOKENS = 150_000
 DEFAULT_BRANCHES = ("main", "master", "trunk", "develop")
 TRANSCRIPT_TAIL_BYTES = 2_000_000
-SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "spec", "path.sh"))
+SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "kit-spec", "path.sh"))
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
 
 TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec)/|[._-](test|spec)\.[a-z]+$|Test\.php$", re.I)
@@ -115,7 +115,7 @@ def new_options_near_caches(root, lines):
                     f"New option `{name}` ({path}). The repo writes caches in {repo_wide} files"
                     + (f", including {', '.join(cache_files[:5])} next to it" if cache_files else "")
                     + ". Confirm every cache whose output depends on this option varies with it or is invalidated"
-                    " when it changes (self-review Correctness lens, derived-data table)."
+                    " when it changes (review Correctness lens, derived-data table)."
                 )
     return problems
 
@@ -509,7 +509,7 @@ def save_verify_report(root, verify, output, verdict):
 
 
 def primary_checkout(root):
-    """The main working tree of root's repository, where the validate skill runs the stack."""
+    """The main working tree of root's repository, where the kit-validate skill runs the stack."""
     common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], root).strip()
     return os.path.dirname(common) if os.path.basename(common) == ".git" else root
 
@@ -576,7 +576,7 @@ def check_checkout(root, session, payload):
     primary = primary_checkout(root)
     remember_checkout(primary)
     for override in marked_overrides({root, primary}):
-        problems.append(f"Temporary {override} from the validate skill is still there: delete it and run "
+        problems.append(f"Temporary {override} from the kit-validate skill is still there: delete it and run "
                         "`docker compose up -d` so the stack serves the primary checkout again.")
     deleted = git(["diff", review_stamp.merge_base(root), "--name-only", "--diff-filter=D"], root).splitlines()
     problems += [f"Test file deleted: {p}" for p in deleted if TEST_FILE.search(p)]

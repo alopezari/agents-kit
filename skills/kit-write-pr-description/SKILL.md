@@ -1,5 +1,5 @@
 ---
-name: write-pr-description
+name: kit-write-pr-description
 description: Write short, blunt, human-sounding pull request titles and descriptions that lead with functional impact and keep technical detail at architectural altitude, based on the actual code changes, repository context, issue requirements, validation evidence, and the repository's configured PR template. Use when opening, updating, or preparing a pull request.
 ---
 

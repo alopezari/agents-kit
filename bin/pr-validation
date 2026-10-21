@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Print a pull request's "## Validation" section from the branch's reports, so it states what they record.
 
-  pr-validation    verify's verdict and what it ran, the self-review's findings, each validation check with its
+  pr-validation    verify's verdict and what it ran, the review's findings, each validation check with its
                    result and what wasn't run, each step of the checks guide with its owner or its latest result,
                    and each phase the user switched off
 
 Links become their text and paths under your home start with ~: the reports are local, the pull request isn't.
-Exits 1, printing nothing, when the verify or self-review report is missing and the user hasn't switched its phase off.
+Exits 1, printing nothing, when the verify or review report is missing and the user hasn't switched its phase off.
 """
 import os
 import re
@@ -75,7 +75,8 @@ def labelled(text, labels):
 
 
 def review_lines(text):
-    header = next((line.strip() for line in text.splitlines() if line.startswith("Self-review")), "Self-review")
+    # "Self-review" heads the reports written before the review was renamed.
+    header = next((line.strip() for line in text.splitlines() if re.match(r"(Self-review|Review)( \(|$)", line)), "Review")
     findings = [(kind, summary.split(" — ")[0].strip().rstrip(".") + ".")
                 for kind, summary in labelled(text, "Fixed|Rejected|Open|Pre-existing")]
     counts = ", ".join(f"{n} {kind.lower()}" for kind in ("Fixed", "Rejected", "Open", "Pre-existing")
@@ -146,13 +147,13 @@ def main():
         "verify", "review", "validation", "checks-guide", "evidence")
     texts = {path: read(path) for path in (verify, review, validation)}
     off, unreadable = phase_switches.phases_off_or_error(os.getcwd())
-    missing = [path for path, phase in ((verify, "verify"), (review, "self-review")) if texts[path] is None and phase not in off]
+    missing = [path for path, phase in ((verify, "verify"), (review, "review")) if texts[path] is None and phase not in off]
     if missing:
         sys.exit("pr-validation: no report at " + " or ".join(missing)
-                 + ". Run verify and the self-review first; the section is built from their reports."
+                 + ". Run verify and the kit-review skill first; the section is built from their reports."
                  + (f" ({unreadable}.)" if unreadable else ""))
     # A phase switched off stands in for its report: one left from before the switch may be stale.
-    shown = {path: text for path, phase, text in ((verify, "verify", texts[verify]), (review, "self-review", texts[review]),
+    shown = {path: text for path, phase, text in ((verify, "verify", texts[verify]), (review, "review", texts[review]),
              (validation, "validate", texts[validation])) if phase not in off}
     lines = verify_line(shown[verify]) if shown.get(verify) is not None else []
     lines += review_lines(shown[review]) if shown.get(review) is not None else []

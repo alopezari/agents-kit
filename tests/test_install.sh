@@ -140,7 +140,7 @@ check "sample profile: the guard blocks tracker and wiki writes, not reads" '[ "
 # A second profile reusing the sample's names, and one of the kit's own: the first profile keeps each name, the
 # kit's own is never replaced, and nothing flips between runs.
 other="$home/zz-other"
-mkdir -p "$other/skills/release-notes" "$other/skills/spec" "$other/repos/example-plugin" "$other/research"
+mkdir -p "$other/skills/release-notes" "$other/skills/kit-spec" "$other/repos/example-plugin" "$other/research"
 echo "# other" > "$other/research/example-study.md"
 echo '{"direct": {"tracker": "^x", "linear": "^y"}}' > "$other/mcp-writes.json"
 out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes --profile "$other" 2>&1); status=$?
@@ -149,14 +149,33 @@ check "two profiles with the same names: warned, the first keeps them, the kit's
   '[ $status = 0 ] && grep -q "warn  skills/release-notes is in profiles sample-profile and zz-other; using sample-profile.s" <<<"$out" \
    && grep -q "warn  repos/example-plugin is in profiles sample-profile and zz-other" <<<"$out" \
    && grep -q "warn  research/example-study.md is in profiles sample-profile and zz-other" <<<"$out" \
-   && grep -q "warn  skills/spec in profile zz-other has the name of the kit.s own; skipped" <<<"$out" \
+   && grep -q "warn  skills/kit-spec in profile zz-other has the name of the kit.s own; skipped" <<<"$out" \
    && [ "$(readlink "$kit/skills/release-notes")" = "$kit/profiles/sample-profile/skills/release-notes" ] \
    && [ "$(readlink "$kit/research/example-study.md")" = "$kit/profiles/sample-profile/research/example-study.md" ] \
-   && [ -d "$kit/skills/spec" ] && [ ! -L "$kit/skills/spec" ] && ! grep -q "  fix " <<<"$again"'
+   && [ -d "$kit/skills/kit-spec" ] && [ ! -L "$kit/skills/kit-spec" ] && ! grep -q "  fix " <<<"$again"'
 check "and a direct MCP server in two places is warned about" \
   'grep -q "warn  MCP server tracker has write rules in profile sample-profile and profile zz-other" <<<"$out" \
    && grep -q "warn  MCP server linear has write rules in the kit and profile zz-other" <<<"$out"'
 rm "$kit/profiles/zz-other"
+# A kit skill renamed by a pull leaves the harness links to its old folder, and the folder itself when git-ignored
+# files stay in it: the links go, the folder is named but kept, and a profile skill it blocks is told why.
+mkdir -p "$kit/skills/spec/__pycache__" "$home/mine" "$home/zz-left/skills/spec"
+echo "---" > "$home/zz-left/skills/spec/SKILL.md"
+ln -s "$kit/skills/spec" "$home/.claude/skills/spec"
+ln -s "$kit/skills/self-review" "$home/.claude/skills/self-review"
+ln -s "$home/mine" "$home/.claude/skills/mine"
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor 2>&1)
+check "doctor: a harness link to a kit folder without a skill is reported, not removed" \
+  'grep -q "warn  $home/.claude/skills/self-review links to $kit/skills/self-review, which holds no skill" <<<"$out" \
+   && grep -q "warn  $home/.claude/skills/spec links to $kit/skills/spec, which holds no skill" <<<"$out" \
+   && [ -L "$home/.claude/skills/spec" ] && [ -L "$home/.claude/skills/self-review" ]'
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes --profile "$home/zz-left" 2>&1)
+check "install: those links go, the leftover folder is named and kept, the user's own link and live kit links stay" \
+  '[ ! -L "$home/.claude/skills/spec" ] && [ ! -L "$home/.claude/skills/self-review" ] && [ -L "$home/.claude/skills/mine" ] \
+   && [ "$(readlink "$home/.claude/skills/kit-spec")" = "$kit/skills/kit-spec" ] && [ -d "$kit/skills/spec/__pycache__" ] \
+   && grep -q "warn  skills/spec has no SKILL.md, left from a renamed or removed skill: not linked; remove the folder" <<<"$out" \
+   && grep -q "warn  skills/spec in profile zz-left is blocked by $kit/skills/spec, a leftover folder without SKILL.md; remove it" <<<"$out"'
+rm -r "$kit/skills/spec" "$kit/profiles/zz-left" "$home/.claude/skills/mine"
 mkdir -p "$home/elsewhere/sample-profile"
 out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor --profile "$home/elsewhere/sample-profile" 2>&1)
 check "a new profile with an installed one's directory name is warned about" \

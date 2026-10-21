@@ -11,7 +11,7 @@ spec="$("$here/path.sh")"
 [ -f "$spec" ] || { echo "review-prompt.sh: no spec for this branch at $spec; write it first" >&2; exit 2; }
 
 cat <<'EOF'
-You are reading a spec before any code is written. An agent will build exactly what it says, and a self-review will
+You are reading a spec before any code is written. An agent will build exactly what it says, and a review will
 judge the change against its acceptance criteria, so a misread here is built well and passes review. Find where the
 spec would make the agent build the wrong thing. Compare it with the request below and report:
 

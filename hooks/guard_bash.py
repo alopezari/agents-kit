@@ -619,7 +619,7 @@ def pr_target(words):
 
 
 def unreviewed_pr(command, cwd):
-    """Opening a PR requires a self-review stamp for the exact current change, measured against the branch the PR
+    """Opening a PR requires a review stamp for the exact current change, measured against the branch the PR
     targets, and a validate stamp for a behavior change; each unless the user switched its phase off."""
     command = without_scripts(command)[0]
     creates = [m for m in re.finditer(COMMAND_START + PREFIXES + GH_PR + PR_CREATE + r"\b([^;&|\n]*)", shell_code(command))
@@ -638,18 +638,18 @@ def unreviewed_pr(command, cwd):
              if re.search(r"review_stamp\.py\b[^;&|\n]*\bwrite\b", re.sub(r"\\\n", " ", shell_code(command))) else "")
     off, unreadable = phase_switches.phases_off_or_error(cwd, time_left())
     store = f" {unreadable}." if unreadable else ""
-    if not {"self-review", "validate"} <= off.keys():
+    if not {"review", "validate"} <= off.keys():
         for target in {pr_target(pr_args(command, match, 1)) for match in creates}:
             matched = subprocess.run([sys.executable, stamp, "base", "--matches", target], cwd=cwd,
                                      capture_output=True, text=True, timeout=time_left())
             if matched.returncode != 0:
                 return (matched.stdout.strip() or matched.stderr.strip()
                         or f"review_stamp.py base failed (exit {matched.returncode}), so the PR's target can't be checked.")
-    if "self-review" not in off and not ok("check", "--kind", "review"):
-        return ("No self-review recorded for the current change. Run the self-review skill first "
+    if "review" not in off and not ok("check", "--kind", "review"):
+        return ("No review recorded for the current change. Run the kit-review skill first "
                 "(it ends with review_stamp.py write); any edit after the review needs a new one." + order + store)
     if "validate" not in off and ok("needs-validate") and not ok("check", "--kind", "validate"):
-        return ("The change touches behavior but has no validation recorded for it. Run the validate skill "
+        return ("The change touches behavior but has no validation recorded for it. Run the kit-validate skill "
                 "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run."
                 + order + store)
     return None

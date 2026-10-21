@@ -13,7 +13,7 @@ Keep the repository private when it holds anything about your employer or client
 |---|---|---|
 | `repos/example-plugin/notes.md` | What an agent should know before working in that repository | linked to `~/.agents/repos/example-plugin/`; `AGENTS.md` sends agents there |
 | `repos/example-plugin/verify` | Checks run when an agent stops after editing that repository; exit non-zero to send it back to work | run by the Stop hook from the repository root |
-| `repos/example-plugin/review.md` | The review guide the self-review's reviewers apply in that repository: what failure looks like there, what to skip | read by `bundle.sh` and the `kit:review-*` agents |
+| `repos/example-plugin/review.md` | The review guide the review's reviewers apply in that repository: what failure looks like there, what to skip | read by `bundle.sh` and the `kit:review-*` agents |
 | `repos/example-plugin/rules.semgrep.yml` | A project rule the `verify` applies to changed lines only | read by `verify` |
 | `skills/release-notes/` | A skill only this kind of work needs | linked into every harness's skills |
 | `research/*` | Studies built from this work's data, one file each | each file linked into `~/.agents/research/` |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A/B harness for browser tooling in the validate skill: Playwright CLI vs agent-browser.
+"""A/B harness for browser tooling in the kit-validate skill: Playwright CLI vs agent-browser.
 
   browse assign                         pick the tool for this validation run (balanced alternation)
   browse <tool args...>                 run the assigned tool with these args, logging the call
@@ -22,7 +22,7 @@ from review_stamp import branch_key  # noqa: E402
 
 TOOLS = ["playwright-cli", "agent-browser"]
 LOG = os.path.expanduser("~/.agents/logs/browser-ab.jsonl")
-SPEC_PATH = os.path.expanduser("~/.agents/skills/spec/path.sh")
+SPEC_PATH = os.path.expanduser("~/.agents/skills/kit-spec/path.sh")
 
 
 def git(*args):

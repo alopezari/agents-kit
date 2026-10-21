@@ -49,7 +49,7 @@ It also adds the kit's baseline settings where a key is missing, never overwriti
 
 ```mermaid
 flowchart TD
-  T[Issue or request] --> SP[spec skill: acceptance criteria, second reading]
+  T[Issue or request] --> SP[kit-spec skill: acceptance criteria, second reading]
   SP --> W[Agent edits code]
   W -->|every shell command| G{guard_bash}
   G -->|irreversible| B[Blocked with the reason]
@@ -59,20 +59,20 @@ flowchart TD
   PE -->|syntax error| W
   W -->|end of turn| SC{stop_checks + verify}
   SC -->|problem found, first time| W
-  SC -->|clean| SR[self-review skill: lenses + second model]
-  SR --> V[validate skill: suite + local checks + checks guide for what it couldn't run]
-  V --> CP[create-pr skill: evidence check, push, write-pr-description]
+  SC -->|clean| SR[kit-review skill: lenses + second model]
+  SR --> V[kit-validate skill: suite + local checks + checks guide for what it couldn't run]
+  V --> CP[kit-create-pr skill: evidence check, push, kit-write-pr-description]
   CP --> PR{gh pr create}
-  PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]
-  PR -->|stamped| FP[follow-pr skill: first run waits for CI and bot reviews; later runs on demand]
+  PR -->|no stamp for this exact change| G2[Blocked: run kit-review / kit-validate]
+  PR -->|stamped| FP[kit-follow-pr skill: first run waits for CI and bot reviews; later runs on demand]
   FP -->|fix needed| W
   FP -->|CI green, reviews answered| MG{You run more checks or merge}
   MG -->|a check fails| W
   MG --> M[Merged: the flow ends]
-  M -.->|only when you ask| SH[ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]
+  M -.->|only when you ask| SH[kit-ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]
 ```
 
-The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Merging the default branch keeps the self-review and validate stamps when the branch's own diff is unchanged, and invalidates verify's: the tests run again on the merged code. Only running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no check (no `ran:` line) leaves a separate stamp, and the status line says "verify checked nothing".
+The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Merging the default branch keeps the review and validate stamps when the branch's own diff is unchanged, and invalidates verify's: the tests run again on the merged code. Only running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no check (no `ran:` line) leaves a separate stamp, and the status line says "verify checked nothing".
 
 Nothing waits for the checks guide: the PR description lists each of its steps with who runs it, or with its result once one is recorded, and you decide whether to run the optional ones before the merge. When you run a step and say so, the agent reads its evidence and adds the result to the guide, so the PR description shows it.
 
@@ -103,7 +103,7 @@ Nothing waits for the checks guide: the PR description lists each of its steps w
 
 **`post_edit.py`**: PostToolUse hook for file edits, shared by Claude Code and Codex. Runs a fast syntax check on each edited file and records that the session edited files, so the Stop hook only runs its checks after real changes.
 
-**`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex. Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards, writes to it are allowed until the user's next message. A DROP or TRUNCATE statement guard_bash.py refuses needs more than a mention: the message opens with the line `allow <statement>`, or does nothing but ask for it in plain words ("Sí, borra las bases de prueba", "drop the test databases"). A message whose first line is `phase off|on <phase> [branch|repo|global]` switches a flow phase (phase_switches.py), and the hook tells the agent what is off now; one whose first line is `review-rounds <0-9> [branch|repo|global]` sets how many re-checks the self-review runs. A yes to the agent's offer approves too: when the agent's last message ends asking whether to write to a guarded service, naming it ("¿Quieres que la cree en Linear?"), and the user's message accepts it ("Sí, crea la tarea en WCCOM…", "dale", "go ahead"), that service is approved until the next message. Only the transcript's tail is read, and anything it can't show for sure (a missing or corrupt file, a turn that ended on a tool call) approves nothing. Only the user's own messages reach this hook, so an agent can't grant itself one: it can word the question, but the user has to accept it. Mentioning the service only to read from it approves writes for that turn too. The objects guard_mcp.py records a session's approved writes to outlast the user's messages: this hook only deletes the ones older than guard_mcp.OBJECT_APPROVAL_HOURS. When the message arrives RETURN_GAP_HOURS or more after the newest conversation entry in the transcript's tail, the hook tells the agent to run `~/.agents/bin/reports brief` and open its reply with Status, What it does and How sure. It runs no report itself, and a tail it can't read only leaves that out (logged as return-gap-unreadable).
+**`prompt_approvals.py`**: UserPromptSubmit hook for Claude Code and Codex. Asking for a write is approving it: when the user's message names a service guard_mcp.py guards (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards, writes to it are allowed until the user's next message. A DROP or TRUNCATE statement guard_bash.py refuses needs more than a mention: the message opens with the line `allow <statement>`, or does nothing but ask for it in plain words ("Sí, borra las bases de prueba", "drop the test databases"). A message whose first line is `phase off|on <phase> [branch|repo|global]` switches a flow phase (phase_switches.py), and the hook tells the agent what is off now; one whose first line is `review-rounds <0-9> [branch|repo|global]` sets how many re-checks the review runs. A yes to the agent's offer approves too: when the agent's last message ends asking whether to write to a guarded service, naming it ("¿Quieres que la cree en Linear?"), and the user's message accepts it ("Sí, crea la tarea en WCCOM…", "dale", "go ahead"), that service is approved until the next message. Only the transcript's tail is read, and anything it can't show for sure (a missing or corrupt file, a turn that ended on a tool call) approves nothing. Only the user's own messages reach this hook, so an agent can't grant itself one: it can word the question, but the user has to accept it. Mentioning the service only to read from it approves writes for that turn too. The objects guard_mcp.py records a session's approved writes to outlast the user's messages: this hook only deletes the ones older than guard_mcp.OBJECT_APPROVAL_HOURS. When the message arrives RETURN_GAP_HOURS or more after the newest conversation entry in the transcript's tail, the hook tells the agent to run `~/.agents/bin/reports brief` and open its reply with Status, What it does and How sure. It runs no report itself, and a tail it can't read only leaves that out (logged as return-gap-unreadable).
 
 **`stop_checks.py`**: Stop hook shared by Claude Code and Codex. After a turn that edited files since the last stop, looks at the lines the branch adds since the merge-base with its base (`review_stamp.branch_base`: the default branch, or the branch it is stacked on; committed or not) and asks the agent to continue, once, for a skipped or focused test, a deleted test file, a debug leftover, a conflict marker, a possible secret, a new option read near a cache, a temporary compose override left behind, or a changed code file the spec's Change map doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read. Once a branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change with its context over NEW_CHANGE_NUDGE_TOKENS, tells the user, once, that a new session picks it up for less (Claude Code only: it reads the transcript). Every stop also starts each profile's `after-turn` in the background with the stop payload on stdin, and doesn't wait for it. The Change map question, verify and the CI question each stay quiet for a checkout whose user switched off the spec, verify or ci phase (phase_switches.py); the other checks always run.
 
@@ -132,8 +132,8 @@ Every block, every approved or browser MCP call and every shell command a user's
 - `chmod 777`: world-writable permissions.
 - Touching `~/.agents/approvals`, written out or relative to the working directory or a `cd` in the command: approvals for shared-system writes must come from the user. Naming it in a message, an echo or a search is text.
 - Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.
-- `gh pr create` until the self-review (and, for behavior changes, validate) stamp matches the change, and while the PR's target isn't the base the stamps measured against (`review_stamp.py base`).
-- The last one lifts for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (self-review, validate; `bin/phase switches`); no other rule here can be switched off.
+- `gh pr create` until the review (and, for behavior changes, validate) stamp matches the change, and while the PR's target isn't the base the stamps measured against (`review_stamp.py base`).
+- The last one lifts for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (review, validate; `bin/phase switches`); no other rule here can be switched off.
 
 It is a seatbelt against agent mistakes, not a security boundary. MCP writes to shared systems need your approval: naming the service in your message approves it until your next one, as does saying yes when the agent's last message asked to write to it by name, and otherwise you create a short-lived approval that the agent can't. The core knows Linear's write operations; profiles declare other servers' in `mcp-writes.json`, and writes to a server no one has declared are not guarded. Where a profile also says which input fields name the object a write touches, and which field a create returns, the objects you approved writing to stay approved for that session for 24 hours: the agent can edit, comment on or attach to the issue it created for you in a later turn, but not create another without asking. In a repository other people work in, Impeccable's project files (PRODUCT.md, DESIGN.md, `.impeccable/`, adding them to `.gitignore`) and its `live` and `hooks on`/`reset` wait the same way for your message naming them (`hooks/guard_files.py` for file tools, the shell guard for commands); a profile lists your own owners in `personal-repos.txt`. For MCP writes and `DROP`/`TRUNCATE` commands, Claude Code's mod asks you right away instead, in a dialog that shows the blocked call: allowing it writes the approval your message would, for that one call or until your next message (`bin/approve`, which the shell guard refuses from the agent).
 
@@ -194,29 +194,29 @@ A repository that needs more (a Docker stack, known failing tests, project rules
 | Skill | Source | What it's for |
 |---|---|---|
 | `clarity` | https://github.com/addyosmani/clarity.git | Draft, rewrite or review prose other people will read, so it is specific and sounds like its author without inventing facts. |
-| `create-pr` | core | Open the pull request once the change is reviewed and validated. Checks that verify, self-review, and validate passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly. |
-| `follow-pr` | core | Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs once right after create-pr (waiting for CI and bot reviews), then whenever the user asks to follow up on the PR. |
 | `impeccable` | https://github.com/pbakaus/impeccable.git, `.claude/skills/impeccable` at 508d7e8 | Design, critique, audit and polish frontend interfaces with a consistent visual direction, and keep an existing brand. |
-| `self-review` | core | Adversarial multi-lens review of your own diff before it goes to a human, using focused reviewers and a second model family, then verifying every finding before acting on it. Use before opening or updating a pull request, before declaring a non-trivial change done, or when asked to review the current branch. |
-| `ship` | core | See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, or, for a repo installed on this machine, deploys and runs the checks itself; prepares the rollback, and closes the loop (issue update, repo notes, local branch). Runs only when the user asks for it: to deploy or verify a merged PR, or to install a merged PR of a repo installed on this machine. Hearing that a PR is merged or deployed is not that request. |
-| `spec` | core | Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the self-review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change. |
-| `validate` | core | Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, and writes a step-by-step checks guide for whatever it couldn't run: optional steps the user can run before the merge, and the steps after it. Use for behavior changes before opening a PR, or when asked to test a change. |
-| `write-pr-description` | core | Write short, blunt, human-sounding pull request titles and descriptions that lead with functional impact and keep technical detail at architectural altitude, based on the actual code changes, repository context, issue requirements, validation evidence, and the repository's configured PR template. Use when opening, updating, or preparing a pull request. |
+| `kit-create-pr` | core | Open the pull request once the change is reviewed and validated. Checks that verify, review, and validate passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the kit-write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly. |
+| `kit-follow-pr` | core | Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs once right after create-pr (waiting for CI and bot reviews), then whenever the user asks to follow up on the PR. |
+| `kit-review` | core | Adversarial multi-lens review of your own diff before it goes to a human, using focused reviewers and a second model family, then verifying every finding before acting on it. Use before opening or updating a pull request, before declaring a non-trivial change done, or when asked to review the current branch. |
+| `kit-ship` | core | See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, or, for a repo installed on this machine, deploys and runs the checks itself; prepares the rollback, and closes the loop (issue update, repo notes, local branch). Runs only when the user asks for it: to deploy or verify a merged PR, or to install a merged PR of a repo installed on this machine. Hearing that a PR is merged or deployed is not that request. |
+| `kit-spec` | core | Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change. |
+| `kit-validate` | core | Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, and writes a step-by-step checks guide for whatever it couldn't run: optional steps the user can run before the merge, and the steps after it. Use for behavior changes before opening a PR, or when asked to test a change. |
+| `kit-write-pr-description` | core | Write short, blunt, human-sounding pull request titles and descriptions that lead with functional impact and keep technical detail at architectural altitude, based on the actual code changes, repository context, issue requirements, validation evidence, and the repository's configured PR template. Use when opening, updating, or preparing a pull request. |
 
-Harnesses pick a skill by its description; you can also call one by name (`/spec` in Claude Code).
+Harnesses pick a skill by its description; you can also call one by name (`/kit-spec` in Claude Code).
 
 ## Claude Code mod
 
-Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code, defines the self-review's reviewer agents, runs the kit's tools without a turn and asks you about a blocked call you could approve. It owns no state and no safety: it shows and runs what the rest of the kit does, and the hooks still decide what is blocked, so Codex, and a session without the mod, get the same flow. Each capability names what Codex has instead.
+Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Claude Code, defines the review's reviewer agents, runs the kit's tools without a turn and asks you about a blocked call you could approve. It owns no state and no safety: it shows and runs what the rest of the kit does, and the hooks still decide what is blocked, so Codex, and a session without the mod, get the same flow. Each capability names what Codex has instead.
 
 | Command, hook or agent | Capability | Codex has instead |
 |---|---|---|
-| `/flow`: Show where this branch is in the kit's flow, run verify without a turn, and switch a phase off or on or set the self-review's re-check rounds | Phase and reports | `bin/reports brief` |
+| `/flow`: Show where this branch is in the kit's flow, run verify without a turn, and switch a phase off or on or set the review's re-check rounds | Phase and reports | `bin/reports brief` |
 |  | The phases switched off, with their scope, also on the default branch | `bin/phase switches` |
 |  | `/flow off\|on <phase> [--repo\|--global]`, typed at the prompt, switches a phase for the branch, the repo or every repo | a message whose first line is `phase off\|on <phase> [branch\|repo\|global]` |
-|  | `/flow review-rounds <0-9> [--repo\|--global]`, typed at the prompt, sets how many re-checks the self-review runs after its first pass (1 when unset) | a message whose first line is `review-rounds <0-9> [branch\|repo\|global]`; `bin/phase review-rounds` reads it |
+|  | `/flow review-rounds <0-9> [--repo\|--global]`, typed at the prompt, sets how many re-checks the review runs after its first pass (1 when unset) | a message whose first line is `review-rounds <0-9> [branch\|repo\|global]`; `bin/phase review-rounds` reads it |
 |  | Follows the branch into the main checkout once create-pr detaches the session's own | the commands of this list, run from the main checkout |
-|  | Stamps (verify, self-review, validate), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
+|  | Stamps (verify, review, validate), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
 |  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
 |  | CI of the pushed HEAD | `bin/ci-wait --once --no-log` |
 |  | Context use | nothing (Codex shows its own) |
@@ -224,7 +224,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | Refresh button, and a refresh after each turn while the pane is open | running the commands above again |
 | `tool.call` hook: Ask the user in a dialog when a kit guard blocks a call they could approve | A blocked MCP write or `DROP`/`TRUNCATE` command shown in a dialog: allowed once, until the user's next message, or kept blocked | the user's next message naming the service, saying yes to the agent's question offering that write by name, or opening with `allow <statement>`; or `touch ~/.agents/approvals/<service>` |
 |  | A dialog that can't ask (`bin/approve` failed, or it closed without an answer) said in the transcript, and an MCP write block in a session without the mod says no dialog will show | none: Codex has no dialog, and its blocks say how to approve |
-| `kit:review-<lens>` agents: One reviewer agent type per self-review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/self-review/lenses.md` |
+| `kit:review-<lens>` agents: One reviewer agent type per review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/kit-review/lenses.md` |
 
 The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.
 
@@ -241,7 +241,7 @@ approve once <session> <name>...     write them for one call, unless the turn ha
 approve revoke <session> <name>...   remove the ones `once` wrote; a turn approval stays
 ```
 
-**`bin/browse`**: A/B harness for browser tooling in the validate skill: Playwright CLI vs agent-browser.
+**`bin/browse`**: A/B harness for browser tooling in the kit-validate skill: Playwright CLI vs agent-browser.
 
 ```
 browse assign                         pick the tool for this validation run (balanced alternation)
@@ -278,13 +278,13 @@ free-branch <worktree>
 
 **`bin/gh`**: Runs the real gh with git's per-host proxy. gh ignores git's `http.<url>.proxy`, so a host reachable only through a proxy (a SOCKS tunnel, for example) makes it hang. This finds the host a call targets, passes git's proxy for it as HTTPS_PROXY, and fails at once when that proxy isn't answering. Linked ahead of the real gh in PATH (install.sh --doctor shows how).
 
-**`bin/phase`**: Where the current branch is in the kit's flow, for the status line: spec → build → self-review → validate → create-pr → PR open → merged.
+**`bin/phase`**: Where the current branch is in the kit's flow, for the status line: spec → build → review → validate → create-pr → PR open → merged.
 
 ```
 phase             print the cached phase at once; refresh it in the background when older than 15 s
 phase --refresh   work it out now from the spec, stamps, reports and PR state, cache it and print it
 phase switches    the phases the user switched off for this checkout, one per line with why (exit 1 unreadable)
-phase review-rounds  how many re-checks the self-review runs here, and where that's set: `2 (repo)`, `1 (default)`
+phase review-rounds  how many re-checks the review runs here, and where that's set: `2 (repo)`, `1 (default)`
 ```
 
 **`bin/pr-comments`**: Print the current branch's pull request comments that the follow-pr report doesn't list yet.
@@ -296,7 +296,7 @@ pr-comments    inline comments on the diff, conversation comments and review sum
 **`bin/pr-validation`**: Print a pull request's "## Validation" section from the branch's reports, so it states what they record.
 
 ```
-pr-validation    verify's verdict and what it ran, the self-review's findings, each validation check with its
+pr-validation    verify's verdict and what it ran, the review's findings, each validation check with its
 ```
 
 **`bin/prune-merged`**: Remove the worktrees and local branches of this repository whose work is already in origin's default branch.
@@ -332,7 +332,7 @@ reports --branch <name> …                        the same for another branch o
 triage                  change vs the merge-base with the branch's base (committed + uncommitted + untracked)
 triage --range A..B     a commit range instead (for calibration on past changes)
 triage --json           machine-readable output
-triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/self-review/lenses.md
+triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/kit-review/lenses.md
 ```
 
 **`bin/wp-query-profile`**: Count the SQL queries a REST route or PHP snippet runs inside the local WordPress, and flag N+1 patterns.
@@ -427,8 +427,8 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | recommended | `gitleaks` | brew install gitleaks | the secrets check at the end of each turn |
 | recommended | `php` | brew install php | the generic verify's PHP checks; tests/run.sh |
 | optional | `claude ≥ 2.1.287` | https://claude.com/claude-code | the kit plugin (mods, from this version on) and the scheduled jobs (they run `claude -p`) |
-| optional | `playwright-cli` | npm install -g @playwright/cli | browser checks in the validate skill (bin/browse) |
-| optional | `agent-browser` | npm install -g agent-browser | browser checks in the validate skill (bin/browse) |
+| optional | `playwright-cli` | npm install -g @playwright/cli | browser checks in the kit-validate skill (bin/browse) |
+| optional | `agent-browser` | npm install -g agent-browser | browser checks in the kit-validate skill (bin/browse) |
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
 | optional | `impeccable` | https://github.com/pbakaus/impeccable/releases | the Design lens and validate's design check (the impeccable skill fetches it on first use) |
 | optional | `docker` | https://www.docker.com | repository verifies that run in containers |

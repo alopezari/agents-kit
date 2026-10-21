@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check a spec has the shape the spec skill documents, so self-review and validate have something to check against.
+"""Check a spec has the shape the kit-spec skill documents, so review and validate have something to check against.
 
   lint.py [spec.md]     the current branch's spec (path.sh) when no file is given
 

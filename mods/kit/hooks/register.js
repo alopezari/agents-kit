@@ -9,7 +9,7 @@ const SWITCH_REFUSED = 3
 // ci-wait --once makes one GitHub round trip per check source, and one more for the no-CI probe when there are none,
 // each bounded at 30 s; a GitHub slower than this reads as couldn't read.
 const CI_TIMEOUT_MS = 90_000
-const STAMPS = [['verify', 'verify'], ['self-review', 'review'], ['validate', 'validate']]
+const STAMPS = [['verify', 'verify'], ['review', 'review'], ['validate', 'validate']]
 const CI_OUTCOMES = { 0: 'passed', 1: 'failed', 2: 'running', 3: 'no checks', 4: 'unreadable', 5: 'none in this repo' }
 const REPORT_LINE = /^(ran|skipped|warning|error):/
 const VERIFY_TAIL_LINES = 8
@@ -23,7 +23,7 @@ const CHECKED_NOTHING = 'verify passed, but it checked nothing'
 const GATHER_ATTEMPTS = 2
 const NEEDS_ATTENTION = /couldn't read|^Couldn't|^CI: failed|^Run verify.* failed/
 
-// Each self-review lens becomes the agent type `kit:review-<key>`, briefed from what `bin/triage --lens-briefs` cuts
+// Each review lens becomes the agent type `kit:review-<key>`, briefed from what `bin/triage --lens-briefs` cuts
 // out of lenses.md. No edit tools is a convenience for the reviewer, not a guard (Bash can still write): the hooks
 // run for subagents too.
 const REVIEWER_TOOLS = ['Read', 'Grep', 'Glob', 'Bash']
@@ -320,7 +320,7 @@ async function runVerify($) {
 
 function reviewerPrompt(lens) {
   return [
-    `You are one reviewer in the kit's self-review, with one lens: ${lens.title}. You read files and run read-only`,
+    `You are one reviewer in the kit's review, with one lens: ${lens.title}. You read files and run read-only`,
     'commands; you never edit files. The spawn prompt gives the base ref, the goal, the spec when there is one, and how',
     "to report. The repository's own AGENTS.md or CLAUDE.md, when it has one, holds its conventions: read it when a",
     'finding depends on them. When `~/.agents/repos/$(~/.agents/bin/repo-name)/review.md` exists (run `repo-name` in the',
@@ -350,7 +350,7 @@ async function registerReviewers($) {
     await $.agent
       .register({
         name: 'review-' + lens.key,
-        description: `The self-review's ${lens.title} lens: a read-only reviewer of a change. Give it the base ref, ` +
+        description: `The review's ${lens.title} lens: a read-only reviewer of a change. Give it the base ref, ` +
           'the goal, the spec path and the evidence instruction.',
         prompt: reviewerPrompt(lens),
         tools: REVIEWER_TOOLS,
@@ -393,13 +393,13 @@ async function switchPhase($, e) {
   // After a failure too: a run that died or timed out may have written the switch first.
   refreshIfOpen($, 'a switch')
   const said = done.stdout?.trim()
-  if (done.exitCode === 0 && rounds) return { text: said, context: [`The user set the review re-check rounds with /flow: ${said} The self-review runs that many re-checks.`] }
+  if (done.exitCode === 0 && rounds) return { text: said, context: [`The user set the review re-check rounds with /flow: ${said} The review runs that many re-checks.`] }
   if (done.exitCode === 0) return { text: said, context: [`The user switched a phase with /flow: ${said} Skip the steps of the phases off.`] }
   if (done.exitCode === SWITCH_REFUSED) return { text: said }
   if (rounds) {
     return {
       text: `Couldn't tell whether review-rounds was set to ${args[1] ?? 'a number'}: ${failureOf(done)}. Run \`~/.agents/bin/phase review-rounds\` to see the value.`,
-      context: ['A /flow review-rounds setting may or may not have been recorded: read `~/.agents/bin/phase review-rounds` before the self-review.'],
+      context: ['A /flow review-rounds setting may or may not have been recorded: read `~/.agents/bin/phase review-rounds` before the review.'],
     }
   }
   return {

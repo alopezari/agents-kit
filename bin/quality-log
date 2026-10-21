@@ -25,7 +25,7 @@ import time
 
 KIT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")
 TAXONOMY = os.path.join(KIT, "review-mining", "taxonomy.md")
-# What became of each finding a lens raised: the self-review skill, step 4, defines each one.
+# What became of each finding a lens raised: the kit-review skill, step 4, defines each one.
 OUTCOMES = ("fixed", "wrong", "intentional", "minor", "pre-existing", "open", "uncertain")
 CONFIRMED_OUTCOMES = ("fixed", "minor", "pre-existing", "open")
 sys.path.insert(0, os.path.join(KIT, "hooks"))
@@ -34,7 +34,7 @@ from review_stamp import quality_log  # noqa: E402
 
 
 def lens_keys():
-    """{key or lowercase heading: key} for every review lens, plus the self-review's re-check and the spec's second reading."""
+    """{key or lowercase heading: key} for every review lens, plus the review's re-check and the spec's second reading."""
     sys.dont_write_bytecode = True  # loading triage would leave bin/__pycache__ behind, which bin/docs reads as a tool
     loader = importlib.machinery.SourceFileLoader("triage", os.path.join(KIT, "bin", "triage"))
     triage = importlib.util.module_from_spec(importlib.util.spec_from_loader("triage", loader))

@@ -22,13 +22,13 @@ profiles/
 !/repos/README.md
 !/repos/_shared/
 /skills/*
-!/skills/create-pr/
-!/skills/follow-pr/
-!/skills/self-review/
-!/skills/ship/
-!/skills/spec/
-!/skills/validate/
-!/skills/write-pr-description/
+!/skills/kit-create-pr/
+!/skills/kit-follow-pr/
+!/skills/kit-review/
+!/skills/kit-ship/
+!/skills/kit-spec/
+!/skills/kit-validate/
+!/skills/kit-write-pr-description/
 
 # Written by Claude Code each time it loads the mod from a directory, for the version running
 mods/kit/.claude-plugin/types/

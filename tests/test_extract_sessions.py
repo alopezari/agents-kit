@@ -248,11 +248,25 @@ def a_session_of_typed_commands(home):
     assert module.summarize(found)["first_prompt"] == "", "the summary has no prompt text to quote, and doesn't fail"
 
 
+def the_kit_names_count_as_their_former_phases(home):
+    rows = [user(0, "build the thing", "a"),
+            *assistant(1, "m0", "a", [skill("kit:kit-spec")]),
+            *assistant(2, "m1", "a", [edit("/repo/app.py")]),
+            *assistant(3, "m2", "a", [skill("kit-review")]),
+            *assistant(4, "m3", "a", [skill("kit-write-pr-description")]),  # runs inside a phase, starts none
+            user(5, "<command-message>kit-validate</command-message>\n<command-name>/kit-validate</command-name>", "a"),
+            *assistant(6, "m4", "a", [TEXT]),
+            *assistant(7, "m5", "a", [skill("create-pr")])]                   # a session from before the rename
+    a = spending(session(home, rows)["phases"])["a"]
+    assert sorted(a) == ["build", "create-pr", "self-review", "spec", "validate"], a
+    assert a["self-review"]["out"] == 20, f"kit-write-pr-description stays in the review: {a['self-review']}"
+
+
 
 for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, branches_started_by_commands,
              writing_the_spec_marks_the_work_before_it, what_counts_as_starting_the_code, short_gaps_add_up,
              the_users_attention_per_branch, what_the_user_did_not_type, another_agents_run_is_not_the_user,
-             a_session_of_typed_commands):
+             a_session_of_typed_commands, the_kit_names_count_as_their_former_phases):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:
