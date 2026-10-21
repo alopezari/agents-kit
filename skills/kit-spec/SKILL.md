@@ -125,6 +125,6 @@ If the other CLI isn't installed or fails, say so when you show the spec and go 
 
 ## Afterwards
 
-In Claude Code with the kit plugin, the build goes to `kit:build-<tier>` for the Risk line's tier (AGENTS.md → Pull requests); it follows the same rule. Build test first: for each criterion whose `verify:` can be an automated test, write that test before the code and run it. It must fail for the reason the criterion names, not on a missing symbol or a setup error; then implement until it passes. Keep the failing output: the review's Tests lens asks for it.
+Build test first: for each criterion whose `verify:` can be an automated test, write that test before the code and run it. It must fail for the reason the criterion names, not on a missing symbol or a setup error; then implement until it passes. Keep the failing output: the review's Tests lens asks for it. In Claude Code with the kit plugin, the build goes to `kit:build-<tier>` for the spec's tier (AGENTS.md → Pull requests), which follows the same rule.
 
 The `kit-review` skill reads this spec. Its Correctness lens checks every acceptance criterion against the diff, and every change in the diff against the criteria, and the PR description can list them as what was verified. If the scope changes while building, update the spec first.

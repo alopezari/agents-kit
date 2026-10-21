@@ -227,9 +227,9 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | A dialog that can't ask (`bin/approve` failed, or it closed without an answer) said in the transcript, and an MCP write block in a session without the mod says no dialog will show | none: Codex has no dialog, and its blocks say how to approve |
 | `kit:review-<lens>` agents: One reviewer agent type per review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/kit-review/lenses.md` |
 |  | Each lens on Opus at high effort, whatever the session runs on | the session's model |
-| `kit:build-<lens>` agents: One builder agent type per risk tier | `build-low` on Sonnet at medium effort, `build-standard` (also without a spec) on Sonnet at high, `build-high` on Opus at high, each with the session's tools and CLAUDE.md | the session builds it, on its own model |
-| `kit:validate-<lens>` agents: A runner for the validation's local checks | `validate-runner` runs the checks through `bin/evidence` on Sonnet at medium effort and reports what each printed, leaving the verdict to the session | the session runs the checks itself |
-| `kit:pr-<lens>` agents: A writer for the pull request's description | `pr-description` writes the title and description into the body file on Sonnet at medium effort, following kit-write-pr-description; the session opens the PR | the session writes it |
+| `kit:build-<tier>` agents: One builder agent type per risk tier | `build-low` on Sonnet at medium effort, `build-standard` (also without a spec) on Sonnet at high, `build-high` on Opus at high, each with the session's tools and CLAUDE.md | the session builds it, on its own model |
+| `kit:validate-runner` agent: A runner for the validation's local checks | `validate-runner` runs the checks through `bin/evidence` on Sonnet at medium effort and reports what each printed, leaving the verdict to the session | the session runs the checks itself |
+| `kit:pr-description` agent: A writer for the pull request's description | `pr-description` writes the title and description into the body file on Sonnet at medium effort, following kit-write-pr-description; the session opens the PR | the session writes it |
 
 The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.
 

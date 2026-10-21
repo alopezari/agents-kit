@@ -30,6 +30,7 @@ export const FEATURES = [
   },
   {
     "agentPrefix": "review",
+    "agent": "review-<lens>",
     "description": "One reviewer agent type per review lens",
     "capabilities": [
       {"name": "One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block", "codex": "a subagent given the lens text from `skills/kit-review/lenses.md`"},
@@ -38,6 +39,7 @@ export const FEATURES = [
   },
   {
     "agentPrefix": "build",
+    "agent": "build-<tier>",
     "description": "One builder agent type per risk tier",
     "capabilities": [
       {"name": "`build-low` on Sonnet at medium effort, `build-standard` (also without a spec) on Sonnet at high, `build-high` on Opus at high, each with the session's tools and CLAUDE.md", "codex": "the session builds it, on its own model"}
@@ -45,6 +47,7 @@ export const FEATURES = [
   },
   {
     "agentPrefix": "validate",
+    "agent": "validate-runner",
     "description": "A runner for the validation's local checks",
     "capabilities": [
       {"name": "`validate-runner` runs the checks through `bin/evidence` on Sonnet at medium effort and reports what each printed, leaving the verdict to the session", "codex": "the session runs the checks itself"}
@@ -52,6 +55,7 @@ export const FEATURES = [
   },
   {
     "agentPrefix": "pr",
+    "agent": "pr-description",
     "description": "A writer for the pull request's description",
     "capabilities": [
       {"name": "`pr-description` writes the title and description into the body file on Sonnet at medium effort, following kit-write-pr-description; the session opens the PR", "codex": "the session writes it"}

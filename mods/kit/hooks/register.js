@@ -370,8 +370,9 @@ async function registerWorkers($) {
   const workers = [
     ...BUILDERS.map(({ tier, model, effort }) => ({
       name: 'build-' + tier,
-      description: `Builds a change whose spec's Risk line is ${tier}` + (tier === 'standard' ? ', or that has no spec' : '') +
-        `, on ${model} at ${effort} effort. Give it the goal, the spec path and any correction the user made.`,
+      description: `Builds a change whose spec's tier, on triage's Spec: line, is ${tier}` + (tier === 'standard' ? ', or that has none' : '') +
+        `, on ${model} at ${effort} effort: the first build only, fixes after it are the session's. Give it the goal, the ` +
+        'spec path and any correction the user made.',
       prompt: BUILDER_PROMPT,
       model,
       effort,
@@ -558,11 +559,11 @@ export function register(on) {
     const waited = new AbortController()
     const registering = registerWorkers($)
       .then(() => registerReviewers($))
-      .catch((error) => $.ui.log('kit: kit agents: ' + messageOf(error), { to: 'debug' }))
+      .catch((error) => $.ui.log('kit: agents: ' + messageOf(error), { to: 'debug' }))
       .finally(() => waited.abort())
     const timer = $.clock.sleep(AGENTS_WAIT_MS, { signal: waited.signal }).then(() => 'timed out', () => 'registered')
     if ((await Promise.race([registering.then(() => 'registered'), timer])) === 'timed out') {
-      await $.ui.log('kit: kit agents: still registering after 2 s, so the session started without them', { to: 'debug' })
+      await $.ui.log('kit: agents: still registering after 2 s, so the session started without the ones not registered yet', { to: 'debug' })
     }
     return next(e)
   })

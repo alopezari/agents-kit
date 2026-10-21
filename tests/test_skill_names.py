@@ -18,8 +18,10 @@ SENDS_TO_FORMER = re.compile(rf"(?<![\w/-])`?{FORMER}`?(?:(?:,| and| or) `?{FORM
 # The review's former name, kept on purpose: the stamp file, the phase alias, old reports' header.
 KEPT = re.compile(r"self-review\.stamp|FORMER_NAMES|\(Self-review\|Review\)|\"Self-review\" heads")
 # The other model family's readings run on one known setup, whatever the user's own default is. A call is the command
-# followed by its flags, so prose naming "step 2's `claude -p` command" isn't one.
-CROSS_MODEL_PINS = {"codex exec -": "-m gpt-6.1-sol -c model_reasoning_effort=high", "claude -p -": "--model opus --effort high"}
+# followed by anything but the closing backtick, so prose naming "step 2's `claude -p` command" isn't one; it runs to
+# the next pipe, `;`, `&&` or backtick, so a pinned call doesn't cover an unpinned one beside it.
+CROSS_MODEL_CALL = re.compile(r"\b(codex exec|claude (?:-p|--print))(?!`)\b[^|;&`]*")
+CROSS_MODEL_PINS = {"codex": ("-m gpt-6.1-sol", "-c model_reasoning_effort=high"), "claude": ("--model opus", "--effort high")}
 READ_BY_THE_AGENT = ["AGENTS.md", "README.md", "skills/kit-*/**/*", "hooks/*.py", "bin/*", "mods/kit/hooks/*.js", "deps.txt"]
 
 failed = False
@@ -48,13 +50,40 @@ print(f"FAIL kit-ship doesn't name the ship.md sections {missing}" if missing el
 failed |= bool(stale)
 print(("FAIL a former skill name is still read by the agent:\n     " + "\n     ".join(stale)) if stale
       else "ok   no instruction, message or path names a former skill")
+
+
+def unpinned_calls(text):
+    """(line, command, missing pin) for each cross-model call in text, a `\\`-continued line counted as its first."""
+    found, joined, start = [], "", 1
+    for n, line in enumerate(text.splitlines() + [""], 1):
+        if not joined:
+            start = n
+        joined += line
+        if line.endswith("\\"):
+            joined = joined[:-1]
+            continue
+        for call in CROSS_MODEL_CALL.finditer(joined):
+            found += [(start, call.group(1), pin) for pin in CROSS_MODEL_PINS[call.group(1).split()[0]] if pin not in call.group(0)]
+        joined = ""
+    return found
+
+
+# The check itself: each of these must be caught, or a call can drift off its pins unseen.
+for sample in ['codex exec "$prompt"', 'claude -p "$p"', "claude --print <<<x", "a | claude -p --model opus --effort high | codex exec -",
+               'claude -p --model opus \\\n  --allowedTools "Read"']:
+    assert unpinned_calls(sample), f"unpinned call not caught: {sample!r}"
+assert not unpinned_calls("pipe it into step 2's `claude -p` command, or `codex exec` from Claude"), "prose counted as a call"
+assert not unpinned_calls("claude -p --effort high \\\n  --model opus -"), "a continued line's pin not seen"
+
 unpinned = []
-for path in glob.glob(os.path.join(KIT, "skills", "kit-*", "**", "*"), recursive=True):
+for path in glob.glob(os.path.join(KIT, "skills", "**", "*"), recursive=True):
     if not os.path.isfile(path):
         continue
-    for n, line in enumerate(open(path).read().splitlines(), 1):
-        unpinned += [f"{os.path.relpath(path, KIT)}:{n}: {call.rstrip(' -')} without {pin}" for call, pin in CROSS_MODEL_PINS.items()
-                     if call in line and pin not in line]
+    try:
+        text = open(path).read()
+    except UnicodeDecodeError:
+        continue
+    unpinned += [f"{os.path.relpath(path, KIT)}:{n}: {call} without {pin}" for n, call, pin in unpinned_calls(text)]
 failed |= bool(unpinned)
 print(("FAIL a cross-model call doesn't pin its model and effort:\n     " + "\n     ".join(unpinned)) if unpinned
       else "ok   every codex exec and claude -p in the skills pins its model and effort")

@@ -706,6 +706,11 @@ test('session start registers one reviewer per lens bin/triage prints, briefed w
   const prefixes = FEATURES.filter((feature) => feature.agentPrefix).map((feature) => feature.agentPrefix + '-')
   expect(prefixes).toEqual(['review-', 'build-', 'validate-', 'pr-'])
   expect(registered.every((spec) => prefixes.some((prefix) => spec.name.startsWith(prefix)))).toBe(true)
+  // The docs print each family's `agent` name, a <placeholder> standing for the part that varies.
+  const families = FEATURES.filter((feature) => feature.agentPrefix)
+    .map((feature) => new RegExp('^' + feature.agent.replace(/<[a-z]+>/, '[a-z0-9-]+') + '$'))
+  expect(registered.every((spec) => families.some((family) => family.test(spec.name)))).toBe(true)
+  expect(families.every((family) => registered.some((spec) => family.test(spec.name)))).toBe(true)
 })
 
 for (const [why, triage, cause] of [
@@ -772,9 +777,10 @@ test('session start registers one builder per risk tier, on its model and effort
   for (const spec of builders) {
     expect(spec.tools).toBeUndefined()
     expect(spec.omitClaudeMd).toBeUndefined()
-    expect(spec.prompt).toContain('test first')
-    expect(spec.prompt).toContain('spec')
-    expect(spec.description).toContain(spec.name.slice('build-'.length))
+    expect(spec.prompt).toContain('Build test first')
+    expect(spec.prompt).toContain('Report the files you changed, each test you ran with the failing output')
+    expect(spec.prompt).toContain('every departure from the spec')
+    expect(spec.description).toContain("on triage's Spec: line, is " + spec.name.slice('build-'.length) + ',')
   }
 })
 
@@ -786,6 +792,7 @@ test('the validate runner runs checks on Sonnet, writes no edits to the repo and
   expect(runner.omitClaudeMd).toBeUndefined()
   expect(runner.prompt).toContain('bin/evidence')
   expect(runner.prompt).toContain('outside the working tree')
+  expect(runner.prompt).toContain('report its id, exit code, evidence file\nand the output line')
   expect(runner.prompt).toContain('never a PASS or FAIL')
 })
 
@@ -796,6 +803,9 @@ test('the PR description is written on Sonnet from the kit-write-pr-description 
   expect(writer.tools).toEqual(['Read', 'Grep', 'Glob', 'Bash', 'Write'])
   expect(writer.omitClaudeMd).toBeUndefined()
   expect(writer.prompt).toContain('~/.agents/skills/kit-write-pr-description/SKILL.md')
+  expect(writer.prompt).toContain('`~/.agents/bin/reports`')
+  expect(writer.prompt).toContain('`~/.agents/bin/pr-validation`')
+  expect(writer.prompt).toContain('the spec the spawn\nprompt names')
   expect(writer.prompt).toContain('body file')
   expect(writer.prompt).toContain('never open')
 })
@@ -807,9 +817,13 @@ test('a builder the host refuses is logged, and the rest of the agents are still
   expect(logged).toEqual([{ text: expect.stringMatching(/build-low.*unknown model/), to: 'debug' }])
 })
 
-test('a triage that never answers holds the session start up for 2 s at most', async ($, on) => {
+test('a triage that never answers holds the session start up for 2 s at most, with the other agents registered', async ($, on) => {
   const { clock } = stub(on, {}, { process: () => new Promise(() => {}) })
-  on('agent.register', ($, e) => ({ value: { agent: 'kit:' + e.name } }))
+  const registered = []
+  on('agent.register', ($, e) => {
+    registered.push(e.name)
+    return { value: { agent: 'kit:' + e.name } }
+  })
   const logged = []
   on('ui.log', ($, e) => {
     logged.push(e)
@@ -823,7 +837,8 @@ test('a triage that never answers holds the session start up for 2 s at most', a
   await clock.advance(1)
   await start
   expect(started).toBe(true)
-  expect(logged).toEqual([{ text: 'kit: kit agents: still registering after 2 s, so the session started without them', to: 'debug' }])
+  expect(registered).toEqual(KIT_AGENTS)
+  expect(logged).toEqual([{ text: 'kit: agents: still registering after 2 s, so the session started without the ones not registered yet', to: 'debug' }])
 })
 
 test('once the session is detached, the pane follows the branch the user took in the main checkout', async ($, on) => {
