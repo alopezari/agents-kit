@@ -2171,7 +2171,7 @@ def guard_records_the_pushed_checkout(base):
     assert recorded(f'git --no-pager -C "{other}" push') == [there]
     assert recorded(f'git push; cd "{other}"; git push') == sorted([here, there])
     assert recorded(f"  cd {other.replace(' ', chr(92) + ' ')} && git push") == [there]
-    assert recorded(f'git status\n\n  \ncd "{other}"\n\n\tgit push') == [there], "a cd between blank lines still counts"
+    assert recorded(f'git status\n\n  \n\t cd "{other}"\n\n\tgit push') == [there], "a cd between blank lines still counts"
     assert recorded(f'(cd "{other}" && git status); git push') == [here], "a subshell's cd stays in the subshell"
     assert recorded("git status && echo 'git push'") == [], "a push only in quoted text isn't one"
     for prose in ["cat > \"$(echo /tmp/n.md)\" <<'EOF'\nthen git push\nEOF",
