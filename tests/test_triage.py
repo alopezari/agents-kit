@@ -893,5 +893,5 @@ for case, untracked, expected in [
     lines = [l for l in out.splitlines() if l.startswith("Skipped:")]
     ok = lines == ([] if expected is None else [expected])
     fail |= not ok
-    print(f"{'ok  ' if ok else 'FAIL'} text output with {case}: {line!r}")
+    print(f"{'ok  ' if ok else 'FAIL'} text output with {case}: {lines!r}")
 sys.exit(fail)
