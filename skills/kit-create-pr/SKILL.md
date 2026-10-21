@@ -19,7 +19,7 @@ Run from the checkout that has the branch. Each line must hold, or the listed st
 
 A row whose phase `~/.agents/bin/phase switches` lists (verify, review, validate) is skipped: the user switched it off, and `bin/pr-validation` puts that in the description. The shell guard enforces the two stamps on `gh pr create`; this table catches the rest before you get there.
 
-The stamps measure the change against `python3 ~/.agents/hooks/review_stamp.py base`, and the guard denies a PR whose target differs from it. When the PR should target another branch (a stacked branch whose parent wasn't detected, or the default branch for one that was), record the target first, `git config branch."$(git branch --show-current)".agentsBase <target>`. When the change measured against it differs, the stamps go stale: re-run the review and validate on the change it shows.
+The stamps measure the change against `python3 ~/.agents/hooks/review_stamp.py base`, and the guard denies a PR whose target differs from it. When the PR should target another branch (a stacked branch whose parent wasn't detected, or the default branch for one that was), record the target first, `git config branch."$(git branch --show-current)".agentsBase <target>`. When the change measured against it differs, the stamps go stale: re-run the kit-review and kit-validate skills on the change it shows.
 
 ## 2. Push
 

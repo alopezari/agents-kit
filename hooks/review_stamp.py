@@ -439,7 +439,7 @@ def main():
         print(f"This PR targets `{target}`, but its stamps measure the change against `{base}`, so the review would "
               f"cover a different change than the PR shows. If `{target}` is the right target, record it with "
               f"`git config branch.{branch}.agentsBase {target}`, then re-run the "
-              f"review and validate on the change it shows; otherwise pass `--base {branch_name(base)}`.")
+              f"kit-review and kit-validate skills on the change it shows; otherwise pass `--base {branch_name(base)}`.")
         return 1
     if command == "follow-renames":
         follow_branch_renames()

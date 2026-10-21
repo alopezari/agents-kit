@@ -256,10 +256,14 @@ def the_kit_names_count_as_their_former_phases(home):
             *assistant(4, "m3", "a", [skill("kit-write-pr-description")]),  # runs inside a phase, starts none
             user(5, "<command-message>kit-validate</command-message>\n<command-name>/kit-validate</command-name>", "a"),
             *assistant(6, "m4", "a", [TEXT]),
-            *assistant(7, "m5", "a", [skill("create-pr")])]                   # a session from before the rename
-    a = spending(session(home, rows)["phases"])["a"]
-    assert sorted(a) == ["build", "create-pr", "self-review", "spec", "validate"], a
-    assert a["self-review"]["out"] == 20, f"kit-write-pr-description stays in the review: {a['self-review']}"
+            *assistant(7, "m5", "a", [skill("kit-create-pr")]),
+            *assistant(8, "m6", "a", [skill("kit:kit-follow-pr")]),
+            *assistant(9, "m7", "a", [skill("kit-ship")]),
+            *assistant(10, "m8", "b", [skill("create-pr")])]                  # a session from before the rename
+    found = spending(session(home, rows)["phases"])
+    assert sorted(found["a"]) == ["build", "create-pr", "follow-pr", "self-review", "ship", "spec", "validate"], found["a"]
+    assert found["a"]["self-review"]["out"] == 20, f"kit-write-pr-description stays in the review: {found['a']['self-review']}"
+    assert sorted(found["b"]) == ["create-pr"], found["b"]
 
 
 

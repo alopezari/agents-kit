@@ -159,23 +159,40 @@ check "and a direct MCP server in two places is warned about" \
 rm "$kit/profiles/zz-other"
 # A kit skill renamed by a pull leaves the harness links to its old folder, and the folder itself when git-ignored
 # files stay in it: the links go, the folder is named but kept, and a profile skill it blocks is told why.
-mkdir -p "$kit/skills/spec/__pycache__" "$home/mine" "$home/zz-left/skills/spec"
+made_codex_dir=0; [ -d "$home/.codex" ] || { mkdir -p "$home/.codex/skills"; made_codex_dir=1; }
+mkdir -p "$kit/skills/spec/__pycache__" "$home/mine" "$home/zz-left/skills/spec" "$home/zz-left/skills/notes-only"
 echo "---" > "$home/zz-left/skills/spec/SKILL.md"
 ln -s "$kit/skills/spec" "$home/.claude/skills/spec"
 ln -s "$kit/skills/self-review" "$home/.claude/skills/self-review"
+ln -s "$kit/skills/self-review" "$home/.codex/skills/self-review"
+# The user's own links stay, also under a retired name or into the kit but not at a skill folder.
 ln -s "$home/mine" "$home/.claude/skills/mine"
+ln -s "$home/mine" "$home/.claude/skills/ship"
+ln -s "$kit/skills/" "$home/.claude/skills/whole"
+ln -s "$kit/skills/kit-review/lenses.md" "$home/.claude/skills/lenses"
+ln -s "$kit/skills/../profiles" "$home/.claude/skills/dotdot"
+ln -s "$kit/skills/spec" "$home/.claude/skills/old-spec"
 out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor 2>&1)
 check "doctor: a harness link to a kit folder without a skill is reported, not removed" \
   'grep -q "warn  $home/.claude/skills/self-review links to $kit/skills/self-review, which holds no skill" <<<"$out" \
    && grep -q "warn  $home/.claude/skills/spec links to $kit/skills/spec, which holds no skill" <<<"$out" \
    && [ -L "$home/.claude/skills/spec" ] && [ -L "$home/.claude/skills/self-review" ]'
-out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes --profile "$home/zz-left" 2>&1)
-check "install: those links go, the leftover folder is named and kept, the user's own link and live kit links stay" \
-  '[ ! -L "$home/.claude/skills/spec" ] && [ ! -L "$home/.claude/skills/self-review" ] && [ -L "$home/.claude/skills/mine" ] \
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes --profile "$home/zz-left" 2>&1); install_status=$?
+check "install: those links go in both harnesses, the leftover folder is named once and kept, the user's own links and live kit links stay" \
+  '[ $install_status = 0 ] && [ ! -L "$home/.claude/skills/spec" ] && [ ! -L "$home/.claude/skills/self-review" ] \
+   && [ ! -L "$home/.codex/skills/self-review" ] && [ "$(readlink "$home/.codex/skills/kit-spec")" = "$kit/skills/kit-spec" ] \
+   && [ -L "$home/.claude/skills/mine" ] && [ -L "$home/.claude/skills/ship" ] && [ -L "$home/.claude/skills/whole" ] \
+   && [ -L "$home/.claude/skills/lenses" ] && [ -L "$home/.claude/skills/dotdot" ] && [ -L "$home/.claude/skills/old-spec" ] \
    && [ "$(readlink "$home/.claude/skills/kit-spec")" = "$kit/skills/kit-spec" ] && [ -d "$kit/skills/spec/__pycache__" ] \
-   && grep -q "warn  skills/spec has no SKILL.md, left from a renamed or removed skill: not linked; remove the folder" <<<"$out" \
+   && [ "$(grep -c "warn  $kit/skills/spec has no SKILL.md, left from a renamed or removed skill: not linked; remove the folder" <<<"$out")" = 1 ] \
    && grep -q "warn  skills/spec in profile zz-left is blocked by $kit/skills/spec, a leftover folder without SKILL.md; remove it" <<<"$out"'
-rm -r "$kit/skills/spec" "$kit/profiles/zz-left" "$home/.claude/skills/mine"
+check "install: a profile skill without SKILL.md is not linked, and not called a folder to remove" \
+  '[ -L "$kit/skills/notes-only" ] && [ ! -e "$home/.claude/skills/notes-only" ] \
+   && grep -q "warn  skills/notes-only, from a profile, has no SKILL.md: not linked" <<<"$out" \
+   && ! grep -q "notes-only.*remove the folder" <<<"$out"'
+rm -r "$kit/skills/spec" "$kit/skills/notes-only" "$kit/profiles/zz-left" "$home/zz-left"
+rm "$home/.claude/skills/"{mine,ship,whole,lenses,dotdot,old-spec}
+[ $made_codex_dir = 1 ] && rm -r "$home/.codex"
 mkdir -p "$home/elsewhere/sample-profile"
 out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --doctor --profile "$home/elsewhere/sample-profile" 2>&1)
 check "a new profile with an installed one's directory name is warned about" \

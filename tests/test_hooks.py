@@ -2611,29 +2611,47 @@ def review_rounds(cwd):
 def the_old_self_review_name_still_switches_the_review(base):
     a = new_repo(base, "zz-phase-alias")
     git(a, "switch", "-q", "-c", "feature")
+    open(os.path.join(a, "app.py"), "a").write("y = 2\n")
     store = os.path.join(PHASE_STORE, "global.json")
     kept = open(store).read() if os.path.exists(store) else None
     os.makedirs(PHASE_STORE, exist_ok=True)
-    with open(store, "w") as fh:
-        json.dump({"self-review": "off"}, fh)  # switched off before the phase was renamed
-    assert phases_off(a) == {"review": "global"}, f"a stored self-review counts as review: {phases_off(a)}"
-    phase_line("phase on review", a)
-    assert phases_off(a) == {}, "a branch's on under the new name overrides a global off under the old one"
-    repo_store = os.path.join(PHASE_STORE, "repo", "zz-phase-alias.json")
-    os.makedirs(os.path.dirname(repo_store), exist_ok=True)
-    with open(repo_store, "w") as fh:
-        json.dump({"self-review": "on", "review": "off", "verify": "off"}, fh)
-    os.remove(os.path.join(PHASE_STORE, "branch", "zz-phase-alias", "feature.json"))
-    assert phases_off(a) == {"review": "repo", "verify": "repo"}, f"the new name wins within one file: {phases_off(a)}"
-    said = phase_line("phase on self-review repo", a)
-    assert "Switched review on" in said, said
-    assert json.load(open(repo_store)) == {"review": "on", "verify": "off"}, "one key per phase, the others kept"
-    assert phases_off(a) == {"verify": "repo"}, phases_off(a)
-    if kept is None:
-        os.remove(store)
-    else:
+
+    def pr_gate():
+        d = run_hook("guard_bash.py", {"tool_input": {"command": "gh pr create --fill"}, "cwd": a, "session_id": "test"})
+        return d["hookSpecificOutput"]["permissionDecisionReason"] if d else ""
+
+    def repo_file(switches):
+        with open(repo_store, "w") as fh:
+            json.dump(switches, fh)
+
+    try:
         with open(store, "w") as fh:
-            fh.write(kept)
+            json.dump({"self-review": "off"}, fh)  # switched off before the phase was renamed
+        assert phases_off(a) == {"review": "global"}, f"a stored self-review counts as review: {phases_off(a)}"
+        assert "validation" in pr_gate(), f"a stored self-review: off lifts the review gate: {pr_gate()}"
+        phase_line("phase on review", a)
+        assert phases_off(a) == {}, "a branch's on under the new name overrides a global off under the old one"
+        os.remove(os.path.join(PHASE_STORE, "branch", "zz-phase-alias", "feature.json"))
+        repo_store = os.path.join(PHASE_STORE, "repo", "zz-phase-alias.json")
+        os.makedirs(os.path.dirname(repo_store), exist_ok=True)
+        repo_file({"self-review": "on", "review": "off", "verify": "off"})
+        assert phases_off(a) == {"review": "repo", "verify": "repo"}, f"the new name wins within one file: {phases_off(a)}"
+        repo_file({"self-review": "off", "review": "on"})
+        assert phases_off(a) == {}, f"the new name wins, whichever way it points: {phases_off(a)}"
+        repo_file({"self-review": "on", "review": "off", "verify": "off"})
+        said = phase_line("phase on self-review repo", a)
+        assert "Switched review on" in said, said
+        assert json.load(open(repo_store)) == {"review": "on", "verify": "off"}, "one key per phase, the others kept"
+        assert phases_off(a) == {"verify": "repo"}, phases_off(a)
+        repo_file({"self-review": "on", "verify": "off"})
+        phase_line("phase off review repo", a)
+        assert json.load(open(repo_store)) == {"review": "off", "verify": "off"}, "the new name replaces the old key too"
+    finally:
+        if kept is None:
+            os.remove(store)
+        else:
+            with open(store, "w") as fh:
+                fh.write(kept)
 
 
 def coming_back_after_hours_asks_for_the_status_first(base):

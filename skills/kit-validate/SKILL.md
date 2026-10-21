@@ -115,7 +115,7 @@ Log every test type that ran, so the monthly job can drop the ones that never fi
 ~/.agents/bin/quality-log test <type> --issues <N> --secs <S> --notes "<what it found>"
 ```
 
-Record the validation. Opening a PR is blocked for behavior changes until this stamp matches the current change. If validating led to code changes, run the review's same-model re-check (its step 4, item 1) again first, with no new cross-model round, so both stamps cover the final code:
+Record the validation. Opening a PR is blocked for behavior changes until this stamp matches the current change. If validating led to code changes, run the kit-review skill's same-model re-check (its step 4, item 1) again first, with no new cross-model round, so both stamps cover the final code:
 
 ```bash
 python3 ~/.agents/hooks/review_stamp.py write --kind validate
@@ -142,4 +142,4 @@ The guide holds the checks that couldn't run in step 4. What needs an environmen
 
 Give the guide in chat in the user's language, and save an English copy to `$(~/.agents/bin/reports path checks-guide)`.
 
-**When the user runs steps and says so,** read each step's evidence in `$EVIDENCE_DIR` and judge it against the step's Expected yourself; the user's word settles only what left no file. Append a `## Results (<date>)` table to the guide, one row per step run (`| Step | Result | Evidence |`), with the observation that decided it and a link to each evidence file by its absolute path. A failure is a finding: fix it (verify, the review's same-model re-check, with no new cross-model round, and this skill's stamp again), update the guide, and tell the user which steps to run again.
+**When the user runs steps and says so,** read each step's evidence in `$EVIDENCE_DIR` and judge it against the step's Expected yourself; the user's word settles only what left no file. Append a `## Results (<date>)` table to the guide, one row per step run (`| Step | Result | Evidence |`), with the observation that decided it and a link to each evidence file by its absolute path. A failure is a finding: fix it (verify, the kit-review skill's same-model re-check, with no new cross-model round, and this skill's stamp again), update the guide, and tell the user which steps to run again.

@@ -49,7 +49,7 @@ Print the comments no earlier run handled, from the branch's checkout:
 
 It reads all three kinds, every page: inline comments on the diff, the conversation, and review summaries. Each comes with its id, author (bots marked), file and line, URL and text. It skips the ids already in the report, the PR author's own replies and reviews without text, and says how many of each it skipped. Exit 4 means GitHub couldn't be read: say so, and don't report "no comments". For each new one:
 
-1. Verify it like a review finding: **Confirmed**, **Rejected** or **Uncertain**, each with evidence.
+1. Verify it like a kit-review finding: **Confirmed**, **Rejected** or **Uncertain**, each with evidence.
 2. Confirmed: fix it (section 3). Rejected: draft a reply with the evidence. Uncertain: put it in front of the user.
    Before fixing any of them, record each confirmed comment that names a file and line, neither outdated nor a deleted line, as a review eval case: the PR's head, the commit the comment's line refers to, still holds the bug, and the monthly job replays it against the reviewers. Skip it when the lens that should have caught it is `spec`, which has no reviewer to replay:
    ```bash
@@ -65,9 +65,9 @@ A fix is a small change of its own, and gets reviewed and tested in proportion, 
 
 1. The smallest fix, with a test that fails without it when there is a harness for it.
 2. Verify runs at the end of the turn (the stop hook).
-3. Review, step 4's same-model re-check only: re-run the Correctness lens yourself on the whole change, naming the fix and holding the findings already decided, even when the user set the rounds to 0, then `python3 ~/.agents/hooks/review_stamp.py write`. No new cross-model round: the review spent its re-check rounds, and a pass per fix would restart the loop it caps.
+3. The kit-review skill's same-model re-check (its step 4, item 1) only: re-run the Correctness lens yourself on the whole change, naming the fix and holding the findings already decided, even when the user set the rounds to 0, then `python3 ~/.agents/hooks/review_stamp.py write`. No new cross-model round: the review spent its re-check rounds, and a pass per fix would restart the loop it caps.
 4. For behavior changes, validate the checks the fix touches, not the whole plan, saving their evidence and updating their rows in the validation report as in the kit-validate skill (steps 4 and 5), then `python3 ~/.agents/hooks/review_stamp.py write --kind validate`.
-5. Push. If the description no longer matches the code, run `write-pr-description` again, save the whole new description to the path `~/.agents/bin/reports path pr-body` prints in the branch's checkout (its own file, even when an earlier run left none), then, as a command of its own, `gh pr edit <n> --body-file <body file>` with that path written out: for a pull request to the kit, the guard reads the file before anything in the command runs.
+5. Push. If the description no longer matches the code, run the kit-write-pr-description skill again, save the whole new description to the path `~/.agents/bin/reports path pr-body` prints in the branch's checkout (its own file, even when an earlier run left none), then, as a command of its own, `gh pr edit <n> --body-file <body file>` with that path written out: for a pull request to the kit, the guard reads the file before anything in the command runs.
 
 The push starts a new CI run: go back to section 1 and wait for it.
 
@@ -82,11 +82,11 @@ CI:      <check>: pass | fixed (<cause>, <commit>) | not caused by the change (<
 Status:  ready to merge | waiting on <what>
 ```
 
-Log every CI failure the change caused and every review comment from someone other than the user, once, when you first handle it. Each is something review and validate let through, and the monthly job measures them:
+Log every CI failure the change caused and every review comment from someone other than the user, once, when you first handle it. Each is something kit-review and kit-validate let through, and the monthly job measures them:
 
 ```bash
 ~/.agents/bin/quality-log escape <ci|review|bot> --verdict <confirmed|rejected|uncertain> \
-  --category <code from ~/.agents/review-mining/taxonomy.md> --lens <review lens that should have caught it, or spec> --pr <n>
+  --category <code from ~/.agents/review-mining/taxonomy.md> --lens <kit-review lens that should have caught it, or spec> --pr <n>
 ```
 
 `review` is a person, `bot` an automated reviewer. For CI, the verdict is `confirmed`; the lens is the one whose area the failure falls in (Tests for a failing test, Correctness for a wrong result). A comment saying the change doesn't do what was asked is category `C.requirement` with lens `spec`: the spec's second reading should have caught it. CI failures not caused by the change are not escapes.

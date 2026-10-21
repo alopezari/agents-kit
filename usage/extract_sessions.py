@@ -23,7 +23,7 @@ CORRECTION = re.compile(
     r"that's wrong|not what|still (fails|broken|not)|doesn't work|wrong)|\[Request interrupted",
     re.I,
 )
-# The skills that start a phase of the flow; others (write-pr-description, clarity…) run inside one.
+# The phases of the flow, keyed by the names their skills had before the kit- prefix; other skills (kit-write-pr-description, clarity…) run inside one.
 FLOW_SKILLS = {"spec", "self-review", "validate", "create-pr", "follow-pr", "ship"}
 # The skills' kit- names count as the phases they had before the rename, so the periods before and after compare.
 KIT_SKILL_PHASES = {"kit-spec": "spec", "kit-review": "self-review", "kit-validate": "validate", "kit-create-pr": "create-pr",

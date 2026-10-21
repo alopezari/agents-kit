@@ -9,8 +9,8 @@ import sys
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 SKILLS = ("kit-spec", "kit-review", "kit-validate", "kit-create-pr", "kit-follow-pr", "kit-ship", "kit-write-pr-description")
 FORMER = r"(?:spec|self-review|validate|create-pr|follow-pr|ship|write-pr-description)"
-# `spec` skill, the self-review or validate skills, /spec, skills/spec/, ../spec/: phase names alone stay unprefixed.
-SENDS_TO_FORMER = re.compile(rf"(?<![\w/-])`?{FORMER}`?(?:(?:,| and| or) `?{FORMER}`?)* skills?\b|`/{FORMER}\b|(?:skills|\.\.)/{FORMER}(?![\w-])")
+# `spec` skill, the self-review or validate skills, run `spec`, /spec, skills/spec/, ../spec/: phase names alone stay unprefixed.
+SENDS_TO_FORMER = re.compile(rf"(?<![\w/-])`?{FORMER}`?(?:(?:,| and| or) `?{FORMER}`?)* skills?\b|\brun `{FORMER}`|`/{FORMER}\b|(?:skills|\.\.)/{FORMER}(?![\w-])")
 # The review's former name, kept on purpose: the stamp file, the phase alias, old reports' header.
 KEPT = re.compile(r"self-review\.stamp|FORMER_NAMES|\(Self-review\|Review\)|\"Self-review\" heads")
 READ_BY_THE_AGENT = ["AGENTS.md", "README.md", "skills/kit-*/**/*", "hooks/*.py", "bin/*", "mods/kit/hooks/*.js", "deps.txt"]

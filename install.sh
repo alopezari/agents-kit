@@ -73,13 +73,12 @@ skills() {  # link every kit skill into a harness skills dir, and drop its links
   local dir=$1 s path target
   for s in "$KIT"/skills/*/; do
     s=${s%/}
-    if [ -f "$s/SKILL.md" ]; then link "$s" "$dir/$(basename "$s")"
-    else warn "skills/$(basename "$s") has no SKILL.md, left from a renamed or removed skill: not linked; remove the folder"; fi
+    [ -f "$s/SKILL.md" ] && link "$s" "$dir/$(basename "$s")"
   done
   for path in "$dir"/*; do
     [ -L "$path" ] || continue
     target=$(readlink "$path")
-    case $target in "$KIT"/skills/*) ;; *) continue ;; esac
+    [ "$target" = "$KIT/skills/$(basename "$path")" ] || continue  # the shape link() makes; any other is the user's
     [ -f "$target/SKILL.md" ] && continue
     if [ $DOCTOR = 1 ]; then warn "$path links to $target, which holds no skill"
     else rm "$path"; fix "removed $path, which linked to $target (no skill there now)"; fi
@@ -183,6 +182,11 @@ while read -r name source _; do
   elif [ $DOCTOR = 1 ]; then warn "$name is missing (from $source)"
   else git clone -q --depth 1 "$source" "$KIT/skills/$name" && fix "$name cloned from $source"; fi
 done < "$KIT/skills.external"
+for s in "$KIT"/skills/*/; do  # skills() links only folders that hold a SKILL.md
+  s=${s%/}; [ -f "$s/SKILL.md" ] && continue
+  if [ -L "$s" ]; then warn "skills/$(basename "$s"), from a profile, has no SKILL.md: not linked"
+  else warn "$s has no SKILL.md, left from a renamed or removed skill: not linked; remove the folder"; fi
+done
 
 echo "Kit repository"
 # The pre-commit hook regenerates docs/framework.md, so the reference never lags the code.
