@@ -145,7 +145,7 @@ def the_agent_stays_out_of_the_approvals(base):
                 "grep -rn approvals hooks/", "git commit -m 'Keep ~/.agents/approvals out of reach'",
                 "git commit -m \"$(cat <<'EOF'\nGuard ~/.agents/approvals\nEOF\n)\"", "echo 'see ~/.agents/approvals'",
                 "ls hooks", "rg -n 'approvals/turn' hooks",
-                "skills/self-review/bundle.sh main Correctness 'keeps the agent out of ~/.agents/approvals'",
+                "skills/kit-review/bundle.sh main Correctness 'keeps the agent out of ~/.agents/approvals'",
                 "git log --grep approvals", "echo see approvals", "git commit -m approvals", "python3 -m pytest -k approvals",
                 "git grep -n approvals", "cd ~/.agents/approvals && ls", "cat < ~/.agents/approvals/linear",
                 "wc -l < ~/.agents/approvals/linear", "command cat ~/.agents/approvals/linear"]] + [("ls -la", os.path.join(kit, "approvals"))]:
@@ -1314,7 +1314,7 @@ def unrun_checks_never_hold_the_pr(base):
         done = subprocess.run(["python3", H + "review_stamp.py", *args], cwd=repo, capture_output=True, text=True)
         assert done.returncode == 2 and "Unknown" in done.stderr, f"a removed or mistyped stamp is refused: {args} {done.stderr}"
     open(os.path.join(repo, "app.py"), "a").write("y = 3\n")
-    assert decision("gh pr create --fill") == "deny", "the self-review gate still holds an unreviewed change"
+    assert decision("gh pr create --fill") == "deny", "the review gate still holds an unreviewed change"
 
 
 def guard_fails_closed(base):
@@ -1417,7 +1417,7 @@ def reports_survive_worktree_removal(base):
     shown = subprocess.run([reports], cwd=main, capture_output=True, text=True).stdout
     assert "# Checks guide" in shown, f"guide written at {guide} is gone after removing the worktree"
     stamped = subprocess.run(["python3", H + "review_stamp.py", "check"], cwd=main).returncode == 0
-    assert stamped, "the self-review stamp must survive removing the worktree so the PR can be opened from the main checkout"
+    assert stamped, "the review stamp must survive removing the worktree so the PR can be opened from the main checkout"
 
 
 def reports_brief_gives_one_line_per_report(base):
@@ -1427,7 +1427,7 @@ def reports_brief_gives_one_line_per_report(base):
 
     def path(kind):
         return subprocess.run([reports, "path", kind], cwd=repo, capture_output=True, text=True).stdout.strip()
-    spec = subprocess.run([os.path.expanduser("~/.agents/skills/spec/path.sh")], cwd=repo, capture_output=True, text=True).stdout.strip()
+    spec = subprocess.run([os.path.expanduser("~/.agents/skills/kit-spec/path.sh")], cwd=repo, capture_output=True, text=True).stdout.strip()
     open(spec, "w").write("# Round prices once\n\nGoal: totals drift.\n" + "x\n" * 200)
     open(path("review"), "w").write("Self-review (risk: standard)\n" + "detail\n" * 200 + "Open:     the 0.005 case\n")
     open(path("validation"), "w").write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
@@ -1511,7 +1511,7 @@ def stop_suggests_a_fresh_session_once_the_pr_is_open(base):
         and "decision" not in first, first
     assert stop_with("big", "PR open", 310_000) is None, "once per session and branch"
     assert stop_with("small", "PR open", 100_000) is None, "a small context needs no new session"
-    assert stop_with("early", "self-review", 300_000) is None, "mid-change a new session would re-read everything"
+    assert stop_with("early", "review", 300_000) is None, "mid-change a new session would re-read everything"
     assert stop_with("edge", "PR open", 150_000) is None, "over 150K, not at it"
     assert stop_with("below-window", "PR open", 160_000), "compaction at a 200K window comes before any higher threshold"
     merged = stop_with("merged", "merged", 300_000)
@@ -1953,7 +1953,7 @@ def stop_asks_once_about_files_outside_the_change_map(base):
     git(repo, "add", "-A")
     git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "more")
     git(repo, "checkout", "-q", "-b", "feat/drift")
-    spec = subprocess.run([os.path.expanduser("~/.agents/skills/spec/path.sh")], cwd=repo, capture_output=True,
+    spec = subprocess.run([os.path.expanduser("~/.agents/skills/kit-spec/path.sh")], cwd=repo, capture_output=True,
                           text=True).stdout.strip()
     with_map = ("# Drift\n\nGoal: x.\n\n## Acceptance criteria\n1. y — verify: tests/test_app.py\n\n"
                 "## Change map\n- Ways in: the app — app.py:1, ./lib/café.py:1, cache.py.bak\n\n"
@@ -2507,24 +2507,24 @@ def a_phase_line_switches_phases_by_scope(base):
     worktree = os.path.join(base, "zz-phase-a-wt")
     git(a, "worktree", "add", "-q", worktree, "other")
     assert phases_off(worktree) == {"verify": "repo"}, "a worktree is the same repo"
-    phase_line("phase off self-review global", b)
-    assert phases_off(b) == {"self-review": "global"} and phases_off(a)["self-review"] == "global"
-    phase_line("phase on self-review", b)
+    phase_line("phase off review global", b)
+    assert phases_off(b) == {"review": "global"} and phases_off(a)["review"] == "global"
+    phase_line("phase on review", b)
     assert phases_off(b) == {}, "a branch's on overrides a global off"
-    assert phases_off(a)["self-review"] == "global"
+    assert phases_off(a)["review"] == "global"
     said = phase_line("phase off staging", a)
     assert said and "Unknown phase `staging`" in said and "staging" not in phases_off(a), "staging left the core flow"
     stored = os.path.join(PHASE_STORE, "global.json")
     kept = open(stored).read()
     with open(stored, "w") as fh:
         json.dump({**json.loads(kept), "staging": "off"}, fh)  # switched off before staging left the flow
-    assert phases_off(a) == {"self-review": "global", "validate": "branch", "verify": "repo"}, phases_off(a)
+    assert phases_off(a) == {"review": "global", "validate": "branch", "verify": "repo"}, phases_off(a)
     with open(stored, "w") as fh:
         fh.write(kept)
     shown = subprocess.run([os.path.expanduser("~/.agents/bin/reports")], cwd=a, capture_output=True, text=True).stdout
     assert "phases the user switched off" in shown and "validate: off (branch)" in shown, shown
     brief = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "brief"], cwd=a, capture_output=True, text=True).stdout
-    assert "off: self-review (global), validate (branch), verify (repo)\n" in brief, brief
+    assert "off: review (global), validate (branch), verify (repo)\n" in brief, brief
     git(a, "tag", "feature")
     assert phases_off(a)["validate"] == "branch", "a tag named like the branch doesn't move its switches"
 
@@ -2574,7 +2574,7 @@ def a_phase_line_switches_phases_by_scope(base):
                  for _ in ("follow-pr", "audit", "second-model")]
     for process, phase in zip(switching, ("follow-pr", "audit", "second-model")):
         process.communicate(json.dumps({"prompt": f"phase off {phase} global", "session_id": RUN + phase, "cwd": a}))
-    assert {"follow-pr", "audit", "second-model", "ci", "self-review"} <= set(stored_switches()["global.json"])
+    assert {"follow-pr", "audit", "second-model", "ci", "review"} <= set(stored_switches()["global.json"])
 
     store = os.path.join(PHASE_STORE, "global.json")
     assert guard(f"echo '{{}}' > {store}", a) == "deny", "the agent can't write a switch from the shell"
@@ -2606,6 +2606,52 @@ def review_rounds(cwd):
     assert done.returncode == 0, done.stdout + done.stderr
     rounds, where = re.fullmatch(r"(\d) \((\w+)\)\n", done.stdout).groups()
     return int(rounds), where
+
+
+def the_old_self_review_name_still_switches_the_review(base):
+    a = new_repo(base, "zz-phase-alias")
+    git(a, "switch", "-q", "-c", "feature")
+    open(os.path.join(a, "app.py"), "a").write("y = 2\n")
+    store = os.path.join(PHASE_STORE, "global.json")
+    kept = open(store).read() if os.path.exists(store) else None
+    os.makedirs(PHASE_STORE, exist_ok=True)
+
+    def pr_gate():
+        d = run_hook("guard_bash.py", {"tool_input": {"command": "gh pr create --fill"}, "cwd": a, "session_id": "test"})
+        return d["hookSpecificOutput"]["permissionDecisionReason"] if d else ""
+
+    def repo_file(switches):
+        with open(repo_store, "w") as fh:
+            json.dump(switches, fh)
+
+    try:
+        with open(store, "w") as fh:
+            json.dump({"self-review": "off"}, fh)  # switched off before the phase was renamed
+        assert phases_off(a) == {"review": "global"}, f"a stored self-review counts as review: {phases_off(a)}"
+        assert "validation" in pr_gate(), f"a stored self-review: off lifts the review gate: {pr_gate()}"
+        phase_line("phase on review", a)
+        assert phases_off(a) == {}, "a branch's on under the new name overrides a global off under the old one"
+        os.remove(os.path.join(PHASE_STORE, "branch", "zz-phase-alias", "feature.json"))
+        repo_store = os.path.join(PHASE_STORE, "repo", "zz-phase-alias.json")
+        os.makedirs(os.path.dirname(repo_store), exist_ok=True)
+        repo_file({"self-review": "on", "review": "off", "verify": "off"})
+        assert phases_off(a) == {"review": "repo", "verify": "repo"}, f"the new name wins within one file: {phases_off(a)}"
+        repo_file({"self-review": "off", "review": "on"})
+        assert phases_off(a) == {}, f"the new name wins, whichever way it points: {phases_off(a)}"
+        repo_file({"self-review": "on", "review": "off", "verify": "off"})
+        said = phase_line("phase on self-review repo", a)
+        assert "Switched review on" in said, said
+        assert json.load(open(repo_store)) == {"review": "on", "verify": "off"}, "one key per phase, the others kept"
+        assert phases_off(a) == {"verify": "repo"}, phases_off(a)
+        repo_file({"self-review": "on", "verify": "off"})
+        phase_line("phase off review repo", a)
+        assert json.load(open(repo_store)) == {"review": "off", "verify": "off"}, "the new name replaces the old key too"
+    finally:
+        if kept is None:
+            os.remove(store)
+        else:
+            with open(store, "w") as fh:
+                fh.write(kept)
 
 
 def coming_back_after_hours_asks_for_the_status_first(base):
@@ -2791,6 +2837,9 @@ def only_the_user_runs_the_switch_cli(base):
     assert done.returncode == 0 and phases_off(repo) == {"second-model": "global"}, done.stdout
     assert "second-model (global)" in done.stdout, done.stdout
     assert cli("on", "second-model", "--global").returncode == 0 and phases_off(repo) == {}
+    done = cli("off", "self-review", "--repo")
+    assert done.returncode == 0 and phases_off(repo) == {"review": "repo"}, f"/flow takes the former name: {done.stdout}"
+    assert cli("on", "review", "--repo").returncode == 0 and phases_off(repo) == {}
     for reviewer in ("claude-review", "codex-review"):
         assert cli("off", reviewer, "--global").returncode == 0 and phases_off(repo) == {reviewer: "global"}, reviewer
         assert cli("on", reviewer, "--global").returncode == 0 and phases_off(repo) == {}
@@ -2829,13 +2878,13 @@ def pr_gate_skips_the_phases_switched_off(base):
         d = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": "test"})
         return d["hookSpecificOutput"]["permissionDecisionReason"] if d else None
 
-    assert "self-review" in reason("gh pr create --fill")
+    assert "No review recorded" in reason("gh pr create --fill")
     phase_line("phase off self-review", repo)
-    assert "validation" in (reason("gh pr create --fill") or ""), "self-review off leaves the validate gate"
+    assert "validation" in (reason("gh pr create --fill") or ""), "review off, by its old name, leaves the validate gate"
     phase_line("phase off validate", repo)
     assert reason("gh pr create --fill") is None, "both off: nothing to wait for"
-    phase_line("phase on self-review", repo)
-    assert "self-review" in (reason("gh pr create --fill") or ""), "back on, the gate needs a real stamp again"
+    phase_line("phase on review", repo)
+    assert "No review recorded" in (reason("gh pr create --fill") or ""), "back on, the gate needs a real stamp again"
     write_stamp(repo, "review")
     assert reason("gh pr create --fill") is None
     phase_line("phase on validate", repo)
@@ -2848,25 +2897,25 @@ def pr_gate_skips_the_phases_switched_off(base):
     other = new_repo(base, "zz-phase-other")
     git(other, "switch", "-q", "-c", "feature")
     open(os.path.join(other, "app.py"), "a").write("y = 2\n")
-    phase_line("phase off self-review", other)
+    phase_line("phase off review", other)
     phase_line("phase off validate", other)
     assert reason(f"cd {other} && gh pr create --fill") is None, "the other checkout's switches apply there"
-    phase_line("phase off self-review", repo)
-    phase_line("phase on self-review", repo)
+    phase_line("phase off review", repo)
+    phase_line("phase on review", repo)
     git(other, "worktree", "add", "-q", "-b", "feat2", os.path.join(base, "zz-phase-other-wt"))
     open(os.path.join(base, "zz-phase-other-wt", "app.py"), "a").write("w = 1\n")
-    assert "self-review" in (reason(f"cd {os.path.join(base, 'zz-phase-other-wt')} && gh pr create --fill") or ""), \
+    assert "No review recorded" in (reason(f"cd {os.path.join(base, 'zz-phase-other-wt')} && gh pr create --fill") or ""), \
         "a branch switch doesn't reach another branch of the same repo"
 
     # An unreadable file in one scope keeps every phase on, the readable ones' too, and the gate says why.
     open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
-    phase_line("phase off self-review", repo)
+    phase_line("phase off review", repo)
     phase_line("phase off validate", repo)
     assert reason("gh pr create --fill --draft") is None
     with open(os.path.join(PHASE_STORE, "global.json"), "w") as fh:
         fh.write("[")
     said = reason("gh pr create --fill --draft") or ""
-    assert "self-review" in said and "Couldn't read" in said, f"an unreadable store means every phase on, said: {said}"
+    assert "No review recorded" in said and "Couldn't read" in said, f"an unreadable store means every phase on, said: {said}"
 
 
 def stop_skips_the_phases_switched_off(base):
@@ -2881,7 +2930,7 @@ def stop_skips_the_phases_switched_off(base):
 
     def verify_runs():
         return len(open(ran).read().splitlines()) if os.path.exists(ran) else 0
-    spec = subprocess.run([os.path.expanduser("~/.agents/skills/spec/path.sh")], cwd=repo, capture_output=True,
+    spec = subprocess.run([os.path.expanduser("~/.agents/skills/kit-spec/path.sh")], cwd=repo, capture_output=True,
                           text=True).stdout.strip()
     with open(spec, "w") as fh:
         fh.write("# X\n\nGoal: x.\n\n## Acceptance criteria\n1. y — verify: a test\n\n## Change map\n- Ways in: none\n")
@@ -2965,13 +3014,13 @@ def a_stacked_branch_is_measured_against_its_parent(base):
     assert "git config branch.child.agentsBase main" in pr_gate("gh pr create -B main --title t --body b")
     assert target in pr_gate("gh pr create --base parent --base main --title t"), "gh takes the last --base"
     git(repo, "config", "branch.child.gh-merge-base", "parent")
-    assert "No self-review recorded" in pr_gate("gh pr create --title t"), "without --base, gh targets gh-merge-base"
+    assert "No review recorded" in pr_gate("gh pr create --title t"), "without --base, gh targets gh-merge-base"
     git(repo, "config", "--unset", "branch.child.gh-merge-base")
     for matching in ("gh pr create --base parent --title t --body b", "gh pr create -B origin/parent --title t",
                      "gh pr create --base=parent --title t", "gh pr create -Bparent --title t",
                      "gh pr create -B=parent --title t", "gh pr create --base parent --title '-Better checks'",
                      "gh pr create --base parent --body '--base=main' -t t"):
-        assert "No self-review recorded" in pr_gate(matching), f"the measured base passes the target check: {matching}"
+        assert "No review recorded" in pr_gate(matching), f"the measured base passes the target check: {matching}"
 
     assert write_stamp(repo, "review").returncode == 0
     git(repo, "config", "branch.child.agentsBase", "main")
@@ -3014,13 +3063,13 @@ def a_stacked_branch_is_measured_against_its_parent(base):
     assert base_of() == "feat/p", "a recorded local branch, with no pushed copy, is the base"
     said = pr_gate("gh pr create --base p --title t")
     assert "against `feat/p`" in said and "pass `--base feat/p`" in said, f"only a remote's name is stripped: {said}"
-    assert "No self-review recorded" in pr_gate("gh pr create --base feat/p --title t")
+    assert "No review recorded" in pr_gate("gh pr create --base feat/p --title t")
     git(repo, "switch", "-q", "main")
     git(repo, "branch", "-q", "-D", "renamed")
     assert git(repo, "config", "--get-regexp", r"branch\.renamed\.").stdout == "", "and goes with `git branch -D`"
 
 
-TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, coming_back_after_hours_asks_for_the_status_first, a_review_rounds_line_sets_the_re_checks_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
+TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, the_old_self_review_name_still_switches_the_review, coming_back_after_hours_asks_for_the_status_first, a_review_rounds_line_sets_the_re_checks_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
          guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,

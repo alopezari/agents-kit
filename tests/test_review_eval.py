@@ -233,11 +233,11 @@ def a_failed_review_is_an_error_not_a_miss(base):
         in no_model.stderr, no_model
     skills = os.path.join(env["HOME"], ".agents", "skills")
     os.unlink(skills)
-    os.makedirs(os.path.join(skills, "self-review"))
-    os.symlink(os.path.join(KIT, "skills", "self-review", "lenses.md"), os.path.join(skills, "self-review", "lenses.md"))
-    with open(os.path.join(skills, "self-review", "bundle.sh"), "w") as fh:
+    os.makedirs(os.path.join(skills, "kit-review"))
+    os.symlink(os.path.join(KIT, "skills", "kit-review", "lenses.md"), os.path.join(skills, "kit-review", "lenses.md"))
+    with open(os.path.join(skills, "kit-review", "bundle.sh"), "w") as fh:
         fh.write("#!/bin/bash\necho 'no such base' >&2; exit 1\n")
-    os.chmod(os.path.join(skills, "self-review", "bundle.sh"), 0o755)
+    os.chmod(os.path.join(skills, "kit-review", "bundle.sh"), 0o755)
     answer(answers, commits["miss"], "- Important: x — cart.py:96")
     with open(os.path.join(env["HOME"], ".agents", "review-mining", "evals", "cases.jsonl"), "a") as fh:
         fh.write(json.dumps({**cases(env)[0], "lens": "Renamed lens", "line": 5}) + "\n")

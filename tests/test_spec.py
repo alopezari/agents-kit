@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""skills/spec: the lint that checks a spec's shape, and the prompt for its second reading."""
+"""skills/kit-spec: the lint that checks a spec's shape, and the prompt for its second reading."""
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import os
 import shutil
@@ -9,9 +9,9 @@ import tempfile
 
 KIT = os.path.expanduser("~/.agents")
 os.environ["TMPDIR"] = tempfile.mkdtemp(prefix="agents-test-spec-tmp-")  # path.sh moves specs out of $TMPDIR
-LINT = os.path.join(KIT, "skills", "spec", "lint.py")
-REVIEW_PROMPT = os.path.join(KIT, "skills", "spec", "review-prompt.sh")
-SPEC_PATH = os.path.join(KIT, "skills", "spec", "path.sh")
+LINT = os.path.join(KIT, "skills", "kit-spec", "lint.py")
+REVIEW_PROMPT = os.path.join(KIT, "skills", "kit-spec", "review-prompt.sh")
+SPEC_PATH = os.path.join(KIT, "skills", "kit-spec", "path.sh")
 
 GOOD = """# SHOP-12: Require Compose v2
 

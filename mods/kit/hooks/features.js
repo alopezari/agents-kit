@@ -5,14 +5,14 @@
 export const FEATURES = [
   {
     "command": "flow",
-    "description": "Show where this branch is in the kit's flow, run verify without a turn, and switch a phase off or on or set the self-review's re-check rounds",
+    "description": "Show where this branch is in the kit's flow, run verify without a turn, and switch a phase off or on or set the review's re-check rounds",
     "capabilities": [
       {"name": "Phase and reports", "codex": "`bin/reports brief`"},
       {"name": "The phases switched off, with their scope, also on the default branch", "codex": "`bin/phase switches`"},
       {"name": "`/flow off|on <phase> [--repo|--global]`, typed at the prompt, switches a phase for the branch, the repo or every repo", "codex": "a message whose first line is `phase off|on <phase> [branch|repo|global]`"},
-      {"name": "`/flow review-rounds <0-9> [--repo|--global]`, typed at the prompt, sets how many re-checks the self-review runs after its first pass (1 when unset)", "codex": "a message whose first line is `review-rounds <0-9> [branch|repo|global]`; `bin/phase review-rounds` reads it"},
+      {"name": "`/flow review-rounds <0-9> [--repo|--global]`, typed at the prompt, sets how many re-checks the review runs after its first pass (1 when unset)", "codex": "a message whose first line is `review-rounds <0-9> [branch|repo|global]`; `bin/phase review-rounds` reads it"},
       {"name": "Follows the branch into the main checkout once create-pr detaches the session's own", "codex": "the commands of this list, run from the main checkout"},
-      {"name": "Stamps (verify, self-review, validate), current or not, and a verify that checked nothing", "codex": "`python3 ~/.agents/hooks/review_stamp.py check --kind <kind>`"},
+      {"name": "Stamps (verify, review, validate), current or not, and a verify that checked nothing", "codex": "`python3 ~/.agents/hooks/review_stamp.py check --kind <kind>`"},
       {"name": "The last verify report's ran/skipped/warning/error lines", "codex": "`cat \"$(~/.agents/bin/reports path verify)\"`"},
       {"name": "CI of the pushed HEAD", "codex": "`bin/ci-wait --once --no-log`"},
       {"name": "Context use", "codex": "nothing (Codex shows its own)"},
@@ -30,9 +30,9 @@ export const FEATURES = [
   },
   {
     "agentPrefix": "review",
-    "description": "One reviewer agent type per self-review lens",
+    "description": "One reviewer agent type per review lens",
     "capabilities": [
-      {"name": "One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block", "codex": "a subagent given the lens text from `skills/self-review/lenses.md`"}
+      {"name": "One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block", "codex": "a subagent given the lens text from `skills/kit-review/lenses.md`"}
     ]
   }
 ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay bugs that got past the self-review against its reviewers, and clean changes for their false alarms.
+"""Replay bugs that got past the review against its reviewers, and clean changes for their false alarms.
 
   eval.py add --checkout DIR --sha SHA --base REF --lens LENS --goal "..." --file PATH --line N --summary "..."
   eval.py add --checkout DIR --sha SHA --base REF --lens LENS --goal "..." --clean
@@ -27,12 +27,12 @@ import time
 EVALS = os.path.join(os.path.expanduser("~/.agents"), "review-mining", "evals")
 CASES = os.path.join(EVALS, "cases.jsonl")
 RUNS = os.path.join(EVALS, "runs")
-BUNDLE = os.path.expanduser("~/.agents/skills/self-review/bundle.sh")
-LENSES = os.path.expanduser("~/.agents/skills/self-review/lenses.md")
+BUNDLE = os.path.expanduser("~/.agents/skills/kit-review/bundle.sh")
+LENSES = os.path.expanduser("~/.agents/skills/kit-review/lenses.md")
 NEAR = 15  # a reviewer names the line its finding starts on, often the function above the faulty line
 REVIEW_SECS = 15 * 60
 BUNDLE_SECS = GIT_SECS = 120
-# claude gets the self-review's cross-model tools; dontAsk refuses the rest instead of falling back to the user's
+# claude gets the review's cross-model tools; dontAsk refuses the rest instead of falling back to the user's
 # permission mode, and nothing from a replay lands among the sessions the monthly job counts.
 MODELS = {
     "codex": ["codex", "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "-"],
@@ -129,7 +129,7 @@ def add(args, parser):
 
 
 def found_section(text):
-    """The last `## Found` heading to the end, as the self-review reads a cross-model pass."""
+    """The last `## Found` heading to the end, as the review reads a cross-model pass."""
     start = [m.start() for m in re.finditer(r"^## Found[ \t]*$", text, re.M)]
     return text[start[-1]:] if start else None
 

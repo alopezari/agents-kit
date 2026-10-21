@@ -47,7 +47,7 @@ def builds_the_section_from_every_report(base):
     evidence = sh(repo, REPORTS, "path", "evidence").stdout.strip()
     write(repo, "verify", "# Verify: PASS\n\n2026-10-01 · verify in shop\n\nran: tests/test_cart.py\n"
                           "ran: tests/test_cart.py with Python 3.14.7\nran: phpunit --group cart\n")
-    write(repo, "review", "Self-review (risk: standard; lenses: correctness, tests; cross-model: codex)\n\n"
+    write(repo, "review", "Review (risk: standard; lenses: correctness, tests; cross-model: codex)\n\n"
                           "Spec: table here\n"
                           "Fixed:    a coupon applied twice on refresh (Codex) — cart.py:40 — test: test_coupon_once.\n"
                           "Fixed:    the total ignored tax — cart.py:52.\n"
@@ -73,7 +73,7 @@ def builds_the_section_from_every_report(base):
     expected = """## Validation
 
 - Verify: PASS, 2 checks: tests/test_cart.py, phpunit --group cart (also under Python 3.14.7).
-- Self-review (risk: standard; lenses: correctness, tests; cross-model: codex): 2 fixed, 1 rejected, 0 open.
+- Review (risk: standard; lenses: correctness, tests; cross-model: codex): 2 fixed, 1 rejected, 0 open.
   - Fixed: a coupon applied twice on refresh (Codex).
   - Fixed: the total ignored tax.
   - Rejected: a race on checkout.
@@ -94,7 +94,7 @@ def builds_the_section_from_every_report(base):
 def counts_open_findings_and_skips_absent_reports(base):
     repo = new_repo(base)
     write(repo, "verify", "# Verify: FAIL\n\nran: tests/test_cart.py\n")
-    write(repo, "review", "Self-review (risk: low; lenses: correctness)\n"
+    write(repo, "review", "Self-review (risk: low; lenses: correctness)\n"  # a report from before the rename
                           "Open:     the refund total may round twice — cart.py:90 — a test with 0.005 would settle it.\n")
     out = sh(repo, PR_VALIDATION)
     assert out.returncode == 0, out
@@ -234,13 +234,13 @@ def names_the_phases_the_user_switched_off(base):
             return subprocess.run([PR_VALIDATION], cwd=repo, capture_output=True, text=True)
 
         write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
-        assert section().returncode == 1, "the self-review report is missing and its phase is on"
-        switch("phase off self-review")
+        assert section().returncode == 1, "the review report is missing and its phase is on"
+        switch("phase off review")
         switch("phase off validate global")
         switch("phase off second-model repo")
         out = section()
         assert out.returncode == 0, out.stderr
-        for line in ("- Verify: ", "- Self-review: skipped by the user (branch).", "- Validate: skipped by the user (global).",
+        for line in ("- Verify: ", "- Review: skipped by the user (branch).", "- Validate: skipped by the user (global).",
                      "- Second-model: skipped by the user (repo)."):
             assert out.stdout.count(line) == 1, (line, out.stdout)
         assert "Staging" not in out.stdout, out.stdout

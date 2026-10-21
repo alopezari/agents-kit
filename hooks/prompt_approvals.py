@@ -8,7 +8,7 @@ needs more than a mention: the message opens with the line `allow <statement>`, 
 plain words ("Sí, borra las bases de prueba", "drop the test databases").
 A message whose first line is `phase off|on <phase> [branch|repo|global]` switches a flow phase (phase_switches.py),
 and the hook tells the agent what is off now; one whose first line is `review-rounds <0-9> [branch|repo|global]`
-sets how many re-checks the self-review runs.
+sets how many re-checks the review runs.
 A yes to the agent's offer approves too: when the agent's last message ends asking whether to write to a guarded
 service, naming it ("¿Quieres que la cree en Linear?"), and the user's message accepts it ("Sí, crea la tarea en
 WCCOM…", "dale", "go ahead"), that service is approved until the next message. Only the transcript's tail is read, and

@@ -17,7 +17,7 @@ if [ $# -ge 4 ] && [ -z "$decided" ]; then echo "bundle.sh: no decided-findings 
 if [ -n "$decided" ]; then decided_text=$(cat "$decided") || { echo "bundle.sh: can't read the decided findings $decided" >&2; exit 1; }; fi
 
 echo "You are reviewing a code change. Goal of the change: $goal"
-spec="$("$here/../spec/path.sh")"
+spec="$("$here/../kit-spec/path.sh")"
 if [ -f "$spec" ]; then echo; echo "The change was built against this spec:"; echo; cat "$spec"; fi
 echo
 awk -v lens="## $lens" '$0==lens{on=1;next} /^## /{on=0} on' "$here/lenses.md"

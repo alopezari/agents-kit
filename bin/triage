@@ -4,9 +4,9 @@
   triage                  change vs the merge-base with the branch's base (committed + uncommitted + untracked)
   triage --range A..B     a commit range instead (for calibration on past changes)
   triage --json           machine-readable output
-  triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/self-review/lenses.md
+  triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/kit-review/lenses.md
 
-The self-review and validate skills run the lenses and tests this selects. Every rule is a regex
+The kit-review and kit-validate skills run the lenses and tests this selects. Every rule is a regex
 over changed paths or added lines, so a selection can always be traced back to its signal.
 """
 import ast
@@ -388,7 +388,7 @@ def cross_model(tier):
 
 
 def lens_briefs():
-    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "skills", "self-review", "lenses.md")
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "skills", "kit-review", "lenses.md")
     sections = re.split(r"^## (.+)$", open(path).read(), flags=re.M)[1:]
     titles = sections[::2]
     key_of = {title: key for key, title in LENS_TITLES.items()}

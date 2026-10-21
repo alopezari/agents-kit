@@ -23,8 +23,11 @@ CORRECTION = re.compile(
     r"that's wrong|not what|still (fails|broken|not)|doesn't work|wrong)|\[Request interrupted",
     re.I,
 )
-# The skills that start a phase of the flow; others (write-pr-description, clarity…) run inside one.
+# The phases of the flow, keyed by the names their skills had before the kit- prefix; other skills (kit-write-pr-description, clarity…) run inside one.
 FLOW_SKILLS = {"spec", "self-review", "validate", "create-pr", "follow-pr", "ship"}
+# The skills' kit- names count as the phases they had before the rename, so the periods before and after compare.
+KIT_SKILL_PHASES = {"kit-spec": "spec", "kit-review": "self-review", "kit-validate": "validate", "kit-create-pr": "create-pr",
+                    "kit-follow-pr": "follow-pr", "kit-ship": "ship"}
 TYPED_SKILL = re.compile(r"<command-name>/?([\w:-]+)</command-name>")
 SPEC_FILE = re.compile(r"spec-.*\.md$")
 # A longer gap between transcript entries is the user away, not work.
@@ -60,6 +63,13 @@ def is_real_prompt(t):
     return bool(t) and not t.startswith(("<command-", "<local-command", "<system-reminder", "Caveat:", "<task-notification", "[SYSTEM", "<environment_context", "<user_instructions", "# AGENTS.md", "<permissions", "<turn_aborted", "<bash-stdout"))
 
 
+def flow_phase(skill):
+    """The phase a skill starts, from its name as typed or called (`kit:kit-review`, `/spec`), or None."""
+    name = skill.split(":")[-1]
+    name = KIT_SKILL_PHASES.get(name, name)
+    return name if name in FLOW_SKILLS else None
+
+
 def phase_events(entry, failed=frozenset()):
     """In block order: ("skill", name) for each flow skill the entry starts (a Skill call by the agent, `/<skill>`
     typed by the user), ("spec", None) for each Edit/Write of a spec (spec-*.md, in .git/agents/ or a temp dir),
@@ -68,16 +78,15 @@ def phase_events(entry, failed=frozenset()):
     a git error."""
     msg = entry.get("message") or {}
     if entry.get("type") == "user":
-        return [("skill", n) for n in (name.split(":")[-1] for name in TYPED_SKILL.findall(text_of(msg.get("content"))))
-                if n in FLOW_SKILLS]
+        return [("skill", n) for n in map(flow_phase, TYPED_SKILL.findall(text_of(msg.get("content")))) if n]
     events = []
     for c in msg.get("content") or []:
         if not isinstance(c, dict):
             continue
         tool, args = c.get("name"), c.get("input") or {}
-        name = str(args.get("skill")).split(":")[-1] if tool == "Skill" else None
+        name = flow_phase(str(args.get("skill"))) if tool == "Skill" else None
         path = str(args.get("file_path"))
-        if name in FLOW_SKILLS:
+        if name:
             events.append(("skill", name))
         elif tool in ("Edit", "Write", "NotebookEdit") and SPEC_FILE.match(os.path.basename(path)):
             events.append(("spec", None))

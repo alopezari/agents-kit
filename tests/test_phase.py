@@ -22,7 +22,7 @@ os.environ.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAM
 QUALITY_LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
 PHASE = os.path.expanduser("~/.agents/bin/phase")
 STAMP = os.path.expanduser("~/.agents/hooks/review_stamp.py")
-SPEC_PATH = os.path.expanduser("~/.agents/skills/spec/path.sh")
+SPEC_PATH = os.path.expanduser("~/.agents/skills/kit-spec/path.sh")
 
 
 def sh(cwd, *cmd, env=None):
@@ -93,9 +93,9 @@ def walks_the_flow(base):
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     assert phase(repo) == "build"
     stamp(repo, "verify-empty")
-    assert phase(repo) == "self-review · verify checked nothing", "a verify that checked nothing moves on, flagged"
+    assert phase(repo) == "review · verify checked nothing", "a verify that checked nothing moves on, flagged"
     stamp(repo, "verify")
-    assert phase(repo) == "self-review"
+    assert phase(repo) == "review"
     stamp(repo, "review")
     assert phase(repo) == "validate", "app.py is a behavior change, so it needs validation"
     stamp(repo, "validate")
@@ -124,7 +124,7 @@ def walks_the_flow(base):
     os.chmod(os.path.join(fake, "gh"), 0o755)
     open(guide.replace("checks-guide-", "follow-pr-"), "w").write("# follow-pr\n")
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "PR_STATE": "OPEN"}
-    assert phase(repo, env) == "PR open · redo verify, self-review, validate", "z = 3 is covered by no check"
+    assert phase(repo, env) == "PR open · redo verify, review, validate", "z = 3 is covered by no check"
     for kind in ("verify", "review", "validate"):
         stamp(repo, kind)
     assert phase(repo, env) == "PR open", "a guide's unrun steps are no redo"
@@ -199,7 +199,7 @@ def red_verify_after_self_review_stays_at_the_furthest_step(base):
     open(sh(repo, SPEC_PATH), "w").write("# Spec\n")
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     stamp(repo, "review")
-    assert phase(repo) == "validate · redo verify", "self-review is done; a red verify doesn't send it back to build"
+    assert phase(repo) == "validate · redo verify", "review is done; a red verify doesn't send it back to build"
 
 
 def spec_reports_and_stamps_follow_branch_renames(base):
@@ -238,7 +238,7 @@ def spec_reports_and_stamps_follow_branch_renames(base):
     assert "(evidence-shop-shop-1~final/a1.txt)" in open(moved_validation).read(), "its links follow the move"
     check = subprocess.run(["python3", STAMP, "check", "--kind", "verify"], cwd=repo)
     assert check.returncode == 0, "the verify stamp follows the rename"
-    assert phase(repo) == "self-review"
+    assert phase(repo) == "review"
     renames = [json.loads(line) for line in (open(QUALITY_LOG) if os.path.exists(QUALITY_LOG) else []) if '"rename"' in line]
     assert [(r["repo"], r["name"], r["to"]) for r in renames] == [("shop", "session/wary-falcon", "shop-1/final")], \
         f"lens runs logged on the session branch must still join to the PR's branch: {renames}"
@@ -351,18 +351,18 @@ def switched_off_phases_leave_the_flow(base):
     assert phase(repo) == "build (no spec)"
     switch(repo, "phase off spec")
     switch(repo, "phase off verify")
-    assert phase(repo, refresh=False) in ("", "self-review · off: spec, verify"), "the switch drops the stale label"
+    assert phase(repo, refresh=False) in ("", "review · off: spec, verify"), "the switch drops the stale label"
     assert phase(repo, refresh=False) != "build (no spec)", "the switch dropped the cached label, not another key's"
-    assert phase(repo) == "self-review · off: spec, verify", phase(repo)
-    switch(repo, "phase off self-review repo")
+    assert phase(repo) == "review · off: spec, verify", phase(repo)
+    switch(repo, "phase off review repo")
     switch(repo, "phase off validate global")
-    assert phase(repo) == "create-pr · off: spec, self-review, validate, verify", phase(repo)
+    assert phase(repo) == "create-pr · off: spec, review, validate, verify", phase(repo)
     switch(repo, "phase on verify")
-    assert phase(repo) == "build · off: spec, self-review, validate", phase(repo)
+    assert phase(repo) == "build · off: spec, review, validate", phase(repo)
     assert sh(repo, PHASE, "switches").splitlines() == [
-        "spec: off (branch)", "self-review: off (repo)", "validate: off (global)"]
+        "spec: off (branch)", "review: off (repo)", "validate: off (global)"]
     sh(repo, "git", "checkout", "-q", "trunk")
-    assert sh(repo, PHASE, "switches") == "self-review: off (repo)\nvalidate: off (global)", \
+    assert sh(repo, PHASE, "switches") == "review: off (repo)\nvalidate: off (global)", \
         "the default branch has its repo's and the global switches"
 
 

@@ -126,7 +126,7 @@ for case, before in (("new", json.dumps(PACKAGE)), ("base", '{"dependencies": {'
 
 
 def triage_worktree(subdir):
-    """triage with no --range, as the self-review runs it: an uncommitted dependency, from the root or a subdirectory."""
+    """triage with no --range, as the review runs it: an uncommitted dependency, from the root or a subdirectory."""
     with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
         def git(*args):
             subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True)
@@ -233,7 +233,7 @@ fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} a file deleted after another change is still counted: {removed['lenses'].get('design')}")
 
 # --lens-briefs: the kit:review-<key> agents are briefed from it, so every lens heading needs a key and keeps its text.
-LENSES = os.path.expanduser("~/.agents/skills/self-review/lenses.md")
+LENSES = os.path.expanduser("~/.agents/skills/kit-review/lenses.md")
 sys.dont_write_bytecode = True  # a bin/__pycache__ would be listed by bin/docs as a tool
 loader = importlib.machinery.SourceFileLoader("triage", TRIAGE)
 module = importlib.util.module_from_spec(importlib.util.spec_from_loader("triage", loader))
@@ -254,11 +254,11 @@ ok = ([b["title"] for b in briefs] == headings and selectable <= {b["key"] for b
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} --lens-briefs: every heading, every key triage selects, each brief as bundle.sh cuts it: "
       f"{out.stderr.strip() or [b['key'] for b in briefs]}")
-skill = open(os.path.expanduser("~/.agents/skills/self-review/SKILL.md")).read()
+skill = open(os.path.expanduser("~/.agents/skills/kit-review/SKILL.md")).read()
 named = set(re.findall(r"kit:review-([\w-]+)", skill)) - {"<lens>"} if "kit:review-" in skill else set()
 ok = bool(named) and named <= {b["key"] for b in briefs}
 fail |= not ok
-print(f"{'ok  ' if ok else 'FAIL'} every kit:review-<key> the self-review skill names is a lens key: {sorted(named)}")
+print(f"{'ok  ' if ok else 'FAIL'} every kit:review-<key> the kit-review skill names is a lens key: {sorted(named)}")
 lenses_text = open(LENSES).read()
 for case, text, expected in [
     ("a lens heading with no key", lenses_text + "\n## Haptics\n\nYou are reviewing vibrations.\n", "no key in LENS_TITLES for Haptics"),
@@ -266,9 +266,9 @@ for case, text, expected in [
     ("a lens headed twice", lenses_text + "\n## Security\n\nAgain.\n", "Security twice"),
 ]:
     with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as kit:
-        os.makedirs(os.path.join(kit, "bin")); os.makedirs(os.path.join(kit, "skills", "self-review"))
+        os.makedirs(os.path.join(kit, "bin")); os.makedirs(os.path.join(kit, "skills", "kit-review"))
         shutil.copy(TRIAGE, os.path.join(kit, "bin", "triage"))
-        with open(os.path.join(kit, "skills", "self-review", "lenses.md"), "w") as f:
+        with open(os.path.join(kit, "skills", "kit-review", "lenses.md"), "w") as f:
             f.write(text)
         out = subprocess.run([os.path.join(kit, "bin", "triage"), "--lens-briefs"], capture_output=True, text=True)
         ok = out.returncode != 0 and expected in out.stderr and not out.stdout
@@ -298,7 +298,7 @@ with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
     usual = cross_model()
     for args, expected, case in ((("off", "second-model", "repo"), "none (second-model switched off)", "off for the repo"),
                                  (("on", "second-model", "branch"), usual, "on for the branch, over the repo's off"),
-                                 (("off", "self-review", "global"), usual, "another phase off")):
+                                 (("off", "review", "global"), usual, "another phase off")):
         switch(*args)
         got = cross_model()
         ok = got == expected and usual in ("none", "correctness", "per lens")
@@ -374,7 +374,7 @@ with tempfile.TemporaryDirectory(prefix="agents-test-bundle-") as home, \
     env = {**os.environ, "HOME": home}
 
     def bundle(*extra):
-        return subprocess.run([os.path.join(home, ".agents", "skills", "self-review", "bundle.sh"), "main", "Correctness",
+        return subprocess.run([os.path.join(home, ".agents", "skills", "kit-review", "bundle.sh"), "main", "Correctness",
                                "Double x", *extra], cwd=repo, capture_output=True, text=True, env=env)
     plain = bundle()
     rules = ("Important", "Nit", "Pre-existing", "at most three", "every other place")
@@ -383,7 +383,7 @@ with tempfile.TemporaryDirectory(prefix="agents-test-bundle-") as home, \
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} bundle.sh asks for the three severities, the nit cap and every instance, "
           f"and with no guide or decided file mentions neither: exit {plain.returncode} {plain.stderr.strip()[-200:]}")
-    with open(os.path.join(kit, "skills", "self-review", "SKILL.md")) as f:
+    with open(os.path.join(kit, "skills", "kit-review", "SKILL.md")) as f:
         skill = f.read()
     shared = re.search(r"Severity is one of: .*? under that one finding\.", skill)
     ok = shared is not None and shared.group(0) in plain.stdout

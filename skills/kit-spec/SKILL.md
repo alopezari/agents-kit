@@ -1,6 +1,6 @@
 ---
-name: spec
-description: Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the self-review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change.
+name: kit-spec
+description: Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change.
 ---
 
 # Spec
@@ -20,10 +20,10 @@ When `~/.agents/bin/phase switches` lists `spec`, the user switched this phase o
 
 ## 2. Write the spec
 
-Save it where the self-review will find it, outside the working tree (the script handles sandboxes where `.git` is read-only):
+Save it where the review will find it, outside the working tree (the script handles sandboxes where `.git` is read-only):
 
 ```bash
-spec="$(~/.agents/skills/spec/path.sh)"
+spec="$(~/.agents/skills/kit-spec/path.sh)"
 ```
 
 Use this shape and keep it under a page:
@@ -57,7 +57,7 @@ What makes criteria useful:
 Check the shape, and fix what it reports before going on:
 
 ```bash
-~/.agents/skills/spec/lint.py
+~/.agents/skills/kit-spec/lint.py
 ```
 
 ## 3. Map the change
@@ -71,7 +71,7 @@ The defects reviewers catch most are a rule enforced on one path and not another
 - Failures: <each external call, query or write the change adds, and what the user sees when it fails> — <file:line>
 ```
 
-Build so that every item is handled, and add a criterion when an item needs its own check. The self-review starts its tables from this map. Name every file the change touches by its path: the stop hook asks about a changed code file the map doesn't name, so the spec is updated, or the change split, while building. Run the lint again: it fails on a map left empty or unfilled.
+Build so that every item is handled, and add a criterion when an item needs its own check. The review starts its tables from this map. Name every file the change touches by its path: the stop hook asks about a changed code file the map doesn't name, so the spec is updated, or the change split, while building. Run the lint again: it fails on a map left empty or unfilled.
 
 When the change goes through a one-way door (a schema or migration, a public contract, a new dependency), add the decisions a reviewer would otherwise ask about, one line each:
 
@@ -80,7 +80,7 @@ When the change goes through a one-way door (a schema or migration, a public con
 - <chosen option> over <rejected alternative>, because <reason>
 ```
 
-The PR description reuses them, and the self-review asks for them: its Maintainability lens for a new dependency, its Compatibility lens for a contract, schema or migration. The lint fails the section when it is empty or unfilled.
+The PR description reuses them, and the review asks for them: its Maintainability lens for a new dependency, its Compatibility lens for a contract, schema or migration. The lint fails the section when it is empty or unfilled.
 
 ## 4. Get a second reading
 
@@ -89,7 +89,7 @@ Skipped when `~/.agents/bin/phase switches` lists `second-model`, or the phase o
 The model that wrote the spec shares its blind spots, and a misread requirement is built well and then passes a review judged against the same spec. Have the other model family read it against the request. Pipe in the request as you gathered it: the issue, its comments and the linked PRs and discussion threads that shaped it, not the issue alone.
 
 ```bash
-prompt="$({ gh issue view <n> --comments && cat <notes on linked PRs and threads>; } | ~/.agents/skills/spec/review-prompt.sh)"
+prompt="$({ gh issue view <n> --comments && cat <notes on linked PRs and threads>; } | ~/.agents/skills/kit-spec/review-prompt.sh)"
 ```
 
 For a Linear issue, or a request that only exists in the conversation, write all of it to a file in your scratch directory and redirect that in instead. If the script fails, fix what it says (usually no spec yet) rather than sending the reviewer an empty prompt. Then:
@@ -97,7 +97,7 @@ For a Linear issue, or a request that only exists in the conversation, write all
 - **Running on a Claude model →** Codex: `codex exec --ephemeral --skip-git-repo-check -s read-only - <<<"$prompt"`
 - **Running on an OpenAI model →** Claude: `claude -p --allowedTools "Read,Grep,Glob" --disallowedTools "Edit,Write" <<<"$prompt"`
 
-Verify each finding as the self-review does: **confirmed** (the request says so, quoted) → fix the spec; **rejected** → one line on why; **uncertain** → an open question for the user. Then run the lint again, and log the reading so the monthly job can weigh it:
+Verify each finding as the review does: **confirmed** (the request says so, quoted) → fix the spec; **rejected** → one line on why; **uncertain** → an open question for the user. Then run the lint again, and log the reading so the monthly job can weigh it:
 
 ```bash
 ~/.agents/bin/quality-log lens spec --findings <N> --confirmed <M> --secs <S> --model <codex|claude> --criteria <number of acceptance criteria> --map-items <items under Change map, 0 without one>
@@ -113,6 +113,6 @@ If the other CLI isn't installed or fails, say so when you show the spec and go 
 
 ## Afterwards
 
-Build test first: for each criterion whose `verify:` can be an automated test, write that test before the code and run it. It must fail for the reason the criterion names, not on a missing symbol or a setup error; then implement until it passes. Keep the failing output: the self-review's Tests lens asks for it.
+Build test first: for each criterion whose `verify:` can be an automated test, write that test before the code and run it. It must fail for the reason the criterion names, not on a missing symbol or a setup error; then implement until it passes. Keep the failing output: the review's Tests lens asks for it.
 
-The `self-review` skill reads this spec. Its Correctness lens checks every acceptance criterion against the diff, and every change in the diff against the criteria, and the PR description can list them as what was verified. If the scope changes while building, update the spec first.
+The `kit-review` skill reads this spec. Its Correctness lens checks every acceptance criterion against the diff, and every change in the diff against the criteria, and the PR description can list them as what was verified. If the scope changes while building, update the spec first.

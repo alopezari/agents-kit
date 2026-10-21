@@ -69,9 +69,20 @@ baseline() {
   while read -r line; do if [ $DOCTOR = 1 ]; then warn "$(basename "$1") $line"; else fix "$(basename "$1") $line"; fi; done <<<"$out"
 }
 
-skills() {  # link every kit skill into a harness skills dir
-  local dir=$1
-  for s in "$KIT"/skills/*/; do s=${s%/}; link "$s" "$dir/$(basename "$s")"; done
+skills() {  # link every kit skill into a harness skills dir, and drop its links to kit folders that hold none
+  local dir=$1 s path target
+  for s in "$KIT"/skills/*/; do
+    s=${s%/}
+    [ -f "$s/SKILL.md" ] && link "$s" "$dir/$(basename "$s")"
+  done
+  for path in "$dir"/*; do
+    [ -L "$path" ] || continue
+    target=$(readlink "$path")
+    [ "$target" = "$KIT/skills/$(basename "$path")" ] || continue  # the shape link() makes; any other is the user's
+    [ -f "$target/SKILL.md" ] && continue
+    if [ $DOCTOR = 1 ]; then warn "$path links to $target, which holds no skill"
+    else rm "$path"; fix "removed $path, which linked to $target (no skill there now)"; fi
+  done
 }
 
 version=$(cat "$KIT/VERSION")
@@ -102,6 +113,9 @@ for profile in "$KIT"/profiles/*/; do
     [ -d "$entry" ] || continue
     entry=${entry%/}; slot=$(basename "$(dirname "$entry")")
     target="$KIT/$slot/$(basename "$entry")"
+    if [ "$slot" = skills ] && [ -d "$target" ] && [ ! -L "$target" ] && [ ! -f "$target/SKILL.md" ]; then
+      warn "skills/$(basename "$entry") in profile $name is blocked by $target, a leftover folder without SKILL.md; remove it"; continue
+    fi
     if [ -e "$target" ] && [ ! -L "$target" ]; then warn "$slot/$(basename "$entry") in profile $name has the name of the kit's own; skipped"; continue; fi
     link_profile_entry "$name" "$entry" "$target"
   done
@@ -168,6 +182,11 @@ while read -r name source _; do
   elif [ $DOCTOR = 1 ]; then warn "$name is missing (from $source)"
   else git clone -q --depth 1 "$source" "$KIT/skills/$name" && fix "$name cloned from $source"; fi
 done < "$KIT/skills.external"
+for s in "$KIT"/skills/*/; do  # skills() links only folders that hold a SKILL.md
+  s=${s%/}; [ -f "$s/SKILL.md" ] && continue
+  if [ -L "$s" ]; then warn "skills/$(basename "$s"), from a profile, has no SKILL.md: not linked"
+  else warn "$s has no SKILL.md, left from a renamed or removed skill: not linked; remove the folder"; fi
+done
 
 echo "Kit repository"
 # The pre-commit hook regenerates docs/framework.md, so the reference never lags the code.
@@ -318,7 +337,7 @@ if command -v codex >/dev/null || [ -d "$HOME/.codex" ]; then
         [ -L "$dir/codex" ] && [ ! -e "$dir/codex" ] && { codex_out+="; $dir/codex links to $(readlink "$dir/codex"), which no longer exists"; break; }
       done
     fi
-    warn "codex does not run ($(head -1 <<<"$codex_out")): the self-review's cross-model pass and the spec's second reading need it. Reinstall Codex or relink it."
+    warn "codex does not run ($(head -1 <<<"$codex_out")): the review's cross-model pass and the spec's second reading need it. Reinstall Codex or relink it."
   fi
   link "$KIT/AGENTS.md" "$HOME/.codex/AGENTS.md"
   skills "$HOME/.codex/skills"

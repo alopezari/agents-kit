@@ -9,7 +9,7 @@ guard_files.py keep the agent out of: only the user switches a phase.
 The narrowest switch set wins (branch over repo over global). A skip writes no stamp, so a phase switched back on
 needs a real one again.
 
-The same files hold how many re-check rounds the self-review runs after its first pass, set the same ways with
+The same files hold how many re-check rounds the review runs after its first pass, set the same ways with
 `review-rounds <0-9> [branch|repo|global]` or `/flow review-rounds …`, and read with `bin/phase review-rounds`.
 """
 import json
@@ -27,9 +27,11 @@ import design_files  # noqa: E402
 import review_stamp  # noqa: E402
 from hooklog import log  # noqa: E402
 
-PHASES = ("spec", "self-review", "validate", "verify", "ci", "follow-pr", "audit", "second-model", "claude-review", "codex-review")
+PHASES = ("spec", "review", "validate", "verify", "ci", "follow-pr", "audit", "second-model", "claude-review", "codex-review")
 SCOPES = ("branch", "repo", "global")
 STORE = os.path.join(design_files.APPROVALS_DIR, "phases")
+# A phase's former name, still taken from the user and read from switches stored under it.
+FORMER_NAMES = {"self-review": "review"}
 PHASE_LINE = re.compile(r"\A[ \t]*phase[ \t]+(off|on)(?=\s|\Z)(.*)", re.I)
 ROUNDS = "review-rounds"
 ROUNDS_LINE = re.compile(r"\A[ \t]*review-rounds(?=\s|\Z)(.*)", re.I)
@@ -102,13 +104,16 @@ def phases_off(cwd, timeout=5):
 def phases_off_in(repo, branch):
     state = {}
     for scope, path in store_files(repo, branch):
+        switches = read(path)
+        # Within one file the current name wins over the former one; across files the narrowest scope still does.
+        switches = {**{FORMER_NAMES[k]: v for k, v in switches.items() if k in FORMER_NAMES}, **switches}
         # A phase a newer kit added isn't an error: an older hook running beside it must not hold every gate.
-        state.update({phase: (value, scope) for phase, value in read(path).items() if phase in PHASES})
+        state.update({phase: (value, scope) for phase, value in switches.items() if phase in PHASES})
     return {phase: scope for phase, (value, scope) in state.items() if value == "off"}
 
 
 def review_rounds(cwd, timeout=5):
-    """(re-check rounds after the self-review's first pass, the scope that set them or "default"). Raises StoreError
+    """(re-check rounds after the review's first pass, the scope that set them or "default"). Raises StoreError
     when a switch file can't be read."""
     return review_rounds_in(*checkout(cwd, timeout)[:2])
 
@@ -141,7 +146,7 @@ def apply_phase_line(prompt, cwd):
     if rounds:
         switched, said, hint = switch(ROUNDS, rounds.group(1).lower().split(), cwd,
                                       f"`{ROUNDS} <0-9> [branch|repo|global]`")
-        then = ("Confirm it to the user in one line; the self-review runs that many re-checks." if switched else
+        then = ("Confirm it to the user in one line; the review runs that many re-checks." if switched else
                 f"Tell the user; {hint}")
         return f"The user's `{ROUNDS}` line: {said} {then}"
     line = PHASE_LINE.match(prompt)
@@ -161,6 +166,7 @@ def switch(action, words, cwd, form):
         return False, f"Not {form}: nothing was switched.", \
             f"the form is {form}, branch when left out." if action == ROUNDS else f"the phases are {', '.join(PHASES)}."
     phase, scope = words[0], words[1] if len(words) == 2 else "branch"
+    phase = FORMER_NAMES.get(phase, phase)
     if action == ROUNDS:
         if not re.fullmatch(r"[0-9]", phase):  # not isdigit(), which takes "²"
             return False, f"`{phase}` isn't a number of re-check rounds from 0 to 9: nothing was switched.", \
@@ -191,6 +197,8 @@ def switch(action, words, cwd, form):
             fcntl.flock(lock, fcntl.LOCK_EX)
             switches = read(path)
             switches[key] = value
+            for former in (f for f, current in FORMER_NAMES.items() if current == key):
+                switches.pop(former, None)
             fd, temporary = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
             with os.fdopen(fd, "w") as fh:
                 json.dump(switches, fh, indent=1, sort_keys=True)

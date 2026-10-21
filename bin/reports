@@ -17,7 +17,7 @@ if [ "${1:-}" = "--branch" ]; then
   other_branch=1 branch_arg=" --branch $(printf %q "$2")"  # a branch name may hold quotes or $
   shift 2
 else
-  spec="$("$HOME/.agents/skills/spec/path.sh")"
+  spec="$("$HOME/.agents/skills/kit-spec/path.sh")"
   dir="$(dirname "$spec")"
   suffix="$(basename "$spec" .md)"; suffix="${suffix#spec-}"
   other_branch=0

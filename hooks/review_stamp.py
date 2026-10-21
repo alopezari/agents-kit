@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Record or check that a skill ran on the exact current change.
 
-  review_stamp.py write [--kind review|validate]   # end of self-review / validate; verify stamps come only from
+  review_stamp.py write [--kind review|validate]   # end of review / validate; verify stamps come only from
                                                    # its runner (stop_checks.py), through record_verify(); validate
                                                    # needs a report whose PASS/FAIL rows name their evidence
   review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
@@ -192,7 +192,7 @@ def fingerprint_for(kind):
     return fingerprint() if kind in VERIFY_KINDS else change_fingerprint()
 
 
-# Files skills/spec/path.sh and bin/reports name <kind>-<repo>-<branch key>.md, next to the spec.
+# Files skills/kit-spec/path.sh and bin/reports name <kind>-<repo>-<branch key>.md, next to the spec.
 REPORT_KINDS = ("spec", "verify", "review", "validation", "checks-guide", "staging-guide", "follow-pr", "pr-body")
 
 
@@ -377,7 +377,7 @@ def rows_without_evidence():
         with open(report) as fh:
             lines = fh.read().splitlines()
     except OSError:
-        return [f"No validation report at {report}: save it first (validate skill, step 5)."]
+        return [f"No validation report at {report}: save it first (kit-validate skill, step 5)."]
     missing = unbacked_rows(lines, evidence)
     if missing:
         return [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for output, "
@@ -439,7 +439,7 @@ def main():
         print(f"This PR targets `{target}`, but its stamps measure the change against `{base}`, so the review would "
               f"cover a different change than the PR shows. If `{target}` is the right target, record it with "
               f"`git config branch.{branch}.agentsBase {target}`, then re-run the "
-              f"self-review and validate on the change it shows; otherwise pass `--base {branch_name(base)}`.")
+              f"kit-review and kit-validate skills on the change it shows; otherwise pass `--base {branch_name(base)}`.")
         return 1
     if command == "follow-renames":
         follow_branch_renames()
