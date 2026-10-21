@@ -190,6 +190,11 @@ check "install: a profile skill without SKILL.md is not linked, and not called a
   '[ -L "$kit/skills/notes-only" ] && [ ! -e "$home/.claude/skills/notes-only" ] \
    && grep -q "warn  skills/notes-only, from a profile, has no SKILL.md: not linked" <<<"$out" \
    && ! grep -q "notes-only.*remove the folder" <<<"$out"'
+out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes --profile "$home/zz-left" 2>&1)
+check "install again: a leftover folder is never linked, so there is no link to remove" '! grep -q "removed $home" <<<"$out"'
+docs_out=$("$kit/bin/docs" --check 2>&1)
+check "docs: the reference leaves out a leftover folder and a profile skill without SKILL.md" \
+  '[ "$docs_out" = "docs/framework.md is current" ]'
 rm -r "$kit/skills/spec" "$kit/skills/notes-only" "$kit/profiles/zz-left" "$home/zz-left"
 rm "$home/.claude/skills/"{mine,ship,whole,lenses,dotdot,old-spec}
 [ $made_codex_dir = 1 ] && rm -r "$home/.codex"
