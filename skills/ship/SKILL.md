@@ -5,7 +5,7 @@ description: See a merged pull request safely into production. Gives the user a 
 
 # Ship
 
-The PR is merged, and the user asked for ship: the core flow ended at the merge, and nothing here starts until they ask ("ship", "install", a deploy guide, a production check). When they only say a PR is merged or deployed, report its status and list what ship would do as optional, without running any of it or asking.
+Run this only when the user asks for it ("ship", "install", a deploy guide, a production check): the core flow ends at the merge. When they only say a PR is merged or deployed, report its status and list what ship would do as optional, without running any of it or asking.
 
 Now it has to work in production. The user deploys and runs every production step: you prepare the guide, the rollback and the follow-up. Never deploy, write to production or SSH into it yourself.
 

@@ -1,4 +1,4 @@
-<svg class="only-narrow" viewBox="0 0 320 418" role="img" aria-label="The flow as a vertical line: spec, build, self-review, validate, create-pr, follow-pr, merge by you after any optional checks, where the flow ends; ship only when you ask">
+<svg class="only-narrow" viewBox="0 0 320 418" role="img" aria-label="The flow as a vertical line: spec, build, self-review, validate, create-pr, follow-pr, merge by you after any optional checks (the flow ends here), then ship, only when you ask">
 <g font-family="JetBrains Mono, monospace" font-size="14" fill="#E8E6DF">
 <line x1="30" y1="20" x2="30" y2="332" stroke="#C6EC5A" stroke-width="2"></line>
 <line x1="30" y1="344" x2="30" y2="374" stroke="#8A8F88" stroke-width="2" stroke-dasharray="3 4"></line>
