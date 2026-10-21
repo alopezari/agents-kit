@@ -17,7 +17,7 @@ parent of a stacked branch: branch_base), except the changelog, so committing st
 and any later edit invalidates it. Review and validate stamps hold the branch's diff, so merging the default branch
 keeps them unless it moves the changed lines or their context; verify's holds the files' content, so the tests run again. Stamps live in the repository's shared git dir, per branch
 (.git/agents/stamps/<branch key>/), never in the tree: they survive removing the worktree they were
-written in, so they are still read from the main checkout once create-pr frees the branch. They also follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
+written in, so they are still read from the main checkout once kit-ship frees the branch. They also follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
 """
 import hashlib
 import json

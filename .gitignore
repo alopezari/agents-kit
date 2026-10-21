@@ -22,7 +22,6 @@ profiles/
 !/repos/README.md
 !/repos/_shared/
 /skills/*
-!/skills/kit-create-pr/
 !/skills/kit-follow-pr/
 !/skills/kit-review/
 !/skills/kit-ship/

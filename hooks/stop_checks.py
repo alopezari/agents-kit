@@ -258,7 +258,7 @@ def fresh_session_notice(session, payload):
         label = json.load(open(os.path.join(common_dir, "agents", "phase", review_stamp.branch_key(branch) + ".json")))["label"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    merged = label.startswith(("merged", "ship"))  # "ship": a cache bin/phase wrote before it named the state merged
+    merged = label.startswith("merged")
     if not (merged or label.startswith("PR open")):
         return None
     tokens = context_tokens(transcript)
@@ -468,7 +468,7 @@ def ci_after_push(session, payload):
         problems.append({
             "failed": f"CI failed on {sha[:12]} ({names}). Read the failures with {wait} and fix them, or tell the user "
                       "why not; don't call the work done.",
-            "running": f"CI is still running on {sha[:12]}: wait for it in the foreground with {wait} (see the follow-pr "
+            "running": f"CI is still running on {sha[:12]}: wait for it in the foreground with {wait} (see the kit-ship "
                        "skill when your harness caps a command's run time) and act on the result before saying the work "
                        "is done.",
             "unreadable": f"Couldn't read CI for {sha[:12]} from GitHub ({out.splitlines()[-1] if out else 'no output'}): "

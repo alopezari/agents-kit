@@ -1,6 +1,6 @@
 ---
 name: kit-follow-pr
-description: "Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs once right after create-pr (waiting for CI and bot reviews), then whenever the user asks to follow up on the PR."
+description: "Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs only when the user asks to follow up on the PR; kit-ship opens it and waits for its first CI run."
 ---
 
 # Follow PR
@@ -16,14 +16,13 @@ cat "$(~/.agents/bin/reports path follow-pr)" 2>/dev/null   # what earlier runs 
 
 Record the PR's target as the branch's base, `git config branch.<headRefName>.agentsBase <baseRefName>`, even when `python3 ~/.agents/hooks/review_stamp.py base` already names it: a parent found by detection is lost once its pushed tip moves past this branch. A PR retargeted on GitHub (its parent merged) then measures the change GitHub shows; when that change differs the stamps go stale, and the fix steps of section 3 bring them back.
 
-- **First run** (right after `create-pr`): wait for CI as in section 1, then read the comments. Bot reviewers usually post when their own check finishes, so reading earlier misses them.
-- **On-demand runs** (the user asks to follow up): read the current state, don't wait. If checks are still running, say which and handle the rest. In a new session, start with `~/.agents/bin/reports brief`: the phase and one line per report, so you read in full only the reports you need.
+It runs only when the user asks to follow up: read the current state, don't wait. If checks are still running, say which and handle the rest. In a new session, start with `~/.agents/bin/reports brief`: the phase and one line per report, so you read in full only the reports you need.
 
-Fixes go on the branch wherever it is checked out. If that is the user's main checkout (the user switched to it), say what you're about to change before editing there: they may be in the middle of something. Once create-pr has freed the branch, run this whole skill (`gh pr view`, `pr-comments`, the reports, ci-wait) from a checkout of the branch: they read the branch checked out where they run, and a session directory create-pr detached has none. That is the main checkout once the user has switched to it; otherwise add a worktree, `git worktree add <path> <branch>`, and free it again with `cd <the session's directory> && ~/.agents/bin/free-branch <path>` at the end of the run, after its CI wait and the report.
+Fixes go on the branch wherever it is checked out. If that is the user's main checkout (the user switched to it), say what you're about to change before editing there: they may be in the middle of something. Once kit-ship has freed the branch, run this whole skill (`gh pr view`, `pr-comments`, the reports, ci-wait) from a checkout of the branch: they read the branch checked out where they run, and a session directory kit-ship detached has none. That is the main checkout once the user has switched to it; otherwise add a worktree, `git worktree add <path> <branch>`, and free it again with `cd <the session's directory> && ~/.agents/bin/free-branch <path>` at the end of the run, after its CI wait and the report.
 
 ## 1. CI
 
-On the first run, and after every push, wait for the checks of the commit you pushed, in the foreground, and read the result before saying anything about the PR:
+After every push, wait for the checks of the commit you pushed, in the foreground, and read the result before saying anything about the PR:
 
 ```bash
 ~/.agents/bin/ci-wait --sha "$(git rev-parse HEAD)"
@@ -91,4 +90,4 @@ Log every CI failure the change caused and every review comment from someone oth
 
 `review` is a person, `bot` an automated reviewer. For CI, the verdict is `confirmed`; the lens is the one whose area the failure falls in (Tests for a failing test, Correctness for a wrong result). A comment saying the change doesn't do what was asked is category `C.requirement` with lens `spec`: the spec's second reading should have caught it. CI failures not caused by the change are not escapes.
 
-It is ready to merge when CI is green, every comment has a fix or an approved reply, and no review request is pending. A fix can make results in the checks guide stale: name the steps it touches, so the user can run them again if they choose. Say what would need another run: checks still running, reviewers who haven't answered. The user merges, and the flow ends there; the `kit-ship` skill runs only when they ask for it (a deploy guide, or the install and post-merge checks of a repo installed on this machine).
+It is ready to merge when CI is green, every comment has a fix or an approved reply, and no review request is pending. A fix can make results in the checks guide stale: name the steps it touches, so the user can run them again if they choose. Say what would need another run: checks still running, reviewers who haven't answered. The user merges, and the flow ends there; the `kit-ship` skill's part after the merge runs only when they ask for it (a deploy guide, or the install and post-merge checks of a repo installed on this machine).
