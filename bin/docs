@@ -301,7 +301,7 @@ def render():
     w("  V --> CP[create-pr skill: evidence check, push, write-pr-description]")
     w("  CP --> PR{gh pr create}\n  PR -->|no stamp for this exact change| G2[Blocked: run self-review / validate]")
     w("  PR -->|stamped| FP[follow-pr skill: first run waits for CI and bot reviews; later runs on demand]\n  FP -->|fix needed| W")
-    w("  FP -->|CI green, reviews answered| MG{You run more checks or merge}\n  MG -->|a check fails| W\n  MG --> SH[ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]\n```\n")
+    w("  FP -->|CI green, reviews answered| MG{You run more checks or merge}\n  MG -->|a check fails| W\n  MG --> M[Merged: the flow ends]\n  M -.->|only when you ask| SH[ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]\n```\n")
     w("The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up "
       "in its report under **Blocked on me** instead of looping. Self-review, validate and a green verify each leave a "
       "stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Merging "

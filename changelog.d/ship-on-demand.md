@@ -1,0 +1,1 @@
+- `ship` is no longer a step of the flow: the flow ends when you merge, and ship runs only when you ask for it (a deploy guide, or the install and post-merge checks of a repo installed on this machine). Saying a PR is merged no longer starts it, and the status line names a merged branch `merged`.

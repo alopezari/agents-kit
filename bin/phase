@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Where the current branch is in the kit's flow, for the status line:
-spec → build → self-review → validate → create-pr → PR open → ship.
+spec → build → self-review → validate → create-pr → PR open → merged.
 
   phase             print the cached phase at once; refresh it in the background when older than 15 s
   phase --refresh   work it out now from the spec, stamps, reports and PR state, cache it and print it
@@ -86,11 +86,11 @@ def compute(previous):
     if followed or git("rev-parse", "--verify", "--quiet", "@{push}"):
         state, checked_at = pr_state(previous)
         extra = {"pr_state": state, "pr_checked_at": checked_at}
-        pr = {"MERGED": "ship", "CLOSED": "PR closed"}.get(state, "PR open" if followed or state == "OPEN" else None)
+        pr = {"MERGED": "merged", "CLOSED": "PR closed"}.get(state, "PR open" if followed or state == "OPEN" else None)
     off, unreadable = phase_switches.phases_off_or_error(toplevel)
     switched = (f" · off: {', '.join(p for p in phase_switches.PHASES if p in off)}" if off else "") + \
         (" · switches unreadable" if unreadable else "")
-    if pr in ("ship", "PR closed"):
+    if pr in ("merged", "PR closed"):
         return pr + switched, extra
 
     changed = review_stamp.changed_paths()[1]
