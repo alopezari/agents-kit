@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 TRIAGE = os.path.expanduser("~/.agents/bin/triage")
 GIT_SENSE = ["cwd = pr_checkout(command, cwd)", "git checkout -b fix", "- uses: actions/checkout@v4",
@@ -428,7 +429,7 @@ with tempfile.TemporaryDirectory(prefix="agents-test-bundle-") as home, \
 SPEC_TEXT = "# Round prices\n\nGoal: totals match.\n\n{risk}\n## Acceptance criteria\n1. x — verify: tests/test_x.py\n{extra}"
 
 
-def triage_spec(risk, diff, extra="", setup=None, plain=False):
+def triage_spec(risk, diff, extra="", setup=None, plain=False, args=()):
     """triage, as the review runs it, on a repo whose spec has `risk` as its Risk line; `diff` is "docs", "code" or "auth"."""
     kit = os.path.realpath(os.path.expanduser("~/.agents"))
     with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
@@ -455,7 +456,7 @@ def triage_spec(risk, diff, extra="", setup=None, plain=False):
             open(spec, "w").write(SPEC_TEXT.format(risk=risk, extra=extra))
         if setup:
             setup(home, repo, spec, env)
-        out = subprocess.run([TRIAGE] + ([] if plain else ["--json"]), cwd=repo, capture_output=True, text=True, env=env,
+        out = subprocess.run([TRIAGE, *args] + ([] if plain else ["--json"]), cwd=repo, capture_output=True, text=True, env=env,
                              timeout=60)
         if os.path.exists(spec):
             os.chmod(spec, 0o644)
@@ -476,7 +477,9 @@ for case, args, expected in (
         ("no spec", (None, "auth"), ("high", None, "high")),
         ("no Risk line", ("", "docs"), ("low", None, "low")),
         ("an invalid Risk line", ("Risk: medium — totals", "docs"), ("low", None, "low")),
-        ("two Risk lines", ("Risk: high — schema\nRisk: low — docs", "docs"), ("low", None, "low"))):
+        ("two Risk lines", ("Risk: high — schema\nRisk: low — docs", "docs"), ("low", None, "low")),
+        ("no Risk line, with Decisions", ("", "docs", DECISIONS), ("high", "high", "low")),
+        ("an invalid Risk line, with Decisions", ("Risk: medium — x", "docs", DECISIONS), ("high", "high", "low"))):
     result = triage_spec(*args)
     ok = tiers(result) == expected
     fail |= not ok
@@ -508,10 +511,19 @@ print(f"{'ok  ' if ok else 'FAIL'} spec risk: the user's switches still apply to
 for case, args, expected in (
         ("the spec decides", ("Risk: high — adds a schema", "docs"), ("Risk: high (", "the spec", "adds a schema")),
         ("the diff decides", ("Risk: low — one line", "auth"), ("Risk: high (", "the diff", "one line")),
-        ("an invalid Risk line", ("Risk: medium — totals", "docs"), ("Risk: low (", "no prediction", "'medium' is not a tier"))):
+        ("they agree", ("Risk: standard — totals", "code"), ("Risk: standard (", "they agree", "totals")),
+        ("a low Risk line with Decisions", ("Risk: low — one line", "docs", DECISIONS),
+         ("Risk: high (", "the spec", "a '## Decisions' section; its Risk line says low: one line")),
+        ("an invalid Risk line", ("Risk: medium — totals", "docs"), ("Risk: low (", "no prediction", "'medium' is not a tier")),
+        ("no Risk line", ("", "docs"), ("Risk: low (", "no prediction", "no 'Risk:' line")),
+        ("two Risk lines", ("Risk: high — a\nRisk: low — b", "docs"), ("Risk: low (", "no prediction", "more than one")),
+        ("no spec", (None, "docs"), ("Risk: low (", None))):
     out = triage_spec(*args, plain=True)
     head = "\n".join(out.splitlines()[:3])
-    ok = out.startswith(expected[0]) and all(part in head for part in expected[1:])
+    if expected[1] is None:  # as today: no Spec line at all
+        ok = out.startswith(expected[0]) and "Spec:" not in out
+    else:
+        ok = out.startswith(expected[0]) and all(part in head for part in expected[1:])
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} spec risk, plain output, {case}: {head!r}")
 
@@ -525,6 +537,18 @@ def unreadable(home, repo, spec, env):
     os.chmod(spec, 0)
 
 
+def not_utf8(home, repo, spec, env):
+    open(spec, "wb").write(SPEC_TEXT.format(risk="Risk: high — schema caf", extra="").encode().replace(b"caf", b"caf\xe9"))
+
+
+def lookup_stalls(home, repo, spec, env):
+    os.remove(os.path.join(home, ".agents", "bin"))
+    os.makedirs(os.path.join(home, ".agents", "bin"))
+    stub = os.path.join(home, ".agents", "bin", "repo-name")
+    open(stub, "w").write("#!/bin/sh\nsleep 30\n")
+    os.chmod(stub, 0o755)
+
+
 def lookup_fails(home, repo, spec, env):
     os.remove(os.path.join(home, ".agents", "bin"))  # path.sh can't run repo-name
     os.makedirs(os.path.join(home, ".agents", "bin"))
@@ -533,17 +557,31 @@ def lookup_fails(home, repo, spec, env):
 for case, setup, expected, note in (
         ("spec switched off, a spec already written", spec_off, ("high", "high", "low"), None),
         ("an unreadable spec", unreadable, ("low", None, "low"), "no prediction"),
-        ("a failing spec lookup", lookup_fails, ("low", None, "low"), "no prediction")):
+        ("a failing spec lookup", lookup_fails, ("low", None, "low"), "no prediction"),
+        ("a spec that isn't UTF-8", not_utf8, ("low", None, "low"), "not UTF-8")):
     result = triage_spec("Risk: high — schema", "docs", setup=setup)
     out = triage_spec("Risk: high — schema", "docs", setup=setup, plain=True)
     ok = tiers(result) == expected and (note is None or note in "\n".join(out.splitlines()[:3]))
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} spec risk, {case}: {tiers(result)}, expected {expected}; plain: {out.splitlines()[:3]}")
 
-result = triage_change({"app.py": "x = 1\n"}, {"app.py": "if current_user_can('edit'):\n    x = 2\n"})
-ok = (result.get("tier"), result.get("spec_tier"), result.get("diff_tier")) == ("high", None, "high")
+started = time.monotonic()
+result = triage_spec("Risk: high — schema", "docs", setup=lookup_stalls)
+took = time.monotonic() - started
+ok = tiers(result) == ("low", None, "low") and "timed out" in str(result.get("spec_note")) and took < 25
 fail |= not ok
-print(f"{'ok  ' if ok else 'FAIL'} spec risk: --range reads no spec: {tiers(result)}")
+print(f"{'ok  ' if ok else 'FAIL'} spec risk, a stalled spec lookup gives up after 10 s: {tiers(result)}, "
+      f"{result.get('spec_note')!r}, {took:.0f} s")
+
+
+def commit_change(home, repo, spec, env):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "change"], cwd=repo, check=True)
+
+
+result = triage_spec("Risk: high — schema", "docs", setup=commit_change, args=("--range", "main..HEAD"))
+ok = tiers(result) == ("low", None, "low")
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} spec risk: --range reads no spec, even with a high one on the branch: {tiers(result)}")
 
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected

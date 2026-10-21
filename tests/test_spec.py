@@ -90,6 +90,9 @@ def lint_demands_a_risk_line_with_a_reason(base):
                             (GOOD.replace(" — changes what the installer accepts; no auth, schema or public API", ""), "no reason"),
                             (GOOD.replace("; no auth, schema or public API", "").replace("changes what the installer accepts", " "), "no reason"),
                             (GOOD.replace("Risk: standard", "Risk: medium"), "'medium' is not a tier"),
+                            (GOOD.replace("Risk: standard", "Risk: standard-ish"), "no reason"),
+                            (GOOD.replace("changes what the installer accepts; no auth, schema or public API",
+                                          "<the signal or Change map item that decides it>"), "no reason"),
                             (GOOD.replace("\n## Acceptance", "Risk: high — schema\n\n## Acceptance"), "more than one 'Risk:' line")):
         status, out = lint(base, broken)
         assert status == 1 and problem in out, (problem, out)

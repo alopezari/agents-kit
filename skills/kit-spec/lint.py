@@ -3,9 +3,10 @@
 
   lint.py [spec.md]     the current branch's spec (path.sh) when no file is given
 
-Fails, naming each problem, on a missing title, Goal line or section, a `Risk:` line missing, repeated, without a reason
-or with an unknown tier, a `## Decisions` section on a spec whose tier isn't high, no numbered criteria, a criterion whose `verify:` is missing, empty or only a
-placeholder, and an empty or unfilled Change map or Decisions; exits 2 when the spec can't be read.
+Fails, naming each problem, on a missing title, Goal line or section, a `Risk:` line missing, repeated, with an unknown
+tier or without a reason (or with the template's placeholder for one), a `## Decisions` section on a spec whose tier
+isn't high, no numbered criteria, a criterion whose `verify:` is missing, empty or only a placeholder, and an empty or
+unfilled Change map or Decisions; exits 2 when the spec can't be read.
 Warns, without failing, when there are fewer than 3 or more than 6 criteria.
 """
 import os
@@ -44,8 +45,8 @@ def risk(text):
     tier, rest = lines[0]
     if tier.lower() not in TIERS:
         return None, None, f"'Risk:': '{tier}' is not a tier; use one of {', '.join(TIERS)}"
-    reason = re.fullmatch(r"\s*[—–-]\s*(\S.*)", rest)
-    if not reason:
+    reason = re.fullmatch(r"(?:\s*[—–]|\s+--?)\s*(\S.*)", rest)  # a hyphen needs a space before it: 'high-ish' isn't high
+    if not reason or re.fullmatch(r"<.*>", reason.group(1).strip()):
         return None, None, f"'Risk: {tier}' gives no reason: add ' — <the signal or Change map item that decides it>'"
     return tier.lower(), reason.group(1).strip(), None
 
