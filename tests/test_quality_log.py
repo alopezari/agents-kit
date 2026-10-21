@@ -132,6 +132,45 @@ def a_session_on_a_worktree_logs_to_the_main_checkout(base):
     assert (rows(kit), rows(worktree)) == (["test", "rename"], ["test", "rename"]), (rows(kit), rows(worktree))
 
 
+def records_the_spec_and_diff_tiers(base):
+    """Each row keeps the spec's predicted tier and the diff's beside the effective one, so mismatches can be counted."""
+    home, repo = os.path.join(base, "home"), os.path.join(base, "shop")
+    os.makedirs(os.path.join(home, ".agents"))
+    for part in ("bin", "hooks", "skills", "review-mining"):
+        os.symlink(os.path.join(KIT, part), os.path.join(home, ".agents", part))
+    env = {**os.environ, "HOME": home}
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q", "-b", "main", repo], check=True)
+    open(os.path.join(repo, "README.md"), "w").write("# Shop\n")
+    subprocess.run([*git, "-C", repo, "add", "-A"], check=True)
+    subprocess.run([*git, "-C", repo, "commit", "-q", "-m", "base"], check=True)
+    subprocess.run([*git, "-C", repo, "checkout", "-q", "-b", "round"], check=True)
+    open(os.path.join(repo, "README.md"), "w").write("# Shop\n\nRounds prices.\n")
+    spec = subprocess.run([os.path.join(KIT, "skills", "kit-spec", "path.sh")], cwd=repo, env=env, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    open(spec, "w").write("# Round\n\nGoal: x.\n\nRisk: high — adds a schema\n")
+
+    def row():
+        result = subprocess.run([os.path.join(home, ".agents", "bin", "quality-log"), "test", "e2e", "--issues", "0"], cwd=repo,
+                                env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        return entries(home)[-1]
+
+    got = row()
+    assert (got["tier"], got.get("spec_tier"), got.get("diff_tier")) == ("high", "high", "low"), got
+    open(spec, "w").write("# Round\n\nGoal: x.\n\nRisk: low — one line\n")  # the prediction the diff proves wrong
+    open(os.path.join(repo, "app.py"), "w").write("if current_user_can('edit'):\n    x = 2\n")
+    got = row()
+    assert (got["tier"], got.get("spec_tier"), got.get("diff_tier")) == ("high", "low", "high"), got
+    os.remove(os.path.join(home, ".agents", "bin"))  # the same kit, with a triage that fails
+    shutil.copytree(os.path.join(KIT, "bin"), os.path.join(home, ".agents", "bin"))
+    stub = os.path.join(home, ".agents", "bin", "triage")  # quality-log still loads it for the lens names
+    source = open(stub).read()
+    open(stub, "w").write(source.replace("\ndef main():\n", "\ndef main():\n    sys.exit('triage: broken')\n", 1))
+    got = row()
+    assert {"tier", "spec_tier", "diff_tier"} <= got.keys() and (got["tier"], got["spec_tier"], got["diff_tier"]) == (None, None, None), got
+
+
 def other_kit_layouts_keep_their_rows_in_the_kit(base):
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
     session = {key: value for key, value in os.environ.items() if key != "AGENTS_KIT_UNDER_TEST"}
@@ -210,7 +249,7 @@ def a_lens_with_no_findings_logs_without_outcomes(base):
 for test in (writes_well_formed_entries, records_the_findings_the_other_model_shared, keeps_lens_names_to_the_lenses_there_are,
              refuses_malformed_entries, a_session_on_a_worktree_logs_to_the_main_checkout,
              other_kit_layouts_keep_their_rows_in_the_kit, records_each_findings_outcome,
-             refuses_malformed_outcomes, a_lens_with_no_findings_logs_without_outcomes):
+             refuses_malformed_outcomes, a_lens_with_no_findings_logs_without_outcomes, records_the_spec_and_diff_tiers):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)

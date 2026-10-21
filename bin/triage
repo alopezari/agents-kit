@@ -7,9 +7,12 @@
   triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/kit-review/lenses.md
 
 The kit-review and kit-validate skills run the lenses and tests this selects. Every rule is a regex
-over changed paths or added lines, so a selection can always be traced back to its signal.
+over changed paths or added lines, so a selection can always be traced back to its signal. Without --range, the
+branch's spec, by its Risk line, can raise the diff's tier, never lower it: the tier is the higher of the two.
 """
 import ast
+import importlib.machinery
+import importlib.util
 import json
 import os
 import re
@@ -111,6 +114,8 @@ def nested_quantifier(line):
 
 
 BUDGET = {"low": "< 5 min", "standard": "<= 20 min", "high": "<= 45 min"}
+TIERS = ("low", "standard", "high")
+SPEC_LOOKUP_SECS = 10
 
 
 def git(*args, cwd=None):
@@ -303,12 +308,14 @@ def triage(rng=None):
         high.append(f"{changed_lines} changed lines")
 
     if (not behavior or style_only) and changed_lines < 50 and not high:
-        tier = "low"
+        diff_tier = "low"
     elif high:
-        tier = "high"
+        diff_tier = "high"
         reasons += high
     else:
-        tier = "standard"
+        diff_tier = "standard"
+    spec_tier, spec_reason, spec_note = (None, None, None) if rng else spec_risk()
+    tier = max(diff_tier, spec_tier or "low", key=TIERS.index)
 
     ui = [p for p in behavior if UI_FILE.search(p)]
     if ui:  # at every tier: a one-line style change can still be a design regression
@@ -317,7 +324,7 @@ def triage(rng=None):
     if style_only:
         lenses["ux-a11y-i18n"] = behavior[:3]
     if tier != "low":
-        lenses["maintainability"] = ["behavior change"]
+        lenses["maintainability"] = ["behavior change" if diff_tier != "low" else f"the spec's {tier} tier"]
         if any(TEST_OR_DOC.search(p) and "test" in p.lower() for p in files) or (behavior and not style_only):
             lenses["tests"] = ["behavior change" if behavior else "tests changed"]
         for lens, rx in LENS_SIGNALS.items():
@@ -354,9 +361,39 @@ def triage(rng=None):
     if tier == "high" and any(TEST_OR_DOC.search(p) and "test" in p.lower() for p in files) and code_added:
         tests["mutation (changed lines)"] = ["high risk with tests in the diff"]
 
-    return {"tier": tier, "budget": BUDGET[tier], "changed_lines": changed_lines, "files": len(files),
+    return {"tier": tier, "spec_tier": spec_tier, "diff_tier": diff_tier, "spec_reason": spec_reason, "spec_note": spec_note,
+            "budget": BUDGET[tier], "changed_lines": changed_lines, "files": len(files),
             "reasons": reasons, "lenses": lenses, "tests": tests,
             "cross_model": cross_model(tier), "base": base, "base_why": base_why}
+
+
+def spec_risk():
+    """(tier, reason, None) from the branch's spec, or (None, None, why it gives no prediction); all None without a spec."""
+    kit_spec = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "skills", "kit-spec")
+    try:
+        found = subprocess.run([os.path.join(kit_spec, "path.sh")], capture_output=True, text=True, timeout=SPEC_LOOKUP_SECS)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:  # ValueError: output that isn't UTF-8
+        return None, None, f"the spec lookup failed: {error}"
+    if found.returncode:
+        return None, None, f"the spec lookup failed: {(found.stderr.strip().splitlines() or ['exit ' + str(found.returncode)])[-1]}"
+    path = found.stdout.strip()
+    try:
+        text = open(path, encoding="utf-8").read()
+    except (FileNotFoundError, IsADirectoryError):
+        return None, None, None
+    except OSError as error:
+        return None, None, f"can't read the spec: {error.strerror}"
+    except ValueError as error:
+        return None, None, f"can't read the spec: not UTF-8 ({error.reason} at byte {error.start})"
+    sys.dont_write_bytecode = True  # as in quality-log: no __pycache__ left in the skill
+    loader = importlib.machinery.SourceFileLoader("spec_lint", os.path.join(kit_spec, "lint.py"))
+    lint = importlib.util.module_from_spec(importlib.util.spec_from_loader("spec_lint", loader))
+    loader.exec_module(lint)
+    tier, reason, problem = lint.risk(text)
+    if lint.DECISIONS.search(text) and tier != "high":
+        written = f"; its Risk line says {tier}: {reason}" if tier else ""
+        return "high", f"a '## Decisions' section{written}", None
+    return (None, None, problem) if problem else (tier, reason, None)
 
 
 def branch_base():
@@ -412,6 +449,13 @@ def main():
         return 0
     print(f"Risk: {result['tier']} ({result['changed_lines']} changed lines in {result['files']} files; "
           f"budget {result['budget']}; cross-model: {result['cross_model']})")
+    if result["spec_note"]:
+        print(f"Spec: no prediction ({result['spec_note']}); the diff decides")
+    elif result["spec_tier"]:
+        spec, diff = TIERS.index(result["spec_tier"]), TIERS.index(result["diff_tier"])
+        decided = "decided by the spec" if spec > diff else "decided by the diff" if diff > spec else "they agree"
+        print(f"Spec: {result['spec_tier']}, diff: {result['diff_tier']}; {decided}. "
+              f"Spec's reason: {result['spec_reason']}")
     if result["base_why"]:
         print(f"Base: {result['base']} ({result['base_why']})")
     for r in result["reasons"]:

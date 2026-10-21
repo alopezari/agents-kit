@@ -17,6 +17,8 @@ GOOD = """# SHOP-12: Require Compose v2
 
 Goal: The installer accepts a standalone Compose v2 binary and rejects v1 with install steps.
 
+Risk: standard — changes what the installer accepts; no auth, schema or public API
+
 ## Acceptance criteria
 1. A standalone `docker-compose` v2 is accepted — verify: tests/test_compose.py::accepts_v2
 2. Compose v1 is rejected with the install steps, and the
@@ -32,6 +34,7 @@ Goal: The installer accepts a standalone Compose v2 binary and rejects v1 with i
 ## Open questions
 - None.
 """
+HIGH = GOOD.replace("Risk: standard", "Risk: high")
 
 
 def lint(base, text):
@@ -72,14 +75,41 @@ def lint_takes_a_change_map_only_when_filled(base):
 
 
 def lint_takes_decisions_only_when_filled(base):
-    status, out = lint(base, GOOD + "\n## Decisions\n- Accept v2 by version string over probing flags, because v1 and v2 share flags.\n")
+    status, out = lint(base, HIGH + "\n## Decisions\n- Accept v2 by version string over probing flags, because v1 and v2 share flags.\n")
     assert status == 0, f"a filled Decisions section passes: {out}"
-    status, out = lint(base, GOOD + "\n## Decisions\n\n")
+    status, out = lint(base, HIGH + "\n## Decisions\n\n")
     assert status == 1 and "'## Decisions' is empty" in out, out
     for unfilled in ("- <chosen option> over <rejected alternative>, because <reason>\n", "- Storage:\n",
                      "- <chosen> over postgres, because simpler.\n"):
-        status, out = lint(base, GOOD + "\n## Decisions\n" + unfilled)
+        status, out = lint(base, HIGH + "\n## Decisions\n" + unfilled)
         assert status == 1 and "'## Decisions' has an unfilled item" in out, (unfilled, out)
+
+
+def lint_demands_a_risk_line_with_a_reason(base):
+    for broken, problem in ((GOOD.replace("Risk: standard — changes what the installer accepts; no auth, schema or public API\n", ""), "no 'Risk:' line"),
+                            (GOOD.replace(" — changes what the installer accepts; no auth, schema or public API", ""), "no reason"),
+                            (GOOD.replace("; no auth, schema or public API", "").replace("changes what the installer accepts", " "), "no reason"),
+                            (GOOD.replace("Risk: standard", "Risk: medium"), "'medium' is not a tier"),
+                            (GOOD.replace("Risk: standard", "Risk: standard-ish"), "no reason"),
+                            (GOOD.replace("changes what the installer accepts; no auth, schema or public API",
+                                          "<the signal or Change map item that decides it>"), "no reason"),
+                            (GOOD.replace("\n## Acceptance", "Risk: high — schema\n\n## Acceptance"), "more than one 'Risk:' line")):
+        status, out = lint(base, broken)
+        assert status == 1 and problem in out, (problem, out)
+    for tier in ("low", "standard", "high"):
+        status, out = lint(base, GOOD.replace("Risk: standard", f"Risk: {tier}"))
+        assert status == 0, (tier, out)
+    status, out = lint(base, GOOD.replace("Risk: standard —", "Risk: standard -"))
+    assert status == 0, f"a hyphen for the dash passes: {out}"
+
+
+def lint_takes_decisions_only_on_a_high_risk_spec(base):
+    decisions = "\n## Decisions\n- Accept v2 by version string over probing flags, because v1 and v2 share flags.\n"
+    for tier in ("low", "standard"):
+        status, out = lint(base, GOOD.replace("Risk: standard", f"Risk: {tier}") + decisions)
+        assert status == 1 and "'## Decisions' means a one-way door: the tier is high" in out, (tier, out)
+    status, out = lint(base, HIGH + decisions)
+    assert status == 0, out
 
 
 def lint_rejects_a_placeholder_verify(base):
@@ -136,6 +166,7 @@ RESULTS = []
 for test in (lint_passes_the_documented_shape, lint_names_every_missing_part, lint_rejects_a_placeholder_verify,
              lint_warns_outside_three_to_six_criteria, lint_exits_2_on_an_unreadable_spec,
              lint_takes_a_change_map_only_when_filled, lint_takes_decisions_only_when_filled,
+             lint_demands_a_risk_line_with_a_reason, lint_takes_decisions_only_on_a_high_risk_spec,
              review_prompt_bundles_the_request_and_the_spec):
     base = tempfile.mkdtemp(prefix="agents-test-spec-")
     try:
