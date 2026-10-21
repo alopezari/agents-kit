@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.
 
-  triage                  change vs the merge-base with the branch's base (committed + uncommitted + untracked, but not logs)
+  triage                  change vs the merge-base with the branch's base (committed + uncommitted + untracked, but not untracked logs)
   triage --range A..B     a commit range instead (for calibration on past changes)
   triage --json           machine-readable output
   triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/kit-review/lenses.md
@@ -26,29 +26,41 @@ STYLE_FILE = re.compile(r"\.(css|scss|sass|less)$", re.I)
 DATA_FILE = re.compile(r"\.(jsonl|ndjson|log|out|err)$", re.I)
 UI_FILE = re.compile(r"\.(jsx?|tsx?|vue|svelte|astro|css|scss|sass|less|html|twig|mustache)$|(^|/)(templates?|views?|blocks?|components?)/", re.I)
 
-# A whole-line comment, told by the file's language. Each language lists only its own prefixes, since another's can be
-# code there: C's #define and *p and --n, PHP's #[Attribute], a shebang.
-SLASH_COMMENT, HASH_COMMENT = r"//|/\*|\*(?=\s|/|$)", r"#(?![!\[])"
+# A whole-line comment, told by the file's language. Each language lists only its own prefixes, since another's is
+# code there: C's #define and --n, PHP's #[Attribute], a shebang.
+SLASH_COMMENT = r"//|/\*|\*(?=\s|/|$)"
 COMMENT_BY_EXT = {ext: re.compile(rf"\s*(?:{prefixes})") for exts, prefixes in [
-    ("c h cc cpp hpp cs java kt swift go rs js jsx mjs cjs ts tsx css scss less dart scala", SLASH_COMMENT),
-    ("php", f"{SLASH_COMMENT}|{HASH_COMMENT}|<!--"),
-    ("sh bash zsh py rb pl yml yaml toml r ps1 conf", HASH_COMMENT), ("", HASH_COMMENT),  # "": scripts, Makefile, Dockerfile
-    ("sql lua hs", r"--(?=\s|$)"),
+    ("c h cc cpp hpp cs java kt swift go rs js jsx mjs cjs ts tsx mts cts css scss less dart scala", SLASH_COMMENT),
+    ("php", rf"{SLASH_COMMENT}|#(?![!\[])|<!--"),
+    ("sh bash zsh py rb pl yml yaml toml r ps1 conf", "#(?!!)"), ("", "#(?!!)"),  # "": scripts, Makefile, Dockerfile
+    ("sql lua hs", "--"),
     ("html htm xml svg twig mustache hbs erb", "<!--"), ("vue svelte astro", f"{SLASH_COMMENT}|<!--"),
 ] for ext in (exts.split() or [""])}
+# A comment line that holds code all the same: code after its closer, a template tag, WordPress block markup.
+HOLDS_CODE = re.compile(r"(?:\*/|-->)\s*\S|<\?|\{\{|\{%|<%|^\s*<!--\s*/?wp:")
+# A spaced `*` opens a docblock line, unless the line ends like a statement: C's `* p = f(x);`, a generator method.
+STATEMENT_END = re.compile(r"[;{}]\s*$")
 
 
 def is_comment(path, line):
     rx = COMMENT_BY_EXT.get(os.path.splitext(os.path.basename(path))[1][1:].lower())
-    return bool(rx and rx.match(line))
+    prefix = rx and rx.match(line)
+    if not prefix or HOLDS_CODE.search(line):
+        return False
+    return not (prefix.group(0).strip() == "*" and STATEMENT_END.search(line))
 
 
 def code_word(stem):
-    """`stem` as part of an identifier or a call (process_payment(, wp_cron, $capability, ->login, PaymentIntent), not as a
-    word of prose or a plain key: "schema or migration", "capabilities": [."""
+    """`stem` as an identifier: part of a longer name (wp_login, user_has_capability, paymentIntent, PaymentIntent), a
+    call, after a sigil or member access ($capability, ->login), a receiver (payment.status), an assignment target, a
+    PHP array key or a declared type. Not a word of prose, a word before a parenthesis or a JS/JSON key: "schema or
+    migration", "the migration (if any)", "capabilities": [. Every branch starts at a word boundary or a literal, so a
+    long line that almost matches is scanned once."""
     cap = stem[0].upper() + stem[1:]
-    return (rf"\w+_{stem}\w*|\b{stem}\w*_\w+|\b{stem}\w*\s*\(|[$>.:\\]{stem}\w*"
-            rf"|(?-i:[a-z0-9]{cap}\w*|\b{cap}[a-z]*[A-Z]\w*)")
+    return (rf"\b\w+_{stem}\w*|\b{stem}\w*_\w+|\b{stem}\w*\((?!s\))|(?:[$\\*&.]|->|::){stem}\w*"
+            rf"|\b{stem}\w*(?:\.|->|::)\w|\b{stem}\w*\s*(?:[-+*/|&]?=(?![=>])|:=)|['\"]{stem}\w*['\"]\s*=>"
+            rf"|(?-i:(?<=[a-z0-9]){cap}\w*|\b{stem}[a-z]*[A-Z]\w*|\b{cap}[a-z]*[A-Z]\w*"
+            rf"|(?:\b(?:class|extends|implements|interface|struct|enum|trait|import)\s+|</?){cap}\w*)")
 
 
 MIGRATION = rf"CREATE TABLE|ALTER TABLE|dbDelta|{code_word('migration')}"
@@ -78,9 +90,10 @@ HIGH_RISK = {
     "payments or orders": rf"stripe|{code_word('payment')}|checkout|refund|subscription|invoice|wc_get_order|->get_total\(",
     "schema or data migration": rf"{MIGRATION}|DROP TABLE",
     "public API or hooks": r"register_rest_route|apply_filters\(|do_action\(|WP_CLI::add_command"
-                           r"|\b(?:app|router)\.(?:route|get|post|put|patch|delete)\(",
+                           r"|\b(?:app|router)\.(?:route|get|post|put|patch|delete)\(\s*['\"`]/",
     "caching": r"set_transient|wp_cache_set|wp_cache_add|cache_key",
-    "scheduled jobs": rf"as_schedule|as_enqueue|wp_schedule_event|{code_word('cron')}|\bcrontab\b",
+    "scheduled jobs": rf"as_schedule|as_enqueue|wp_schedule_event|{code_word('cron')}|\bcrontab\b"
+                      r"|\bcron\w*['\"]?\s*[:=]\s*['\"][\d*@]",
 }
 # A git checkout, not a shop's: lines with version-control words don't count as a payments signal.
 GIT_CHECKOUT = re.compile(r"\bgit(\b|_)|actions/checkout|worktree|\bbranch|\b(pr|primary|known|remember)_checkouts?\b|\bpr_checkout_"

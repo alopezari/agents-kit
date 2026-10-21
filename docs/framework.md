@@ -334,7 +334,7 @@ reports --branch <name> …                        the same for another branch o
 **`bin/triage`**: Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.
 
 ```
-triage                  change vs the merge-base with the branch's base (committed + uncommitted + untracked, but not logs)
+triage                  change vs the merge-base with the branch's base (committed + uncommitted + untracked, but not untracked logs)
 triage --range A..B     a commit range instead (for calibration on past changes)
 triage --json           machine-readable output
 triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/kit-review/lenses.md
