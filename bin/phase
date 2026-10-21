@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Where the current branch is in the kit's flow, for the status line:
-spec → build → review → validate → create-pr → PR open → merged.
+spec → build → review → validate → ship → PR open → merged.
 
   phase             print the cached phase at once; refresh it in the background when older than 15 s
   phase --refresh   work it out now from the spec, stamps, reports and PR state, cache it and print it
@@ -79,7 +79,7 @@ def compute(previous):
     reports = os.path.dirname(spec)
     suffix = os.path.basename(spec)[len("spec-"):-len(".md")]
 
-    # A PR may have been opened without follow-pr (by hand, or before the flow existed), so ask gh too, once the
+    # A PR may have been opened with no follow-pr report (follow-pr runs only on request), so ask gh too, once the
     # branch is pushed. @{push}, not @{upstream}: a branch started from origin/main tracks it before it's pushed.
     followed = os.path.exists(os.path.join(reports, f"follow-pr-{suffix}.md"))
     pr, extra = None, {}
@@ -116,7 +116,7 @@ def compute(previous):
     note = " · verify checked nothing" if checked_nothing and "verify" not in off else ""
     if pr:
         return pr + (f" · redo {', '.join(redo)}" if redo else "") + note + switched, extra
-    label = steps[reached][0] if reached < len(steps) else "create-pr"
+    label = steps[reached][0] if reached < len(steps) else "ship"
     return label + (f" · redo {', '.join(redo)}" if redo else "") + note + flag + switched, extra
 
 

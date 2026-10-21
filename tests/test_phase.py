@@ -99,7 +99,7 @@ def walks_the_flow(base):
     stamp(repo, "review")
     assert phase(repo) == "validate", "app.py is a behavior change, so it needs validation"
     stamp(repo, "validate")
-    assert phase(repo) == "create-pr"
+    assert phase(repo) == "ship"
 
     guide = sh(repo, os.path.expanduser("~/.agents/bin/reports"), "path", "checks-guide")
     for text, why in [
@@ -108,11 +108,11 @@ def walks_the_flow(base):
             ("# Checks guide\n## Before the merge (optional)\n### M1. Try it on a phone\n\n## Results (2026-10-21)\n\n"
              "| Step | Result | Evidence |\n|---|---|---|\n| M1 | FAIL | [out](e/M1.txt) |\n", "nor does a FAIL: the user decides")]:
         open(guide, "w").write(text)
-        assert phase(repo) == "create-pr", why
+        assert phase(repo) == "ship", why
     os.remove(guide)
     legacy = guide.replace("checks-guide-", "staging-guide-")
     open(legacy, "w").write("# Staging guide\n## Before the merge\n### S1. Deploy\n## After the merge\n### P1. Backfill\n")
-    assert phase(repo) == "create-pr", "an older staging guide, unrun, is only a guide now"
+    assert phase(repo) == "ship", "an older staging guide, unrun, is only a guide now"
     os.remove(legacy)
 
     open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
@@ -149,7 +149,7 @@ def pr_opened_without_follow_pr(base):
     os.chmod(os.path.join(fake, "gh"), 0o755)
     calls = os.path.join(base, "gh-calls")
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "PR_STATE": "OPEN", "GH_CALLS": calls}
-    assert phase(repo, env) == "create-pr", "a branch that was never pushed has no PR"
+    assert phase(repo, env) == "ship", "a branch that was never pushed has no PR"
     assert not os.path.exists(calls), "and gh isn't asked about it"
 
     remote = os.path.join(base, "remote.git")
@@ -159,7 +159,7 @@ def pr_opened_without_follow_pr(base):
     sh(repo, "git", "fetch", "-q", "origin")
     sh(repo, "git", "branch", "-q", "--set-upstream-to", "origin/trunk")
     os.remove(os.path.join(repo, ".git", "agents", "phase", "feature~cart.json"))
-    assert phase(repo, env) == "create-pr" and not os.path.exists(calls), \
+    assert phase(repo, env) == "ship" and not os.path.exists(calls), \
         "tracking origin/trunk, as a branch started from it does, isn't being pushed"
     sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "cart")
     sh(repo, "git", "push", "-q", "-u", "origin", "feature/cart")
@@ -168,8 +168,8 @@ def pr_opened_without_follow_pr(base):
     assert phase(repo, env) == "PR open"
     env["PR_STATE"] = ""
     os.remove(os.path.join(repo, ".git", "agents", "phase", "feature~cart.json"))
-    assert phase(repo, env) == "create-pr", "a pushed branch with no PR is still in the flow"
-    assert phase(repo, env) == "create-pr"
+    assert phase(repo, env) == "ship", "a pushed branch with no PR is still in the flow"
+    assert phase(repo, env) == "ship"
     assert len(open(calls).read().split()) == 2, "no PR is cached like any other answer"
 
 
@@ -356,7 +356,7 @@ def switched_off_phases_leave_the_flow(base):
     assert phase(repo) == "review · off: spec, verify", phase(repo)
     switch(repo, "phase off review repo")
     switch(repo, "phase off validate global")
-    assert phase(repo) == "create-pr · off: spec, review, validate, verify", phase(repo)
+    assert phase(repo) == "ship · off: spec, review, validate, verify", phase(repo)
     switch(repo, "phase on verify")
     assert phase(repo) == "build · off: spec, review, validate", phase(repo)
     assert sh(repo, PHASE, "switches").splitlines() == [

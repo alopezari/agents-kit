@@ -6,7 +6,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 
 ## At a glance
 
-- **2 harnesses** share one `AGENTS.md`, 9 skills and 6 hook scripts.
+- **2 harnesses** share one `AGENTS.md`, 8 skills and 6 hook scripts.
 - **22 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
@@ -61,15 +61,17 @@ flowchart TD
   SC -->|problem found, first time| W
   SC -->|clean| SR[kit-review skill: lenses + second model]
   SR --> V[kit-validate skill: suite + local checks + checks guide for what it couldn't run]
-  V --> CP[kit-create-pr skill: evidence check, push, kit-write-pr-description]
+  V --> CP[kit-ship skill: evidence check, push, kit-write-pr-description, wait for CI]
   CP --> PR{gh pr create}
   PR -->|no stamp for this exact change| G2[Blocked: run kit-review / kit-validate]
-  PR -->|stamped| FP[kit-follow-pr skill: first run waits for CI and bot reviews; later runs on demand]
+  PR -->|stamped| CI{CI and reviews}
+  CI -.->|only when you ask| FP[kit-follow-pr skill: CI failures and review comments]
   FP -->|fix needed| W
-  FP -->|CI green, reviews answered| MG{You run more checks or merge}
+  CI --> MG{You run more checks or merge}
+  FP -->|CI green, reviews answered| MG
   MG -->|a check fails| W
   MG --> M[Merged: the flow ends]
-  M -.->|only when you ask| SH[kit-ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]
+  M -.->|only when you ask| SH[kit-ship skill, after the merge: ship.md's steps as your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]
 ```
 
 The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up in its report under **Blocked on me** instead of looping. Review, validate and a green verify each leave a stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Merging the default branch keeps the review and validate stamps when the branch's own diff is unchanged, and invalidates verify's: the tests run again on the merged code. Only running verify (the stop hook, or `stop_checks.py verify`) writes its stamp. A green verify that ran no check (no `ran:` line) leaves a separate stamp, and the status line says "verify checked nothing".
@@ -195,10 +197,9 @@ A repository that needs more (a Docker stack, known failing tests, project rules
 |---|---|---|
 | `clarity` | https://github.com/addyosmani/clarity.git | Draft, rewrite or review prose other people will read, so it is specific and sounds like its author without inventing facts. |
 | `impeccable` | https://github.com/pbakaus/impeccable.git, `.claude/skills/impeccable` at 508d7e8 | Design, critique, audit and polish frontend interfaces with a consistent visual direction, and keep an existing brand. |
-| `kit-create-pr` | core | Open the pull request once the change is reviewed and validated. Checks that verify, review, and validate passed for the exact current change (or that the user switched their phase off), pushes the branch, writes the title and description with the kit-write-pr-description skill, and runs gh pr create. Use when a change is ready for a PR, instead of calling gh pr create directly. |
-| `kit-follow-pr` | core | Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs once right after create-pr (waiting for CI and bot reviews), then whenever the user asks to follow up on the PR. |
+| `kit-follow-pr` | core | Take an open pull request to ready-to-merge. Handles what is new since the last run: CI failures the change caused and review comments from people and bots, each verified before it is fixed or answered, with review and testing of every fix. Runs only when the user asks to follow up on the PR; kit-ship opens it and waits for its first CI run. |
 | `kit-review` | core | Adversarial multi-lens review of your own diff before it goes to a human, using focused reviewers and a second model family, then verifying every finding before acting on it. Use before opening or updating a pull request, before declaring a non-trivial change done, or when asked to review the current branch. |
-| `kit-ship` | core | See a merged pull request safely into production. Gives the user a step-by-step deploy and light production verification guide to run themselves, or, for a repo installed on this machine, deploys and runs the checks itself; prepares the rollback, and closes the loop (issue update, repo notes, local branch). Runs only when the user asks for it: to deploy or verify a merged PR, or to install a merged PR of a repo installed on this machine. Hearing that a PR is merged or deployed is not that request. |
+| `kit-ship` | core | The flow's last phase. Before the merge, it opens the pull request once the change is reviewed and validated (checks that verify, review and validate passed for the exact current change, or that the user switched their phase off, pushes, writes the description with the kit-write-pr-description skill, runs gh pr create) and waits for its CI. After the merge, and only when the user asks, it sees the merged pull request into production with the repo's own steps from its ship.md - a deploy and light verification guide for the user, or, for a repo installed on this machine, the install and checks run by the agent - with the rollback ready, and closes the loop. Use it instead of calling gh pr create directly. Hearing that a PR is merged or deployed is not a request for the part after the merge. |
 | `kit-spec` | core | Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change. |
 | `kit-validate` | core | Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with temporary scripts covering positive and negative cases, and writes a step-by-step checks guide for whatever it couldn't run: optional steps the user can run before the merge, and the steps after it. Use for behavior changes before opening a PR, or when asked to test a change. |
 | `kit-write-pr-description` | core | Write short, blunt, human-sounding pull request titles and descriptions that lead with functional impact and keep technical detail at architectural altitude, based on the actual code changes, repository context, issue requirements, validation evidence, and the repository's configured PR template. Use when opening, updating, or preparing a pull request. |
@@ -215,7 +216,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | The phases switched off, with their scope, also on the default branch | `bin/phase switches` |
 |  | `/flow off\|on <phase> [--repo\|--global]`, typed at the prompt, switches a phase for the branch, the repo or every repo | a message whose first line is `phase off\|on <phase> [branch\|repo\|global]` |
 |  | `/flow review-rounds <0-9> [--repo\|--global]`, typed at the prompt, sets how many re-checks the review runs after its first pass (1 when unset) | a message whose first line is `review-rounds <0-9> [branch\|repo\|global]`; `bin/phase review-rounds` reads it |
-|  | Follows the branch into the main checkout once create-pr detaches the session's own | the commands of this list, run from the main checkout |
+|  | Follows the branch into the main checkout once kit-ship detaches the session's own | the commands of this list, run from the main checkout |
 |  | Stamps (verify, review, validate), current or not, and a verify that checked nothing | `python3 ~/.agents/hooks/review_stamp.py check --kind <kind>` |
 |  | The last verify report's ran/skipped/warning/error lines | `cat "$(~/.agents/bin/reports path verify)"` |
 |  | CI of the pushed HEAD | `bin/ci-wait --once --no-log` |
@@ -278,7 +279,7 @@ free-branch <worktree>
 
 **`bin/gh`**: Runs the real gh with git's per-host proxy. gh ignores git's `http.<url>.proxy`, so a host reachable only through a proxy (a SOCKS tunnel, for example) makes it hang. This finds the host a call targets, passes git's proxy for it as HTTPS_PROXY, and fails at once when that proxy isn't answering. Linked ahead of the real gh in PATH (install.sh --doctor shows how).
 
-**`bin/phase`**: Where the current branch is in the kit's flow, for the status line: spec → build → review → validate → create-pr → PR open → merged.
+**`bin/phase`**: Where the current branch is in the kit's flow, for the status line: spec → build → review → validate → ship → PR open → merged.
 
 ```
 phase             print the cached phase at once; refresh it in the background when older than 15 s
@@ -319,7 +320,7 @@ quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --cate
 
 ```
 reports path <verify|review|validation|checks-guide|follow-pr>   where the stop hook or a skill saves that report
-reports path pr-body                             where create-pr and follow-pr save the PR description; left out of the listings
+reports path pr-body                             where kit-ship and kit-follow-pr save the PR description; left out of the listings
 reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
 reports                                          every report that exists, with its path, the evidence, the phases off
 reports brief                                    the phase and one line per report, to pick a branch up in a new session
@@ -422,7 +423,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | required | `git ≥ 2.31` | brew install git | everything that looks at a change |
 | required | `jq` | brew install jq | install.sh, the status line, the scheduled jobs |
 | required | `node ≥ 22.13` | brew install node | tools/ and site/ (npm), the scheduled jobs |
-| required | `gh` | brew install gh | create-pr, follow-pr, the flow phase in the status line, review mining |
+| required | `gh` | brew install gh | kit-ship, kit-follow-pr, the flow phase in the status line, review mining |
 | recommended | `semgrep` | brew install semgrep | verify's semgrep rules; tests/run.sh |
 | recommended | `gitleaks` | brew install gitleaks | the secrets check at the end of each turn |
 | recommended | `php` | brew install php | the generic verify's PHP checks; tests/run.sh |
@@ -459,7 +460,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `launchd/` | Templates for the scheduled jobs (macOS). |
 | `mods/` | The kit's Claude Code plugin (`mods/kit/`): a mod that adds what only Claude Code can show, on top of the shared flow. |
 | `monitors/` | The weekly health check and the mid-month trends scan. |
-| `repos/` | Per-repository overlays (`notes.md`, `verify`, `review.md`, `wp-cli`) and the shared verify scripts in `_shared/`. |
+| `repos/` | Per-repository overlays (`notes.md`, `ship.md`, `verify`, `review.md`, `wp-cli`) and the shared verify scripts in `_shared/`. |
 | `review-mining/` | The monthly job that learns from human code-review comments. |
 | `site/` | The public landing page and these docs as a website, built from README.md and this file (`site/build.mjs`). |
 | `skills.external` | Third-party skills install.sh fetches from their source, some pinned to a commit in `vendor/`. |

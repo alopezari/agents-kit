@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The kit's own skills go by their kit- names, and nothing the agent reads still sends it to a former one."""
+"""The kit's own skills go by their kit- names, and nothing the agent reads still sends it to a former or retired one."""
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import glob
 import os
@@ -7,7 +7,10 @@ import re
 import sys
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
-SKILLS = ("kit-spec", "kit-review", "kit-validate", "kit-create-pr", "kit-follow-pr", "kit-ship", "kit-write-pr-description")
+SKILLS = ("kit-spec", "kit-review", "kit-validate", "kit-follow-pr", "kit-ship", "kit-write-pr-description")
+# Merged into kit-ship, which opens the pull request now.
+RETIRED = re.compile(r"\b(?:kit-)?create-pr\b")
+SHIP_SECTIONS = ("## Deploy", "## Smoke checks", "## Rollback", "## Installed on this machine")
 FORMER = r"(?:spec|self-review|validate|create-pr|follow-pr|ship|write-pr-description)"
 # `spec` skill, the self-review or validate skills, run `spec`, /spec, skills/spec/, ../spec/: phase names alone stay unprefixed.
 SENDS_TO_FORMER = re.compile(rf"(?<![\w/-])`?{FORMER}`?(?:(?:,| and| or) `?{FORMER}`?)* skills?\b|\brun `{FORMER}`|`/{FORMER}\b|(?:skills|\.\.)/{FORMER}(?![\w-])")
@@ -33,7 +36,11 @@ for pattern in READ_BY_THE_AGENT:
         except UnicodeDecodeError:
             continue
         stale += [f"{os.path.relpath(path, KIT)}:{n}: {line.strip()[:120]}" for n, line in enumerate(lines, 1)
-                  if SENDS_TO_FORMER.search(line) or ("self-review" in line.lower() and not KEPT.search(line))]
+                  if SENDS_TO_FORMER.search(line) or RETIRED.search(line) or ("self-review" in line.lower() and not KEPT.search(line))]
+ship = open(os.path.join(KIT, "skills", "kit-ship", "SKILL.md")).read()
+missing = [section for section in SHIP_SECTIONS if f"`{section}`" not in ship]
+failed |= bool(missing)
+print(f"FAIL kit-ship doesn't name the ship.md sections {missing}" if missing else "ok   kit-ship names the four ship.md sections")
 failed |= bool(stale)
 print(("FAIL a former skill name is still read by the agent:\n     " + "\n     ".join(stale)) if stale
       else "ok   no instruction, message or path names a former skill")

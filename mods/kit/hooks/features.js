@@ -11,7 +11,7 @@ export const FEATURES = [
       {"name": "The phases switched off, with their scope, also on the default branch", "codex": "`bin/phase switches`"},
       {"name": "`/flow off|on <phase> [--repo|--global]`, typed at the prompt, switches a phase for the branch, the repo or every repo", "codex": "a message whose first line is `phase off|on <phase> [branch|repo|global]`"},
       {"name": "`/flow review-rounds <0-9> [--repo|--global]`, typed at the prompt, sets how many re-checks the review runs after its first pass (1 when unset)", "codex": "a message whose first line is `review-rounds <0-9> [branch|repo|global]`; `bin/phase review-rounds` reads it"},
-      {"name": "Follows the branch into the main checkout once create-pr detaches the session's own", "codex": "the commands of this list, run from the main checkout"},
+      {"name": "Follows the branch into the main checkout once kit-ship detaches the session's own", "codex": "the commands of this list, run from the main checkout"},
       {"name": "Stamps (verify, review, validate), current or not, and a verify that checked nothing", "codex": "`python3 ~/.agents/hooks/review_stamp.py check --kind <kind>`"},
       {"name": "The last verify report's ran/skipped/warning/error lines", "codex": "`cat \"$(~/.agents/bin/reports path verify)\"`"},
       {"name": "CI of the pushed HEAD", "codex": "`bin/ci-wait --once --no-log`"},

@@ -147,7 +147,7 @@ async function branchAt($, root) {
   return { root, branch: branch.stdout.trim(), head: head.stdout.trim() }
 }
 
-// create-pr frees the branch by detaching the session's worktree (bin/free-branch), and the user checks it out in the main one.
+// kit-ship frees the branch by detaching the session's worktree (bin/free-branch), and the user checks it out in the main one.
 async function mainCheckout($, root) {
   const listed = await run($, ['git', 'worktree', 'list', '--porcelain'], root)
   if (listed.failure || listed.exitCode !== 0) return { none: "Detached HEAD, and couldn't find the main checkout: " + failureOf(listed) }

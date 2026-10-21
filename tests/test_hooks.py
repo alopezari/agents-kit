@@ -1516,8 +1516,7 @@ def stop_suggests_a_fresh_session_once_the_pr_is_open(base):
     assert stop_with("below-window", "PR open", 160_000), "compaction at a 200K window comes before any higher threshold"
     merged = stop_with("merged", "merged", 300_000)
     assert merged and "is merged" in merged["systemMessage"], merged
-    cached = stop_with("cached", "ship", 300_000)
-    assert cached and "is merged" in cached["systemMessage"], "a cache written before the rename still reads as merged"
+    assert stop_with("ship", "ship", 300_000) is None, "ship is the step that opens the PR, not a merged branch"
 
 
 def stop_suggests_a_fresh_session_for_the_next_change(base):

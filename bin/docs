@@ -37,7 +37,7 @@ LAYOUT = {
     "hooks/": "The hook scripts all harnesses share (one JSON contract: stdin in, decision out).",
     "skills/": "Skills linked into every harness; third-party ones are listed in `skills.external`.",
     "skills.external": "Third-party skills install.sh fetches from their source, some pinned to a commit in `vendor/`.",
-    "repos/": "Per-repository overlays (`notes.md`, `verify`, `review.md`, `wp-cli`) and the shared verify scripts in `_shared/`.",
+    "repos/": "Per-repository overlays (`notes.md`, `ship.md`, `verify`, `review.md`, `wp-cli`) and the shared verify scripts in `_shared/`.",
     "bin/": "Command-line tools the skills and people call.",
     "site/": "The public landing page and these docs as a website, built from README.md and this file (`site/build.mjs`).",
     "tools/": "Node code and dependencies for the tools in `bin/` and the diagram check in `tests/run.sh`.",
@@ -291,7 +291,7 @@ def render():
     w("")
 
     w("## The life of a task\n")
-    for skill in ("spec", "review", "validate", "create-pr", "write-pr-description", "follow-pr", "ship"):
+    for skill in ("spec", "review", "validate", "write-pr-description", "follow-pr", "ship"):
         require(f"skills/kit-{skill}/SKILL.md")
     w("```mermaid\nflowchart TD\n  T[Issue or request] --> SP[kit-spec skill: acceptance criteria, second reading]\n  SP --> W[Agent edits code]")
     w("  W -->|every shell command| G{guard_bash}\n  G -->|irreversible| B[Blocked with the reason]")
@@ -299,10 +299,10 @@ def render():
     w("  W -->|every file edit| PE[post_edit: syntax check]\n  PE -->|syntax error| W")
     w("  W -->|end of turn| SC{stop_checks + verify}\n  SC -->|problem found, first time| W\n  SC -->|clean| SR[kit-review skill: lenses + second model]")
     w("  SR --> V[kit-validate skill: suite + local checks + checks guide for what it couldn't run]")
-    w("  V --> CP[kit-create-pr skill: evidence check, push, kit-write-pr-description]")
+    w("  V --> CP[kit-ship skill: evidence check, push, kit-write-pr-description, wait for CI]")
     w("  CP --> PR{gh pr create}\n  PR -->|no stamp for this exact change| G2[Blocked: run kit-review / kit-validate]")
-    w("  PR -->|stamped| FP[kit-follow-pr skill: first run waits for CI and bot reviews; later runs on demand]\n  FP -->|fix needed| W")
-    w("  FP -->|CI green, reviews answered| MG{You run more checks or merge}\n  MG -->|a check fails| W\n  MG --> M[Merged: the flow ends]\n  M -.->|only when you ask| SH[kit-ship skill: your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]\n```\n")
+    w("  PR -->|stamped| CI{CI and reviews}\n  CI -.->|only when you ask| FP[kit-follow-pr skill: CI failures and review comments]\n  FP -->|fix needed| W")
+    w("  CI --> MG{You run more checks or merge}\n  FP -->|CI green, reviews answered| MG\n  MG -->|a check fails| W\n  MG --> M[Merged: the flow ends]\n  M -.->|only when you ask| SH[kit-ship skill, after the merge: ship.md's steps as your deploy + verification guide, or the agent's for a repo installed here; rollback ready, close the loop]\n```\n")
     w("The stop hook asks the agent to continue at most once per turn, so a check it cannot satisfy honestly ends up "
       "in its report under **Blocked on me** instead of looping. Review, validate and a green verify each leave a "
       "stamp of the exact change in `.git/`; editing anything afterwards but the changelog (CHANGELOG.md or `changelog.d/`) invalidates it. Merging "
