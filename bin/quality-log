@@ -132,15 +132,16 @@ def parse(argv):
 def main():
     kind, name, fields = parse(sys.argv[1:])
     try:
-        tier = json.loads(subprocess.run([os.path.expanduser("~/.agents/bin/triage"), "--json"],
-                                         capture_output=True, text=True, timeout=60).stdout)["tier"]
-    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
-        tier = None
+        triage = json.loads(subprocess.run([os.path.expanduser("~/.agents/bin/triage"), "--json"],
+                                           capture_output=True, text=True, timeout=60).stdout)
+        tiers = {key: triage[key] for key in ("tier", "spec_tier", "diff_tier")}
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+        tiers = {"tier": None, "spec_tier": None, "diff_tier": None}
     log = quality_log()
     os.makedirs(os.path.dirname(log), exist_ok=True)
     with open(log, "a") as fh:
         fh.write(json.dumps({
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": kind, "name": name, "tier": tier,
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": kind, "name": name, **tiers,
             "repo": subprocess.run([os.path.expanduser("~/.agents/bin/repo-name")], capture_output=True,
                                    text=True).stdout.strip() or os.path.basename(os.getcwd()),
             "branch": git("branch", "--show-current"), "harness": session_harness() or "unknown",

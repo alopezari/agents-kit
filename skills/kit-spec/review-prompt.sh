@@ -22,6 +22,9 @@ spec would make the agent build the wrong thing. Compare it with the request bel
 - Scope the spec adds that the request didn't ask for.
 - Assumptions that should be open questions, because the answer would change the work.
 - A Change map missing a way into the behavior, a cache or stored value that reads a new input, or a failure mode.
+- A Risk tier the spec's own rules don't support: high for a Decisions section, a high-risk signal (auth or
+  permissions, payments, schema or migration, public API or hooks, caching, scheduled jobs) or more than 400 changed
+  lines; low only for a behavior change under 50 lines in files that already have tests. Argue the tier you'd give.
 
 For each, quote the line of the request or spec it's about, say what's wrong and what the spec should say instead,
 with a confidence (high/medium/low); low-confidence findings are welcome, because they are verified afterwards. Don't

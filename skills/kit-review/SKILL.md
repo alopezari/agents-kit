@@ -21,7 +21,7 @@ Two things make review work:
 - Review committed and uncommitted changes together: `git diff <merge-base>` plus untracked files.
 - Goal: if `~/.agents/skills/kit-spec/path.sh` points at an existing file, that spec's goal and acceptance criteria are the goal every reviewer gets. Otherwise, state the goal in one or two sentences.
 - For a check that stops something (a guard, validation, permission, rate limit), the goal says who it stops: an honest mistake, a careless model or user, or a deliberate attacker. Without it, reviewers report bypasses the check was never meant to stop, and each round goes to rejecting them.
-- Run `~/.agents/bin/triage` in the checkout. It prints the risk tier, the lenses to run with the signal behind each, how much to send cross-model, and a time budget. Run what it selects. Add a lens it missed only when you can name the risk, and say so in the report.
+- Run `~/.agents/bin/triage` in the checkout. It prints the risk tier, the lenses to run with the signal behind each, how much to send cross-model, and a time budget. The tier is the higher of the spec's Risk line and the diff's own, and its `Spec:` line says which decided; a spec never lowers the diff's. Run what it selects. Add a lens it missed only when you can name the risk, and say so in the report.
 
 ## 2. Run the lenses
 

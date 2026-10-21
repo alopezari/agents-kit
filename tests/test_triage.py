@@ -424,6 +424,127 @@ with tempfile.TemporaryDirectory(prefix="agents-test-bundle-") as home, \
     print(f"{'ok  ' if ok else 'FAIL'} bundle.sh fails on a review guide it can't read: exit {unreadable.returncode} "
           f"{unreadable.stderr.strip()[-200:]}")
 
+# The spec's Risk line is a prediction made before the code: triage takes the higher of it and the diff's tier.
+SPEC_TEXT = "# Round prices\n\nGoal: totals match.\n\n{risk}\n## Acceptance criteria\n1. x — verify: tests/test_x.py\n{extra}"
+
+
+def triage_spec(risk, diff, extra="", setup=None, plain=False):
+    """triage, as the review runs it, on a repo whose spec has `risk` as its Risk line; `diff` is "docs", "code" or "auth"."""
+    kit = os.path.realpath(os.path.expanduser("~/.agents"))
+    with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as home, \
+            tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
+        os.makedirs(os.path.join(home, ".agents"))
+        for part in ("bin", "hooks", "skills"):  # not approvals/: the switches a case sets stay in this HOME
+            os.symlink(os.path.join(kit, part), os.path.join(home, ".agents", part))
+        env = {**os.environ, "HOME": home}
+
+        def git(*args):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True)
+        git("init", "-q", "-b", "main")
+        open(os.path.join(repo, "README.md"), "w").write("# Shop\n")
+        open(os.path.join(repo, "app.py"), "w").write("x = 1\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "base")
+        git("checkout", "-q", "-b", "round-prices")
+        changed = {"docs": ("README.md", "# Shop\n\nRounds prices.\n"), "code": ("app.py", "x = 2\n"),
+                   "auth": ("app.py", "if current_user_can('edit'):\n    x = 2\n")}[diff]
+        open(os.path.join(repo, changed[0]), "w").write(changed[1])
+        spec = subprocess.run([os.path.join(kit, "skills", "kit-spec", "path.sh")], cwd=repo, capture_output=True,
+                              text=True, env=env, check=True).stdout.strip()
+        if risk is not None:
+            open(spec, "w").write(SPEC_TEXT.format(risk=risk, extra=extra))
+        if setup:
+            setup(home, repo, spec, env)
+        out = subprocess.run([TRIAGE] + ([] if plain else ["--json"]), cwd=repo, capture_output=True, text=True, env=env,
+                             timeout=60)
+        if os.path.exists(spec):
+            os.chmod(spec, 0o644)
+        return out.stdout if plain or out.returncode else json.loads(out.stdout)
+
+
+def tiers(result):
+    return result if isinstance(result, str) else (result.get("tier"), result.get("spec_tier"), result.get("diff_tier"))
+
+
+DECISIONS = "\n## Decisions\n- Round once over per line, because totals drift.\n"
+for case, args, expected in (
+        ("spec low, high-risk diff", ("Risk: low — one line", "auth"), ("high", "low", "high")),
+        ("spec standard, docs-only diff", ("Risk: standard — totals", "docs"), ("standard", "standard", "low")),
+        ("spec high, docs-only diff", ("Risk: high — schema", "docs"), ("high", "high", "low")),
+        ("a low Risk line with Decisions", ("Risk: low — one line", "docs", DECISIONS), ("high", "high", "low")),
+        ("spec equal to the diff", ("Risk: standard — totals", "code"), ("standard", "standard", "standard")),
+        ("no spec", (None, "auth"), ("high", None, "high")),
+        ("no Risk line", ("", "docs"), ("low", None, "low")),
+        ("an invalid Risk line", ("Risk: medium — totals", "docs"), ("low", None, "low")),
+        ("two Risk lines", ("Risk: high — schema\nRisk: low — docs", "docs"), ("low", None, "low"))):
+    result = triage_spec(*args)
+    ok = tiers(result) == expected
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} spec risk, {case}: (tier, spec, diff) {tiers(result)}, expected {expected}")
+
+result = triage_spec("Risk: standard — totals", "docs")
+got = (result.get("budget"), "maintainability" in result.get("lenses", {}), result.get("cross_model", "")) if isinstance(result, dict) else result
+ok = isinstance(result, dict) and got[0] == "<= 20 min" and got[1] and got[2].startswith("correctness")
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} spec risk: a standard spec over a docs-only diff gets standard's budget, lenses and cross-model: {got}")
+result = triage_spec("Risk: high — schema", "docs")
+ok = isinstance(result, dict) and result.get("budget") == "<= 45 min" and result.get("cross_model", "").startswith("per lens")
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} spec risk: a high spec gets high's budget and a cross-model pass per lens: "
+      f"{result.get('budget') if isinstance(result, dict) else result}, {result.get('cross_model') if isinstance(result, dict) else ''}")
+
+
+def second_model_off(home, repo, spec, env):
+    subprocess.run(["python3", os.path.join(home, ".agents", "hooks", "phase_switches.py"), "set", "off", "second-model", "branch"],
+                   cwd=repo, check=True, capture_output=True, env=env)
+
+
+result = triage_spec("Risk: high — schema", "docs", setup=second_model_off)
+ok = isinstance(result, dict) and result.get("tier") == "high" and result.get("cross_model") == "none (second-model switched off)"
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} spec risk: the user's switches still apply to a high spec's cross-model: "
+      f"{result.get('cross_model') if isinstance(result, dict) else result}")
+
+for case, args, expected in (
+        ("the spec decides", ("Risk: high — adds a schema", "docs"), ("Risk: high (", "the spec", "adds a schema")),
+        ("the diff decides", ("Risk: low — one line", "auth"), ("Risk: high (", "the diff", "one line")),
+        ("an invalid Risk line", ("Risk: medium — totals", "docs"), ("Risk: low (", "no prediction", "'medium' is not a tier"))):
+    out = triage_spec(*args, plain=True)
+    head = "\n".join(out.splitlines()[:3])
+    ok = out.startswith(expected[0]) and all(part in head for part in expected[1:])
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} spec risk, plain output, {case}: {head!r}")
+
+
+def spec_off(home, repo, spec, env):
+    subprocess.run(["python3", os.path.join(home, ".agents", "hooks", "phase_switches.py"), "set", "off", "spec", "branch"],
+                   cwd=repo, check=True, capture_output=True, env=env)
+
+
+def unreadable(home, repo, spec, env):
+    os.chmod(spec, 0)
+
+
+def lookup_fails(home, repo, spec, env):
+    os.remove(os.path.join(home, ".agents", "bin"))  # path.sh can't run repo-name
+    os.makedirs(os.path.join(home, ".agents", "bin"))
+
+
+for case, setup, expected, note in (
+        ("spec switched off, a spec already written", spec_off, ("high", "high", "low"), None),
+        ("an unreadable spec", unreadable, ("low", None, "low"), "no prediction"),
+        ("a failing spec lookup", lookup_fails, ("low", None, "low"), "no prediction")):
+    result = triage_spec("Risk: high — schema", "docs", setup=setup)
+    out = triage_spec("Risk: high — schema", "docs", setup=setup, plain=True)
+    ok = tiers(result) == expected and (note is None or note in "\n".join(out.splitlines()[:3]))
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} spec risk, {case}: {tiers(result)}, expected {expected}; plain: {out.splitlines()[:3]}")
+
+result = triage_change({"app.py": "x = 1\n"}, {"app.py": "if current_user_can('edit'):\n    x = 2\n"})
+ok = (result.get("tier"), result.get("spec_tier"), result.get("diff_tier")) == ("high", None, "high")
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} spec risk: --range reads no spec: {tiers(result)}")
+
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected
     fail |= not ok

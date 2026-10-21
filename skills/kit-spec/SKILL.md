@@ -33,6 +33,8 @@ Use this shape and keep it under a page:
 
 Goal: <one or two sentences on the user-visible outcome, in the issue's terms>
 
+Risk: <low|standard|high> — <the signal or Change map item that decides it>
+
 ## Acceptance criteria
 1. <observable behavior> — verify: <test, command, or manual check>
 2. ...
@@ -53,6 +55,14 @@ What makes criteria useful:
 - **Each one is checkable by a test, a command or a named manual step.** "Works correctly" is not a criterion; "a standalone Compose v2 binary is accepted, v1 is rejected with install steps" is.
 - **They cover the edges the issue implies but doesn't spell out:** other entry points (CLI, cron, REST), existing data and settings, empty and failure states, backwards compatibility.
 - **Three to six of them.** More usually means the issue should be split; say so.
+
+The Risk line predicts the change's risk before any code exists; decide it from the Change map (section 3) once it's written:
+
+- **High:** a `## Decisions` section (a one-way door), a high-risk signal triage looks for (auth or permissions, payments, schema or migration, public API or hooks, caching, scheduled jobs), or more than 400 expected changed lines.
+- **Low:** a behavior change under 50 lines, with none of those, in files that already have tests.
+- **Standard:** everything else.
+
+You may raise the tier with a reason; never lower it below what these rules give. After the build, triage compares it with the diff's tier and the review runs the higher of the two, so a "low" spec still gets a standard review when the diff says standard; a diff that turns out riskier than the spec predicted is what the monthly job counts.
 
 Check the shape, and fix what it reports before going on:
 
