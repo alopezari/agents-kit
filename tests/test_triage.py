@@ -780,4 +780,99 @@ result = triage_change({}, {"debug.log": "current_user_can( 'x' );\n"})
 ok = labels(result) == {"auth or permissions"}
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} a tracked log still counts: {result['reasons']}")
+
+# Removing or commenting out a risk check is a risky change too: removed code lines raise the high-risk labels.
+AUTH = "<?php\nif ( current_user_can( 'edit' ) ) {\n\tsave();\n}\n"
+for case, before, after, label, path in [
+        ("a deleted auth check", {"auth.php": AUTH}, {"auth.php": "<?php\nsave();\n"}, "auth or permissions", "auth.php"),
+        ("an auth check commented out", {"auth.php": AUTH},
+         {"auth.php": "<?php\n// if ( current_user_can( 'edit' ) ) {\n\tsave();\n// }\n"}, "auth or permissions", "auth.php"),
+        ("a deleted file holding a scheduled job", {"cron.php": "<?php\nwp_schedule_event( time(), 'hourly', 'h' );\n", "a.php": "<?php\n"},
+         {"cron.php": None}, "scheduled jobs", "cron.php"),
+        ("a removed ALTER TABLE", {"m.sql": "ALTER TABLE users ADD age int;\nSELECT 1;\n"}, {"m.sql": "SELECT 1;\n"},
+         "schema or data migration", "m.sql")]:
+    result = triage_change(before, after)
+    ok = result["diff_tier"] == "high" and labels(result) == {label} and f"{path}, removed" in " ".join(result["reasons"])
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {case} raises {label}: {result['diff_tier']} {result['reasons']}")
+
+# A deletion not committed yet counts the same, and a removed line is judged by the path it was removed from.
+with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
+    def git(*args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True)
+    git("init", "-q", "-b", "main")
+    open(os.path.join(repo, "auth.php"), "w").write(AUTH)
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    open(os.path.join(repo, "auth.php"), "w").write("<?php\nsave();\n")
+    result = json.loads(subprocess.run([TRIAGE, "--json"], cwd=repo, capture_output=True, text=True, timeout=60).stdout)
+ok = labels(result) == {"auth or permissions"}
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} an uncommitted deletion of an auth check raises auth or permissions: {result['reasons']}")
+body = "".join(f"\tstep_{n}();\n" for n in range(20))
+result = triage_change({"auth.php": "<?php\nif ( current_user_can( 'edit' ) ) {\n" + body + "}\n"},
+                       {"auth.php": None, "docs/auth.md": "<?php\n" + body + "}\n"})
+ok = labels(result) == {"auth or permissions"} and "auth.php, removed" in " ".join(result["reasons"])
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} a check removed while its file moves into docs/ still counts: {result['reasons']}")
+
+# Removed lines go through the same filters: a comment, a test or doc file, a word of prose raise nothing.
+for case, before, after in [
+        ("a removed comment", {"auth.php": "<?php\n// current_user_can( is checked upstream\nsave();\n"}, {"auth.php": "<?php\nsave();\n"}),
+        ("a removed line in a test", {"tests/test_auth.php": "<?php\ncurrent_user_can( 'x' );\n"}, {"tests/test_auth.php": "<?php\n"}),
+        ("a removed line in a doc", {"docs/auth.md": "Call current_user_can( first.\n"}, {"docs/auth.md": "Done.\n"}),
+        ("a removed word of prose", {"cli.py": 'help = "schema or migration"\n'}, {"cli.py": 'help = "schema"\n'})]:
+    result = triage_change(before, after)
+    ok = not result["reasons"]
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {case} raises nothing: {result['reasons']}")
+
+# Only the high-risk labels read removed lines: removing a query or a migration selects no lens or test of its own.
+for path, trigger in [("q.php", "$wpdb->get_results( $q );"), ("q.php", "dbDelta( $sql );"), ("re.py", 'P = re.compile(r"(a+)+$")'),
+                      ("f.js", "function parsePrice(text) {}")]:
+    result = triage_change({path: "x = 1\n" + trigger + "\nsave();\n"}, {path: "x = 1\nsave();\n"})
+    selected = sorted(set(result["lenses"]) & {"security", "performance", "compatibility", "operability", "data-privacy"})
+    selected += sorted(set(result["tests"]) & {"query budget", "migration round-trip", "regex worst-case timing", "property-based"})
+    ok = not selected
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} removing `{trigger}` selects no lens or test: {selected}")
+
+# An added hit comes before a removed one, so a changed line keeps the reason it had.
+result = triage_change({"a.php": "<?php\ncurrent_user_can('a');\n"}, {"a.php": "<?php\ncurrent_user_can('b');\n"})
+ok = result["reasons"] == ["auth or permissions (a.php: `current_user_can`)"]
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} a changed line keeps its added reason: {result['reasons']}")
+
+# What the filters left out is reported, so a tier lower than expected can be explained.
+result = triage_untracked({"stream.jsonl": stream, "err.log": "x\n", "auth.php": "<?php\n// current_user_can( later\nsave();\n"})
+skipped = result.get("skipped", {})
+ok = (skipped.get("comment_lines"), skipped.get("untracked_data_files"), sorted(skipped.get("untracked_data_sample", []))) == (
+    1, 2, ["err.log", "stream.jsonl"])
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} --json reports what was skipped: {skipped}")
+
+
+def triage_text(untracked):
+    """triage's text output on a committed docs change plus untracked files ({path: text})."""
+    with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
+        def git(*args):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True)
+        git("init", "-q", "-b", "main")
+        open(os.path.join(repo, "README.md"), "w").write("# Shop\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "base")
+        for path, text in untracked.items():
+            open(os.path.join(repo, path), "w").write(text)
+        return subprocess.run([TRIAGE], cwd=repo, capture_output=True, text=True, timeout=60).stdout
+
+
+many = {f"run{n}.log": "x\n" for n in range(7)}
+for case, untracked, expected in [
+        ("logs and a comment", {**many, "a.py": "# wp_cron later\nx = 1\n"}, "Skipped: 1 comment line; 7 untracked data files ("),
+        ("nothing skipped", {"a.py": "x = 1\n"}, None)]:
+    out = triage_text(untracked)
+    line = next((l for l in out.splitlines() if l.startswith("Skipped:")), None)
+    ok = line is None if expected is None else bool(line) and line.startswith(expected) and line.endswith("and 2 more)")
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} text output with {case}: {line!r}")
 sys.exit(fail)

@@ -1,0 +1,2 @@
+- Triage counts removed code toward the high-risk labels: deleting or commenting out an auth check, a migration, a public hook or a scheduled job makes the change high risk, as adding one does, and the reason says the line was removed. Removed comments, test and doc lines still don't count.
+- Triage says what its filters left out: a `Skipped:` line with the whole-line comments it didn't scan and the untracked logs it left out (up to five named), and a `skipped` object in `--json`.
