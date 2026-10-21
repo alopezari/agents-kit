@@ -5,14 +5,16 @@ description: The flow's last phase. Before the merge, it opens the pull request 
 
 # Ship
 
-Ship has two parts, and the branch's pull request decides which one runs. Read its state first, from the checkout that has the branch:
+Ship has two parts, and the pull request decides which one runs. Read its state first. When the user names the PR, or this session opened it, name it, since after the merge the session's directory is detached or on the default branch and has no PR of its own:
 
 ```bash
-gh pr view --json number,url,state,mergedAt,mergeCommit,headRefName
+gh pr view <number or head branch> --json number,url,state,mergedAt,mergeCommit,headRefName,baseRefName
 ```
 
-- **No pull request** (`no pull requests found`): part 1, the whole of it.
-- **Open:** part 1 without opening a second one. Push the commits GitHub doesn't have yet (step 2), wait for their CI (step 5) and report.
+Otherwise run it without an argument, from the checkout that has the branch.
+
+- **No pull request** (`no pull requests found`): part 1, the whole of it, but only on a branch of its own. On the default branch or a detached HEAD there is nothing to open: ask which PR the user means.
+- **Open:** part 1 without opening a second one: check the evidence (step 1), push the commits GitHub doesn't have yet (step 2), refresh the description when it no longer matches the change (step 3, then `gh pr edit <n> --body-file <body file>` as a command of its own), record the base (step 4's last paragraph), wait for CI (step 5), free the branch (step 6) and report.
 - **Merged:** part 2, only when the user asked for it ("ship", "install", a deploy guide, a production check). When they only say it's merged or deployed, report its status and list what part 2 would do as optional, without running any of it or asking.
 - **Closed without a merge:** say so and stop.
 
@@ -42,7 +44,7 @@ The stamps measure the change against `python3 ~/.agents/hooks/review_stamp.py b
 git push -u origin "$(git branch --show-current)"
 ```
 
-If the push is refused, show the error and stop: there is no pull request yet.
+If the push is refused, show the error and stop: nothing new reached GitHub.
 
 ### 3. Write the title and description
 
@@ -65,6 +67,8 @@ gh pr create --base <base> --head "$(git branch --show-current)" --title "<title
 A normal pull request, ready for review: not a draft. `<base>` is the branch `review_stamp.py base` prints, without its `origin/`, written out: the guard reads the command's text, so a `$(...)` there names no branch, and for a pull request to the kit no description file either. Run it as a command of its own, after the stamps were written and the description file saved in earlier commands: the guard reads both before anything in the command runs.
 
 If the guard or GitHub refuses it, the branch is pushed with no pull request: say which step the refusal names and run that step, then this one again. Otherwise print the PR URL.
+
+Then record the PR's target as the branch's base, `git config branch.<head branch>.agentsBase <base>`, even when `review_stamp.py base` found it on its own: a parent found by detection is lost once its pushed tip moves past this branch, and later fixes (kit-follow-pr) measure against this base.
 
 ### 5. Wait for CI
 
@@ -91,7 +95,7 @@ It removes a worktree you created and detaches the one the session runs in (the 
 ### Report
 
 ```
-PR:        <url> (opened | already open: <N> commits pushed)
+PR:        <url> (opened | already open: <N> commits pushed, description <refreshed | unchanged>)
 CI:        passed | failed: <checks> (kit-follow-pr can take it) | still running | no checks | GitHub unreadable | no CI | not waited: ci switched off
 Branch:    free (<worktree removed | detached>; `cd <main checkout> && git switch <branch>`) | in the main checkout
 Evidence:  verify <PASS | FAIL | checked nothing: <tests run instead>> · review <stamp ok> · validate <stamp ok | not needed: tests/docs only>
@@ -112,7 +116,9 @@ How each repo deploys, what to check after, how to roll back and whether it runs
 
 These sections decide what this part does: when one disagrees with a step below, ship.md wins.
 
-When the file is missing, or a section is, draft it before anything else. Copy what the notes' deploy section already says (its heading starts with `## Deploy`), then replace that section in the notes with a line pointing to ship.md. Infer the rest from the repo's README, Makefile, package scripts and CI config, marking each inferred step `(inferred: <file>)`. A section none of these support says `unknown`: ask the user for it, never invent it. Show the user the inferred steps and run none of them until they confirm; copied steps need no confirmation.
+When the file is missing, or a section is, draft it before anything else. Copy the deploy, check and rollback steps the notes already give (often under a heading starting with `## Deploy`), and leave the notes as they are. Infer the rest from the repo's README, Makefile, package scripts and CI config, marking each inferred step `(inferred: <file>)`. A section none of these support says `unknown`: ask the user for it, never invent it. Copied steps need no confirmation.
+
+On every run, not only the first, a step still marked `(inferred: …)` or a section still `unknown` is shown to the user before anything runs, and runs only once they confirm it. Their confirmation removes the marker in ship.md, so it isn't asked again.
 
 ### 1. Deploy and verification guide
 

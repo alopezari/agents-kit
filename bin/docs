@@ -37,7 +37,7 @@ LAYOUT = {
     "hooks/": "The hook scripts all harnesses share (one JSON contract: stdin in, decision out).",
     "skills/": "Skills linked into every harness; third-party ones are listed in `skills.external`.",
     "skills.external": "Third-party skills install.sh fetches from their source, some pinned to a commit in `vendor/`.",
-    "repos/": "Per-repository overlays (`notes.md`, `verify`, `review.md`, `wp-cli`) and the shared verify scripts in `_shared/`.",
+    "repos/": "Per-repository overlays (`notes.md`, `ship.md`, `verify`, `review.md`, `wp-cli`) and the shared verify scripts in `_shared/`.",
     "bin/": "Command-line tools the skills and people call.",
     "site/": "The public landing page and these docs as a website, built from README.md and this file (`site/build.mjs`).",
     "tools/": "Node code and dependencies for the tools in `bin/` and the diagram check in `tests/run.sh`.",

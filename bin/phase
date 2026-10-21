@@ -79,7 +79,7 @@ def compute(previous):
     reports = os.path.dirname(spec)
     suffix = os.path.basename(spec)[len("spec-"):-len(".md")]
 
-    # A PR may have been opened without follow-pr (by hand, or before the flow existed), so ask gh too, once the
+    # A PR may have been opened with no follow-pr report (follow-pr runs only on request), so ask gh too, once the
     # branch is pushed. @{push}, not @{upstream}: a branch started from origin/main tracks it before it's pushed.
     followed = os.path.exists(os.path.join(reports, f"follow-pr-{suffix}.md"))
     pr, extra = None, {}

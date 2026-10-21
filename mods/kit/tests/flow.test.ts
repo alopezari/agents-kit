@@ -493,7 +493,7 @@ test('a Refresh during a gathering gathers again after it, and the newer facts s
           await clock.sleep(5000)
           return { value: { exitCode: 0, stdout: 'phase: build\n', stderr: '' } }
         }
-        return { value: { exitCode: 0, stdout: 'phase: create-pr\n', stderr: '' } }
+        return { value: { exitCode: 0, stdout: 'phase: ship\n', stderr: '' } }
       }
       const answer = runs[key]
       return { value: { exitCode: answer.exitCode, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' } }
@@ -509,7 +509,7 @@ test('a Refresh during a gathering gathers again after it, and the newer facts s
   await clock.settle()
   const shown = await texts(ui)
   expect(briefs).toBe(2)
-  expect(shown).toContain('phase: create-pr')
+  expect(shown).toContain('phase: ship')
   expect(shown).not.toContain('phase: build')
   expect(shown).not.toContain('refreshing…')
 })

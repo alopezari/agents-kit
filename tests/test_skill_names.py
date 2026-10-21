@@ -9,7 +9,7 @@ import sys
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 SKILLS = ("kit-spec", "kit-review", "kit-validate", "kit-follow-pr", "kit-ship", "kit-write-pr-description")
 # Merged into kit-ship, which opens the pull request now.
-RETIRED = re.compile(r"\bkit-create-pr\b")
+RETIRED = re.compile(r"\b(?:kit-)?create-pr\b")
 SHIP_SECTIONS = ("## Deploy", "## Smoke checks", "## Rollback", "## Installed on this machine")
 FORMER = r"(?:spec|self-review|validate|create-pr|follow-pr|ship|write-pr-description)"
 # `spec` skill, the self-review or validate skills, run `spec`, /spec, skills/spec/, ../spec/: phase names alone stay unprefixed.

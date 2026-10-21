@@ -9,6 +9,6 @@
 <rect x="22" y="220" width="16" height="16" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="54" y="233">ship</text><text x="220" y="233" font-size="12" fill="#FF9B73">gated</text>
 <rect x="22" y="272" width="16" height="16" fill="#0E100F" stroke="#8A8F88" stroke-width="2" stroke-dasharray="3 3"></rect><text x="54" y="285">follow-pr</text><text x="220" y="285" font-size="12" fill="#8A8F88">on request</text>
 <rect x="22" y="324" width="16" height="16" fill="#FF9B73" stroke="#FF9B73" stroke-width="2"></rect><text x="54" y="337" fill="#FF9B73">merge · you</text>
-<rect x="22" y="376" width="16" height="16" fill="#0E100F" stroke="#8A8F88" stroke-width="2" stroke-dasharray="3 3"></rect><text x="54" y="389">deploy</text><text x="220" y="389" font-size="12" fill="#8A8F88">ship, on request</text>
+<rect x="22" y="376" width="16" height="16" fill="#0E100F" stroke="#8A8F88" stroke-width="2" stroke-dasharray="3 3"></rect><text x="54" y="389">deploy</text><text x="220" y="389" font-size="12" fill="#8A8F88">ship, if asked</text>
 </g>
 </svg>
