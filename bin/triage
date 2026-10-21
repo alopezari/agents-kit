@@ -36,8 +36,10 @@ COMMENT_BY_EXT = {ext: re.compile(rf"\s*(?:{prefixes})") for exts, prefixes in [
     ("sql lua hs", "--"),
     ("html htm xml svg twig mustache hbs erb", "<!--"), ("vue svelte astro", f"{SLASH_COMMENT}|<!--"),
 ] for ext in (exts.split() or [""])}
-# A comment line that holds code all the same: code after its closer, a template tag, WordPress block markup.
-HOLDS_CODE = re.compile(r"(?:\*/|-->)\s*\S|<\?|\{\{|\{%|<%|^\s*<!--\s*/?wp:")
+# A comment line that holds code all the same: code after a block comment's closer; in an HTML comment, also a
+# template tag or WordPress block markup. Other comment forms run to the end of the line.
+BLOCK_COMMENT_HOLDS_CODE = re.compile(r"\*/\s*(?!//|/\*)\S")
+HTML_COMMENT_HOLDS_CODE = re.compile(r"-->\s*(?!<!--)\S|<\?|\{\{|\{%|<%|^\s*<!--\s*/?wp:")
 # A spaced `*` opens a docblock line, unless the line ends like a statement: C's `* p = f(x);`, a generator method.
 STATEMENT_END = re.compile(r"[;{}]\s*$")
 
@@ -45,9 +47,12 @@ STATEMENT_END = re.compile(r"[;{}]\s*$")
 def is_comment(path, line):
     rx = COMMENT_BY_EXT.get(os.path.splitext(os.path.basename(path))[1][1:].lower())
     prefix = rx and rx.match(line)
-    if not prefix or HOLDS_CODE.search(line):
+    if not prefix:
         return False
-    return not (prefix.group(0).strip() == "*" and STATEMENT_END.search(line))
+    form = prefix.group(0).strip()
+    if form in ("/*", "*") and BLOCK_COMMENT_HOLDS_CODE.search(line) or form == "<!--" and HTML_COMMENT_HOLDS_CODE.search(line):
+        return False
+    return not (form == "*" and STATEMENT_END.search(line))
 
 
 def code_word(stem):
@@ -90,10 +95,10 @@ HIGH_RISK = {
     "payments or orders": rf"stripe|{code_word('payment')}|checkout|refund|subscription|invoice|wc_get_order|->get_total\(",
     "schema or data migration": rf"{MIGRATION}|DROP TABLE",
     "public API or hooks": r"register_rest_route|apply_filters\(|do_action\(|WP_CLI::add_command"
-                           r"|\b(?:app|router)\.(?:route|get|post|put|patch|delete)\(\s*['\"`]/",
+                           r"|\b(?:app|router)\.(?:route|get|post|put|patch|delete)\(\s*(?:['\"`]/|/|\[)",
     "caching": r"set_transient|wp_cache_set|wp_cache_add|cache_key",
     "scheduled jobs": rf"as_schedule|as_enqueue|wp_schedule_event|{code_word('cron')}|\bcrontab\b"
-                      r"|\bcron\w*['\"]?\s*[:=]\s*['\"][\d*@]",
+                      r"|\bcron\w*['\"]?\s*[:=]\s*['\"](?:@\w+|[\d*/,-]+(?: [\d*/,?-]+){4,5})['\"]",
 }
 # A git checkout, not a shop's: lines with version-control words don't count as a payments signal.
 GIT_CHECKOUT = re.compile(r"\bgit(\b|_)|actions/checkout|worktree|\bbranch|\b(pr|primary|known|remember)_checkouts?\b|\bpr_checkout_"

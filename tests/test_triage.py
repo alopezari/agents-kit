@@ -634,7 +634,10 @@ COMMENTS = [("auth.js", "// guards with current_user_can( first", "if (current_u
             ("wp.toml", "# wp_cron = true", "wp_cron = true", "scheduled jobs"),
             ("feed.xml", "<!-- current_user_can( -->", "<x>current_user_can(1)</x>", "auth or permissions"),
             ("cart.twig", "<!-- checkout -->", "<a href=\"{{ checkout_url }}\">", "payments or orders"),
-            ("App.vue", "<!-- current_user_can( -->", "if (current_user_can(1)) {}", "auth or permissions")]
+            ("App.vue", "<!-- current_user_can( -->", "if (current_user_can(1)) {}", "auth or permissions"),
+            ("cart.js", "// Render {{ checkout_url }} in the template.", "renderCheckout(root);", "payments or orders"),
+            ("db.py", "# ALTER TABLE x */ then check it", "run('ALTER TABLE x ADD y int')", "schema or data migration"),
+            ("pay.js", "/* process_payment(x); */ // must be idempotent", "process_payment(x);", "payments or orders")]
 for path, comment, code, label in COMMENTS:
     quiet, loud = triage_change({}, {path: comment + "\n"}), triage_change({}, {path: code + "\n"})
     signalled = sorted(set(quiet["lenses"]) & {"security", "performance", "compatibility", "operability", "data-privacy"})
@@ -671,7 +674,9 @@ SHAPES = [("auth or permissions", ("auth.php", "user_has_capability( $u );"), ("
           ("auth or permissions", ("auth.php", "echo $capability;"), ("msg.py", 'msg = "Note:login flows"')),
           ("payments or orders", ("pay.js", "return createPayment;"), ("pay.py", "payments are retried (see below)")),
           ("schema or data migration", ("db.py", "x = [MigrationRunner]"), ("db.py", '"""Runs the migration (if any) first."""')),
-          ("public API or hooks", ("api.js", "app.post('/orders', create)"), ("api.js", "const port = app.get('port');"))]
+          ("public API or hooks", ("api.js", "app.post('/orders', create)"), ("api.js", "const port = app.get('port');")),
+          ("public API or hooks", ("api.js", r"router.get(/^\/users\/\d+$/, list);"), ("api.js", "app.get(name);")),
+          ("scheduled jobs", ("nightly.yml", "  - cron: '@daily'"), ("help.js", 'const help = {"cron": "5 fields separated by spaces"};'))]
 # Every identifier shape of criterion 3 fires. (label, path, code)
 for label, path, code in [("payments or orders", "pay.js", "payment.status = 'paid';"),
                           ("scheduled jobs", "job.js", "cron.schedule('* * * * *', run);"),
@@ -684,7 +689,8 @@ for label, path, code in [("payments or orders", "pay.js", "payment.status = 'pa
                           ("payments or orders", "Payment.php", "class Payment extends Model {"),
                           ("schema or data migration", "m.php", "return new class extends Migration"),
                           ("scheduled jobs", "nightly.yml", "    - cron: '0 3 * * *'"),
-                          ("scheduled jobs", "Job.java", '@Scheduled(cron = "0 0 * * * *")')]:
+                          ("scheduled jobs", "Job.java", '@Scheduled(cron = "0 0 * * * *")'),
+                          ("public API or hooks", "api.js", 'app.get(["/a", "/b"], list);')]:
     result = triage_change({}, {path: code + "\n"})
     ok = label in labels(result)
     fail |= not ok
