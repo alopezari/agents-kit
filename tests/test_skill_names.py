@@ -21,6 +21,9 @@ KEPT = re.compile(r"self-review\.stamp|FORMER_NAMES|\(Self-review\|Review\)|\"Se
 # followed by anything but the closing backtick, so prose naming "step 2's `claude -p` command" isn't one; it runs to
 # the next pipe, `;`, `&&` or backtick, so a pinned call doesn't cover an unpinned one beside it.
 CROSS_MODEL_CALL = re.compile(r"\b(codex exec|claude (?:-p|--print))(?!`)\b[^|;&`]*")
+# A quoted prompt can hold any of those separators, so quoted text is blanked first; an apostrophe follows a letter and
+# opens no quote.
+QUOTED = re.compile(r"\"[^\"\n]*\"|(?<!\w)'[^'\n]*'")
 CROSS_MODEL_PINS = {"codex": ("-m gpt-6.1-sol", "-c model_reasoning_effort=high"), "claude": ("--model opus", "--effort high")}
 READ_BY_THE_AGENT = ["AGENTS.md", "README.md", "skills/kit-*/**/*", "hooks/*.py", "bin/*", "mods/kit/hooks/*.js", "deps.txt"]
 
@@ -62,7 +65,7 @@ def unpinned_calls(text):
         if line.endswith("\\"):
             joined = joined[:-1]
             continue
-        for call in CROSS_MODEL_CALL.finditer(joined):
+        for call in CROSS_MODEL_CALL.finditer(QUOTED.sub('""', joined)):
             found += [(start, call.group(1), pin) for pin in CROSS_MODEL_PINS[call.group(1).split()[0]] if pin not in call.group(0)]
         joined = ""
     return found
@@ -74,6 +77,10 @@ for sample in ['codex exec "$prompt"', 'claude -p "$p"', "claude --print <<<x", 
     assert unpinned_calls(sample), f"unpinned call not caught: {sample!r}"
 assert not unpinned_calls("pipe it into step 2's `claude -p` command, or `codex exec` from Claude"), "prose counted as a call"
 assert not unpinned_calls("claude -p --effort high \\\n  --model opus -"), "a continued line's pin not seen"
+for sample in ['codex exec --ephemeral "Review A; check B" -m gpt-6.1-sol -c model_reasoning_effort=high',
+               "claude -p --allowedTools Read 'Review A | check B' --model opus --effort high"]:
+    assert not unpinned_calls(sample), f"a separator inside quotes cut a pinned call: {sample!r}"
+assert unpinned_calls('codex exec "Review A; check B" -m gpt-6.1-sol'), "an unpinned call with a quoted prompt not caught"
 
 unpinned = []
 for path in glob.glob(os.path.join(KIT, "skills", "**", "*"), recursive=True):
