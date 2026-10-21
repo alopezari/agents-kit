@@ -367,6 +367,25 @@ def guard_reads_code_not_text(base):
     assert guard(long) == "allow" and child_cpu() - started < 3, "a long mixed command must not stall the guard"
     started = child_cpu()
     assert guard(long + "EOF\ngit branch -D old") == "deny" and child_cpu() - started < 3, "the whole long command is read"
+    # Each blank line once re-read every blank line after it: a closed 16,000-line body took 26 s.
+    started = child_cpu()
+    guard("ls")
+    startup = child_cpu() - started
+    for body in ("x\n", "\n", "  \n", "s = 'git push --force'\n"):
+        cost = {}
+        for lines in (4000, 16000):
+            started = child_cpu()
+            assert guard(("python3 - <<'EOF'\n" if "s =" in body else "cat <<'EOF'\n") + body * lines + "EOF\nls") == "allow"
+            cost[lines] = child_cpu() - started - startup
+        assert cost[16000] < 1.5 and cost[16000] < 8 * max(cost[4000], 0.05), f"cost must grow linearly in {body!r}: {cost}"
+    blank = "\n\n  \n\t\n"
+    for after in ("sudo ls", "git branch -D old"):
+        assert reason("cat <<'EOF'\nx\nEOF" + blank + after) == reason(after) != "", f"blank lines hide nothing: {after}"
+    shell_script = "cat > /tmp/s.sh <<'EOF'\ngit branch -D old\nEOF\n"
+    assert reason(shell_script + blank + "bash /tmp/s.sh") == reason(shell_script + "bash /tmp/s.sh") != "", \
+        "a script a shell runs after blank lines is still read as commands"
+    assert guard("cat > /tmp/s.py <<'EOF'\ns = 'git branch -D old'\nEOF\n" + blank + "python3 /tmp/s.py") == "allow", \
+        "and one python3 runs after blank lines is still Python"
 
 
 def guard_reads_through_wrappers_and_scripts(base):
@@ -1064,6 +1083,8 @@ def pr_gate_review_and_validation(base):
     assert guard('grep -n "guard_bash\\|gh pr create" bin/docs', repo) == "allow", "a | inside a pattern starts no command"
     assert guard("cat > notes.md <<'EOF'\nRun gh pr create\n| gh pr create --fill\nEOF", repo) == "allow", "heredoc text"
     assert guard("cat > notes.md <<'EOF'\ntext\nEOF\ngh pr create --fill", repo) == "deny", "a real one after a heredoc"
+    assert denial("cat > notes.md <<'EOF'\ntext\nEOF\n\n  \n\ngh pr create --fill") == \
+        denial("cat > notes.md <<'EOF'\ntext\nEOF\ngh pr create --fill"), "blank lines before it change nothing"
     runs = ['GH_HOST="x" gh pr create --fill', 'echo "$(gh pr create --fill)"', "cat <<EOF\n$(gh pr create --fill)\nEOF",
             "# <<EOF\ngh pr create --fill\nEOF", "echo $((1<<2)); gh pr create --fill", 'printf \\" | gh pr create --fill',
             "echo `gh pr create --fill`", "echo \"$(printf %s ')' ; gh pr create --fill)\"",
@@ -2139,6 +2160,7 @@ def guard_records_the_pushed_checkout(base):
     assert recorded(f'git --no-pager -C "{other}" push') == [there]
     assert recorded(f'git push; cd "{other}"; git push') == sorted([here, there])
     assert recorded(f"  cd {other.replace(' ', chr(92) + ' ')} && git push") == [there]
+    assert recorded(f'cd "{other}"\n\n  \ngit push') == [there], "a cd before blank lines still counts"
     assert recorded(f'(cd "{other}" && git status); git push') == [here], "a subshell's cd stays in the subshell"
     assert recorded("git status && echo 'git push'") == [], "a push only in quoted text isn't one"
     for prose in ["cat > \"$(echo /tmp/n.md)\" <<'EOF'\nthen git push\nEOF",
