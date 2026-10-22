@@ -1100,10 +1100,14 @@ def a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn(base):
                  "merge it once I say so", "merge it when I tell you", "Merge this branch into feature-x locally",
                  "Next step: merge.", "Merge it, after I review", "Merge it, when I say so", "Merge it, later",
                  "Merge it when CI passes and I approve", "merge it and let me check it first", "Merge it. Stop.",
-                 "Mergealo, pero despues de que lo revise", "Merge it. Abort.", "Merge it. Hold off.", "merge it, right?"]:
+                 "Mergealo, pero despues de que lo revise", "Merge it. Abort.", "Merge it. Hold off.", "merge it, right?",
+                 "Merge it. Don't.", "Merge it. Do not.", "Merge it. Note: do not merge it."]:
         prompt("allow gh pr merge")
         prompt(text)
         assert guard_in(merge) != "allow", f"grants nothing and revokes the last one: {text!r}"
+    prompt("allow gh pr merge")
+    for rewrite in ["git push -uf origin feature && gh pr merge 12", "git push --force-with-lease origin x && gh pr merge 12"]:
+        assert guard_in(rewrite) != "allow", f"a merge approval doesn't carry a force push: {rewrite!r}"
     prompt("allow gh pr merge\nallow DROP TABLE")
     assert guard_in("gh pr merge 12 && psql -c 'DROP TABLE t'") == "allow", "each grant lifts its own rule"
     with open(os.path.join(base, ".agents", "logs", "hooks.jsonl")) as fh:
@@ -1125,7 +1129,9 @@ def a_message_asking_to_push_approves_that_protected_branch(base):
         for rewrite in ["git push --force origin main", "git push -uf origin main", "git push -fu origin main",
                         "git push --force-with-lease origin main", "git push --force-if-includes origin main",
                         "git push origin --delete main", "git push -d origin main", "git push --mirror origin main",
-                        'git push origin main "--force"', "git push origin main && git push origin \\\n  production"]:
+                        'git push origin main "--force"', "git push origin main && git push origin \\\n  production",
+                        'git push origin main && git push origin "production"',
+                        "git push origin main HEAD:refs/heads/production"]:
             assert guard_in(rewrite) != "allow", f"{text!r} asks for a push, not {rewrite!r}"
     prompt("allow git push production")
     assert guard_in("git push origin production") == "allow" and guard_in(push) != "allow", "each branch its own"
@@ -1135,7 +1141,7 @@ def a_message_asking_to_push_approves_that_protected_branch(base):
         assert guard_in("git push origin release/12") != "allow", f"{text!r} keeps the dot"
     for text in ["¿pusheo a main?", "don't push to main", "no pushees a main", "pushed to main", "push to main later",
                  "> push to main", "push to main-feature", "push to main/experiment", "push to main, not now",
-                 "Push to main, after I check", "Push to main. Hmm, no.",
+                 "Push to main, after I check", "Push to main. Hmm, no.", "Push to main. Don't.",
                  "Push to main failed. Look into it.", "Push to main is what broke prod."]:
         prompt("allow git push main")
         prompt(text)

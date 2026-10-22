@@ -1373,7 +1373,7 @@ LATER_CLAUSE = re.compile(r"(?:(?:but|pero|only|solo) )*(?:later|despues|mas tar
 ACTION_WORD = re.compile(r"\bmerg|\bpush|\bsube")
 RETRACTION = re.compile(r"\b(wait|espera|actually|nevermind|never mind|olvidalo|scratch that|mejor no|cancel|"
                         r"cancela|stop|abort|hold on|hold off|no lo hagas|not yet|todavia no|aun no|kidding|es broma)\b|"
-                        r"(?:^|[,;] *)(no|nope|nah)$")
+                        r"(?:^|[,;] *)(no|nope|nah)$|^(don't|do not)( do it| do that)?$")
 REFUSAL = re.compile(r"\b(no|not|don'?t|do not|never|nunca|todavia|yet)\b|n't\b")
 # Text the user quotes: removed, and a quote left open drops the rest of the line, as does a colon ("the reviewer
 # wrote: merge it"). An apostrophe inside a word ("don't") opens nothing.
@@ -1405,7 +1405,7 @@ def action_approval_names(prompt):
         reported = reported or line.rstrip().endswith(":")
         if skipped:
             continue
-        line = QUOTE_OPEN.split(QUOTED.sub(" ", line))[0]
+        line, *reported_rest = QUOTE_OPEN.split(QUOTED.sub(" ", line), maxsplit=1)
         for sentence in re.split(r"(?<=[.!?])\s+", line):
             sentence = sentence.strip(" .!¡")
             if "?" in sentence or "¿" in sentence:
@@ -1426,12 +1426,16 @@ def action_approval_names(prompt):
                 grants = set()
             elif not held:
                 grants |= asked
+        # What a colon reports asks for nothing, but a refusal there ("Note: do not merge it") still takes back.
+        if any(RETRACTION.search(s.strip(" .!¡")) or ACTION_WORD.search(s) and REFUSAL.search(s)
+               for rest in reported_rest for s in re.split(r"(?<=[.!?])\s+", rest)):
+            grants = set()
     return sorted(grants)
 
 
 def git_pushes(code):
     """Each `git push` in the code, with the protected branches it names."""
-    return [(push, [b.group(1) for b in re.finditer(rf"\s(?:\S+:)?{PROTECTED_BRANCHES}(?=\s|$)", push.group(1))])
+    return [(push, [b.group(1) for b in re.finditer(rf"\s(?:\S+:)?(?:refs/heads/)?{PROTECTED_BRANCHES}(?=\s|$)", push.group(1))])
             for push in re.finditer(GIT + r"push\b([^;&|\n]*)", code)]
 
 
@@ -1447,7 +1451,7 @@ def unquoted(command):
 
 def pushed_branches(command):
     """The protected branches the command's pushes name, by the approval each one needs."""
-    return {push_grant(b): b for _, named in git_pushes(joined_code(command)) for b in named}
+    return {push_grant(b): b for _, named in git_pushes(unquoted(command)) for b in named}
 
 
 # A force, delete, mirror or prune push does more to the branch than the push the user asked for.
@@ -1456,20 +1460,22 @@ PUSH_REWRITES = re.compile(r"--force\S*|--delete|--mirror|--prune|-[a-zA-Z]*[fd]
 
 def action_grants(command):
     """The approvals the command's `gh pr merge` and protected pushes need, or None when no approval lifts their block:
-    `--admin` skips the required checks, a PUSH_REWRITES push isn't a push, and a push the rule reads across lines
-    names no branch here."""
+    `--admin` skips the required checks, a PUSH_REWRITES push anywhere in it isn't the push asked for, and a push the
+    rule reads across lines names no branch here."""
     code, flags = joined_code(command), unquoted(command)
+    pushed = [w for push in re.finditer(GIT + r"push\b([^;&|\n]*)", flags) for w in push.group(1).split()]
     grants = []
     if re.search(MERGE, code):
         if re.search(r"(?<!\S)--admin\b", flags):
             return None
         grants.append(MERGE_GRANT)
     if re.search(PROTECTED_PUSH, code):
-        pushed = [w for push in re.finditer(GIT + r"push\b([^;&|\n]*)", flags) for w in push.group(1).split()]
         branches = sorted(pushed_branches(command))
-        if not branches or any(PUSH_REWRITES.fullmatch(w) for w in pushed):
+        if not branches:
             return None
         grants += branches
+    if grants and any(PUSH_REWRITES.fullmatch(w) for w in pushed):
+        return None
     return grants
 
 
