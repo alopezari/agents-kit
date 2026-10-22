@@ -5,7 +5,7 @@ description: "Take an open pull request to ready-to-merge. Handles what is new s
 
 # Follow PR
 
-From an open PR to "ready to merge". The merge is the user's: the shell guard blocks `gh pr merge` unless the user's message asks for it ("merge it", or a first line `allow gh pr merge`), until their next message. When it does, merge once the PR is ready to merge, and report the merge; when it isn't ready, say what is missing instead.
+From an open PR to "ready to merge". The merge is the user's: the shell guard blocks `gh pr merge` unless the user's message asks for it ("merge it", or a first line `allow gh pr merge`), until their next message. When it does, merge once the PR is ready to merge (section 4), report the merge, then do what else the message asked: an install or ship is the `kit-ship` skill's part after the merge. When it isn't ready, say what is missing instead.
 
 Every run handles only what is new: its report keeps each comment it dealt with, so running it again after three days picks up where it left off.
 

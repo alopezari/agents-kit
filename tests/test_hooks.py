@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1071,7 +1072,8 @@ def a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn(base):
                  "allow gh pr merge\nand then install it", "Mergéalo", "Sí, mergea el PR", "haz el merge",
                  "Perfecto. Haz merge y luego instálalo.", "si pasa el CI, mergealo", "merge it", "Merge this please",
                  "OK, merge the PR", "Go ahead and merge", "merge #12", "Merge PR 12 and install it", "mergeadlo",
-                 "Mergeala ya", "Great, thanks! Merge it."]:
+                 "Mergeala ya", "Great, thanks! Merge it.", "merge it once CI passes", "Mergéalo y después instálalo",
+                 "Merge it. Don't install it.", "merge it into main", "Steps:\n- check\n\nmerge it"]:
         prompt("now fix the failing test")
         assert guard_in(merge) != "allow", "a message that doesn't ask revokes the last one"
         prompt(text)
@@ -1079,7 +1081,8 @@ def a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn(base):
     with open(os.path.join(base, ".agents", "logs", "hooks.jsonl")) as fh:
         logged = [json.loads(line) for line in fh if '"allow-approved"' in line]
     assert [e["detail"] for e in logged][-1:] == ["git.merge"], "an approved merge leaves a trace"
-    assert guard_in("gh pr merge 12 --admin --squash") != "allow", "--admin skips the checks the user may count on"
+    for admin in ["gh pr merge 12 --admin --squash", "gh pr merge 12 \\\n  --admin", 'gh pr merge 12 "--admin"']:
+        assert guard_in(admin) != "allow", f"--admin skips the checks the user may count on: {admin!r}"
     assert guard_in(merge, session="s2") != "allow", "another session's message approves nothing"
     assert guard_in("gh pr merge 12 && git push --force origin x") != "allow", "other rules still hold"
     for text in ["Merged.", "Merged. Ahora que?", "¿lo mergeo?", "Lo mergeo?", "should I merge it?",
@@ -1088,10 +1091,22 @@ def a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn(base):
                  "the reviewer wrote 'merge it'", 'Ana dijo "mergealo"', "> merge it", "    merge it", "```\nmerge it\n```",
                  "ok\nallow gh pr merge", "after the merge, install it", "the merge failed", "I'll merge it myself",
                  "Lo mergeo yo", "why did you merge it?", "merge conflicts in hooks/x.py", "Don't merge it yet",
-                 "merge it tomorrow", "No mergees nada", "the merge is mine", f"why was this blocked? {denial}"]:
+                 "merge it tomorrow", "No mergees nada", "the merge is mine", f"why was this blocked? {denial}",
+                 "merge it?", "¿mergealo?", "Merge it, actually wait.", "Merge it, but not yet.", "Merge it. No.",
+                 "Merge it. Do not merge it.", "Do not, under any circumstances, merge it", "Merge it - kidding",
+                 "The reviewer wrote: merge it", "TODO: merge it", "The reviewer wrote:\nmerge it",
+                 "The reviewer wrote 'Looks good, merge it, thanks'", 'He said "Looks good. Merge it. Ship it."',
+                 "Merge it is the next step.", "Merge the PR failed because of conflicts.", "merge it after I review",
+                 "merge it once I say so", "merge it when I tell you", "Merge this branch into feature-x locally",
+                 "Next step: merge."]:
         prompt("allow gh pr merge")
         prompt(text)
         assert guard_in(merge) != "allow", f"grants nothing and revokes the last one: {text!r}"
+    prompt("allow gh pr merge\nallow DROP TABLE")
+    assert guard_in("gh pr merge 12 && psql -c 'DROP TABLE t'") == "allow", "each grant lifts its own rule"
+    with open(os.path.join(base, ".agents", "logs", "hooks.jsonl")) as fh:
+        logged = [json.loads(line)["detail"] for line in fh if '"allow-approved"' in line]
+    assert sorted(logged[-1].split(", ")) == ["git.merge", "sql.drop-table"], f"the trace names every grant: {logged[-1:]}"
 
 
 def a_message_asking_to_push_approves_that_protected_branch(base):
@@ -1105,11 +1120,20 @@ def a_message_asking_to_push_approves_that_protected_branch(base):
         for command in [push, "git push -u origin main", "git push origin HEAD:main", "git push upstream main"]:
             assert guard_in(command) == "allow", f"{text!r} approves {command!r}"
         assert guard_in("git push origin production") != "allow", f"{text!r} names main only"
-        assert guard_in("git push --force origin main") != "allow", "a force push keeps its own rule"
+        for rewrite in ["git push --force origin main", "git push -uf origin main", "git push -fu origin main",
+                        "git push --force-with-lease origin main", "git push --force-if-includes origin main",
+                        "git push origin --delete main", "git push -d origin main", "git push --mirror origin main",
+                        'git push origin main "--force"', "git push origin main && git push origin \\\n  production"]:
+            assert guard_in(rewrite) != "allow", f"{text!r} asks for a push, not {rewrite!r}"
     prompt("allow git push production")
     assert guard_in("git push origin production") == "allow" and guard_in(push) != "allow", "each branch its own"
+    for text in ["allow git push release/1.2", "push to release/1.2", "Push to release/1.2."]:
+        prompt(text)
+        assert guard_in("git push origin release/1.2") == "allow", f"{text!r} names release/1.2"
+        assert guard_in("git push origin release/12") != "allow", f"{text!r} keeps the dot"
     for text in ["¿pusheo a main?", "don't push to main", "no pushees a main", "pushed to main", "push to main later",
-                 "> push to main"]:
+                 "> push to main", "push to main-feature", "push to main/experiment", "push to main, not now",
+                 "Push to main failed. Look into it.", "Push to main is what broke prod."]:
         prompt("allow git push main")
         prompt(text)
         assert guard_in(push) != "allow", f"grants nothing and revokes the last one: {text!r}"
@@ -1130,14 +1154,37 @@ def a_first_push_to_an_empty_remote_needs_no_approval(base):
     git("remote", "add", "origin", empty, cwd=work)
     git("remote", "add", "used", used, cwd=work)
     git("remote", "add", "dead", "git://127.0.0.1:1/x.git", cwd=work)
+    other = os.path.join(base, "other.git")
+    git("init", "-q", "--bare", other)
+    git("push", "-q", other, "main:gh-pages", cwd=work)
+    git("remote", "add", "other", other, cwd=work)
+    stalled = socket.create_server(("127.0.0.1", 0))  # accepts the connection and never answers
+    git("remote", "add", "stalled", f"git://127.0.0.1:{stalled.getsockname()[1]}/x.git", cwd=work)
     for command in ["git push -u origin main", "git push origin main", "git push --set-upstream origin HEAD:main",
                     f"git push {empty} main", f"cd {work} && git push -u origin main"]:
         assert guard_in(command, cwd=work if "cd " not in command else "/tmp") == "allow", \
             f"nothing to review against: {command}"
     for command in ["git push -u used main", "git push dead main", "git push nowhere main",
                     "git push origin main && git push used main", "git push origin main; git push origin develop",
-                    "git push --force origin main", "git push main"]:
+                    "git push --force origin main", "git push main", "git push other main",
+                    "git push origin main production", "git push -o ci.skip origin main",
+                    "gh pr merge 1 && git push -u origin main", f"git -c remote.origin.pushurl={used} push origin main",
+                    f"git remote set-url --push origin {used} && git push origin main",
+                    f"GIT_DIR={used} git push origin main"]:
         assert guard_in(command, cwd=work) != "allow", f"stays denied: {command}"
+    start = time.monotonic()
+    assert guard_in("git push stalled main", cwd=work) != "allow", "a remote that never answers fails closed"
+    assert time.monotonic() - start < 6, f"within the hook's budget: {time.monotonic() - start:.1f}s"
+    stalled.close()
+    with open(os.path.join(base, ".agents", "logs", "hooks.jsonl")) as fh:
+        assert any('"allow-approved"' in line and '"empty-remote"' in line for line in fh), "the exemption is logged"
+    for n in range(1, 6):
+        git("init", "-q", "--bare", f"{empty}{n}")
+        git("remote", "set-url", "--add", "--push", "origin", f"{empty}{n}", cwd=work)
+        expected = "allow" if n <= 4 else "deny"
+        assert (guard_in("git push origin main", cwd=work) == "allow") == (expected == "allow"), \
+            f"{n} empty push URLs: {expected}"
+    git("config", "--unset-all", "remote.origin.pushurl", cwd=work)
     assert guard_in("git push -u origin main", cwd="/tmp") != "allow", "outside the repository the remote is unknown"
     git("remote", "set-url", "--push", "origin", used, cwd=work)
     assert guard_in("git push origin main", cwd=work) != "allow", "the push URL decides, not the empty fetch URL"

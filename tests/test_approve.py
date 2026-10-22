@@ -109,7 +109,11 @@ def names_the_merge_and_protected_push_approvals(base):
     got = needed(env, bash("git push origin main && git push origin HEAD:production"))
     assert got["names"] == ["git.push-main", "git.push-production"], got
     assert got["scope"] == "any push to main or any push to production", got
-    for command in ["gh pr merge 12 --admin", "git push --force origin main", "git push --force origin x && gh pr merge 1"]:
+    got = needed(env, bash("git push origin release/1.0"))
+    assert got["scope"] == "any push to release/1.0" and "to release/1.0 skips" in got["what"], got
+    for command in ["gh pr merge 12 --admin", "gh pr merge 12 \\\n --admin", "git push --force origin main",
+                    "git push --force origin x && gh pr merge 1", "git push --force-with-lease origin main",
+                    "git push -uf origin main", "git push origin --delete main"]:
         assert needed(env, bash(command))["names"] == [], f"no approval lifts this block: {command}"
     assert run(env, "grant", "s1", "git.push-main").returncode == 0
     assert guard(env, "guard_bash.py", bash("git push origin main")) == "allow", "the dialog's grant lifts the block"
