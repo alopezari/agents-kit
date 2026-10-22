@@ -12,8 +12,8 @@ branch's spec, by its Risk line, can raise the diff's tier, never lower it: the 
 
 A framework's own names are signals only in its repos: packs/<name>.json adds them, in a repo whose top level, at
 either end of the change, shows the framework (WordPress: wp-config.php, wp-content/, .wp-env.json, a root PHP file's
-Plugin Name header, style.css's Theme Name header, or composer.json), or where ~/.agents/repos/<repo>/packs turns the
-pack on. Detection that can't conclude stops triage, naming why.
+Plugin Name header, style.css's Theme Name header, or a composer.json typed as a WordPress package or requiring WordPress
+itself), or where ~/.agents/repos/<repo>/packs turns the pack on. Detection that can't conclude stops triage, naming why.
 """
 import ast
 import importlib.machinery
@@ -330,6 +330,7 @@ class Inconclusive(Exception):
 PACKS = ("wordpress",)
 PLUGIN_HEADERS_READ = 200  # root PHP files, in name order
 HEADER_BYTES = 8192  # as much of a file as WordPress reads for its header
+COMPOSER_BYTES = 1_000_000  # composer.json is parsed whole, so a bigger one is refused rather than read
 PLUGIN_HEADER = re.compile(rb"^(?:[ \t]*<\?php)?[ \t/*#@]*Plugin Name:", re.M | re.I)
 THEME_HEADER = re.compile(rb"^[ \t/*#@]*Theme Name:", re.M | re.I)
 WORDPRESS_COMPOSER_TYPES = ("wordpress-plugin", "wordpress-theme", "wordpress-muplugin")
@@ -347,52 +348,78 @@ def run_git(*args, stdin=None):
 
 class Tree:
     """A tree's top level, read for pack markers: a commit's, or the working tree's (ignored and untracked files
-    included) when ref is None."""
+    included) when ref is None. `names` holds every entry, symlinks and submodules included; `files` the ones whose
+    content can be read."""
 
     def __init__(self, root, ref):
         self.root, self.ref = root, ref
         if ref is None:
-            names = os.listdir(root)
-            self.dirs = {n for n in names if os.path.isdir(os.path.join(root, n))}
-            self.files = sorted(n for n in names if os.path.isfile(os.path.join(root, n)))
+            try:
+                self.names = set(os.listdir(root))
+            except OSError as error:
+                raise Inconclusive(f"can't list {root}: {error.strerror}") from None
+            self.files = sorted(n for n in self.names if os.path.isfile(os.path.join(root, n)))
         else:
-            entries = [e.split("\t", 1) for e in run_git("ls-tree", "-z", ref).decode(errors="replace").split("\0") if e]
-            self.dirs = {name for meta, name in entries if meta.split()[1] == "tree"}
-            self.files = sorted(name for meta, name in entries if meta.split()[1] == "blob")
+            # --full-tree: without it ls-tree lists the directory triage runs in.
+            listing = run_git("ls-tree", "--full-tree", "-z", ref).decode(errors="replace").split("\0")
+            entries = [(meta.split(), name) for meta, name in (e.split("\t", 1) for e in listing if e)]
+            self.names = {name for _, name in entries}
+            self.oids = {name: oid for (mode, kind, oid), name in entries if kind == "blob" and mode != "120000"}
+            self.files = sorted(self.oids)
 
     def heads(self, names, limit=HEADER_BYTES):
-        """The first `limit` bytes of each file (all of it with None), in one git call for a commit."""
+        """The first `limit` bytes of each file; for a commit, one git process, asked by object id one file at a time so
+        only `limit` bytes of each are kept."""
+        heads = []
         if self.ref is None:
-            heads = []
             for name in names:
                 try:
                     with open(os.path.join(self.root, name), "rb") as f:
-                        heads.append(f.read(limit) if limit else f.read())
+                        heads.append(f.read(limit))
                 except OSError as error:
                     raise Inconclusive(f"can't read {name}: {error.strerror}") from None
             return heads
-        out = run_git("cat-file", "--batch", stdin="".join(f"{self.ref}:{n}\n" for n in names).encode())
-        heads = []
-        for name in names:
-            header, _, out = out.partition(b"\n")
-            if header.endswith(b" missing") or not header:
-                raise Inconclusive(f"git cat-file can't read {self.ref}:{name}: {header.decode(errors='replace') or 'no output'}")
-            size = int(header.split()[2])
-            heads.append(out[:min(size, limit or size)])
-            out = out[size + 1:]
+        git_ = subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
+        try:
+            for name in names:
+                git_.stdin.write(f"{self.oids[name]}\n".encode())
+                git_.stdin.flush()
+                header = git_.stdout.readline().split()
+                if len(header) != 3:
+                    raise Inconclusive(f"git cat-file can't read {self.ref}:{name}: {b' '.join(header).decode() or 'no output'}")
+                size = int(header[2])
+                heads.append(git_.stdout.read(min(size, limit)))
+                left = size - len(heads[-1]) + 1  # the rest of the blob, then git's newline
+                while left:
+                    chunk = git_.stdout.read(min(left, 1 << 16))
+                    if not chunk:
+                        raise Inconclusive(f"git cat-file stopped in the middle of {self.ref}:{name}")
+                    left -= len(chunk)
+        finally:
+            git_.stdin.close()
+            git_.stdout.close()
+            error = git_.stderr.read().decode(errors="replace").strip()
+            git_.stderr.close()
+            git_.wait()
+        if git_.returncode:
+            raise Inconclusive(f"git cat-file failed: {error.splitlines()[-1] if error else f'exit {git_.returncode}'}")
         return heads
 
 
 def wordpress_marker(tree):
     """(why, root PHP files left unread) for the first WordPress marker at a tree's top level, why None without one."""
     for marker in ("wp-config.php", ".wp-env.json"):
-        if marker in tree.files:
+        if marker in tree.names:
             return marker, 0
-    if "wp-content" in tree.dirs:
+    if "wp-content" in tree.names:
         return "wp-content/", 0
     if "composer.json" in tree.files:
+        text = tree.heads(["composer.json"], limit=COMPOSER_BYTES + 1)[0]
+        if len(text) > COMPOSER_BYTES:
+            raise Inconclusive("composer.json is over 1 MB, too big to read for WordPress")
         try:
-            text = tree.heads(["composer.json"], limit=None)[0].decode()
+            text = text.decode()
             data = json.loads(text)
             requires = dependency_names("composer.json", text)
         except ValueError as error:
@@ -402,11 +429,12 @@ def wordpress_marker(tree):
         core = sorted(n for n in requires if WORDPRESS_CORE_PACKAGE.match(n))
         if core:
             return f"composer.json requires {core[0]}", 0
-    if "style.css" in tree.files and THEME_HEADER.search(tree.heads(["style.css"])[0]):
+    # WordPress reads headers with any line end, a lone \r included.
+    if "style.css" in tree.files and THEME_HEADER.search(tree.heads(["style.css"])[0].replace(b"\r", b"\n")):
         return "style.css has a Theme Name header", 0
     php = [n for n in tree.files if n.endswith(".php")]
     for name, head in zip(php, tree.heads(php[:PLUGIN_HEADERS_READ])):
-        if PLUGIN_HEADER.search(head):
+        if PLUGIN_HEADER.search(head.replace(b"\r", b"\n")):
             return f"{name} has a Plugin Name header", 0
     return None, max(0, len(php) - PLUGIN_HEADERS_READ)
 
@@ -414,13 +442,13 @@ def wordpress_marker(tree):
 def overlay_packs(repo):
     """{pack: (on, why)} from the repo's packs file in the user's overlay: a pack's name turns it on, -name off."""
     short = f"repos/{repo}/packs"
-    path = os.path.join(os.path.expanduser("~/.agents"), short)
+    path, shown = os.path.join(os.path.expanduser("~/.agents"), short), f"~/.agents/{short}"
     try:
         lines = open(path, encoding="utf-8").read().splitlines()
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as error:
-        raise Inconclusive(f"can't read {path}: {getattr(error, 'strerror', None) or error}") from None
+        raise Inconclusive(f"can't read {shown}: {getattr(error, 'strerror', None) or error}") from None
     named = {}
     for number, line in enumerate(lines, 1):
         word = line.strip()
@@ -428,9 +456,9 @@ def overlay_packs(repo):
             continue
         name = word[1:] if word.startswith("-") else word
         if name not in PACKS:
-            raise Inconclusive(f"{path}:{number}: unknown pack {word!r} (known: {', '.join(PACKS)})")
+            raise Inconclusive(f"{shown}:{number}: unknown pack {word!r} (known: {', '.join(PACKS)})")
         if name in named and named[name][0] != (word == name):
-            raise Inconclusive(f"{path}:{named[name][1]}: {name} is turned on and off (again at :{number})")
+            raise Inconclusive(f"{shown}:{named[name][1]}: {name} is turned on and off (again at :{number})")
         named.setdefault(name, (word == name, number))
     return {name: (on, short) for name, (on, _) in named.items()}
 
@@ -441,24 +469,34 @@ def applied_packs(rng, merge_base):
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))  # as in cross_model
     import review_stamp
     root = run_git("rev-parse", "--show-toplevel").decode().strip()
-    chosen = overlay_packs(review_stamp.repo_name(root))
-    if "wordpress" in chosen:
-        on, why = chosen["wordpress"]
-        return ([{"name": "wordpress", "why": why}], [], 0) if on else ([], [{"name": "wordpress", "why": why}], 0)
+    repo = review_stamp.repo_name_of(run_git("rev-parse", "--path-format=absolute", "--git-common-dir").decode().strip())
+    if not repo:
+        raise Inconclusive("git names no repository directory")
     before, after = range_ends(rng, merge_base)
     if not before:
         raise Inconclusive(f"{rng} has no merge-base")
-    for end, ref in (("end", after), ("start", before)):
+    unborn = not rng and subprocess.run(["git", "rev-parse", "--verify", "--quiet", "HEAD"], capture_output=True).returncode
+    ends = [("end", after)] + ([] if unborn else [("start", before)])  # with no commit yet, the working tree is the change
+    for end, ref in ends:
         if ref is not None:
             try:
                 run_git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
             except Inconclusive:
                 raise Inconclusive(f"the change's {end} {ref!r} isn't a commit") from None
+    chosen = overlay_packs(repo)
+    if "wordpress" in chosen:
+        on, why = chosen["wordpress"]
+        return ([{"name": "wordpress", "why": why}], [], 0) if on else ([], [{"name": "wordpress", "why": why}], 0)
     unread = 0
-    for ref, suffix in ((after, ""), (before, ", before the change")):
-        why, left = wordpress_marker(Tree(root, ref))
+    for end, ref in ends:
+        try:
+            why, left = wordpress_marker(Tree(root, ref))
+        except Inconclusive as error:
+            where = "the working tree" if ref is None else f"the change's {end} {ref}"
+            raise Inconclusive(f"{error} (in {where}; to skip detection, put wordpress or -wordpress in "
+                               f"~/.agents/repos/{repo}/packs)") from None
         if why:
-            return [{"name": "wordpress", "why": why + suffix}], [], 0
+            return [{"name": "wordpress", "why": why + (", before the change" if end == "start" else "")}], [], 0
         unread = max(unread, left)
     return [], [], unread
 
@@ -468,7 +506,8 @@ PACK_PATTERNS = ("migration", "query_budget", "html_comment_holds_code")
 
 def load_pack(name):
     """The pack's patterns, each adding to a core label or lens it names; Inconclusive when the file can't be used."""
-    path = os.path.normpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "packs", f"{name}.json"))
+    shown = f"packs/{name}.json"
+    path = os.path.normpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", shown))
     try:
         pack = json.load(open(path, encoding="utf-8"))
         if not isinstance(pack, dict) or set(pack) != {"high_risk", "lens_signals", *PACK_PATTERNS}:
@@ -479,7 +518,7 @@ def load_pack(name):
         for rx in [*pack["high_risk"].values(), *pack["lens_signals"].values(), *(pack[k] for k in PACK_PATTERNS)]:
             re.compile(rx)
     except (OSError, ValueError, AttributeError, TypeError, re.error) as error:
-        raise Inconclusive(f"can't use the {name} pack {path}: {getattr(error, 'strerror', None) or error}") from None
+        raise Inconclusive(f"can't use the {name} pack {shown}: {getattr(error, 'strerror', None) or error}") from None
     return pack
 
 
@@ -506,7 +545,8 @@ def triage(rng=None):
     for pack in (load_pack(p["name"]) for p in packs):
         high_risk.update({k: f"{high_risk[k]}|{rx}" for k, rx in pack["high_risk"].items()})
         lens_signals.update({k: f"{lens_signals[k]}|{rx}" for k, rx in pack["lens_signals"].items()})
-        migration_rx, query_budget_rx = f"{migration_rx}|{pack['migration']}", pack["query_budget"]
+        migration_rx = f"{migration_rx}|{pack['migration']}"
+        query_budget_rx = "|".join(filter(None, (query_budget_rx, pack["query_budget"])))
         html_holds_code = re.compile(f"{html_holds_code.pattern}|{pack['html_comment_holds_code']}")
     files, added, removed, renamed_from, data_files = collect(rng, merge_base)
     changed_lines = sum(files.values()) + len(removed)
@@ -578,7 +618,7 @@ def triage(rng=None):
         tests["visual check of affected pages (validate)"] = ["style-only change"]
     budget = query_budget_rx and hits(query_budget_rx, limit=2)
     if budget:
-        tests["query budget"] = budget
+        tests["query budget"] = lenses.get("performance", [])[:2] or budget
     if "ux-a11y-i18n" in lenses:
         tests["accessibility (axe)"] = lenses["ux-a11y-i18n"]
     minimum = php_min()
