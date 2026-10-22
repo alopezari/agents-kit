@@ -1,0 +1,1 @@
+- The shell guard reads long heredocs and runs of blank lines in linear time: each blank line (as a heredoc body becomes once read) made it re-read every blank line after it, so a 16,000-line heredoc took 26 s of CPU and now takes a fraction of a second.

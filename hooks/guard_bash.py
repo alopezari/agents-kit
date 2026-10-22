@@ -41,7 +41,8 @@ PREFIXES = (r"(?:" + ASSIGNMENT + r"|command\s+(?:-p\s+|--\s+)*|nohup\s+(?:--\s+
             r"|env\s+(?:-[i0v]*[uCS](?:\s+\S+|\S+)\s+|--(?:unset|chdir|split-string)(?:=|\s+)\S+\s+|-[i0v]+\s+"
             r"|--(?:ignore-environment|null|debug)\s+|--\s+|-\s+)*)*")
 # Where a command starts: after a separator, and any shell keywords after it (`; then gh pr ready`, `{ gh pr ready; }`).
-COMMAND_START = r"(?:^|[;&|(\n`{])\s*(?:(?:then|do|else|elif|if|while|until)\s+|!\s*)*"
+# [^\S\n], not \s: a newline starts a command itself, and \s there would make each line re-read every line after it.
+COMMAND_START = r"(?:^|[;&|(\n`{])[^\S\n]*(?:(?:then|do|else|elif|if|while|until)[^\S\n]+|![^\S\n]*)*"
 
 GIT = r"\bgit\s+(?:(?:-C|-c)\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*"
 PROTECTED_BRANCHES = r"(main|master|trunk|develop|production|release(/[\w.-]+)?)"
@@ -878,7 +879,7 @@ CODE_FLAGS = {"python": "c", "node": "e|p|-eval|-print", "ruby": "e", "perl": "e
 SQL_USED = re.compile(r"\b(?:psql|mysqli?|mariadb|sqlite3|psycopg2?|pymysql)|\bwp\s+db\s+(?:query|cli)\b|\.(?:execute|query)\s*\(|"
                       r"exec_driver_sql|\bduckdb\b|\.raw\s*\(|\$(?:execute|query)Raw(?:Unsafe)?\b")
 # A command that runs a script file: a heredoc it writes to a file may be that script.
-RUNS_SCRIPT_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))\s*(?:(?:command|exec)\s+)?(?:(?:(?:/[\w.-]+)*/)?(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*[^\s<-]|source\s|\.\s+\S|"
+RUNS_SCRIPT_FILE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|do))[^\S\n]*(?:(?:command|exec)\s+)?(?:(?:(?:/[\w.-]+)*/)?(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*[^\s<-]|source\s|\.\s+\S|"
                               r"\.{0,2}/\S+\.sh\b)")
 # A redirection's & (2>&1, >&2, &>) joins no commands.
 REDIRECT_AMPERSAND = re.compile(r"(?<=[<>])&|&(?=>)")
@@ -1422,15 +1423,15 @@ def private_terms_in_kit_pr(command, cwd, env=os.environ):
     def quote_around(pos):
         return next(((start, end) for start, end in spans if start < pos < end), None)
 
-    for match in re.finditer(r"(?:^|[;&|(\n`])\s*(" + PREFIXES + r")" + GH_PR + r"(?:" + PR_CREATE + r"|edit)\b", code):
+    for match in re.finditer(r"(?:^|[;&|(\n`])[^\S\n]*(" + PREFIXES + r")" + GH_PR + r"(?:" + PR_CREATE + r"|edit)\b", code):
         before = command[:match.start(1)]
         # gh reads a relative --body-file from where it runs, not the --head worktree pr_checkout() may pick.
         # The cds are found in the code, where a quote may read as ; around eval's argument, and read from the command.
         runs_in = cwd
-        for cd in re.finditer(r"(?:^|[;&|\n]\s*)(cd)\s+(\"[^\"]+\"|'[^']+'|;[^;\n]+;|[^\s;&|]+)", code[:match.start(1)]):
+        for cd in re.finditer(r"(?:^|[;&|\n][^\S\n]*)(cd)\s+(\"[^\"]+\"|'[^']+'|;[^;\n]+;|[^\s;&|]+)", code[:match.start(1)]):
             if not quote_around(cd.start(1)):
                 runs_in = cd_into(runs_in, command[cd.start(2):cd.end(2)])
-        exported = dict(re.findall(r"(?:^|[;&|\n]\s*)(?:export\s+)?(GH_REPO|GH_HOST)=([^\s;&|]+)(?=\s*(?:[;&|\n]|$))",
+        exported = dict(re.findall(r"(?:^|[;&|\n][^\S\n]*)(?:export\s+)?(GH_REPO|GH_HOST)=([^\s;&|]+)(?=\s*(?:[;&|\n]|$))",
                                    before))
         wrapper = quote_around(match.end(1))
         if wrapper:
@@ -1512,7 +1513,7 @@ def pushed_from(command, cwd):
 
     for push in re.finditer(GIT + r"push\b", code):
         runs_in = cwd
-        for cd in re.finditer(r"(?:^|[;&|(\n])\s*cd\s+((?:\\ |[^\s;&|)])+)", code[:push.start()]):
+        for cd in re.finditer(r"(?:^|[;&|(\n])[^\S\n]*cd\s+((?:\\ |[^\s;&|)])+)", code[:push.start()]):
             between = code[cd.end():push.start()]
             if between.count(")") <= between.count("("):
                 runs_in = cd_into(runs_in, word(cd.start(1), cd.end(1)))

@@ -64,6 +64,10 @@ def kit_prs_are_checked(base):
     assert "ACME-4" in guard("gh pr edit 3 -t ACME-4\ngh pr edit 3 -R someone/other -t fine", KIT, env), "newlines"
     assert "ACME-4" in guard(f"cd /tmp && gh pr edit 3 -t a && cd {KIT} && gh pr edit 3 -t ACME-4", other, env), "cd"
     assert "ACME-4" in guard("export GH_REPO=alopezari/agents-kit && gh pr edit 3 -t ACME-4", other, env), "export"
+    blank = "\n\n  \n\t\n"
+    assert "ACME-4" in guard(f"echo start{blank}cd {KIT}{blank}gh pr edit 3 -t ACME-4", other, env), "cd between blank lines"
+    assert "ACME-4" in guard(f"echo start{blank}export GH_REPO=alopezari/agents-kit{blank}gh pr edit 3 -t ACME-4", other, env), \
+        "export between blank lines"
     assert "ACME-4" in guard("gh pr edit 3 -t ACME-4", other, {**env, "GH_REPO": "alopezari/agents-kit"}), "inherited"
     assert guard("GH_HOST=ghe.example gh pr edit 3 -R alopezari/agents-kit -t ACME-4", other, env) == "", "GH_HOST"
     open(os.path.join(other, "-"), "w").write("fine\n")
