@@ -1118,6 +1118,7 @@ for case, kwargs, expected in [
         ("a wp-content symlink in the commit", {"base": {"wp-content": ("../shared/wp-content",)}}, ["wordpress"]),
         ("a dangling wp-config.php symlink, no --range", {"base": {"wp-config.php": ("../wp-config.php",)}, "args": ("--json",)},
          ["wordpress"]),
+        ("a composer.json symlink in the commit, whose link text isn't read", {"base": {"composer.json": ("../composer.json",)}}, []),
         ("a plugin header with CR line ends", {"base": {"main.php": "<?php\r/*\rPlugin Name: Example\r*/\r"}}, ["wordpress"]),
         ("a theme header with CR line ends", {"base": {"style.css": "/*\rTheme Name: Example\r*/\r"}}, ["wordpress"]),
         ("a root PHP file whose name holds a newline", {"base": {"line\nbreak.php": "<?php\n", "index.php": "<?php\n"}}, [])]:
