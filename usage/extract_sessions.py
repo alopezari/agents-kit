@@ -326,7 +326,8 @@ def builds_of(transcript):
     builds = []
     for meta_file in sorted(glob.glob(transcript[:-len(".jsonl")] + "/subagents/agent-*.meta.json")):
         try:
-            meta = json.load(open(meta_file))
+            with open(meta_file) as fh:
+                meta = json.load(fh)
         except (OSError, ValueError):
             continue
         if not str(meta.get("agentType", "")).startswith("kit:build-"):
@@ -334,7 +335,12 @@ def builds_of(transcript):
         models, efforts, times, seen, branch = {}, set(), [], set(), None
         tokens = {"in": 0, "out": 0, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}
         usd = 0.0
-        for line in open(meta_file[:-len(".meta.json")] + ".jsonl", errors="ignore"):
+        try:
+            with open(meta_file[:-len(".meta.json")] + ".jsonl", errors="ignore") as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        for line in lines:
             try:
                 e = json.loads(line)
             except ValueError:
@@ -343,7 +349,7 @@ def builds_of(transcript):
                 times.append(e["timestamp"])
             branch = branch or e.get("gitBranch")
             msg = e.get("message") or {}
-            if e.get("type") != "assistant" or msg.get("id") in seen:
+            if e.get("type") != "assistant" or msg.get("id") and msg["id"] in seen:
                 continue  # one line per content block, each repeating the message's usage
             seen.add(msg.get("id"))
             model = msg.get("model")

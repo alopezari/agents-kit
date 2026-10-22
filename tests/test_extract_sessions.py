@@ -276,6 +276,8 @@ def subagent(home, agent_id, agent_type, lines, model):
     os.makedirs(folder, exist_ok=True)
     meta = {"agentType": agent_type, "description": "d", **({"model": model} if model else {})}
     json.dump(meta, open(os.path.join(folder, f"agent-{agent_id}.meta.json"), "w"))
+    if lines is None:
+        return  # a meta file whose transcript is missing
     with open(os.path.join(folder, f"agent-{agent_id}.jsonl"), "w") as fh:
         fh.writelines(json.dumps(line) + "\n" for line in lines)
 
@@ -311,6 +313,22 @@ def builds_come_from_their_transcripts(home):
     assert module.summarize(found)["builds"] == found["builds"]
 
 
+def opus_prices_and_usage_without_the_cache_split(home):
+    split = {"input_tokens": 10, "output_tokens": 1000, "cache_read_input_tokens": 100000, "cache_creation_input_tokens": 3000,
+             "cache_creation": {"ephemeral_5m_input_tokens": 2000, "ephemeral_1h_input_tokens": 1000}}
+    unsplit = {k: v for k, v in split.items() if k != "cache_creation"}
+    found = session(home, [user(0, "build it", "feat"), *assistant(1, "m0", "feat", [TEXT])], subagents=[
+        ("b1", "kit:build-high", build_turn(2, "x1", "claude-opus-5-5", split), None),
+        ("b2", "kit:build-low", build_turn(3, "y1", "claude-sonnet-5-5", unsplit), "sonnet"),
+        ("b3", "kit:build-standard", None, "opus")])
+    high, low = sorted(found["builds"], key=lambda b: b["agent"])
+    assert [high["agent"], low["agent"]] == ["kit:build-high", "kit:build-low"], "a build whose transcript is missing is skipped"
+    assert abs(high["usd"] - (10 * 4 + 1000 * 20 + 100000 * 0.20 + 2000 * 5 + 1000 * 8) / 1e6) < 1e-9, high["usd"]
+    assert high["assigned_model"] is None
+    assert (low["tokens"]["cache_write_5m"], low["tokens"]["cache_write_1h"]) == (3000, 0), "no split: every write at 5 minutes"
+    assert abs(low["usd"] - (10 * 2 + 1000 * 10 + 100000 * 0.10 + 3000 * 2.50) / 1e6) < 1e-9, low["usd"]
+
+
 def a_session_without_builds_lists_none(home):
     found = session(home, [user(0, "hi", "a"), *assistant(1, "m0", "a", [TEXT])])
     assert found["builds"] == [], found["builds"]
@@ -320,7 +338,8 @@ for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_
              writing_the_spec_marks_the_work_before_it, what_counts_as_starting_the_code, short_gaps_add_up,
              the_users_attention_per_branch, what_the_user_did_not_type, another_agents_run_is_not_the_user,
              a_session_of_typed_commands, the_kit_names_count_as_their_former_phases,
-             builds_come_from_their_transcripts, a_session_without_builds_lists_none):
+             builds_come_from_their_transcripts, opus_prices_and_usage_without_the_cache_split,
+             a_session_without_builds_lists_none):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:

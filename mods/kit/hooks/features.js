@@ -42,7 +42,7 @@ export const FEATURES = [
     "agent": "build-<tier>",
     "description": "One builder agent type per risk tier",
     "capabilities": [
-      {"name": "`build-low` on Sonnet at medium effort, `build-standard` (also without a spec) on Sonnet at high, `build-high` on Opus at high, each with the session's tools and CLAUDE.md", "codex": "the session builds it, on its own model"}
+      {"name": "`build-low` on Sonnet at medium effort, `build-standard` (also without a spec) on Sonnet at high, `build-high` on Opus at high, each with the session's tools and CLAUDE.md; until 2026-11-13 `bin/build-ab` gives low and standard builds Sonnet or Opus in turn, at the same effort", "codex": "the session builds it, on its own model"}
     ]
   },
   {

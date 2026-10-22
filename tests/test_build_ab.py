@@ -93,6 +93,66 @@ def a_broken_line_is_skipped_and_counted(base):
     assert "1 line" in got.stderr, got.stderr
 
 
+def a_line_cut_short_keeps_the_next_event_whole(base):
+    home, trees, _, env = setup(base, ("a", "b"))
+    os.makedirs(os.path.dirname(log_path(home)))
+    with open(log_path(home), "w") as fh:
+        fh.write('{"event": "assign", "repo": "shop", "branch": "old", "tier": "standard", "model": "sonnet"}\n{"event": "ass')
+    assert assign(home, trees["a"], env, "standard").stdout.strip() == "opus"
+    assert assign(home, trees["b"], env, "standard").stdout.strip() == "sonnet", "a's event was counted"
+
+
+def the_arm_behind_goes_next_until_level(base):
+    home, trees, _, env = setup(base, ("a", "b", "c"))
+    os.makedirs(os.path.dirname(log_path(home)))
+    with open(log_path(home), "w") as fh:
+        fh.writelines(json.dumps({"event": "assign", "repo": "shop", "branch": f"old{i}", "tier": "low", "model": "sonnet"}) + "\n"
+                      for i in range(2))
+    got = [assign(home, trees[b], env, "low").stdout.strip() for b in ("a", "b", "c")]
+    assert got == ["opus", "opus", "sonnet"], got
+
+
+def concurrent_assigns_split_the_arms(base):
+    branches = ("a", "b", "c", "d")
+    home, trees, _, env = setup(base, branches)
+    procs = [subprocess.Popen([os.path.join(home, ".agents", "bin", "build-ab"), "assign", "standard"], cwd=trees[b], env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for b in branches]
+    got = sorted(p.communicate(timeout=30)[0].strip() for p in procs)
+    assert got == ["opus", "opus", "sonnet", "sonnet"], got
+    assert sorted(e["branch"] for e in events(home)) == list(branches), events(home)
+
+
+def each_repo_has_its_own_branches(base):
+    home, trees, main, env = setup(base, ("a",))
+    cafe = os.path.join(base, "cafe")
+    os.makedirs(cafe)
+    run(["git", "init", "-q", "-b", "a"], cafe, None)
+    run(["git", "commit", "-q", "--allow-empty", "-m", "init"], cafe, None)
+    assert assign(home, trees["a"], env, "standard").stdout.strip() == "sonnet"
+    assert assign(home, cafe, env, "standard").stdout.strip() == "opus", "branch a in another repo is another task"
+    assert [(e["repo"], e["branch"]) for e in events(home)] == [("shop", "a"), ("cafe", "a")], events(home)
+
+
+def a_repo_without_a_name_is_refused(base):
+    home, trees, _, env = setup(base)
+    nameless = os.path.join(home, ".agents", "bin", "repo-name")
+    os.remove(nameless)
+    with open(nameless, "w") as fh:
+        fh.write("#!/bin/sh\nexit 1\n")
+    os.chmod(nameless, 0o755)
+    got = assign(home, trees["a"], env, "standard")
+    assert got.returncode == 2 and "repo" in got.stderr and not events(home), (got.returncode, got.stderr, events(home))
+
+
+def a_broken_line_is_counted_for_a_known_branch_too(base):
+    home, trees, _, env = setup(base, ("a",))
+    os.makedirs(os.path.dirname(log_path(home)))
+    with open(log_path(home), "w") as fh:
+        fh.write('{"event": "assign", "repo": "shop", "branch": "a", "tier": "low", "model": "opus"}\n{"event": "ass\n')
+    got = assign(home, trees["a"], env, "standard")
+    assert got.stdout.strip() == "opus" and "1 line" in got.stderr, (got.stdout, got.stderr)
+
+
 def an_assign_waits_for_the_log_lock(base):
     """Counting and appending happen under one lock: while another assign holds it, this one neither reads nor writes."""
     home, trees, _, env = setup(base, ("a", "b"))
@@ -117,7 +177,9 @@ def codex_is_logged_as_codex(base):
 
 
 for test in (arms_alternate_per_tier, a_branch_keeps_its_arm, what_stays_out_of_the_test,
-             a_broken_line_is_skipped_and_counted, an_assign_waits_for_the_log_lock, codex_is_logged_as_codex):
+             a_broken_line_is_skipped_and_counted, each_repo_has_its_own_branches, a_repo_without_a_name_is_refused,
+             a_broken_line_is_counted_for_a_known_branch_too, a_line_cut_short_keeps_the_next_event_whole,
+             the_arm_behind_goes_next_until_level, concurrent_assigns_split_the_arms, an_assign_waits_for_the_log_lock, codex_is_logged_as_codex):
     base = tempfile.mkdtemp(prefix="agents-test-build-ab-")
     try:
         test(base)
