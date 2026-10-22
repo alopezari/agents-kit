@@ -159,7 +159,7 @@ def records_the_spec_and_diff_tiers(base):
     got = row()
     assert (got["tier"], got.get("spec_tier"), got.get("diff_tier")) == ("high", "high", "low"), got
     open(spec, "w").write("# Round\n\nGoal: x.\n\nRisk: low — one line\n")  # the prediction the diff proves wrong
-    open(os.path.join(repo, "app.py"), "w").write("if current_user_can('edit'):\n    x = 2\n")
+    open(os.path.join(repo, "app.py"), "w").write("if user_has_capability('edit'):\n    x = 2\n")
     got = row()
     assert (got["tier"], got.get("spec_tier"), got.get("diff_tier")) == ("high", "low", "high"), got
     os.remove(os.path.join(home, ".agents", "bin"))  # the same kit, with a triage that fails

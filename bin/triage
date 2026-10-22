@@ -9,6 +9,11 @@
 The kit-review and kit-validate skills run the lenses and tests this selects. Every rule is a regex
 over changed paths or added code lines (a whole-line comment isn't one; the high-risk labels read removed ones too), so a selection can always be traced back to its signal. Without --range, the
 branch's spec, by its Risk line, can raise the diff's tier, never lower it: the tier is the higher of the two.
+
+A framework's own names are signals only in its repos: packs/<name>.json adds them, in a repo whose top level, at
+either end of the change, shows the framework (WordPress: wp-config.php, wp-content/, .wp-env.json, a root PHP file's
+Plugin Name header, style.css's Theme Name header, or composer.json), or where ~/.agents/repos/<repo>/packs turns the
+pack on. Detection that can't conclude stops triage, naming why.
 """
 import ast
 import importlib.machinery
@@ -37,20 +42,20 @@ COMMENT_BY_EXT = {ext: re.compile(rf"\s*(?:{prefixes})") for exts, prefixes in [
     ("html htm xml svg twig mustache hbs erb", "<!--"), ("vue svelte astro", f"{SLASH_COMMENT}|<!--"),
 ] for ext in (exts.split() or [""])}
 # A comment line that holds code all the same: code after a block comment's closer; in an HTML comment, also a
-# template tag or WordPress block markup. Other comment forms run to the end of the line.
+# template tag (a pack adds its own markup). Other comment forms run to the end of the line.
 BLOCK_COMMENT_HOLDS_CODE = re.compile(r"\*/\s*(?!//|/\*)\S")
-HTML_COMMENT_HOLDS_CODE = re.compile(r"-->\s*(?!<!--)\S|<\?|\{\{|\{%|<%|^\s*<!--\s*/?wp:")
+HTML_COMMENT_HOLDS_CODE = re.compile(r"-->\s*(?!<!--)\S|<\?|\{\{|\{%|<%")
 # A spaced `*` opens a docblock line, unless the line ends like a statement: C's `* p = f(x);`, a generator method.
 STATEMENT_END = re.compile(r"[;{}]\s*$")
 
 
-def is_comment(path, line):
+def is_comment(path, line, html_holds_code=HTML_COMMENT_HOLDS_CODE):
     rx = COMMENT_BY_EXT.get(os.path.splitext(os.path.basename(path))[1][1:].lower())
     prefix = rx and rx.match(line)
     if not prefix:
         return False
     form = prefix.group(0).strip()
-    if form in ("/*", "*") and BLOCK_COMMENT_HOLDS_CODE.search(line) or form == "<!--" and HTML_COMMENT_HOLDS_CODE.search(line):
+    if form in ("/*", "*") and BLOCK_COMMENT_HOLDS_CODE.search(line) or form == "<!--" and html_holds_code.search(line):
         return False
     return not (form == "*" and STATEMENT_END.search(line))
 
@@ -68,20 +73,15 @@ def code_word(stem):
             rf"|(?:\b(?:class|extends|implements|interface|struct|enum|trait|import)\s+|</?){cap}\w*)")
 
 
-MIGRATION = rf"CREATE TABLE|ALTER TABLE|dbDelta|{code_word('migration')}"
-# (name, regex over added code lines) — each hit is recorded as a reason.
+MIGRATION = rf"CREATE TABLE|ALTER TABLE|{code_word('migration')}"
+# (name, regex over added code lines) — each hit is recorded as a reason. A pack adds its framework's names to these.
 LENS_SIGNALS = {
-    "security": r"\$_(GET|POST|REQUEST|COOKIE|FILES|SERVER)\b|get_param\(|get_json_params|register_rest_route|wp_ajax_"
-                r"|current_user_can|nonce|\$wpdb->|unserialize\(|file_put_contents|unlink\(|move_uploaded_file"
-                r"|wp_remote_|curl_|\bexec\(|shell_exec|proc_open|eval\(|innerHTML|dangerouslySetInnerHTML|redirect",
-    "performance": r"\$wpdb->|new WP_Query|get_posts\(|wc_get_(orders|products)\(|get_post_meta\(|wp_remote_"
-                   r"|add_action\(\s*['\"](init|wp|wp_loaded|template_redirect|admin_init|plugins_loaded)['\"]"
-                   r"|set_transient|wp_cache_|autoload|as_schedule|wp_schedule_event|posts_per_page|LIMIT",
-    "compatibility": r"apply_filters\(|do_action\(|register_rest_route|WP_CLI::add_command|->add_argument\("
-                     r"|add_option\(|update_option\(|register_setting|CREATE TABLE|ALTER TABLE|dbDelta|add_filter\(|add_action\(",
-    "operability": r"as_schedule|as_enqueue|wp_schedule_event|register_rest_route|WP_CLI::add_command|wp_remote_"
-                   r"|curl_|error_log|->log\(",
-    "data-privacy": r"CREATE TABLE|ALTER TABLE|DROP |dbDelta|DELETE FROM|->delete\(|wp_delete_|TRUNCATE|user_email"
+    "security": r"\$_(GET|POST|REQUEST|COOKIE|FILES|SERVER)\b|nonce|unserialize\(|file_put_contents|unlink\(|move_uploaded_file"
+                r"|curl_|\bexec\(|shell_exec|proc_open|eval\(|innerHTML|dangerouslySetInnerHTML|redirect",
+    "performance": r"autoload|LIMIT",
+    "compatibility": r"->add_argument\(|CREATE TABLE|ALTER TABLE",
+    "operability": r"curl_|error_log|->log\(",
+    "data-privacy": r"CREATE TABLE|ALTER TABLE|DROP |DELETE FROM|->delete\(|TRUNCATE|user_email"
                     r"|billing_|shipping_|\bemail\b|ip_address|personal|gdpr|tracks?_event|analytics|error_log",
 }
 # The lenses.md heading of each lens key triage selects. The Claude Code mod names its reviewer agents by these keys.
@@ -90,14 +90,12 @@ LENS_TITLES = {"correctness": "Correctness", "tests": "Tests", "maintainability"
                "operability": "Operability", "data-privacy": "Data and privacy", "ux-a11y-i18n": "UX, accessibility and i18n",
                "design": "Design"}
 HIGH_RISK = {
-    "auth or permissions": rf"current_user_can|permission_callback|wp_verify_nonce|check_ajax_referer|{code_word('login')}"
-                           rf"|{code_word('capabilit')}",
-    "payments or orders": rf"stripe|{code_word('payment')}|checkout|refund|subscription|invoice|wc_get_order|->get_total\(",
+    "auth or permissions": rf"{code_word('login')}|{code_word('capabilit')}",
+    "payments or orders": rf"stripe|{code_word('payment')}|checkout|refund|subscription|invoice",
     "schema or data migration": rf"{MIGRATION}|DROP TABLE",
-    "public API or hooks": r"register_rest_route|apply_filters\(|do_action\(|WP_CLI::add_command"
-                           r"|\b(?:app|router)\.(?:route|get|post|put|patch|delete)\(\s*(?:['\"`]/|/|\[)",
-    "caching": r"set_transient|wp_cache_set|wp_cache_add|cache_key",
-    "scheduled jobs": rf"as_schedule|as_enqueue|wp_schedule_event|{code_word('cron')}|\bcrontab\b"
+    "public API or hooks": r"\b(?:app|router)\.(?:route|get|post|put|patch|delete)\(\s*(?:['\"`]/|/|\[)",
+    "caching": r"cache_key",
+    "scheduled jobs": rf"{code_word('cron')}|\bcrontab\b"
                       r"|\bcron\w*['\"]?\s*[:=]\s*['\"](?:@\w+|[\d*/,-]+(?: [\d*/,?-]+){4,5})['\"]",
 }
 # A git checkout, not a shop's: lines with version-control words don't count as a payments signal.
@@ -286,17 +284,21 @@ def dependency_names(path, text):
     return names
 
 
-def new_dependencies(files, renamed_from, rng, merge_base):
-    """'new dependency: <name> (<manifest>)' for each name a changed manifest gains, and a line for each it can't read."""
-    # The same ends git diff compares: A...B from their merge-base, A..B, and a lone ref against the working tree.
+def range_ends(rng, merge_base):
+    """(before, after) refs: the same ends git diff compares, A...B from their merge-base, A..B, and a lone ref against
+    the working tree (after is None)."""
     if rng and "..." in rng:
         a, b = rng.split("...", 1)
-        before_ref, after_ref = git("merge-base", a or "HEAD", b or "HEAD").strip(), b or "HEAD"
-    elif rng and ".." in rng:
+        return git("merge-base", a or "HEAD", b or "HEAD").strip(), b or "HEAD"
+    if rng and ".." in rng:
         a, b = rng.split("..", 1)
-        before_ref, after_ref = a or "HEAD", b or "HEAD"
-    else:
-        before_ref, after_ref = rng or merge_base, None
+        return a or "HEAD", b or "HEAD"
+    return rng or merge_base, None
+
+
+def new_dependencies(files, renamed_from, rng, merge_base):
+    """'new dependency: <name> (<manifest>)' for each name a changed manifest gains, and a line for each it can't read."""
+    before_ref, after_ref = range_ends(rng, merge_base)
     root = git("rev-parse", "--show-toplevel").strip()
     found = []
     for path in (p for p in files if MANIFEST.search(p)):
@@ -321,6 +323,166 @@ def new_dependencies(files, renamed_from, rng, merge_base):
     return found
 
 
+class Inconclusive(Exception):
+    """Pack detection couldn't decide: triage stops rather than size the change without the pack it may need."""
+
+
+PACKS = ("wordpress",)
+PLUGIN_HEADERS_READ = 200  # root PHP files, in name order
+HEADER_BYTES = 8192  # as much of a file as WordPress reads for its header
+PLUGIN_HEADER = re.compile(rb"^(?:[ \t]*<\?php)?[ \t/*#@]*Plugin Name:", re.M | re.I)
+THEME_HEADER = re.compile(rb"^[ \t/*#@]*Theme Name:", re.M | re.I)
+WORDPRESS_COMPOSER_TYPES = ("wordpress-plugin", "wordpress-theme", "wordpress-muplugin")
+WORDPRESS_CORE_PACKAGE = re.compile(r"^(johnpbloch/wordpress|roots/wordpress|wpackagist-.+)$")
+
+
+def run_git(*args, stdin=None):
+    """git's stdout as bytes; Inconclusive, with git's own words, when it fails."""
+    done = subprocess.run(["git", *args], input=stdin, capture_output=True)
+    if done.returncode:
+        error = done.stderr.decode(errors="replace").strip().splitlines() or [f"exit {done.returncode}"]
+        raise Inconclusive(f"git {args[0]} failed: {error[-1]}")
+    return done.stdout
+
+
+class Tree:
+    """A tree's top level, read for pack markers: a commit's, or the working tree's (ignored and untracked files
+    included) when ref is None."""
+
+    def __init__(self, root, ref):
+        self.root, self.ref = root, ref
+        if ref is None:
+            names = os.listdir(root)
+            self.dirs = {n for n in names if os.path.isdir(os.path.join(root, n))}
+            self.files = sorted(n for n in names if os.path.isfile(os.path.join(root, n)))
+        else:
+            entries = [e.split("\t", 1) for e in run_git("ls-tree", "-z", ref).decode(errors="replace").split("\0") if e]
+            self.dirs = {name for meta, name in entries if meta.split()[1] == "tree"}
+            self.files = sorted(name for meta, name in entries if meta.split()[1] == "blob")
+
+    def heads(self, names, limit=HEADER_BYTES):
+        """The first `limit` bytes of each file (all of it with None), in one git call for a commit."""
+        if self.ref is None:
+            heads = []
+            for name in names:
+                try:
+                    with open(os.path.join(self.root, name), "rb") as f:
+                        heads.append(f.read(limit) if limit else f.read())
+                except OSError as error:
+                    raise Inconclusive(f"can't read {name}: {error.strerror}") from None
+            return heads
+        out = run_git("cat-file", "--batch", stdin="".join(f"{self.ref}:{n}\n" for n in names).encode())
+        heads = []
+        for name in names:
+            header, _, out = out.partition(b"\n")
+            if header.endswith(b" missing") or not header:
+                raise Inconclusive(f"git cat-file can't read {self.ref}:{name}: {header.decode(errors='replace') or 'no output'}")
+            size = int(header.split()[2])
+            heads.append(out[:min(size, limit or size)])
+            out = out[size + 1:]
+        return heads
+
+
+def wordpress_marker(tree):
+    """(why, root PHP files left unread) for the first WordPress marker at a tree's top level, why None without one."""
+    for marker in ("wp-config.php", ".wp-env.json"):
+        if marker in tree.files:
+            return marker, 0
+    if "wp-content" in tree.dirs:
+        return "wp-content/", 0
+    if "composer.json" in tree.files:
+        try:
+            text = tree.heads(["composer.json"], limit=None)[0].decode()
+            data = json.loads(text)
+            requires = dependency_names("composer.json", text)
+        except ValueError as error:
+            raise Inconclusive(f"composer.json can't be read: {error}") from None
+        if data.get("type") in WORDPRESS_COMPOSER_TYPES:
+            return f"composer.json type {data['type']}", 0
+        core = sorted(n for n in requires if WORDPRESS_CORE_PACKAGE.match(n))
+        if core:
+            return f"composer.json requires {core[0]}", 0
+    if "style.css" in tree.files and THEME_HEADER.search(tree.heads(["style.css"])[0]):
+        return "style.css has a Theme Name header", 0
+    php = [n for n in tree.files if n.endswith(".php")]
+    for name, head in zip(php, tree.heads(php[:PLUGIN_HEADERS_READ])):
+        if PLUGIN_HEADER.search(head):
+            return f"{name} has a Plugin Name header", 0
+    return None, max(0, len(php) - PLUGIN_HEADERS_READ)
+
+
+def overlay_packs(repo):
+    """{pack: (on, why)} from the repo's packs file in the user's overlay: a pack's name turns it on, -name off."""
+    short = f"repos/{repo}/packs"
+    path = os.path.join(os.path.expanduser("~/.agents"), short)
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as error:
+        raise Inconclusive(f"can't read {path}: {getattr(error, 'strerror', None) or error}") from None
+    named = {}
+    for number, line in enumerate(lines, 1):
+        word = line.strip()
+        if not word or word.startswith("#"):
+            continue
+        name = word[1:] if word.startswith("-") else word
+        if name not in PACKS:
+            raise Inconclusive(f"{path}:{number}: unknown pack {word!r} (known: {', '.join(PACKS)})")
+        if name in named and named[name][0] != (word == name):
+            raise Inconclusive(f"{path}:{named[name][1]}: {name} is turned on and off (again at :{number})")
+        named.setdefault(name, (word == name, number))
+    return {name: (on, short) for name, (on, _) in named.items()}
+
+
+def applied_packs(rng, merge_base):
+    """([{name, why}] of the packs this change is sized with, [{name, why}] of those the overlay turned off, root PHP
+    files whose headers went unread). The overlay wins over detection; detection reads both ends of the change."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))  # as in cross_model
+    import review_stamp
+    root = run_git("rev-parse", "--show-toplevel").decode().strip()
+    chosen = overlay_packs(review_stamp.repo_name(root))
+    if "wordpress" in chosen:
+        on, why = chosen["wordpress"]
+        return ([{"name": "wordpress", "why": why}], [], 0) if on else ([], [{"name": "wordpress", "why": why}], 0)
+    before, after = range_ends(rng, merge_base)
+    if not before:
+        raise Inconclusive(f"{rng} has no merge-base")
+    for end, ref in (("end", after), ("start", before)):
+        if ref is not None:
+            try:
+                run_git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+            except Inconclusive:
+                raise Inconclusive(f"the change's {end} {ref!r} isn't a commit") from None
+    unread = 0
+    for ref, suffix in ((after, ""), (before, ", before the change")):
+        why, left = wordpress_marker(Tree(root, ref))
+        if why:
+            return [{"name": "wordpress", "why": why + suffix}], [], 0
+        unread = max(unread, left)
+    return [], [], unread
+
+
+PACK_PATTERNS = ("migration", "query_budget", "html_comment_holds_code")
+
+
+def load_pack(name):
+    """The pack's patterns, each adding to a core label or lens it names; Inconclusive when the file can't be used."""
+    path = os.path.normpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "packs", f"{name}.json"))
+    try:
+        pack = json.load(open(path, encoding="utf-8"))
+        if not isinstance(pack, dict) or set(pack) != {"high_risk", "lens_signals", *PACK_PATTERNS}:
+            raise ValueError(f"its keys must be high_risk, lens_signals, {', '.join(PACK_PATTERNS)}")
+        unknown = [k for k in pack["high_risk"] if k not in HIGH_RISK] + [k for k in pack["lens_signals"] if k not in LENS_SIGNALS]
+        if unknown:
+            raise ValueError(f"no core label or lens named {', '.join(map(repr, unknown))}")
+        for rx in [*pack["high_risk"].values(), *pack["lens_signals"].values(), *(pack[k] for k in PACK_PATTERNS)]:
+            re.compile(rx)
+    except (OSError, ValueError, AttributeError, TypeError, re.error) as error:
+        raise Inconclusive(f"can't use the {name} pack {path}: {getattr(error, 'strerror', None) or error}") from None
+    return pack
+
+
 def php_min():
     for candidate in ("composer.json", "src/composer.json"):
         try:
@@ -338,17 +500,27 @@ def php_min():
 def triage(rng=None):
     base, base_why = (None, "") if rng else branch_base()
     merge_base = None if rng else git("merge-base", "HEAD", base).strip() or "HEAD"
+    packs, packs_off, headers_unread = applied_packs(rng, merge_base)
+    high_risk, lens_signals = dict(HIGH_RISK), dict(LENS_SIGNALS)
+    migration_rx, query_budget_rx, html_holds_code = MIGRATION, None, HTML_COMMENT_HOLDS_CODE
+    for pack in (load_pack(p["name"]) for p in packs):
+        high_risk.update({k: f"{high_risk[k]}|{rx}" for k, rx in pack["high_risk"].items()})
+        lens_signals.update({k: f"{lens_signals[k]}|{rx}" for k, rx in pack["lens_signals"].items()})
+        migration_rx, query_budget_rx = f"{migration_rx}|{pack['migration']}", pack["query_budget"]
+        html_holds_code = re.compile(f"{html_holds_code.pattern}|{pack['html_comment_holds_code']}")
     files, added, removed, renamed_from, data_files = collect(rng, merge_base)
     changed_lines = sum(files.values()) + len(removed)
     behavior = [p for p in files if not TEST_OR_DOC.search(p)]
     style_only = bool(behavior) and all(STYLE_FILE.search(p) for p in behavior)
     behavior_added = [(p, l) for p, l in added if not TEST_OR_DOC.search(p)]
-    code_added = [(p, l) for p, l in behavior_added if not is_comment(p, l)]
+    code_added = [(p, l) for p, l in behavior_added if not is_comment(p, l, html_holds_code)]
     # Deleting or commenting out a risk check is as risky as adding one; only the high-risk labels read these.
     behavior_removed = [(p, l) for p, l in removed if p and not TEST_OR_DOC.search(p)]
-    code_removed = [(p, l) for p, l in behavior_removed if not is_comment(p, l)]
+    code_removed = [(p, l) for p, l in behavior_removed if not is_comment(p, l, html_holds_code)]
     skipped = {"comment_lines": len(behavior_added) - len(code_added) + len(behavior_removed) - len(code_removed),
                "untracked_data_files": len(data_files), "untracked_data_sample": data_files[:SKIPPED_SAMPLE]}
+    if headers_unread:
+        skipped["php_headers_unread"] = headers_unread
     reasons, lenses, tests = [], {"correctness": ["always"]}, {"unit (verify)": ["always"]}
 
     def hits(pattern, lines=code_added, limit=3, where=""):
@@ -363,7 +535,7 @@ def triage(rng=None):
         return found
 
     high = []
-    for label, rx in HIGH_RISK.items():
+    for label, rx in high_risk.items():
         h = hits(rx, limit=1) or hits(rx, code_removed, limit=1, where=", removed")
         if h:
             high.append(f"{label} ({h[0]})")
@@ -390,7 +562,7 @@ def triage(rng=None):
         lenses["maintainability"] = ["behavior change" if diff_tier != "low" else f"the spec's {tier} tier"]
         if any(TEST_OR_DOC.search(p) and "test" in p.lower() for p in files) or (behavior and not style_only):
             lenses["tests"] = ["behavior change" if behavior else "tests changed"]
-        for lens, rx in LENS_SIGNALS.items():
+        for lens, rx in lens_signals.items():
             h = hits(rx)
             if h:
                 lenses[lens] = h
@@ -404,14 +576,15 @@ def triage(rng=None):
         tests["e2e positive/negative (validate)"] = ["behavior change"]
     elif style_only:
         tests["visual check of affected pages (validate)"] = ["style-only change"]
-    if any(re.search(r"\$wpdb->|WP_Query|get_posts\(|wc_get_(orders|products)\(", l) for _, l in code_added):
-        tests["query budget"] = lenses["performance"][:2]
+    budget = query_budget_rx and hits(query_budget_rx, limit=2)
+    if budget:
+        tests["query budget"] = budget
     if "ux-a11y-i18n" in lenses:
         tests["accessibility (axe)"] = lenses["ux-a11y-i18n"]
     minimum = php_min()
     if minimum and float(minimum) < 8.0 and any(p.endswith(".php") for p in files):
         tests[f"php {minimum} syntax (verify)"] = [f"composer requires php {minimum}"]
-    migration = hits(MIGRATION, limit=2)
+    migration = hits(migration_rx, limit=2)
     if migration:
         tests["migration round-trip"] = migration
     nested = [f"{p}: `{l.strip()}`" for p, l in code_added
@@ -428,7 +601,7 @@ def triage(rng=None):
     return {"tier": tier, "spec_tier": spec_tier, "diff_tier": diff_tier, "spec_reason": spec_reason, "spec_note": spec_note,
             "budget": BUDGET[tier], "changed_lines": changed_lines, "files": len(files),
             "reasons": reasons, "lenses": lenses, "tests": tests, "skipped": skipped,
-            "cross_model": cross_model(tier), "base": base, "base_why": base_why}
+            "cross_model": cross_model(tier), "base": base, "base_why": base_why, "packs": packs, "packs_off": packs_off}
 
 
 def spec_risk():
@@ -512,7 +685,10 @@ def main():
         print(json.dumps(lens_briefs()))
         return 0
     rng = args[args.index("--range") + 1] if "--range" in args else None
-    result = triage(rng)
+    try:
+        result = triage(rng)
+    except Inconclusive as error:
+        sys.exit(f"triage: can't tell which packs apply: {error}")
     if "--json" in args:
         print(json.dumps(result, indent=1))
         return 0
@@ -527,12 +703,19 @@ def main():
               f"Spec's reason: {result['spec_reason']}")
     if result["base_why"]:
         print(f"Base: {result['base']} ({result['base_why']})")
+    if result["packs"]:
+        print("Packs: " + ", ".join(f"{p['name']} ({p['why']})" for p in result["packs"]))
+    elif result["packs_off"]:
+        print("Packs: none (" + ", ".join(f"{p['name']} turned off by {p['why']}" for p in result["packs_off"]) + ")")
     skipped = result["skipped"]
     comments, data = skipped["comment_lines"], skipped["untracked_data_files"]
     parts = [f"{comments} comment line{'s' * (comments != 1)}"] if comments else []
     if data:
         more = f" and {data - SKIPPED_SAMPLE} more" if data > SKIPPED_SAMPLE else ""
         parts.append(f"{data} untracked data file{'s' * (data != 1)} ({', '.join(map(printable, skipped['untracked_data_sample']))}{more})")
+    if skipped.get("php_headers_unread"):
+        parts.append(f"{skipped['php_headers_unread']} root PHP files past the first {PLUGIN_HEADERS_READ} "
+                     "(not read for a WordPress plugin header)")
     if parts:
         print(f"Skipped: {'; '.join(parts)}")
     for r in result["reasons"]:

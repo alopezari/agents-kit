@@ -1,0 +1,20 @@
+{
+ "high_risk": {
+  "auth or permissions": "current_user_can|permission_callback|wp_verify_nonce|check_ajax_referer",
+  "payments or orders": "wc_get_order|->get_total\\(",
+  "schema or data migration": "dbDelta",
+  "public API or hooks": "register_rest_route|apply_filters\\(|do_action\\(|WP_CLI::add_command",
+  "caching": "set_transient|wp_cache_set|wp_cache_add",
+  "scheduled jobs": "as_schedule|as_enqueue|wp_schedule_event"
+ },
+ "lens_signals": {
+  "security": "get_param\\(|get_json_params|register_rest_route|wp_ajax_|current_user_can|\\$wpdb->|wp_remote_",
+  "performance": "\\$wpdb->|new WP_Query|get_posts\\(|wc_get_(orders|products)\\(|get_post_meta\\(|wp_remote_|add_action\\(\\s*['\"](init|wp|wp_loaded|template_redirect|admin_init|plugins_loaded)['\"]|set_transient|wp_cache_|as_schedule|wp_schedule_event|posts_per_page",
+  "compatibility": "apply_filters\\(|do_action\\(|register_rest_route|WP_CLI::add_command|add_option\\(|update_option\\(|register_setting|dbDelta|add_filter\\(|add_action\\(",
+  "operability": "as_schedule|as_enqueue|wp_schedule_event|register_rest_route|WP_CLI::add_command|wp_remote_",
+  "data-privacy": "dbDelta|wp_delete_"
+ },
+ "migration": "dbDelta",
+ "query_budget": "(?-i:\\$wpdb->|WP_Query|get_posts\\(|wc_get_(orders|products)\\()",
+ "html_comment_holds_code": "^\\s*<!--\\s*/?wp:"
+}

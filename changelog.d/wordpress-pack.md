@@ -1,0 +1,1 @@
+- Triage reads WordPress names (current_user_can, $wpdb, dbDelta, hooks, block markup) as risk signals only in WordPress repos, detected from the repo's top level or turned on and off with a `packs` file in the repo's overlay. A non-WordPress change no longer picks up lenses or a high tier from them, and triage prints which packs it applied.
