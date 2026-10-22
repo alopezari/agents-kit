@@ -13,6 +13,8 @@ import tempfile
 import time
 
 TRIAGE = os.path.expanduser("~/.agents/bin/triage")
+# Committed in a test repo's base, it turns the wordpress pack on: most samples here are WordPress code.
+WORDPRESS_MARKER = ".wp-env.json"
 GIT_SENSE = ["cwd = pr_checkout(command, cwd)", "git checkout -b fix", "- uses: actions/checkout@v4",
              "$msg = 'the main checkout serves the stack';", "for path in known_checkouts():", "git_checkout(command, cwd)",
              "def pr_checkout_unknown(command, payload):", "repo = phase_switches.checkout(os.getcwd())[0]",
@@ -34,7 +36,9 @@ def payments_signal(line):
         def git(*args):
             subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
         git("init", "-q", "-b", "main")
-        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+        open(os.path.join(repo, WORDPRESS_MARKER), "w").write("{}\n")
+        git("add", WORDPRESS_MARKER)
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
         open(os.path.join(repo, "code.php"), "w").write(line + "\n")
         git("add", "code.php")
         git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "change")
@@ -43,7 +47,8 @@ def payments_signal(line):
 
 
 def triage_change(before, after):
-    """triage --json for one commit that turns the files in `before` into those in `after` ({path: text or None})."""
+    """triage --json for one commit that turns the files in `before` into those in `after` ({path: text or None}), in a
+    WordPress repo."""
     with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
         def git(*args):
             subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True)
@@ -57,6 +62,7 @@ def triage_change(before, after):
                     os.makedirs(os.path.dirname(full), exist_ok=True)
                     open(full, "w").write(text)
         git("init", "-q", "-b", "main")
+        write({WORDPRESS_MARKER: "{}\n"})
         write(before)
         git("add", "-A")
         git("commit", "-q", "--allow-empty", "-m", "base")
@@ -447,6 +453,7 @@ def triage_spec(risk, diff, extra="", setup=None, plain=False, args=()):
         git("init", "-q", "-b", "main")
         open(os.path.join(repo, "README.md"), "w").write("# Shop\n")
         open(os.path.join(repo, "app.py"), "w").write("x = 1\n")
+        open(os.path.join(repo, WORDPRESS_MARKER), "w").write("{}\n")
         git("add", "-A")
         git("commit", "-q", "-m", "base")
         git("checkout", "-q", "-b", "round-prices")
@@ -749,6 +756,7 @@ def triage_untracked(untracked):
             subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True)
         git("init", "-q", "-b", "main")
         open(os.path.join(repo, "README.md"), "w").write("# Shop\n")
+        open(os.path.join(repo, WORDPRESS_MARKER), "w").write("{}\n")
         git("add", "-A")
         git("commit", "-q", "-m", "base")
         open(os.path.join(repo, "README.md"), "w").write("# Shop\n\nSells things.\n")
@@ -802,6 +810,7 @@ with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True)
     git("init", "-q", "-b", "main")
     open(os.path.join(repo, "auth.php"), "w").write(AUTH)
+    open(os.path.join(repo, WORDPRESS_MARKER), "w").write("{}\n")
     git("add", "-A")
     git("commit", "-q", "-m", "base")
     open(os.path.join(repo, "auth.php"), "w").write("<?php\nsave();\n")
@@ -875,6 +884,7 @@ def triage_text(untracked):
             subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True)
         git("init", "-q", "-b", "main")
         open(os.path.join(repo, "README.md"), "w").write("# Shop\n")
+        open(os.path.join(repo, WORDPRESS_MARKER), "w").write("{}\n")
         git("add", "-A")
         git("commit", "-q", "-m", "base")
         for path, text in untracked.items():
@@ -894,4 +904,341 @@ for case, untracked, expected in [
     ok = lines == ([] if expected is None else [expected])
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} text output with {case}: {lines!r}")
+# B3b: the WordPress signals are a pack, applied in a WordPress repo or where the repo's overlay turns it on.
+def triage_packs(base, change=None, overlay=None, uncommitted=None, args=("--json", "--range", "HEAD~1..HEAD"), subdir="",
+                 worktree=False, setup=None):
+    """triage in a repo committed as `base`, then `change`, then `uncommitted` left in the tree ({path: text or None}),
+    under a HOME whose overlay for the repo holds `overlay` as its packs file. Returns the finished process."""
+    kit = os.path.realpath(os.path.expanduser("~/.agents"))
+    with tempfile.TemporaryDirectory(prefix="agents-test-packs-") as home, \
+            tempfile.TemporaryDirectory(prefix="agents-test-packs-") as parent:
+        repo = os.path.join(parent, "plugin")
+        os.makedirs(os.path.join(home, ".agents"))
+        for part in ("bin", "hooks", "skills", "packs"):
+            os.symlink(os.path.join(kit, part), os.path.join(home, ".agents", part))
+        if overlay is not None:
+            os.makedirs(os.path.join(home, ".agents", "repos", "plugin"))
+            open(os.path.join(home, ".agents", "repos", "plugin", "packs"), "w").write(overlay)
+        env = {**os.environ, "HOME": home}
+
+        def git(*a, cwd=repo):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True)
+
+        def write(files):
+            for path, text in (files or {}).items():
+                full = os.path.join(repo, path)
+                if text is None:
+                    os.remove(full)
+                elif isinstance(text, tuple):
+                    os.symlink(text[0], full)
+                else:
+                    os.makedirs(os.path.dirname(full), exist_ok=True)
+                    open(full, "w").write(text)
+        os.makedirs(repo)
+        git("init", "-q", "-b", "main")
+        write(base)
+        git("add", "-A")
+        git("commit", "-q", "--allow-empty", "-m", "base")
+        write(change if change is not None else {"app.php": "<?php\nsave();\n"})
+        git("add", "-A")
+        git("commit", "-q", "--allow-empty", "-m", "change")
+        if "--range" not in args:
+            git("checkout", "-q", "-b", "feature", "HEAD")
+            git("branch", "-q", "-f", "main", "HEAD~1")
+        write(uncommitted)
+        where = repo
+        if worktree:
+            where = os.path.join(parent, "second")
+            git("worktree", "add", "-q", "-b", "other", where, "HEAD")
+        if setup:
+            setup(repo)
+        os.makedirs(os.path.join(where, subdir), exist_ok=True)
+        out = subprocess.run([os.path.join(home, ".agents", "bin", "triage"), *args], cwd=os.path.join(where, subdir),
+                             capture_output=True, text=True, env=env, timeout=60)
+        if setup:
+            for root, dirs, files in os.walk(repo):
+                for name in dirs + files:
+                    os.chmod(os.path.join(root, name), 0o755)
+        return out
+
+
+def packs_of(out):
+    if out.returncode:
+        return f"exit {out.returncode}: {out.stderr.strip()[-200:]}"
+    return json.loads(out.stdout).get("packs")
+
+
+# Criterion 1: no WordPress name is left in the core tables; the pack holds every one.
+loader = importlib.machinery.SourceFileLoader("triage_core", TRIAGE)
+core = importlib.util.module_from_spec(importlib.util.spec_from_loader("triage_core", loader))
+sys.dont_write_bytecode = True
+loader.exec_module(core)
+core_text = " ".join([*core.HIGH_RISK.values(), *core.LENS_SIGNALS.values(), core.MIGRATION, core.HTML_COMMENT_HOLDS_CODE.pattern])
+WORDPRESS_NAMES = ["current_user_can", "permission_callback", "wp_verify_nonce", "check_ajax_referer", "wc_get_order",
+                   "get_total", "register_rest_route", "apply_filters", "do_action", "WP_CLI", "set_transient", "wp_cache",
+                   "as_schedule", "as_enqueue", "wp_schedule_event", "wp_ajax_", "wpdb", "WP_Query", "get_posts",
+                   "get_post_meta", "template_redirect", "plugins_loaded", "add_option", "update_option", "register_setting",
+                   "add_filter", "add_action", "wp_delete_", "dbDelta", "wc_get_(orders|products)", "wp_remote_",
+                   "posts_per_page", "get_json_params", "wp:"]
+left = [name for name in WORDPRESS_NAMES if name in core_text]
+source = open(TRIAGE).read()
+left += [name for name in ("wpdb", "WP_Query", "get_posts", "wc_get_") if name in source]
+pack_path = os.path.join(os.path.dirname(os.path.realpath(TRIAGE)), "..", "packs", "wordpress.json")
+pack_text = open(pack_path).read() if os.path.exists(pack_path) else ""
+missing = [name for name in WORDPRESS_NAMES if name.replace("\\", "") not in pack_text.replace("\\\\", "\\").replace("\\", "")]
+ok = not left and not missing
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} the core tables hold no WordPress name ({left}) and the pack holds every one ({missing})")
+
+# Criterion 2: a WordPress line is sized as today with the pack on, by the generic signals alone with it off; a generic line
+# the same in every state. (path, line, where its WordPress signal shows: "label", "lens", "test", or "code" for markup that stops being a comment)
+WORDPRESS_LINES = [("auth.php", "if ( current_user_can( 'edit' ) ) {}", "label", "auth or permissions"),
+                   ("auth.php", "check_ajax_referer( 'save' );", "label", "auth or permissions"),
+                   ("order.php", "$o = wc_get_order( $id );", "label", "payments or orders"),
+                   ("total.php", "$t = $o->get_total();", "label", "payments or orders"),
+                   ("db.php", "dbDelta( $sql );", "test", "migration round-trip"),
+                   ("rest.php", "register_rest_route( 'a', 'b' );", "label", "public API or hooks"),
+                   ("hook.php", "$v = apply_filters( 'x', $y );", "label", "public API or hooks"),
+                   ("cli.php", "WP_CLI::add_command( 'x', 'X' );", "label", "public API or hooks"),
+                   ("cache.php", "wp_cache_set( 'k', 1 );", "label", "caching"),
+                   ("job.php", "as_enqueue_async_action( 'h' );", "label", "scheduled jobs"),
+                   ("job.php", "wp_schedule_event( time(), 'hourly', 'h' );", "label", "scheduled jobs"),
+                   ("ajax.php", "add_action( 'wp_ajax_save', 'f' );", "lens", "security"),
+                   ("q.php", "$rows = $wpdb->get_results( $q );", "test", "query budget"),
+                   ("meta.php", "$m = get_post_meta( 1, 'k', true );", "lens", "performance"),
+                   ("init.php", "add_action( 'init', 'f' );", "lens", "performance"),
+                   ("posts.php", "$p = get_posts( array() );", "test", "query budget"),
+                   ("opt.php", "update_option( 'k', 1 );", "lens", "compatibility"),
+                   ("remote.php", "$r = wp_remote_get( $u );", "lens", "operability"),
+                   ("del.php", "wp_delete_post( 1 );", "lens", "data-privacy"),
+                   ("block.html", "<!-- wp:paragraph -->", "code", "block markup")]
+GENERIC_LINES = [("pay.py", "stripe.charges.create(amount=1)"), ("views.py", "@login_required"),
+                 ("m.sql", "ALTER TABLE users ADD age int;"), ("api.js", "router.get('/users', list)"),
+                 ("c.py", 'cache_key = f"user:{uid}"'), ("j.sh", "crontab -l"), ("x.js", "el.innerHTML = html;"),
+                 ("app.py", "x = 1")]
+SIZING = ("tier", "diff_tier", "reasons", "lenses", "tests", "skipped")
+
+
+def sized(base, path, line, overlay=None):
+    out = triage_packs(base, {path: line + "\n"}, overlay=overlay)
+    return {k: json.loads(out.stdout)[k] for k in SIZING} if out.returncode == 0 else f"exit {out.returncode}: {out.stderr[-200:]}"
+
+
+def shows(result, where, name):
+    if isinstance(result, str):
+        return False
+    return {"label": name in labels(result), "lens": name in result["lenses"], "test": name in result["tests"],
+            "code": not result["skipped"]["comment_lines"]}[where]
+
+
+MARKED = {WORDPRESS_MARKER: "{}\n"}
+for path, line, where, name in WORDPRESS_LINES:
+    detected, forced_on = sized(MARKED, path, line), sized({}, path, line, overlay="wordpress\n")
+    forced_off, absent = sized(MARKED, path, line, overlay="-wordpress\n"), sized({}, path, line)
+    ok = (detected == forced_on and forced_off == absent and shows(detected, where, name) and not shows(absent, where, name))
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} `{line}`: {where} {name} with the pack on (detected and forced), not with it off or absent"
+          + ("" if ok else f": {detected} | {forced_on} | {forced_off} | {absent}"))
+for path, line in GENERIC_LINES:
+    states = [sized(MARKED, path, line), sized({}, path, line, overlay="wordpress\n"),
+              sized(MARKED, path, line, overlay="-wordpress\n"), sized({}, path, line)]
+    ok = all(state == states[0] for state in states) and not isinstance(states[0], str)
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} `{line}` is sized the same in every pack state" + ("" if ok else f": {states}"))
+
+# The query-budget test keeps today's evidence, the performance lens's first two signals; a query pattern that no lens
+# names gives its own, and the patterns match WordPress's casing only.
+for case, line, expected in [
+        ("with the performance lens", "update_option( 'x', 1, 'autoload' ); $q = new WP_Query( $a );",
+         ["q.php: `autoload`"]),
+        ("without it", "$q = WP_Query::instance();", ["q.php: `WP_Query`"]),
+        ("in another casing", "$q = wp_query();", None)]:
+    result = sized(MARKED, "q.php", line)
+    got = result["tests"].get("query budget") if isinstance(result, dict) else result
+    ok = got == expected
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} the query-budget evidence {case}: {got}")
+
+# Criterion 3: what makes a repo WordPress, at either end of the change, read within bounds. (case, base, change, why part)
+PLUGINS = {f"p{n:03}.php": "<?php\necho 1;\n" for n in range(200)}
+HEADERED = {**PLUGINS, "p149.php": "<?php\n/**\n * Plugin Name: Late Starter\n */\n"}
+for case, base, change, why in [
+        ("wp-config.php", {"wp-config.php": "<?php\n"}, None, "wp-config.php"),
+        ("wp-content/", {"wp-content/index.php": "<?php\n"}, None, "wp-content/"),
+        (".wp-env.json", {".wp-env.json": "{}\n"}, None, ".wp-env.json"),
+        ("a plugin header in the 150th root PHP file", HEADERED, None, "p149.php"),
+        ("a plugin header, # style", {"main.php": "<?php\n# Plugin Name: Hash\n"}, None, "main.php"),
+        ("a theme header", {"style.css": "/*\nTheme Name: Twenty\n*/\n"}, None, "style.css"),
+        ("composer type wordpress-plugin", {"composer.json": '{"type": "wordpress-plugin"}'}, None, "composer.json"),
+        ("composer type wordpress-theme", {"composer.json": '{"type": "wordpress-theme"}'}, None, "composer.json"),
+        ("composer type wordpress-muplugin", {"composer.json": '{"type": "wordpress-muplugin"}'}, None, "composer.json"),
+        ("composer requires johnpbloch/wordpress", {"composer.json": '{"require": {"johnpbloch/wordpress": "6"}}'}, None, "johnpbloch"),
+        ("composer requires roots/wordpress", {"composer.json": '{"require": {"roots/wordpress": "6"}}'}, None, "roots/wordpress"),
+        ("composer requires a wpackagist package", {"composer.json": '{"require-dev": {"wpackagist-plugin/akismet": "*"}}'}, None,
+         "wpackagist-plugin/akismet"),
+        ("a marker only in the start tree", {"wp-config.php": "<?php\n"}, {"wp-config.php": None, "app.php": "<?php\n"},
+         "wp-config.php"),
+        ("a marker the change adds", {}, {"wp-config.php": "<?php\n"}, "wp-config.php")]:
+    got = packs_of(triage_packs(base, change))
+    ok = isinstance(got, list) and [p["name"] for p in got] == ["wordpress"] and why in got[0]["why"]
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} WordPress from {case}: {got}")
+for case, base in [("a PHP repo with no marker", {"index.php": "<?php echo 1;\n", "style.css": "body { color: red; }\n",
+                                                  "composer.json": '{"type": "library", "require": {"monolog/monolog": "3"}}'}),
+                   ("a plugin header past the first 8 KB", {"late.php": "<?php\n//" + "x" * 8200 + "\n/* Plugin Name: Late */\n"}),
+                   ("a header in a PHP file below the root", {"src/plugin.php": "<?php\n/* Plugin Name: Deep */\n"}),
+                   ("a theme header in a stylesheet below the root", {"css/style.css": "/* Theme Name: Deep */\n"})]:
+    got = packs_of(triage_packs(base))
+    ok = got == []
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} not WordPress: {case}: {got}")
+# Without --range the end is the working tree, untracked files included, and the root is the top level from anywhere.
+for case, kwargs in [("an untracked wp-config.php", {"base": {}, "uncommitted": {"wp-config.php": "<?php\n"}}),
+                     ("a run from a subdirectory", {"base": MARKED, "uncommitted": {"app.php": "<?php\nx();\n"}, "subdir": "src/deep"})]:
+    got = packs_of(triage_packs(args=("--json",), **kwargs))
+    ok = isinstance(got, list) and [p["name"] for p in got] == ["wordpress"]
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} WordPress from {case}, no --range: {got}")
+# With --range both ends are commits: a marker the end commit has and the working tree has lost still counts.
+got = packs_of(triage_packs({}, {"wp-config.php": "<?php\n"}, uncommitted={"wp-config.php": None}))
+ok = isinstance(got, list) and [p["name"] for p in got] == ["wordpress"]
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} --range reads its end commit, not the working tree: {got}")
+got = packs_of(triage_packs({}, {"app.php": "<?php\n"}, uncommitted={"wp-config.php": "<?php\n"}))
+ok = got == []
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} --range ignores a marker only the working tree has: {got}")
+# Commits are read from the top level whatever directory triage runs in, and a marker counts whatever git stores it as.
+for case, kwargs, expected in [
+        ("--range from a subdirectory", {"base": MARKED, "subdir": "src"}, ["wordpress"]),
+        ("a marker only in the start tree, from a subdirectory", {"base": {"wp-config.php": "<?php\n"},
+         "change": {"wp-config.php": None, "src/a.php": "<?php\n"}, "args": ("--json",), "subdir": "src"}, ["wordpress"]),
+        ("a PHP repo with no marker, from the subdirectory it changes", {"base": {"app/a.php": "<?php\n", "index.php": "<?php\n"},
+         "change": {"app/a.php": "<?php\nx();\n"}, "subdir": "app"}, []),
+        ("a wp-content symlink in the commit", {"base": {"wp-content": ("../shared/wp-content",)}}, ["wordpress"]),
+        ("a dangling wp-config.php symlink, no --range", {"base": {"wp-config.php": ("../wp-config.php",)}, "args": ("--json",)},
+         ["wordpress"]),
+        ("a composer.json symlink in the commit, whose link text isn't read", {"base": {"composer.json": ("../composer.json",)}}, []),
+        ("a plugin header with CR line ends", {"base": {"main.php": "<?php\r/*\rPlugin Name: Example\r*/\r"}}, ["wordpress"]),
+        ("a theme header with CR line ends", {"base": {"style.css": "/*\rTheme Name: Example\r*/\r"}}, ["wordpress"]),
+        ("a root PHP file whose name holds a newline", {"base": {"line\nbreak.php": "<?php\n", "index.php": "<?php\n"}}, [])]:
+    got = packs_of(triage_packs(**kwargs))
+    ok = isinstance(got, list) and [p["name"] for p in got] == expected
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {case}: {got}")
+# A repo with no commit yet is read from its working tree alone.
+with tempfile.TemporaryDirectory(prefix="agents-test-packs-") as repo:
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    open(os.path.join(repo, "a.php"), "w").write("<?php\nx();\n")
+    results = []
+    for marker in (None, "wp-config.php"):
+        if marker:
+            open(os.path.join(repo, marker), "w").write("<?php\n")
+        out = subprocess.run([TRIAGE, "--json"], cwd=repo, capture_output=True, text=True, timeout=60)
+        results.append(packs_of(out))
+    ok = results[0] == [] and isinstance(results[1], list) and [p["name"] for p in results[1]] == ["wordpress"]
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} a repo with no commit yet, without and with a marker: {results}")
+# Past 200 root PHP files triage stops reading headers and says so.
+many_php = {f"p{n:03}.php": "<?php\necho 1;\n" for n in range(300)}
+out = triage_packs({**many_php, "p250.php": "<?php\n/* Plugin Name: Too Late */\n"}, {"p000.php": "<?php\necho 2;\n"})
+result = json.loads(out.stdout) if out.returncode == 0 else {}
+ok = result.get("packs") == [] and result.get("skipped", {}).get("php_headers_unread") == 100
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} a 300-file root reads 200 headers and says it stopped: {result.get('packs')} {result.get('skipped')}")
+text = triage_packs(many_php, {"p000.php": "<?php\necho 2;\n"}, args=("--range", "HEAD~1..HEAD")).stdout
+ok = any(l.startswith("Skipped:") and "100 root PHP files past the first 200" in l for l in text.splitlines())
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} the text output says it too: {[l for l in text.splitlines() if l.startswith('Skipped:')]}")
+
+# Criterion 4: the repo's overlay turns the pack on or off over detection, from any worktree; a bad line fails loudly.
+for case, base, overlay, worktree, expected in [
+        ("on, in a repo with no marker", {}, "wordpress\n", False, ["wordpress"]),
+        ("on, from a second worktree", {}, "# WordPress, though it doesn't look it\n\nwordpress\n", True, ["wordpress"]),
+        ("off, in a WordPress repo", MARKED, "-wordpress\n", False, []),
+        ("off, from a second worktree", MARKED, "-wordpress\n", True, []),
+        ("empty, so detection decides", MARKED, "\n", False, ["wordpress"])]:
+    got = packs_of(triage_packs(base, overlay=overlay, worktree=worktree))
+    ok = isinstance(got, list) and [p["name"] for p in got] == expected
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} the overlay {case}: {got}")
+for case, overlay, named in [("an unknown pack", "laravel\n", ["~/.agents/repos/plugin/packs:1", "laravel"]),
+                             ("an unknown pack on a later line", "# packs\nwordpress\n-django\n", ["~/.agents/repos/plugin/packs:3", "django"]),
+                             ("on and off at once", "wordpress\n-wordpress\n", ["~/.agents/repos/plugin/packs:1", ":2", "wordpress"])]:
+    out = triage_packs(MARKED, overlay=overlay)
+    ok = out.returncode != 0 and all(n in out.stderr for n in named)
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} the overlay with {case} fails naming it: exit {out.returncode}, {out.stderr.strip()[-160:]}")
+
+# Criterion 5: which packs applied, and why, in both outputs.
+for case, base, overlay, expected in [("detected", MARKED, None, "Packs: wordpress (.wp-env.json)"),
+                                      ("forced on", {}, "wordpress\n", "Packs: wordpress (repos/plugin/packs)"),
+                                      ("forced off", MARKED, "-wordpress\n", "Packs: none (wordpress turned off by repos/plugin/packs)"),
+                                      ("absent", {}, None, None)]:
+    text = triage_packs(base, overlay=overlay, args=("--range", "HEAD~1..HEAD")).stdout
+    lines = [l for l in text.splitlines() if l.startswith("Packs:")]
+    ok = lines == ([] if expected is None else [expected])
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} text output, pack {case}: {lines}")
+result = json.loads(triage_packs(MARKED, overlay="-wordpress\n").stdout)
+ok = result.get("packs") == [] and result.get("packs_off") == [{"name": "wordpress", "why": "repos/plugin/packs"}]
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} --json names a pack turned off: {result.get('packs')} {result.get('packs_off')}")
+
+
+# A pack can only add to the core's labels and lenses: one naming another fails, naming the pack and the label.
+with tempfile.TemporaryDirectory(prefix="agents-test-packs-") as kit:
+    os.makedirs(os.path.join(kit, "bin"))
+    os.makedirs(os.path.join(kit, "packs"))
+    shutil.copy(TRIAGE, os.path.join(kit, "bin", "triage"))
+    os.symlink(os.path.join(os.path.dirname(os.path.realpath(TRIAGE)), "..", "hooks"), os.path.join(kit, "hooks"))
+    pack = json.load(open(pack_path))
+    for case, broken, named in [("an unknown label", {**pack, "high_risk": {"billing": "x"}}, "'billing'"),
+                                ("an unknown lens", {**pack, "lens_signals": {"speed": "x"}}, "'speed'"),
+                                ("a missing key", {k: v for k, v in pack.items() if k != "migration"}, "keys must be"),
+                                ("a bad regex", {**pack, "migration": "dbDelta("}, "missing )")]:
+        open(os.path.join(kit, "packs", "wordpress.json"), "w").write(json.dumps(broken))
+        with tempfile.TemporaryDirectory(prefix="agents-test-packs-") as repo:
+            for a in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "a"]):
+                subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo, check=True)
+            open(os.path.join(repo, "wp-config.php"), "w").write("<?php\n")
+            out = subprocess.run([os.path.join(kit, "bin", "triage"), "--json"], cwd=repo, capture_output=True, text=True)
+        ok = (out.returncode != 0 and named in out.stderr and "packs/wordpress.json" in out.stderr and kit not in out.stderr
+              and "Traceback" not in out.stderr)
+        fail |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} a pack file with {case} stops triage, naming it: {out.stderr.strip()[-200:]}")
+
+# Criterion 6: detection that can't conclude stops triage, naming why.
+def drop_blob(path):
+    def setup(repo):
+        sha = subprocess.run(["git", "rev-parse", f"HEAD:{path}"], cwd=repo, capture_output=True, text=True).stdout.strip()
+        os.remove(os.path.join(repo, ".git", "objects", sha[:2], sha[2:]))
+    return setup
+
+
+def lock(path):
+    def setup(repo):
+        os.chmod(os.path.join(repo, path), 0)
+    return setup
+
+
+for case, kwargs, named in [
+        ("an invalid composer.json", {"base": {"composer.json": "{not json"}}, "composer.json"),
+        ("a composer.json that isn't an object", {"base": {"composer.json": "[]"}}, "composer.json"),
+        ("a missing range end", {"base": {}, "args": ("--json", "--range", "HEAD~1..no-such-branch")}, "no-such-branch"),
+        ("a missing range start", {"base": {}, "args": ("--json", "--range", "no-such-start..HEAD")}, "no-such-start"),
+        ("a missing range end, the overlay turning it on", {"base": {}, "overlay": "wordpress\n",
+                                                            "args": ("--json", "--range", "HEAD~1..no-such-branch")}, "no-such-branch"),
+        ("a missing range end, the overlay turning it off", {"base": {}, "overlay": "-wordpress\n",
+                                                             "args": ("--json", "--range", "HEAD~1..no-such-branch")}, "no-such-branch"),
+        ("a composer.json over 1 MB", {"base": {"composer.json": '{"description": "' + "x" * 1100000 + '"}'}}, "over 1 MB"),
+        ("an unreadable marker file", {"base": {"style.css": "body {}\n"}, "args": ("--json",), "setup": lock("style.css")}, "style.css"),
+        ("a git command that fails", {"base": {"main.php": "<?php\n"}, "setup": drop_blob("main.php")},
+         "the change's end HEAD")]:
+    out = triage_packs(**kwargs)
+    # A tree that can't be read points to the overlay, which skips detection.
+    hint = "range" in case or "repos/plugin/packs" in out.stderr
+    ok = out.returncode != 0 and named in out.stderr and hint and "Traceback" not in out.stderr
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {case} stops triage, naming {named}: exit {out.returncode}, {out.stderr.strip()[-160:]}")
 sys.exit(fail)
