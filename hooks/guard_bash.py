@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 import tokenize
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import harness, log  # noqa: E402
@@ -49,12 +50,16 @@ PROTECTED_BRANCHES = r"(main|master|trunk|develop|production|release(/[\w.-]+)?)
 DATABASE_STATEMENT = r"\bDROP{space}+(DATABASE|TABLE|SCHEMA)\b|\bTRUNCATE{space}+TABLE\b"
 DATABASE_DESTROY = "(?i:" + DATABASE_STATEMENT.format(space=r"\s") + ")"
 DATABASE_ALLOW_LINE = re.compile(r"allow[ \t]+(" + DATABASE_STATEMENT.format(space="[ \t]") + ")", re.I)
-
+ACTION_ALLOW_LINE = re.compile(rf"allow[ \t]+(gh[ \t]+pr[ \t]+merge|git[ \t]+push[ \t]+{PROTECTED_BRANCHES})", re.I)
+MERGE = r"\bgh\s+pr\s+merge\b"
+PROTECTED_PUSH = GIT + rf"push\b[^;&|]*\s(\S+:)?{PROTECTED_BRANCHES}(\s|$)"
 RULES = [
     (GIT + r"push\b[^;&|]*\s(--force(?!-with-lease)\b|-f\b|\+\S)",
      "`git push --force`: rewrites remote history."),
-    (GIT + rf"push\b[^;&|]*\s(\S+:)?{PROTECTED_BRANCHES}(\s|$)",
-     "`git push` to main/master/trunk/develop/production/release: bypasses review."),
+    (PROTECTED_PUSH, "`git push` to main/master/trunk/develop/production/release: bypasses review. Instead of running "
+                     "it themselves, the user can allow it for that branch until their next message, by asking for it "
+                     "in plain words (`push to main`) or by starting their message with the line `allow git push main`. "
+                     "A first push to a remote with no branches yet needs no approval."),
     (GIT + r"reset\s+--hard\b", "`git reset --hard`: discards uncommitted work."),
     (GIT + r"clean\s+-\w*f", "`git clean -f`: deletes untracked files."),
     (GIT + r"checkout(\s+-[\w=-]+)*\s+(--\s+)?\./?(\s|$)",
@@ -66,7 +71,9 @@ RULES = [
      "`git restore .`: discards all uncommitted changes."),
     (GIT + r"branch\s+-D\b", "`git branch -D`: force-deletes a branch."),
     (GIT + r"stash\s+(drop|clear)\b", "`git stash drop|clear`: deletes stashed work."),
-    (r"\bgh\s+pr\s+merge\b", "`gh pr merge`: merging is a human decision."),
+    (MERGE, "`gh pr merge`: merging is the user's decision. Instead of running it themselves, the user can allow it "
+            "until their next message, by asking for it in plain words (`merge it`, `mergéalo`) or by starting their "
+            "message with the line `allow gh pr merge`. `--admin` stays theirs."),
     (r"\bgh\s+repo\s+(delete|archive)\b", "`gh repo delete|archive`: deletes or archives a repository."),
     (r"\bgh\s+release\s+(create|delete)\b", "`gh release create|delete`: publishes or deletes a release."),
     (r"\bgh\s+api\b[^;&|]*(-X|--method)\s*DELETE\b", "`gh api -X DELETE`: deletes through the GitHub API."),
@@ -1237,12 +1244,21 @@ def database_approval_names(prompt):
     statement), or a message that only asks in plain words (plain_request_grants). Only there: questions, refusals,
     quotes, pasted dumps and code examples name them anywhere else."""
     grants = plain_request_grants(prompt)
-    for line in prompt.splitlines():  # not lstrip(): an indented first line is a code example
-        allow = DATABASE_ALLOW_LINE.fullmatch(line.rstrip())
-        if not allow:
-            break
-        grants.add(database_grant(allow.group(1)))
+    for line in opening_allow_lines(prompt):
+        allow = DATABASE_ALLOW_LINE.fullmatch(line)
+        if allow:
+            grants.add(database_grant(allow.group(1)))
     return sorted(grants)
+
+
+def opening_allow_lines(prompt):
+    """The `allow …` lines a user's message opens with, of either kind, in any order."""
+    lines = []
+    for line in prompt.splitlines():  # not lstrip(): an indented first line is a code example
+        if not (DATABASE_ALLOW_LINE.fullmatch(line.rstrip()) or ACTION_ALLOW_LINE.fullmatch(line.rstrip())):
+            break
+        lines.append(line.rstrip())
+    return lines
 
 
 PLAIN_VERBS = {**dict.fromkeys(["borra", "borrad", "elimina", "eliminad", "suprime", "suprimid", "drop", "delete",
@@ -1271,9 +1287,7 @@ def plain_request_grants(prompt):
     words: "Sí, borra las bases de prueba", "Perfect. Drop the test databases and empty the runs table." One clause
     that isn't a yes or a request (another instruction, a question, a condition, a retraction), or a character
     beyond words and `,.!¡-*` (a label, a quote, code, markup), and the message grants nothing."""
-    lines = prompt.splitlines()
-    while lines and DATABASE_ALLOW_LINE.fullmatch(lines[0].rstrip()):
-        lines.pop(0)
+    lines = prompt.splitlines()[len(opening_allow_lines(prompt)):]
     grants = set()
     for line in filter(str.strip, lines):
         if not re.fullmatch(r"[\w ,.!¡*-]+", line) or line[0] == " " or ".." in line:  # an example; "pero..."
@@ -1328,6 +1342,200 @@ def approved_database_grants(command, session):
     line in the user's message this turn or by the user's own approval file (guard_mcp.approved); else []."""
     grants = sorted({database_grant(m.group()) for m in re.finditer(DATABASE_DESTROY, command)})
     return grants if all(design_files.guard_mcp().approved(g, session) for g in grants) else []
+
+
+def push_grant(branch):
+    return "git.push-" + branch.lower().replace("/", "-")
+
+
+MERGE_GRANT = "git.merge"
+# What may follow a request: courtesy, timing, the base branch, or a condition on CI ("merge it once CI passes").
+REQUEST_TAIL = (rf"(?: (?:now|please|por favor|ya|ahora|ahora mismo|too|also|tambien|thanks|gracias|right away|asap|"
+                rf"(?:into|to|en|a) (?:la rama )?{PROTECTED_BRANCHES}))*"
+                r"(?: (?:when|once|if|after|si|cuando|en cuanto|una vez|una vez que) "
+                r"(?=[\w ]*\b(?:ci|checks?|tests?|build|green|verde)\b)[\w ]*)?")
+# The whole clause, accents dropped: "Merged.", "after the merge" and "Merge the PR failed" ask for nothing.
+MERGE_REQUEST = re.compile(r"(?:merge(?:a|alo|ala|alos|adlo|ad)|mergea(?:d)? (?:el|este|ese) (?:pr|pull request)|(?:haz|"
+                           r"haced) (?:el )?merge|merge(?: (?:it|this|that|them|the pr|the pull request|pr|pr #?\d+|"
+                           r"#\d+))?)" + REQUEST_TAIL)
+PUSH_REQUEST = re.compile(rf"(?:pushea(?:lo)?|haz push|haced push|sube(?:lo)?|push(?: it| this| the branch| the changes)?) "
+                          rf"(?:a|to) (?:la rama )?(?P<branch>{PROTECTED_BRANCHES})" + REQUEST_TAIL)
+REQUEST_LEADS = re.compile(r"((si|yes|ok|okay|vale|claro|perfecto|perfect|genial|great|sure|dale|venga|bien|good|"
+                           r"please|por favor|gracias|thanks|thank you|then|luego|ahora|now|also|tambien|ya|so|pues|"
+                           r"just|go ahead( and)?|adelante|listo|de acuerdo) )*")
+# A condition only the user can meet holds the sentence's request back: the grant would end before they meet it.
+REQUEST_HELD = re.compile(r"\b(after|once|when|until|before|cuando|hasta|en cuanto|una vez que|despues de que|antes de "
+                          r"que) (i|yo|te lo|lo)\b|\b(i say|say so|tell you|te diga|myself|yo mismo|let me|dejame)\b|"
+                          r"\b(i|yo) (approve|review|check|confirm)\b")
+# Later holds back the clause it's in ("Mergéalo y después instálalo" still merges), or the sentence when it's alone.
+REQUEST_LATER = re.compile(r"\b(later|despues|mas tarde|tomorrow|manana)\b")
+LATER_CLAUSE = re.compile(r"(?:(?:but|pero|only|solo) )*(?:later|despues|mas tarde|tomorrow|manana)")
+ACTION_WORD = re.compile(r"\bmerg|\bpush|\bsube")
+RETRACTION = re.compile(r"\b(wait|espera|actually|nevermind|never mind|olvidalo|scratch that|mejor no|cancel|"
+                        r"cancela|stop|abort|hold on|hold off|no lo hagas|not yet|todavia no|aun no|kidding|es broma)\b|"
+                        r"(?:^|[,;] *)(no|nope|nah)$|^(don't|do not)( do it| do that)?$")
+REFUSAL = re.compile(r"\b(no|not|don'?t|do not|never|nunca|todavia|yet)\b|n't\b")
+# Text the user quotes: removed, and a quote left open drops the rest of the line, as does a colon ("the reviewer
+# wrote: merge it"). An apostrophe inside a word ("don't") opens nothing.
+QUOTED = re.compile(r"\"[^\"]*\"|“[^”]*”|‘[^’]*’|«[^»]*»|`[^`]*`|(?<!\w)'[^']*'(?!\w)")
+QUOTE_OPEN = re.compile(r"[\"“”‘«»`:]|(?<!\w)'")
+
+
+def action_approval_names(prompt):
+    """The merge and protected-push approvals a user's message grants: its opening `allow gh pr merge` or `allow git
+    push main` lines, and each clause of its own text that is a whole request (MERGE_REQUEST, PUSH_REQUEST) with no
+    condition only the user can meet. A question, quoted text, an indented or fenced line and the lines after one
+    ending in a colon ask nothing, and a sentence that refuses or takes back a merge or push ("Merge it, actually
+    wait.", "Do not merge it") revokes what came before it."""
+    allow_lines = opening_allow_lines(prompt)
+    grants = set()
+    for line in allow_lines:
+        allow = ACTION_ALLOW_LINE.fullmatch(line)
+        if allow:
+            grants.add(MERGE_GRANT if allow.group(2) is None else push_grant(allow.group(2)))
+    text = unicodedata.normalize("NFD", "\n".join(prompt.splitlines()[len(allow_lines):]).lower())
+    text = "".join(c for c in text if not unicodedata.combining(c)).replace("’", "'")
+    fenced = reported = False
+    for line in text.split("\n"):
+        if re.match(r"\s*(```|~~~)", line):
+            fenced = not fenced
+        if not line.strip():
+            reported = False
+        skipped = fenced or reported or re.match(r"\s*(```|~~~)|\s|>", line)
+        reported = reported or line.rstrip().endswith(":")
+        if skipped:
+            continue
+        line, *reported_rest = QUOTE_OPEN.split(QUOTED.sub(" ", line), maxsplit=1)
+        for sentence in re.split(r"(?<=[.!?])\s+", line):
+            sentence = sentence.strip(" .!¡")
+            if "?" in sentence or "¿" in sentence:
+                continue
+            asked, held = set(), REQUEST_HELD.search(sentence)
+            for clause in re.split(r"[,;]|\b(?:y|e|and|then)\b", sentence):
+                clause = clause.strip(" .!¡")
+                said = clause[REQUEST_LEADS.match(clause + " ").end():].strip()
+                if REQUEST_LATER.search(said):
+                    held = held or LATER_CLAUSE.fullmatch(said)
+                    continue
+                if MERGE_REQUEST.fullmatch(said):
+                    asked.add(MERGE_GRANT)
+                push = PUSH_REQUEST.fullmatch(said)
+                if push:
+                    asked.add(push_grant(push.group("branch")))
+            if RETRACTION.search(sentence) or (asked or ACTION_WORD.search(sentence)) and REFUSAL.search(sentence):
+                grants = set()
+            elif not held:
+                grants |= asked
+        # What a colon reports asks for nothing, but a refusal there ("Note: do not merge it") still takes back.
+        if any(RETRACTION.search(s.strip(" .!¡")) or ACTION_WORD.search(s) and REFUSAL.search(s)
+               for rest in reported_rest for s in re.split(r"(?<=[.!?])\s+", rest)):
+            grants = set()
+    return sorted(grants)
+
+
+def git_pushes(code):
+    """Each `git push` in the code, with the protected branches it names."""
+    return [(push, [b.group(1) for b in re.finditer(rf"\s(?:\S+:)?(?:refs/heads/)?{PROTECTED_BRANCHES}(?=\s|$)", push.group(1))])
+            for push in re.finditer(GIT + r"push\b([^;&|\n]*)", code)]
+
+
+def joined_code(command):
+    """code_text() with line continuations joined, so a flag or push on the next line belongs to its command."""
+    return code_text(command.replace("\\\n", " "))
+
+
+def unquoted(command):
+    """The command with its continuations joined and its quote marks dropped: `"--admin"` is still a flag."""
+    return re.sub(r"[\"']", "", command.replace("\\\n", " "))
+
+
+def pushed_branches(command):
+    """The protected branches the command's pushes name, by the approval each one needs."""
+    return {push_grant(b): b for _, named in git_pushes(unquoted(command)) for b in named}
+
+
+# A force, delete, mirror or prune push does more to the branch than the push the user asked for.
+PUSH_REWRITES = re.compile(r"--force\S*|--delete|--mirror|--prune|-[a-zA-Z]*[fd][a-zA-Z]*|[+:]\S+")
+
+
+def action_grants(command):
+    """The approvals the command's `gh pr merge` and protected pushes need, or None when no approval lifts their block:
+    `--admin` skips the required checks, a PUSH_REWRITES push anywhere in it isn't the push asked for, and a push the
+    rule reads across lines names no branch here."""
+    code, flags = joined_code(command), unquoted(command)
+    pushed = [w for push in re.finditer(GIT + r"push\b([^;&|\n]*)", flags) for w in push.group(1).split()]
+    grants = []
+    if re.search(MERGE, code):
+        if re.search(r"(?<!\S)--admin\b", flags):
+            return None
+        grants.append(MERGE_GRANT)
+    if re.search(PROTECTED_PUSH, code):
+        branches = sorted(pushed_branches(command))
+        if not branches:
+            return None
+        grants += branches
+    if grants and any(PUSH_REWRITES.fullmatch(w) for w in pushed):
+        return None
+    return grants
+
+
+def approved_action_grants(command, session, cwd):
+    """The approvals that let the command's `gh pr merge` or protected `git push` run: the user's message this turn,
+    or their own approval file (guard_mcp.approved), for each one action_grants() names; else `empty-remote` for a
+    lone first push to a remote with no branches; else []."""
+    grants = action_grants(command)
+    if not grants:
+        return []
+    if all(design_files.guard_mcp().approved(g, session) for g in grants):
+        return grants
+    if MERGE_GRANT not in grants and first_push_to_empty_remote(command, cwd):
+        return ["empty-remote"]
+    return []
+
+
+PUSH_FLAGS = {"-u", "--set-upstream", "-q", "--quiet", "-v", "--verbose", "--no-verify", "--follow-tags", "--atomic"}
+MAX_PUSH_URLS = 4
+# Git told where to push by something else in the command: the probe would ask the wrong remote.
+GIT_REDIRECTED = re.compile(r"\bgit\s+(-c|--git-dir|--work-tree|--exec-path|--namespace)\b|\bGIT_\w*=|"
+                            r"\bgit\s+(-C\s+\S+\s+)*(remote|config)\b")
+
+
+def first_push_to_empty_remote(command, cwd):
+    """Whether the command is one `git push [-u] <remote> <branch>` to a protected branch of a remote whose every
+    push URL lists no branch. Any doubt (another push, an option that takes a value, git's config changed in the
+    command, git failing or slow) is a no: git's time is bounded by the hook's own budget, so the hook can't time out
+    and let the push through."""
+    pushes, dirs = git_pushes(joined_code(command)), pushed_from(command, cwd)
+    if len(pushes) != 1 or len(pushes[0][1]) != 1 or len(dirs) != 1 or GIT_REDIRECTED.search(unquoted(command)):
+        return False
+    words = pushes[0][0].group(1).split()
+    if any(w.startswith("-") and w not in PUSH_FLAGS for w in words):
+        return False
+    words = [w for w in words if not w.startswith("-")]
+    if len(words) < 2:
+        return False
+
+    def git(*args):
+        if time_left() <= 0.5:  # time_left() floors at 0.1: past the deadline, every call would still get that
+            raise subprocess.TimeoutExpired(args, 0)
+        return subprocess.run(["git", *args], cwd=dirs[0], capture_output=True, text=True,
+                              timeout=min(design_files.GIT_TIMEOUT, time_left()),
+                              env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+
+    try:
+        urls = git("remote", "get-url", "--push", "--all", words[0])
+        if urls.returncode != 0 and "/" not in words[0]:
+            return False
+        urls = urls.stdout.split() if urls.returncode == 0 else [words[0]]
+        if len(urls) > MAX_PUSH_URLS:
+            return False
+        for url in urls:
+            heads = git("ls-remote", "--heads", "--", url)
+            if heads.returncode != 0 or heads.stdout.strip():
+                return False
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def impeccable_files(command, cwd, session):
@@ -1552,7 +1760,7 @@ def main():
         return 0
     command = without_evidence_runner(command)
     cwd = payload.get("cwd") or ""
-    approved = []
+    approved, action_approved = [], None
     try:
         cwd = os.path.realpath(cwd or os.getcwd())  # getcwd raises when the directory was deleted
         reason = (pr_checkout_unknown(command, payload) or dangerous_rm(command, cwd)
@@ -1565,8 +1773,15 @@ def main():
                 # A SQL client or driver runs the quoted statements and scripts every other rule reads as text.
                 if re.search(pattern, command if pattern == DATABASE_DESTROY and SQL_USED.search(without_prose(command)) else code):
                     if pattern == DATABASE_DESTROY:
-                        approved = approved_database_grants(command, payload.get("session_id"))
-                        if approved:
+                        granted = approved_database_grants(command, payload.get("session_id"))
+                        if granted:
+                            approved += granted
+                            continue
+                    if pattern in (MERGE, PROTECTED_PUSH):
+                        if action_approved is None:  # both rules can match one command; git runs once
+                            action_approved = approved_action_grants(command, payload.get("session_id"), cwd)
+                        if action_approved:
+                            approved += action_approved
                             continue
                     reason = why if re.search(pattern, bare_code(command)) else f"{why} {TEXT_HINT}"
                     break
@@ -1575,7 +1790,7 @@ def main():
                   "Tell the user: the error is in ~/.agents/logs/hooks.jsonl.")
     if not reason:
         if approved:  # the grants, not the command: it can carry a password (PGPASSWORD=…)
-            log("guard_bash", "allow-approved", payload, ", ".join(approved))
+            log("guard_bash", "allow-approved", payload, ", ".join(dict.fromkeys(approved)))
         record_push(command, cwd, payload)
         return 0
 

@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -917,8 +918,8 @@ def database_approval_hooks(base):
     def prompt(text, session="s1"):
         hook("prompt_approvals.py", {"prompt": text, "session_id": session, "cwd": "/tmp"})
 
-    def guard_in(command, session="s1"):
-        got = hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": "/tmp", "session_id": session})
+    def guard_in(command, session="s1", cwd="/tmp"):
+        got = hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": cwd, "session_id": session})
         if not got:
             return "allow"
         assert got["hookSpecificOutput"]["permissionDecision"] == "deny", got
@@ -1060,6 +1061,142 @@ def a_plain_request_approves_a_database_statement_for_that_turn(base):
     assert done.returncode == 0 and not done.stderr, done.stderr
     granted = {t: g for t, g in zip(negatives, json.loads(done.stdout)) if g}
     assert not granted, f"grant nothing: {granted}"
+
+
+def a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn(base):
+    prompt, guard_in = database_approval_hooks(base)
+    merge = "gh pr merge 12 --squash"
+    denial = guard_in(merge)
+    assert "`allow gh pr merge`" in denial and "plain words" in denial, "the denial says how to allow it"
+    for text in ["Vale ya esta listo, mergealo, instalalo y dime si queda algo pendiente", "allow gh pr merge",
+                 "allow gh pr merge\nand then install it", "Mergéalo", "Sí, mergea el PR", "haz el merge",
+                 "Perfecto. Haz merge y luego instálalo.", "si pasa el CI, mergealo", "merge it", "Merge this please",
+                 "OK, merge the PR", "Go ahead and merge", "merge #12", "Merge PR 12 and install it", "mergeadlo",
+                 "Mergeala ya", "Great, thanks! Merge it.", "merge it once CI passes", "Mergéalo y después instálalo",
+                 "Merge it. Don't install it.", "merge it into main", "Steps:\n- check\n\nmerge it"]:
+        prompt("now fix the failing test")
+        assert guard_in(merge) != "allow", "a message that doesn't ask revokes the last one"
+        prompt(text)
+        assert guard_in(merge) == "allow", f"{text!r} asks for the merge"
+    with open(os.path.join(base, ".agents", "logs", "hooks.jsonl")) as fh:
+        logged = [json.loads(line) for line in fh if '"allow-approved"' in line]
+    assert [e["detail"] for e in logged][-1:] == ["git.merge"], "an approved merge leaves a trace"
+    for admin in ["gh pr merge 12 --admin --squash", "gh pr merge 12 \\\n  --admin", 'gh pr merge 12 "--admin"']:
+        assert guard_in(admin) != "allow", f"--admin skips the checks the user may count on: {admin!r}"
+    assert guard_in(merge, session="s2") != "allow", "another session's message approves nothing"
+    assert guard_in("gh pr merge 12 && git push --force origin x") != "allow", "other rules still hold"
+    for text in ["Merged.", "Merged. Ahora que?", "¿lo mergeo?", "Lo mergeo?", "should I merge it?",
+                 "can you merge it?", "Can you merge it", "no lo mergees todavía", "No lo mergees", "don't merge it",
+                 "do not merge it", "merge it later, not now", "Merge it. Actually, wait.", "Mergealo. Bueno, espera.",
+                 "the reviewer wrote 'merge it'", 'Ana dijo "mergealo"', "> merge it", "    merge it", "```\nmerge it\n```",
+                 "ok\nallow gh pr merge", "after the merge, install it", "the merge failed", "I'll merge it myself",
+                 "Lo mergeo yo", "why did you merge it?", "merge conflicts in hooks/x.py", "Don't merge it yet",
+                 "merge it tomorrow", "No mergees nada", "the merge is mine", f"why was this blocked? {denial}",
+                 "merge it?", "¿mergealo?", "Merge it, actually wait.", "Merge it, but not yet.", "Merge it. No.",
+                 "Merge it. Do not merge it.", "Do not, under any circumstances, merge it", "Merge it - kidding",
+                 "The reviewer wrote: merge it", "TODO: merge it", "The reviewer wrote:\nmerge it",
+                 "The reviewer wrote 'Looks good, merge it, thanks'", 'He said "Looks good. Merge it. Ship it."',
+                 "Merge it is the next step.", "Merge the PR failed because of conflicts.", "merge it after I review",
+                 "merge it once I say so", "merge it when I tell you", "Merge this branch into feature-x locally",
+                 "Next step: merge.", "Merge it, after I review", "Merge it, when I say so", "Merge it, later",
+                 "Merge it when CI passes and I approve", "merge it and let me check it first", "Merge it. Stop.",
+                 "Mergealo, pero despues de que lo revise", "Merge it. Abort.", "Merge it. Hold off.", "merge it, right?",
+                 "Merge it. Don't.", "Merge it. Do not.", "Merge it. Note: do not merge it."]:
+        prompt("allow gh pr merge")
+        prompt(text)
+        assert guard_in(merge) != "allow", f"grants nothing and revokes the last one: {text!r}"
+    prompt("allow gh pr merge")
+    for rewrite in ["git push -uf origin feature && gh pr merge 12", "git push --force-with-lease origin x && gh pr merge 12"]:
+        assert guard_in(rewrite) != "allow", f"a merge approval doesn't carry a force push: {rewrite!r}"
+    prompt("allow gh pr merge\nallow DROP TABLE")
+    assert guard_in("gh pr merge 12 && psql -c 'DROP TABLE t'") == "allow", "each grant lifts its own rule"
+    with open(os.path.join(base, ".agents", "logs", "hooks.jsonl")) as fh:
+        logged = [json.loads(line)["detail"] for line in fh if '"allow-approved"' in line]
+    assert sorted(logged[-1].split(", ")) == ["git.merge", "sql.drop-table"], f"the trace names every grant: {logged[-1:]}"
+
+
+def a_message_asking_to_push_approves_that_protected_branch(base):
+    prompt, guard_in = database_approval_hooks(base)
+    push = "git push origin main"
+    denial = guard_in(push)
+    assert "`allow git push main`" in denial, "the denial says how to allow it"
+    for text in ["allow git push main", "pushea a main", "Vale, haz push a main", "push to main", "Push it to main"]:
+        prompt("now fix the failing test")
+        prompt(text)
+        for command in [push, "git push -u origin main", "git push origin HEAD:main", "git push upstream main"]:
+            assert guard_in(command) == "allow", f"{text!r} approves {command!r}"
+        assert guard_in("git push origin production") != "allow", f"{text!r} names main only"
+        for rewrite in ["git push --force origin main", "git push -uf origin main", "git push -fu origin main",
+                        "git push --force-with-lease origin main", "git push --force-if-includes origin main",
+                        "git push origin --delete main", "git push -d origin main", "git push --mirror origin main",
+                        'git push origin main "--force"', "git push origin main && git push origin \\\n  production",
+                        'git push origin main && git push origin "production"',
+                        "git push origin main HEAD:refs/heads/production"]:
+            assert guard_in(rewrite) != "allow", f"{text!r} asks for a push, not {rewrite!r}"
+    prompt("allow git push production")
+    assert guard_in("git push origin production") == "allow" and guard_in(push) != "allow", "each branch its own"
+    for text in ["allow git push release/1.2", "push to release/1.2", "Push to release/1.2."]:
+        prompt(text)
+        assert guard_in("git push origin release/1.2") == "allow", f"{text!r} names release/1.2"
+        assert guard_in("git push origin release/12") != "allow", f"{text!r} keeps the dot"
+    for text in ["¿pusheo a main?", "don't push to main", "no pushees a main", "pushed to main", "push to main later",
+                 "> push to main", "push to main-feature", "push to main/experiment", "push to main, not now",
+                 "Push to main, after I check", "Push to main. Hmm, no.", "Push to main. Don't.",
+                 "Push to main failed. Look into it.", "Push to main is what broke prod."]:
+        prompt("allow git push main")
+        prompt(text)
+        assert guard_in(push) != "allow", f"grants nothing and revokes the last one: {text!r}"
+
+
+def a_first_push_to_an_empty_remote_needs_no_approval(base):
+    _, guard_in = database_approval_hooks(base)
+
+    def git(*args, cwd=base):
+        subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+    empty, used, work = (os.path.join(base, n) for n in ("empty.git", "used.git", "work"))
+    git("init", "-q", "--bare", empty)
+    git("init", "-q", "--bare", used)
+    git("init", "-q", "-b", "main", work)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x", cwd=work)
+    git("push", "-q", used, "main", cwd=work)
+    git("remote", "add", "origin", empty, cwd=work)
+    git("remote", "add", "used", used, cwd=work)
+    git("remote", "add", "dead", "git://127.0.0.1:1/x.git", cwd=work)
+    other = os.path.join(base, "other.git")
+    git("init", "-q", "--bare", other)
+    git("push", "-q", other, "main:gh-pages", cwd=work)
+    git("remote", "add", "other", other, cwd=work)
+    stalled = socket.create_server(("127.0.0.1", 0))  # accepts the connection and never answers
+    git("remote", "add", "stalled", f"git://127.0.0.1:{stalled.getsockname()[1]}/x.git", cwd=work)
+    for command in ["git push -u origin main", "git push origin main", "git push --set-upstream origin HEAD:main",
+                    f"git push {empty} main", f"cd {work} && git push -u origin main"]:
+        assert guard_in(command, cwd=work if "cd " not in command else "/tmp") == "allow", \
+            f"nothing to review against: {command}"
+    for command in ["git push -u used main", "git push dead main", "git push nowhere main",
+                    "git push origin main && git push used main", "git push origin main; git push origin develop",
+                    "git push --force origin main", "git push main", "git push other main",
+                    "git push origin main production", "git push -o ci.skip origin main", "git push origin main -o ci.skip",
+                    "gh pr merge 1 && git push -u origin main", f"git -c remote.origin.pushurl={used} push origin main",
+                    f"git remote set-url --push origin {used} && git push origin main",
+                    f"GIT_DIR={used} git push origin main"]:
+        assert guard_in(command, cwd=work) != "allow", f"stays denied: {command}"
+    start = time.monotonic()
+    assert guard_in("git push stalled main", cwd=work) != "allow", "a remote that never answers fails closed"
+    assert time.monotonic() - start < 6, f"within the hook's budget: {time.monotonic() - start:.1f}s"
+    stalled.close()
+    with open(os.path.join(base, ".agents", "logs", "hooks.jsonl")) as fh:
+        assert any('"allow-approved"' in line and '"empty-remote"' in line for line in fh), "the exemption is logged"
+    for n in range(1, 6):
+        git("init", "-q", "--bare", f"{empty}{n}")
+        git("remote", "set-url", "--add", "--push", "origin", f"{empty}{n}", cwd=work)
+        expected = "allow" if n <= 4 else "deny"
+        assert (guard_in("git push origin main", cwd=work) == "allow") == (expected == "allow"), \
+            f"{n} empty push URLs: {expected}"
+    git("config", "--unset-all", "remote.origin.pushurl", cwd=work)
+    assert guard_in("git push -u origin main", cwd="/tmp") != "allow", "outside the repository the remote is unknown"
+    git("remote", "set-url", "--push", "origin", used, cwd=work)
+    assert guard_in("git push origin main", cwd=work) != "allow", "the push URL decides, not the empty fetch URL"
 
 
 def guard_mcp_logs_browser_mcp(base):
@@ -3106,7 +3243,8 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          the_agent_stays_out_of_the_approvals,
          guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
-         a_plain_request_approves_a_database_statement_for_that_turn, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
+         a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
+         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,

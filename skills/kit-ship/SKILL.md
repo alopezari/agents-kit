@@ -80,7 +80,7 @@ Unless `~/.agents/bin/phase switches` lists `ci`, wait for the checks of the com
 
 It waits up to 30 minutes and prints each check, with the failing lines of a failed job's log. When your harness caps a command's run time (Claude Code's is 10 minutes), pass a `--timeout` under the cap and run it again while it exits 2, up to 30 minutes in all. Report its result as it is, each exit code by name: 0 passed, 1 failed (name the failing checks), 2 still running after the wait, 3 no checks appeared, 4 GitHub couldn't be read, 5 the repo runs no CI. Only 0 is "CI passed".
 
-On a failure, don't fix it here: report it, and offer the `kit-follow-pr` skill, which works out whether the change caused it and fixes it. Never call the pull request ready to merge: review comments may still come, and that's follow-pr's call.
+On a failure, don't fix it here: report it, and offer the `kit-follow-pr` skill, which works out whether the change caused it and fixes it. Never call the pull request ready to merge: review comments may still come, and that's follow-pr's call. When the user's message asked you to merge it, merge once it is ready to merge as follow-pr defines it: CI passed (or the repo runs no CI, or the user switched `ci` off), no review request pending and every comment answered (`gh pr merge <n>`, which the guard allows for that message). Then run part 2 if they asked for an install or ship too.
 
 ### 6. Free the branch
 

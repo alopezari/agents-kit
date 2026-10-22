@@ -5,7 +5,7 @@ description: "Take an open pull request to ready-to-merge. Handles what is new s
 
 # Follow PR
 
-From an open PR to "ready to merge". The merge is always the user's: the shell guard blocks `gh pr merge`, and that stays.
+From an open PR to "ready to merge". The merge is the user's: the shell guard blocks `gh pr merge` unless the user's message asks for it ("merge it", or a first line `allow gh pr merge`), until their next message. When it does, merge once the PR is ready to merge (section 4), report the merge, then do what else the message asked: an install or ship is the `kit-ship` skill's part after the merge. When it isn't ready, say what is missing instead.
 
 Every run handles only what is new: its report keeps each comment it dealt with, so running it again after three days picks up where it left off.
 
@@ -90,4 +90,4 @@ Log every CI failure the change caused and every review comment from someone oth
 
 `review` is a person, `bot` an automated reviewer. For CI, the verdict is `confirmed`; the lens is the one whose area the failure falls in (Tests for a failing test, Correctness for a wrong result). A comment saying the change doesn't do what was asked is category `C.requirement` with lens `spec`: the spec's second reading should have caught it. CI failures not caused by the change are not escapes.
 
-It is ready to merge when CI is green, every comment has a fix or an approved reply, and no review request is pending. A fix can make results in the checks guide stale: name the steps it touches, so the user can run them again if they choose. Say what would need another run: checks still running, reviewers who haven't answered. The user merges, and the flow ends there; the `kit-ship` skill's part after the merge runs only when they ask for it (a deploy guide, or the install and post-merge checks of a repo installed on this machine).
+It is ready to merge when CI is green, every comment has a fix or an approved reply, and no review request is pending. A fix can make results in the checks guide stale: name the steps it touches, so the user can run them again if they choose. Say what would need another run: checks still running, reviewers who haven't answered. The user merges, or asks you to in their message, and the flow ends there; the `kit-ship` skill's part after the merge runs only when they ask for it (a deploy guide, or the install and post-merge checks of a repo installed on this machine).

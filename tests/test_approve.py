@@ -101,6 +101,27 @@ def names_the_approvals_that_would_lift_a_block(base):
     assert run(env, "needed").returncode == 2, "no payload"
 
 
+def names_the_merge_and_protected_push_approvals(base):
+    env = new_home(base)
+    got = needed(env, bash("gh pr merge 12 --squash"))
+    assert got == {"names": ["git.merge"], "what": "`gh pr merge` merges a pull request",
+                   "scope": "any `gh pr merge`"}, got
+    got = needed(env, bash("git push origin main && git push origin HEAD:production"))
+    assert got["names"] == ["git.push-main", "git.push-production"], got
+    assert got["scope"] == "any push to main or any push to production", got
+    got = needed(env, bash("git push origin release/1.0"))
+    assert got["scope"] == "any push to release/1.0" and "to release/1.0 skips" in got["what"], got
+    for command in ["gh pr merge 12 --admin", "gh pr merge 12 \\\n --admin", "git push --force origin main",
+                    "git push --force origin x && gh pr merge 1", "git push --force-with-lease origin main",
+                    "git push -uf origin main", "git push origin --delete main"]:
+        assert needed(env, bash(command))["names"] == [], f"no approval lifts this block: {command}"
+    assert run(env, "grant", "s1", "git.push-main").returncode == 0
+    assert guard(env, "guard_bash.py", bash("git push origin main")) == "allow", "the dialog's grant lifts the block"
+    assert guard(env, "guard_bash.py", bash("git push origin develop")) == "deny", "for that branch only"
+    assert needed(env, bash("git push origin main develop"))["names"] == ["git.push-develop"], \
+        "a branch the turn already has isn't asked for again"
+
+
 def a_grant_is_the_turn_approval_a_message_would_write(base):
     env = new_home(base)
     drop, issue = bash("psql -c 'DROP TABLE runs'"), mcp("mcp__linear__save_issue")
@@ -150,7 +171,7 @@ def a_grant_is_the_turn_approval_a_message_would_write(base):
             f"{verb} cut short takes back the names it wrote"
 
 
-for test in (names_the_approvals_that_would_lift_a_block, a_grant_is_the_turn_approval_a_message_would_write):
+for test in (names_the_approvals_that_would_lift_a_block, names_the_merge_and_protected_push_approvals, a_grant_is_the_turn_approval_a_message_would_write):
     base = tempfile.mkdtemp(prefix="agents-test-approve-")
     try:
         test(base)

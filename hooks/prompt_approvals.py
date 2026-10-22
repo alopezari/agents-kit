@@ -5,7 +5,9 @@ Asking for a write is approving it: when the user's message names a service guar
 (Linear, or one a profile declares), or one of Impeccable's project files design_files.py guards,
 writes to it are allowed until the user's next message. A DROP or TRUNCATE statement guard_bash.py refuses
 needs more than a mention: the message opens with the line `allow <statement>`, or does nothing but ask for it in
-plain words ("Sí, borra las bases de prueba", "drop the test databases").
+plain words ("Sí, borra las bases de prueba", "drop the test databases"). The same holds for `gh pr merge` and a push
+to a protected branch: an opening `allow gh pr merge` or `allow git push main` line, or a plain request ("mergéalo",
+"push to main"), allows it until the next message (guard_bash.action_approval_names).
 A message whose first line is `phase off|on <phase> [branch|repo|global]` switches a flow phase (phase_switches.py),
 and the hook tells the agent what is off now; one whose first line is `review-rounds <0-9> [branch|repo|global]`
 sets how many re-checks the review runs.
@@ -293,7 +295,7 @@ def main():
             named = sorted(set(named) | set(offered))
     named += design_files.approval_names(prompt)
     import guard_bash  # after the clearing: if it fails to load, the last turn's approvals are already gone
-    named += guard_bash.database_approval_names(prompt)
+    named += guard_bash.database_approval_names(prompt) + guard_bash.action_approval_names(prompt)
     if named:
         os.makedirs(os.path.join(guard_mcp.TURN_APPROVALS, session))
         for service in named:
