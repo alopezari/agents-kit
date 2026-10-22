@@ -46,8 +46,25 @@ SCRATCH_PATH = re.compile(r"^(/private)?/tmp/|^/var/folders/|^" + re.escape(HOME
 REMOVED_WORKTREE = re.compile(r"(.*)-worktree-[^/]+")
 REMOTE_REPO = re.compile(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$")
 # USD per million tokens (input, 5-minute cache write, 1-hour cache write, cache read, output), from
-# platform.claude.com/docs/en/about-claude/pricing on 2026-10-23. A model missing here leaves a build's dollars unknown.
-PRICES = {"claude-opus-5-5": (4, 5, 8, 0.20, 20), "claude-sonnet-5-5": (2, 2.50, 4, 0.10, 10)}
+# platform.claude.com/docs/en/about-claude/pricing on 2026-10-23, where the 1M context ("[1m]") costs the same. A model
+# missing here, fast mode or US-only inference (priced higher) leaves a build's dollars unknown.
+PRICES = {"claude-opus-5-5": (4, 5, 8, 0.20, 20), "claude-sonnet-5-5": (2, 2.50, 4, 0.10, 10),
+          "claude-fable-5-1": (10, 12.50, 20, 0.25, 50)}
+
+
+def usd_of(model, usage):
+    """Dollars of one API call's usage, or None when the table can't price it."""
+    if usage.get("speed") not in (None, "standard") or usage.get("inference_geo") not in (None, "", "global"):
+        return None
+    price = PRICES.get(re.sub(r"\[\w+\]$", "", model or ""))
+    return None if price is None else sum(n * p for n, p in zip(spent_of(usage), price)) / 1e6
+
+
+def spent_of(usage):
+    """Tokens of one API call in PRICES' column order; with no 5m/1h split, every cache write counts at 5 minutes."""
+    split = usage.get("cache_creation") or {"ephemeral_5m_input_tokens": usage.get("cache_creation_input_tokens", 0)}
+    return (usage.get("input_tokens", 0), split.get("ephemeral_5m_input_tokens", 0), split.get("ephemeral_1h_input_tokens", 0),
+            usage.get("cache_read_input_tokens", 0), usage.get("output_tokens", 0))
 
 
 def ts(s):
@@ -332,7 +349,7 @@ def builds_of(transcript):
             continue
         if not str(meta.get("agentType", "")).startswith("kit:build-"):
             continue
-        models, efforts, times, seen, branch = {}, set(), [], set(), None
+        models, efforts, times, seen, branch, cwd, advisor = {}, set(), [], set(), None, None, {"calls": 0, "usd": 0.0}
         tokens = {"in": 0, "out": 0, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}
         usd = 0.0
         try:
@@ -348,6 +365,7 @@ def builds_of(transcript):
             if e.get("timestamp"):
                 times.append(e["timestamp"])
             branch = branch or e.get("gitBranch")
+            cwd = cwd or e.get("cwd")
             msg = e.get("message") or {}
             if e.get("type") != "assistant" or msg.get("id") and msg["id"] in seen:
                 continue  # one line per content block, each repeating the message's usage
@@ -359,16 +377,24 @@ def builds_of(transcript):
             if e.get("effort"):
                 efforts.add(str(e["effort"]))
             u = msg.get("usage") or {}
-            split = u.get("cache_creation") or {"ephemeral_5m_input_tokens": u.get("cache_creation_input_tokens", 0)}
-            spent = (u.get("input_tokens", 0), split.get("ephemeral_5m_input_tokens", 0), split.get("ephemeral_1h_input_tokens", 0),
-                     u.get("cache_read_input_tokens", 0), u.get("output_tokens", 0))
-            for key, n in zip(("in", "cache_write_5m", "cache_write_1h", "cache_read", "out"), spent):
-                tokens[key] += n
-            price = PRICES.get(model)
-            usd = None if usd is None or price is None else usd + sum(n * p for n, p in zip(spent, price)) / 1e6
+            # With iterations, the totals leave out the advisor's calls and split cache writes for the first call only:
+            # each iteration carries its own usage, the advisor's under its own model.
+            costs = []
+            for call in u.get("iterations") or [u]:
+                if call.get("type") == "advisor_message":
+                    cost = usd_of(call.get("model"), {**call, "speed": u.get("speed"), "inference_geo": u.get("inference_geo")})
+                    advisor["calls"] += 1
+                    advisor["usd"] = None if advisor["usd"] is None or cost is None else advisor["usd"] + cost
+                    costs.append(cost)
+                    continue
+                for key, n in zip(("in", "cache_write_5m", "cache_write_1h", "cache_read", "out"), spent_of(call)):
+                    tokens[key] += n
+                costs.append(usd_of(model, {**call, "speed": u.get("speed"), "inference_geo": u.get("inference_geo")}))
+            usd = None if usd is None or None in costs else usd + sum(costs)
         minutes = round((ts(max(times)) - ts(min(times))).total_seconds() / 60) if times else 0
-        builds.append({"agent": meta["agentType"], "assigned_model": meta.get("model"), "branch": branch, "models": models,
-                       "effort": sorted(efforts), "tokens": tokens, "usd": usd, "minutes": minutes,
+        builds.append({"agent": meta["agentType"], "assigned_model": meta.get("model"), "branch": branch,
+                       "repo": (checkout(cwd) or (None, None))[1] if cwd else None, "models": models, "effort": sorted(efforts), "tokens": tokens,
+                       "advisor": advisor, "usd": usd, "minutes": minutes,
                        "start": min(times) if times else None})
     return builds
 

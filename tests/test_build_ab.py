@@ -87,10 +87,10 @@ def a_broken_line_is_skipped_and_counted(base):
     home, trees, _, env = setup(base, ("a",))
     os.makedirs(os.path.dirname(log_path(home)))
     with open(log_path(home), "w") as fh:
-        fh.write('{"event": "assign", "repo": "shop", "branch": "old", "tier": "standard", "model": "sonnet"}\n{"event": "ass\n')
+        fh.write('{"event": "assign", "repo": "shop", "branch": "old", "tier": "standard", "model": "sonnet"}\n{"event": "ass\n[1]\n')
     got = assign(home, trees["a"], env, "standard")
     assert got.returncode == 0 and got.stdout.strip() == "opus", (got.stdout, got.stderr)
-    assert "1 line" in got.stderr, got.stderr
+    assert "2 lines" in got.stderr, got.stderr
 
 
 def a_line_cut_short_keeps_the_next_event_whole(base):

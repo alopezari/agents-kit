@@ -72,6 +72,7 @@ Inputs (read them from disk):
 - $HOME/.agents/logs/browser-ab.jsonl: A/B test of browser tools in the kit-validate skill (assign/call/finish events per run).
 - $HOME/.agents/logs/build-ab.jsonl: A/B test of the build's model (one assign event per branch: repo, branch, tier, model, harness).
 - $RUN/sessions.json: my last 200 agent sessions (harness, model, effort, tokens, advisor_calls, prompts, correction_signals).
+- $RUN/sessions-all.json: the same for every session, read for the A/B's builds.
 
 - $HOME/.agents/research/health/*.md: weekly health reports from this month.
 - $RUN/evals.txt: this month's review evals, per model and lens: recall over escaped bugs replayed against the
@@ -94,10 +95,12 @@ Steps:
    From browser-ab.jsonl, add a short "Browser A/B" section per tool: runs, commands per run, output bytes per run (context cost), failed calls, wall time, checks passed/completed, tool issues and notes. Also count, from hooks.jsonl (decision "browser-mcp"), sessions that drove a browser through an MCP instead of bin/browse, and which of them look like validation: those runs are missing from the test. The test ends on 2026-11-05 or at 10 finished runs per tool, whichever comes first. Recommend one tool only when both tools have at least 10 finished runs; otherwise report the result as inconclusive, give the counts, and propose a new end date (and, if MCP bypasses explain the gap, how to stop them).
    From build-ab.jsonl and sessions-all.json, add a short "Build model A/B" section: the first build of a change goes to
    kit:build-<tier> on Sonnet or Opus, effort held at the tier's value. Per tier and assigned arm: builds assigned;
-   builds found in $RUN/sessions-all.json, every session rather than the last 200 (each session's "builds", joined to an assignment by repo and branch, the repo from
-   the session's cwd, through the rename lines in quality.jsonl); and builds whose transcript model differs from the
-   arm, listed and left out of the comparison. For the rest, per build: tokens by type and the extractor's usd (null
-   means a model the price table lacks; say so rather than counting it as 0), and, joined by repo and branch through
+   builds found in $RUN/sessions-all.json, every session rather than the last 200 (each session's "builds", joined to an assignment by the build's repo and branch,
+   through the rename lines in quality.jsonl; grouped by the assignment's tier, noting a build whose agent type names
+   another); and builds whose transcript model differs from the
+   arm, listed and left out of the comparison. For the rest, per build: tokens by type and the extractor's usd, advisor calls included
+   (null means a call the price table can't price: another model, fast mode or US-only inference; say so rather than
+   counting it as 0), and, joined by repo and branch through
    the renames, the confirmed review findings on that branch (quality.jsonl lens lines), its escapes and its merge
    outcome (outcomes.json). A branch with no review lines, no follow-pr run or no PR yet is unobserved for that
    measure, never zero: give those counts apart. The test ends on 2026-11-13. Under 5 compared builds per arm in a

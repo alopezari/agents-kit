@@ -282,8 +282,8 @@ def subagent(home, agent_id, agent_type, lines, model):
         fh.writelines(json.dumps(line) + "\n" for line in lines)
 
 
-def build_turn(minute, msg_id, model, usage, blocks=1):
-    return [{"type": "assistant", "isSidechain": True, "timestamp": at(minute), "cwd": "/repo", "gitBranch": "feat",
+def build_turn(minute, msg_id, model, usage, blocks=1, cwd="/repo"):
+    return [{"type": "assistant", "isSidechain": True, "timestamp": at(minute), "cwd": cwd, "gitBranch": "feat",
              "effort": "high", "uuid": f"{msg_id}-{i}", "message": {"id": msg_id, "model": model, "usage": usage, "content": [TEXT]}}
             for i in range(blocks)]
 
@@ -329,6 +329,33 @@ def opus_prices_and_usage_without_the_cache_split(home):
     assert abs(low["usd"] - (10 * 2 + 1000 * 10 + 100000 * 0.10 + 3000 * 2.50) / 1e6) < 1e-9, low["usd"]
 
 
+def advisor_calls_and_what_the_table_cannot_price(home):
+    first = {"input_tokens": 2, "output_tokens": 300, "cache_read_input_tokens": 70000, "cache_creation_input_tokens": 1000,
+             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1000}, "type": "message"}
+    advice = {"input_tokens": 75000, "output_tokens": 3000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+              "type": "advisor_message", "model": "claude-fable-5-1"}
+    second = {**first, "output_tokens": 2000, "cache_creation": {"ephemeral_5m_input_tokens": 1000, "ephemeral_1h_input_tokens": 0}}
+    # Totals as Claude Code writes them: the advisor's call left out, the cache-write split of the first call only.
+    advised = {"input_tokens": 4, "output_tokens": 2300, "cache_read_input_tokens": 140000, "cache_creation_input_tokens": 2000,
+               "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1000},
+               "speed": "standard", "inference_geo": "global", "iterations": [first, advice, second]}
+    plain = {"input_tokens": 10, "output_tokens": 1000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    found = session(home, [user(0, "build it", "feat"), *assistant(1, "m0", "feat", [TEXT])], subagents=[
+        ("b1", "kit:build-high", build_turn(2, "x1", "claude-opus-5-5[1m]", advised, cwd=os.path.join(home, "repo")), None),
+        ("b2", "kit:build-low", build_turn(3, "y1", "claude-opus-5-5", {**plain, "speed": "fast", "iterations": [plain, advice]}), "opus"),
+        ("b3", "kit:build-standard", build_turn(4, "z1", "claude-sonnet-5-5", {**plain, "inference_geo": "us"}), "sonnet")])
+    high, low, standard = sorted(found["builds"], key=lambda b: b["agent"])
+    assert high["models"] == {"claude-opus-5-5[1m]": 1} and high["repo"] == "repo", high
+    assert high["tokens"] == {"in": 4, "out": 2300, "cache_read": 140000, "cache_write_5m": 1000, "cache_write_1h": 1000}, high["tokens"]
+    fable = (75000 * 10 + 3000 * 50) / 1e6
+    assert high["advisor"]["calls"] == 1 and abs(high["advisor"]["usd"] - fable) < 1e-9, high["advisor"]
+    opus = (4 * 4 + 2300 * 20 + 140000 * 0.20 + 1000 * 5 + 1000 * 8) / 1e6
+    assert abs(high["usd"] - (opus + fable)) < 1e-9, high["usd"]
+    assert low["usd"] is None and standard["usd"] is None, "fast mode and US-only inference cost more than the table says"
+    assert low["advisor"] == {"calls": 1, "usd": None}, low["advisor"]
+    assert low["repo"] is None, "a build outside a checkout names no repo"
+
+
 def a_session_without_builds_lists_none(home):
     found = session(home, [user(0, "hi", "a"), *assistant(1, "m0", "a", [TEXT])])
     assert found["builds"] == [], found["builds"]
@@ -339,7 +366,7 @@ for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_
              the_users_attention_per_branch, what_the_user_did_not_type, another_agents_run_is_not_the_user,
              a_session_of_typed_commands, the_kit_names_count_as_their_former_phases,
              builds_come_from_their_transcripts, opus_prices_and_usage_without_the_cache_split,
-             a_session_without_builds_lists_none):
+             advisor_calls_and_what_the_table_cannot_price, a_session_without_builds_lists_none):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:

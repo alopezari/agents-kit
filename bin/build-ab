@@ -47,6 +47,8 @@ def assign(tier):
             try:
                 event = json.loads(line)
             except ValueError:
+                event = None
+            if not isinstance(event, dict):
                 broken += 1
                 continue
             if event.get("repo") == repo and event.get("branch") == branch and event.get("model") in ARMS:
