@@ -338,8 +338,9 @@ def split_into_phases(entries, renames, repos):
     return {b: ps for b, ps in kept.items() if ps}
 
 
-def builds_of(transcript):
-    """The session's kit:build-<tier> subagents (bin/build-ab's A/B): what each ran on, spent and cost."""
+def builds_of(transcript, session_repo):
+    """The session's kit:build-<tier> subagents (bin/build-ab's A/B): what each ran on, spent and cost. A build whose
+    directory is gone and names no checkout takes the session's repo."""
     builds = []
     for meta_file in sorted(glob.glob(transcript[:-len(".jsonl")] + "/subagents/agent-*.meta.json")):
         try:
@@ -349,15 +350,15 @@ def builds_of(transcript):
             continue
         if not str(meta.get("agentType", "")).startswith("kit:build-"):
             continue
-        models, efforts, times, seen, branch, cwd, advisor = {}, set(), [], set(), None, None, {"calls": 0, "usd": 0.0}
+        efforts, times, branch, cwd, advisor = set(), [], None, None, {"calls": 0, "usd": 0.0}
         tokens = {"in": 0, "out": 0, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}
-        usd = 0.0
+        usd, calls = 0.0, {}
         try:
             with open(meta_file[:-len(".meta.json")] + ".jsonl", errors="ignore") as fh:
                 lines = fh.readlines()
         except OSError:
             continue
-        for line in lines:
+        for n, line in enumerate(lines):
             try:
                 e = json.loads(line)
             except ValueError:
@@ -367,16 +368,16 @@ def builds_of(transcript):
             branch = branch or e.get("gitBranch")
             cwd = cwd or e.get("cwd")
             msg = e.get("message") or {}
-            if e.get("type") != "assistant" or msg.get("id") and msg["id"] in seen:
-                continue  # one line per content block, each repeating the message's usage
-            seen.add(msg.get("id"))
-            model = msg.get("model")
-            if not model or model == "<synthetic>":
+            if e.get("type") != "assistant" or not msg.get("model") or msg["model"] == "<synthetic>":
                 continue
-            models[model] = models.get(model, 0) + 1
             if e.get("effort"):
                 efforts.add(str(e["effort"]))
-            u = msg.get("usage") or {}
+            # One line per content block while the reply streams: only the last holds its final usage (output tokens,
+            # speed, the advisor's iterations), so a later line replaces an earlier one.
+            calls[msg.get("id") or n] = (msg["model"], msg.get("usage") or {})
+        models = {}
+        for model, u in calls.values():
+            models[model] = models.get(model, 0) + 1
             # With iterations, the totals leave out the advisor's calls and split cache writes for the first call only:
             # each iteration carries its own usage, the advisor's under its own model.
             costs = []
@@ -393,7 +394,7 @@ def builds_of(transcript):
             usd = None if usd is None or None in costs else usd + sum(costs)
         minutes = round((ts(max(times)) - ts(min(times))).total_seconds() / 60) if times else 0
         builds.append({"agent": meta["agentType"], "assigned_model": meta.get("model"), "branch": branch,
-                       "repo": (checkout(cwd) or (None, None))[1] if cwd else None, "models": models, "effort": sorted(efforts), "tokens": tokens,
+                       "repo": (checkout(cwd) or (None, session_repo))[1] if cwd else session_repo, "models": models, "effort": sorted(efforts), "tokens": tokens,
                        "advisor": advisor, "usd": usd, "minutes": minutes,
                        "start": min(times) if times else None})
     return builds
@@ -455,7 +456,7 @@ def claude_sessions():
             yield dict(harness="claude-code", id=sid, cwd=cwd, start=min(times), end=max(times), prompts=prompts,
                        models=models, effort=sorted(efforts), tokens=tokens, tool_calls=tools, advisor_calls=advisor,
                        branches=sorted(branches), repos={r: sorted(names) for r, names in repos.items()}, phases=phases,
-                       builds=builds_of(f))
+                       builds=builds_of(f, (checkout(cwd) or (None, None))[1] if cwd else None))
 
 
 def codex_sessions():

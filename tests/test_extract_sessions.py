@@ -341,7 +341,10 @@ def advisor_calls_and_what_the_table_cannot_price(home):
                "speed": "standard", "inference_geo": "global", "iterations": [first, advice, second]}
     plain = {"input_tokens": 10, "output_tokens": 1000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
     found = session(home, [user(0, "build it", "feat"), *assistant(1, "m0", "feat", [TEXT])], subagents=[
-        ("b1", "kit:build-high", build_turn(2, "x1", "claude-opus-5-5[1m]", advised, cwd=os.path.join(home, "repo")), None),
+        # Streamed as Claude Code writes it: the first line a partial snapshot, the final usage on the last.
+        ("b1", "kit:build-high", build_turn(2, "x1", "claude-opus-5-5[1m]", {**first, "output_tokens": 16, "type": None},
+                                            cwd=os.path.join(home, "repo"))
+         + build_turn(2, "x1", "claude-opus-5-5[1m]", advised, cwd=os.path.join(home, "repo")), None),
         ("b2", "kit:build-low", build_turn(3, "y1", "claude-opus-5-5", {**plain, "speed": "fast", "iterations": [plain, advice]}), "opus"),
         ("b3", "kit:build-standard", build_turn(4, "z1", "claude-sonnet-5-5", {**plain, "inference_geo": "us"}), "sonnet")])
     high, low, standard = sorted(found["builds"], key=lambda b: b["agent"])
@@ -353,7 +356,7 @@ def advisor_calls_and_what_the_table_cannot_price(home):
     assert abs(high["usd"] - (opus + fable)) < 1e-9, high["usd"]
     assert low["usd"] is None and standard["usd"] is None, "fast mode and US-only inference cost more than the table says"
     assert low["advisor"] == {"calls": 1, "usd": None}, low["advisor"]
-    assert low["repo"] is None, "a build outside a checkout names no repo"
+    assert low["repo"] == "repo", "a build whose worktree is gone takes the session's repo"
 
 
 def a_session_without_builds_lists_none(home):
