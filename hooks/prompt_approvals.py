@@ -293,7 +293,7 @@ def main():
             named = sorted(set(named) | set(offered))
     named += design_files.approval_names(prompt)
     import guard_bash  # after the clearing: if it fails to load, the last turn's approvals are already gone
-    named += guard_bash.database_approval_names(prompt)
+    named += guard_bash.database_approval_names(prompt) + guard_bash.action_approval_names(prompt)
     if named:
         os.makedirs(os.path.join(guard_mcp.TURN_APPROVALS, session))
         for service in named:

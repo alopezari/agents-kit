@@ -114,14 +114,14 @@ Every block, every approved or browser MCP call and every shell command a user's
 ### What the shell guard blocks
 
 - `git push --force`: rewrites remote history.
-- `git push` to main/master/trunk/develop/production/release: bypasses review.
+- `git push` to main/master/trunk/develop/production/release: bypasses review. Instead of running it themselves, the user can allow it for that branch until their next message, by asking for it in plain words (`push to main`) or by starting their message with the line `allow git push main`. A first push to a remote with no branches yet needs no approval.
 - `git reset --hard`: discards uncommitted work.
 - `git clean -f`: deletes untracked files.
 - `git checkout .`: discards all uncommitted changes.
 - `git restore .`: discards all uncommitted changes.
 - `git branch -D`: force-deletes a branch.
 - `git stash drop|clear`: deletes stashed work.
-- `gh pr merge`: merging is a human decision.
+- `gh pr merge`: merging is the user's decision. Instead of running it themselves, the user can allow it until their next message, by asking for it in plain words (`merge it`, `mergéalo`) or by starting their message with the line `allow gh pr merge`. `--admin` stays theirs.
 - `gh repo delete|archive`: deletes or archives a repository.
 - `gh release create|delete`: publishes or deletes a release.
 - `gh api -X DELETE`: deletes through the GitHub API.

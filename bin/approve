@@ -7,8 +7,8 @@
   approve revoke <session> <name>...   remove the ones `once` wrote; a turn approval stays
 
 `needed` reads a PreToolUse payload with the block's text as `deny`. When guard_mcp blocked a write, or guard_bash's
-DROP/TRUNCATE rule a command, it names the service, or the sql.* grant of each statement not granted yet this turn;
-`what` shows them and `scope` says what a turn approval covers. A later rule can still block the same call (a `sudo`
+DROP/TRUNCATE, merge or protected-push rule a command, it names the service, or each sql.*, git.merge or git.push-*
+grant not granted yet this turn; `what` shows them and `scope` says what a turn approval covers. A later rule can still block the same call (a `sudo`
 after the statement). Names is empty for anything else.
 
 `grant` and `once` are the user's own answer (the Claude Code mod's dialog); the shell guard refuses them from an agent.
@@ -45,10 +45,16 @@ def needed(payload):
     deny = str(payload.get("deny") or "")
     if payload.get("tool_name") == "Bash":
         import guard_bash  # only here: it loads the whole shell guard
-        # Another rule blocked it (a force push before the statement): granting the statement would change nothing.
-        if "Blocked by ~/.agents/hooks/guard_bash.py: " + dict(guard_bash.RULES)[guard_bash.DATABASE_DESTROY] not in deny:
-            return NOTHING
         command = str(tool_input.get("command") or "")
+
+        def blocked_by(pattern):
+            return "Blocked by ~/.agents/hooks/guard_bash.py: " + dict(guard_bash.RULES)[pattern] in deny
+
+        # Another rule blocked it (a force push before the statement): granting this one would change nothing.
+        if blocked_by(guard_bash.MERGE) or blocked_by(guard_bash.PROTECTED_PUSH):
+            return action_needed(guard_bash, command, session)
+        if not blocked_by(guard_bash.DATABASE_DESTROY):
+            return NOTHING
         verbs, shown = {}, []
         for match in re.finditer(guard_bash.DATABASE_DESTROY, command):
             name = guard_bash.database_grant(match.group())
@@ -73,6 +79,17 @@ def needed(payload):
         return NOTHING
     return {"names": [hit[0]], "what": f"`{hit[1]}` writes to {hit[0]}, which other people see",
             "scope": f"every {hit[0]} write"}
+
+
+def action_needed(guard_bash, command, session):
+    grants = [g for g in guard_bash.action_grants(command) or [] if not guard_mcp.approved(g, session)]
+    if not grants:
+        return NOTHING
+    shown = ["`gh pr merge` merges a pull request" if g == guard_bash.MERGE_GRANT
+             else f"`git push` to {g.removeprefix('git.push-')} skips review" for g in grants]
+    scope = ["any `gh pr merge`" if g == guard_bash.MERGE_GRANT else f"any push to {g.removeprefix('git.push-')}"
+             for g in grants]
+    return {"names": grants, "what": ", ".join(shown), "scope": " or ".join(scope)}
 
 
 def refuse(why):
