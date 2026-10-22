@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **18 command-line tools**: a11y-check, approve, browse, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
+- **19 command-line tools**: a11y-check, approve, browse, build-ab, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -252,6 +252,12 @@ approve revoke <session> <name>...   remove the ones `once` wrote; a turn approv
 browse assign                         pick the tool for this validation run (balanced alternation)
 browse <tool args...>                 run the assigned tool with these args, logging the call
 browse finish --checks N --passed P [--tool-issues K] [--notes "..."]
+```
+
+**`bin/build-ab`**: A/B harness for the build's model: Sonnet vs Opus, effort held at the build agent's per-tier value.
+
+```
+build-ab assign <low|standard|high>   print the model to give kit:build-<tier> on this branch
 ```
 
 **`bin/changelog`**: Cut a release from the changelog entries: each pull request adds its own changelog.d/<branch>.md, without a number.

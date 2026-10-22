@@ -42,8 +42,9 @@ def bash(command, tool_id="b"):
     return {"type": "tool_use", "id": f"t-{tool_id}", "name": "Bash", "input": {"command": command}}
 
 
-def session(home, rows, renames=(), cwd="repo"):
-    """Rows' "/repo" is a checkout of o/repo at HOME/repo; with `cwd`, the session ran in HOME/<cwd> instead."""
+def session(home, rows, renames=(), cwd="repo", subagents=()):
+    """Rows' "/repo" is a checkout of o/repo at HOME/repo; with `cwd`, the session ran in HOME/<cwd> instead.
+    `subagents` are (id, agent type, lines, model given at spawn or None)."""
     checkout = os.path.join(home, "repo")
     os.makedirs(checkout)
     subprocess.run(["git", "init", "-q", checkout], check=True)
@@ -51,6 +52,8 @@ def session(home, rows, renames=(), cwd="repo"):
     os.makedirs(os.path.join(home, ".claude", "projects", "p"))
     with open(os.path.join(home, ".claude", "projects", "p", "s1.jsonl"), "w") as fh:
         fh.writelines(json.dumps({**r, "cwd": os.path.join(home, cwd)} if r.get("cwd") else r) + "\n" for r in rows)
+    for agent in subagents:
+        subagent(home, *agent)
     os.makedirs(os.path.join(home, ".agents", "logs"))
     with open(os.path.join(home, ".agents", "logs", "quality.jsonl"), "w") as fh:
         fh.writelines(json.dumps({"kind": "rename", "repo": repo, "name": old, "to": new}) + "\n" for repo, old, new in renames)
@@ -267,10 +270,57 @@ def the_kit_names_count_as_their_former_phases(home):
 
 
 
+def subagent(home, agent_id, agent_type, lines, model):
+    """A subagent's transcript and meta file beside the session's, where Claude Code keeps them."""
+    folder = os.path.join(home, ".claude", "projects", "p", "s1", "subagents")
+    os.makedirs(folder, exist_ok=True)
+    meta = {"agentType": agent_type, "description": "d", **({"model": model} if model else {})}
+    json.dump(meta, open(os.path.join(folder, f"agent-{agent_id}.meta.json"), "w"))
+    with open(os.path.join(folder, f"agent-{agent_id}.jsonl"), "w") as fh:
+        fh.writelines(json.dumps(line) + "\n" for line in lines)
+
+
+def build_turn(minute, msg_id, model, usage, blocks=1):
+    return [{"type": "assistant", "isSidechain": True, "timestamp": at(minute), "cwd": "/repo", "gitBranch": "feat",
+             "effort": "high", "uuid": f"{msg_id}-{i}", "message": {"id": msg_id, "model": model, "usage": usage, "content": [TEXT]}}
+            for i in range(blocks)]
+
+
+def builds_come_from_their_transcripts(home):
+    usage = {"input_tokens": 10, "output_tokens": 1000, "cache_read_input_tokens": 100000, "cache_creation_input_tokens": 3000,
+             "cache_creation": {"ephemeral_5m_input_tokens": 2000, "ephemeral_1h_input_tokens": 1000}}
+    rows = [user(0, "build it", "feat"), *assistant(1, "m0", "feat", [TEXT])]
+    found = session(home, rows, subagents=[
+        ("b1", "kit:build-standard", [*build_turn(2, "x1", "claude-sonnet-5-5", usage, blocks=2),
+                                      *build_turn(9, "x2", "claude-sonnet-5-5", usage)], "sonnet"),
+        ("r1", "kit:review-tests", build_turn(3, "y1", "claude-opus-5-5", usage), None),
+        ("b2", "kit:build-low", [*build_turn(4, "z1", "claude-opus-5-5", usage), *build_turn(5, "z2", "claude-haiku-9", usage)], None)])
+    builds = sorted(found["builds"], key=lambda b: b["agent"])
+    assert [b["agent"] for b in builds] == ["kit:build-low", "kit:build-standard"], "only build agents, review agents left out"
+    standard = builds[1]
+    assert standard["models"] == {"claude-sonnet-5-5": 2} and standard["effort"] == ["high"], standard
+    assert standard["tokens"] == {"in": 20, "out": 2000, "cache_read": 200000, "cache_write_5m": 4000, "cache_write_1h": 2000}, \
+        "a message repeated once per content block counts once: " + str(standard["tokens"])
+    # per message: 10 x $2 + 1000 x $10 + 100000 x $0.10 + 2000 x $2.50 + 1000 x $4, per million tokens
+    assert abs(standard["usd"] - 2 * 0.02902) < 1e-9, standard["usd"]
+    assert standard["minutes"] == 7 and standard["branch"] == "feat" and standard["assigned_model"] == "sonnet", standard
+    assert builds[0]["usd"] is None, "a model the table doesn't price leaves the build without dollars, not under-counted"
+    spec = importlib.util.spec_from_file_location("extract_sessions", os.path.join(KIT, "usage", "extract_sessions.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.summarize(found)["builds"] == found["builds"]
+
+
+def a_session_without_builds_lists_none(home):
+    found = session(home, [user(0, "hi", "a"), *assistant(1, "m0", "a", [TEXT])])
+    assert found["builds"] == [], found["builds"]
+
+
 for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, branches_started_by_commands,
              writing_the_spec_marks_the_work_before_it, what_counts_as_starting_the_code, short_gaps_add_up,
              the_users_attention_per_branch, what_the_user_did_not_type, another_agents_run_is_not_the_user,
-             a_session_of_typed_commands, the_kit_names_count_as_their_former_phases):
+             a_session_of_typed_commands, the_kit_names_count_as_their_former_phases,
+             builds_come_from_their_transcripts, a_session_without_builds_lists_none):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:

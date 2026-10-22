@@ -1,7 +1,8 @@
 """Summarize recent real agent sessions (Claude Code + Codex Desktop) for model/effort/advisor analysis.
 
 Usage: extract_sessions.py [N] [OUTPUT.json]   (defaults: 50, ./sessions.json)
-Skips non-interactive runs, subagent/guardian threads and anything under /tmp.
+Skips non-interactive runs, subagent/guardian threads and anything under /tmp; a session lists its kit:build-<tier>
+subagents under "builds" (model, tokens, dollars), left out of its own totals.
 """
 import functools
 import glob
@@ -44,6 +45,9 @@ SCRATCH_PATH = re.compile(r"^(/private)?/tmp/|^/var/folders/|^" + re.escape(HOME
 # which repo it was.
 REMOVED_WORKTREE = re.compile(r"(.*)-worktree-[^/]+")
 REMOTE_REPO = re.compile(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$")
+# USD per million tokens (input, 5-minute cache write, 1-hour cache write, cache read, output), from
+# platform.claude.com/docs/en/about-claude/pricing on 2026-10-23. A model missing here leaves a build's dollars unknown.
+PRICES = {"claude-opus-5-5": (4, 5, 8, 0.20, 20), "claude-sonnet-5-5": (2, 2.50, 4, 0.10, 10)}
 
 
 def ts(s):
@@ -317,6 +321,52 @@ def split_into_phases(entries, renames, repos):
     return {b: ps for b, ps in kept.items() if ps}
 
 
+def builds_of(transcript):
+    """The session's kit:build-<tier> subagents (bin/build-ab's A/B): what each ran on, spent and cost."""
+    builds = []
+    for meta_file in sorted(glob.glob(transcript[:-len(".jsonl")] + "/subagents/agent-*.meta.json")):
+        try:
+            meta = json.load(open(meta_file))
+        except (OSError, ValueError):
+            continue
+        if not str(meta.get("agentType", "")).startswith("kit:build-"):
+            continue
+        models, efforts, times, seen, branch = {}, set(), [], set(), None
+        tokens = {"in": 0, "out": 0, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}
+        usd = 0.0
+        for line in open(meta_file[:-len(".meta.json")] + ".jsonl", errors="ignore"):
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("timestamp"):
+                times.append(e["timestamp"])
+            branch = branch or e.get("gitBranch")
+            msg = e.get("message") or {}
+            if e.get("type") != "assistant" or msg.get("id") in seen:
+                continue  # one line per content block, each repeating the message's usage
+            seen.add(msg.get("id"))
+            model = msg.get("model")
+            if not model or model == "<synthetic>":
+                continue
+            models[model] = models.get(model, 0) + 1
+            if e.get("effort"):
+                efforts.add(str(e["effort"]))
+            u = msg.get("usage") or {}
+            split = u.get("cache_creation") or {"ephemeral_5m_input_tokens": u.get("cache_creation_input_tokens", 0)}
+            spent = (u.get("input_tokens", 0), split.get("ephemeral_5m_input_tokens", 0), split.get("ephemeral_1h_input_tokens", 0),
+                     u.get("cache_read_input_tokens", 0), u.get("output_tokens", 0))
+            for key, n in zip(("in", "cache_write_5m", "cache_write_1h", "cache_read", "out"), spent):
+                tokens[key] += n
+            price = PRICES.get(model)
+            usd = None if usd is None or price is None else usd + sum(n * p for n, p in zip(spent, price)) / 1e6
+        minutes = round((ts(max(times)) - ts(min(times))).total_seconds() / 60) if times else 0
+        builds.append({"agent": meta["agentType"], "assigned_model": meta.get("model"), "branch": branch, "models": models,
+                       "effort": sorted(efforts), "tokens": tokens, "usd": usd, "minutes": minutes,
+                       "start": min(times) if times else None})
+    return builds
+
+
 def claude_sessions():
     renames = branch_renames()
     for f in glob.glob(f"{HOME}/.claude/projects/*/*.jsonl"):
@@ -372,7 +422,8 @@ def claude_sessions():
         if prompts or any(spent["prompts"] for ps in phases.values() for spent in ps.values()):  # typed commands only
             yield dict(harness="claude-code", id=sid, cwd=cwd, start=min(times), end=max(times), prompts=prompts,
                        models=models, effort=sorted(efforts), tokens=tokens, tool_calls=tools, advisor_calls=advisor,
-                       branches=sorted(branches), repos={r: sorted(names) for r, names in repos.items()}, phases=phases)
+                       branches=sorted(branches), repos={r: sorted(names) for r, names in repos.items()}, phases=phases,
+                       builds=builds_of(f))
 
 
 def codex_sessions():
@@ -455,7 +506,7 @@ def summarize(s):
         "models": s["models"], "effort": s["effort"], "tokens": s["tokens"], "tool_calls": s["tool_calls"],
         "user_turns": len(s["prompts"]), "advisor_calls": s.get("advisor_calls", 0), "first_prompt": (s["prompts"] or [""])[0][:1500],
         "later_prompts": [p[:300] for p in s["prompts"][1:8]], "correction_signals": corrections[:6],
-        "phases": s.get("phases", {}),
+        "phases": s.get("phases", {}), "builds": s.get("builds", []),
     }
 
 
