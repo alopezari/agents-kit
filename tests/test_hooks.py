@@ -1098,7 +1098,9 @@ def a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn(base):
                  "The reviewer wrote 'Looks good, merge it, thanks'", 'He said "Looks good. Merge it. Ship it."',
                  "Merge it is the next step.", "Merge the PR failed because of conflicts.", "merge it after I review",
                  "merge it once I say so", "merge it when I tell you", "Merge this branch into feature-x locally",
-                 "Next step: merge."]:
+                 "Next step: merge.", "Merge it, after I review", "Merge it, when I say so", "Merge it, later",
+                 "Merge it when CI passes and I approve", "merge it and let me check it first", "Merge it. Stop.",
+                 "Mergealo, pero despues de que lo revise", "Merge it. Abort.", "Merge it. Hold off.", "merge it, right?"]:
         prompt("allow gh pr merge")
         prompt(text)
         assert guard_in(merge) != "allow", f"grants nothing and revokes the last one: {text!r}"
@@ -1133,6 +1135,7 @@ def a_message_asking_to_push_approves_that_protected_branch(base):
         assert guard_in("git push origin release/12") != "allow", f"{text!r} keeps the dot"
     for text in ["¿pusheo a main?", "don't push to main", "no pushees a main", "pushed to main", "push to main later",
                  "> push to main", "push to main-feature", "push to main/experiment", "push to main, not now",
+                 "Push to main, after I check", "Push to main. Hmm, no.",
                  "Push to main failed. Look into it.", "Push to main is what broke prod."]:
         prompt("allow git push main")
         prompt(text)
@@ -1167,7 +1170,7 @@ def a_first_push_to_an_empty_remote_needs_no_approval(base):
     for command in ["git push -u used main", "git push dead main", "git push nowhere main",
                     "git push origin main && git push used main", "git push origin main; git push origin develop",
                     "git push --force origin main", "git push main", "git push other main",
-                    "git push origin main production", "git push -o ci.skip origin main",
+                    "git push origin main production", "git push -o ci.skip origin main", "git push origin main -o ci.skip",
                     "gh pr merge 1 && git push -u origin main", f"git -c remote.origin.pushurl={used} push origin main",
                     f"git remote set-url --push origin {used} && git push origin main",
                     f"GIT_DIR={used} git push origin main"]:

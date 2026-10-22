@@ -1363,12 +1363,17 @@ PUSH_REQUEST = re.compile(rf"(?:pushea(?:lo)?|haz push|haced push|sube(?:lo)?|pu
 REQUEST_LEADS = re.compile(r"((si|yes|ok|okay|vale|claro|perfecto|perfect|genial|great|sure|dale|venga|bien|good|"
                            r"please|por favor|gracias|thanks|thank you|then|luego|ahora|now|also|tambien|ya|so|pues|"
                            r"just|go ahead( and)?|adelante|listo|de acuerdo) )*")
-# A condition only the user can meet holds the request back: the grant would end before they meet it.
-REQUEST_HELD = re.compile(r"\b(later|despues|mas tarde|tomorrow|manana|myself|yo mismo)\b|\b(after|once|when|until|"
-                          r"cuando|hasta|en cuanto|una vez que) (i|yo|te lo|lo)\b|\b(i say|say so|tell you|te diga)\b")
+# A condition only the user can meet holds the sentence's request back: the grant would end before they meet it.
+REQUEST_HELD = re.compile(r"\b(after|once|when|until|before|cuando|hasta|en cuanto|una vez que|despues de que|antes de "
+                          r"que) (i|yo|te lo|lo)\b|\b(i say|say so|tell you|te diga|myself|yo mismo|let me|dejame)\b|"
+                          r"\b(i|yo) (approve|review|check|confirm)\b")
+# Later holds back the clause it's in ("Mergéalo y después instálalo" still merges), or the sentence when it's alone.
+REQUEST_LATER = re.compile(r"\b(later|despues|mas tarde|tomorrow|manana)\b")
+LATER_CLAUSE = re.compile(r"(?:(?:but|pero|only|solo) )*(?:later|despues|mas tarde|tomorrow|manana)")
 ACTION_WORD = re.compile(r"\bmerg|\bpush|\bsube")
 RETRACTION = re.compile(r"\b(wait|espera|actually|nevermind|never mind|olvidalo|scratch that|mejor no|cancel|"
-                        r"cancela|hold on|no lo hagas|not yet|todavia no|aun no|kidding|es broma)\b|^(no|nope|nah)$")
+                        r"cancela|stop|abort|hold on|hold off|no lo hagas|not yet|todavia no|aun no|kidding|es broma)\b|"
+                        r"(?:^|[,;] *)(no|nope|nah)$")
 REFUSAL = re.compile(r"\b(no|not|don'?t|do not|never|nunca|todavia|yet)\b|n't\b")
 # Text the user quotes: removed, and a quote left open drops the rest of the line, as does a colon ("the reviewer
 # wrote: merge it"). An apostrophe inside a word ("don't") opens nothing.
@@ -1405,11 +1410,12 @@ def action_approval_names(prompt):
             sentence = sentence.strip(" .!¡")
             if "?" in sentence or "¿" in sentence:
                 continue
-            asked = set()
+            asked, held = set(), REQUEST_HELD.search(sentence)
             for clause in re.split(r"[,;]|\b(?:y|e|and|then)\b", sentence):
                 clause = clause.strip(" .!¡")
                 said = clause[REQUEST_LEADS.match(clause + " ").end():].strip()
-                if REQUEST_HELD.search(said):
+                if REQUEST_LATER.search(said):
+                    held = held or LATER_CLAUSE.fullmatch(said)
                     continue
                 if MERGE_REQUEST.fullmatch(said):
                     asked.add(MERGE_GRANT)
@@ -1418,8 +1424,8 @@ def action_approval_names(prompt):
                     asked.add(push_grant(push.group("branch")))
             if RETRACTION.search(sentence) or (asked or ACTION_WORD.search(sentence)) and REFUSAL.search(sentence):
                 grants = set()
-                continue
-            grants |= asked
+            elif not held:
+                grants |= asked
     return sorted(grants)
 
 
