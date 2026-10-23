@@ -2234,6 +2234,15 @@ def stop_clears_only_the_edits_it_checked(base):
                      "    clearing.start()\n    time.sleep(0.3)\n    fh.write('/raced.py\\n')\n    fh.close()\n"
                      "clearing.join()\nprint(open(marker).read().split())", repo)
     assert raced.stdout.strip() == "['/raced.py']", (raced.stdout, raced.stderr[-500:])
+    # And post_edit waits while the stop holds the lock.
+    edit = json.dumps({"session_id": session, "tool_input": {"file_path": "/waited.md"}})
+    waited = in_hooks(f"import time, subprocess, post_edit\nmarker = {edit_marker(session)!r}\n"
+                      "with post_edit.marker_lock(marker):\n"
+                      f"    hook = subprocess.Popen([sys.executable, {H + 'post_edit.py'!r}], stdin=subprocess.PIPE, text=True)\n"
+                      f"    hook.stdin.write({edit!r})\n    hook.stdin.close()\n    time.sleep(0.5)\n"
+                      "    print(hook.poll(), open(marker).read().split())\nhook.wait()\nprint(open(marker).read().split())", repo)
+    assert waited.stdout.splitlines() == ["None ['/raced.py']", "['/raced.py', '/waited.md']"], \
+        (waited.stdout, waited.stderr[-500:])
 
 
 def a_delete_only_patch_is_checked(base):
@@ -2253,6 +2262,14 @@ def a_delete_only_patch_is_checked(base):
     open(os.path.join(repo, ".gitignore"), "a").write("worktrees/\n")
     nested = in_hooks(f"print(repr(s.checkout_of({os.path.join(repo, 'worktrees', 'gone', 'app.py')!r})))", base)
     assert nested.stdout.strip() == "''", (nested.stdout, nested.stderr[-500:])
+    # A tracked file deleted under an ignored directory is still the checkout's, staged or not.
+    os.makedirs(os.path.join(repo, "worktrees", "kept"))
+    open(os.path.join(repo, "worktrees", "kept", "test_k.py"), "w").write("def test_k(): pass\n")
+    git(repo, "add", "-f", ".gitignore", "worktrees/kept/test_k.py")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "vendored")
+    git(repo, "rm", "-q", "worktrees/kept/test_k.py")
+    tracked = in_hooks(f"print(s.checkout_of({os.path.join(repo, 'worktrees', 'kept', 'test_k.py')!r}))", base)
+    assert tracked.stdout.strip() == os.path.realpath(repo), (tracked.stdout, tracked.stderr[-500:])
     moved = "*** Begin Patch\n*** Update File: app.py\n*** Move to: lib/app.py\n@@\n-x = 1\n+x = 2\n*** End Patch\n"
     run_hook("post_edit.py", {"session_id": session, "cwd": repo, "tool_name": "apply_patch", "tool_input": {"patch": moved}})
     with open(edit_marker(session)) as fh:
@@ -2308,6 +2325,11 @@ def a_verify_report_that_cant_be_written_is_said(base):
             os.remove(report)
     failed = in_hooks("def broken():\n    raise RuntimeError('git hash-object failed')\nrs.fingerprint = broken\n"
                       "print(s.run_verify(os.getcwd()))", repo)
+    timed = in_hooks("def broken():\n    raise rs.GitTimeout('git hash-object timed out after 30s')\nrs.fingerprint = broken\n"
+                     "s.save_verify_report = lambda *args: 'the stale report is still there'\n"
+                     "try:\n    s.run_verify(os.getcwd())\nexcept rs.GitTimeout as error:\n    print(error)", repo)
+    assert "timed out after 30s" in timed.stdout and "the stale report is still there" in timed.stdout, \
+        ("a fingerprint timeout still says the report failed", timed.stdout, timed.stderr[-500:])
     nowhere = in_hooks(f"os.environ['HOME'] = {base!r}\nprint(s.save_verify_report(os.getcwd(), 'verify', 'out', 'PASS'))", repo)
     assert "earlier report" in nowhere.stdout, ("no reports helper: said, not raised", nowhere.stdout, nowhere.stderr[-500:])
     lost = in_hooks("s.SPEC_PATH = '/usr/bin/false'\nprint(s.unmapped_files(os.getcwd(), 'x'))", repo)

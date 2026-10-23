@@ -233,9 +233,12 @@ def checkout_of(path):
     while not os.path.isdir(start) and os.path.dirname(start) != start:
         start = os.path.dirname(start)
     root = git(["rev-parse", "--show-toplevel"], start).strip()
-    # A removed worktree nested in its main checkout (an ignored directory) would otherwise read as the main's edit.
-    if root and start != directory and review_stamp.run_git(
-            ["check-ignore", "-q", "--no-index", os.path.relpath(os.path.realpath(path), root)], cwd=root).returncode == 0:
+    # A removed worktree nested in an ignored directory of its main checkout would otherwise read as the main's edit.
+    # A file the checkout tracks (in its index, or in HEAD once `git rm` staged the deletion) is still its own.
+    relative = os.path.relpath(os.path.realpath(path), root) if root else ""
+    if (root and start != directory
+            and review_stamp.run_git(["check-ignore", "-q", relative], cwd=root).returncode == 0
+            and not git(["ls-tree", "--name-only", "HEAD", "--", relative], root).strip()):
         return ""
     return root
 
@@ -721,7 +724,8 @@ def run_verify(root):
         result = finish([f"Couldn't fingerprint the change, so verify can't stamp it: {error}"],
                         f"FAIL (couldn't fingerprint the change: {error})")
         if isinstance(error, review_stamp.GitTimeout):
-            raise
+            problems, stamp_error = result[0][1:], result[4]
+            raise review_stamp.GitTimeout("; ".join([str(error), *problems, *[stamp_error] * bool(stamp_error)])) from None
         return result
     try:
         result = run_snapshot(verify, root) if verify != AUTO_VERIFY else subprocess.run(
