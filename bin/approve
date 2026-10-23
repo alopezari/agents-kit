@@ -74,7 +74,9 @@ def needed(payload):
         return {"names": sorted(verbs), "what": f"{', '.join(shown)} {'destroys' if len(shown) == 1 else 'destroy'} "
                 "database data", "scope": "any " + " or ".join(sorted(set(verbs.values())))}
     tool_name = str(payload.get("tool_name") or "")
-    hit = None if guard_mcp.BROWSER_MCP.match(tool_name) else guard_mcp.classify(tool_name, tool_input)
+    # With a profile that didn't load, the guard denies whatever is approved: a dialog would change nothing.
+    hit = None if guard_mcp.LOAD_ERROR or guard_mcp.BROWSER_MCP.match(tool_name) \
+        else guard_mcp.classify(tool_name, tool_input)
     if not hit or "Blocked by ~/.agents/hooks/guard_mcp.py: " not in deny or guard_mcp.approved(hit[0], session):
         return NOTHING
     return {"names": [hit[0]], "what": f"`{hit[1]}` writes to {hit[0]}, which other people see",

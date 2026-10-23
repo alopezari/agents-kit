@@ -24,7 +24,7 @@ import tokenize
 import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from hooklog import harness, log  # noqa: E402
+from hooklog import harness, log, redact  # noqa: E402
 import design_files  # noqa: E402
 import phase_switches  # noqa: E402
 import private_terms  # noqa: E402
@@ -103,8 +103,9 @@ WRITERS = {"rm", "rmdir", "mv", "cp", "touch", "mkdir", "tee", "ln", "chmod", "c
            "truncate", "unlink", "shred"}
 APPROVALS_WHY = ("Touching `~/.agents/approvals`: approvals for shared-system writes must come from the user, not the "
                  "agent.")
-SWITCHES_PHASE = ("`phase_switches.py set`: a phase is switched by the user, with a `phase off|on` line in their message or "
-                  "`/flow off|on` in Claude Code, not by the agent.")
+SWITCHES_PHASE = ("`phase_switches.py set`: the phases and the review's re-check rounds are set by the user, not by the "
+                  "agent: with a `phase off|on <phase>` or `review-rounds <0-9>` line in their message, or "
+                  "`/flow off|on <phase>` or `/flow review-rounds <0-9>` in Claude Code.")
 REDIRECT = re.compile(r"&?[<>]+[&|]?")  # >, >>, 2>&1's >&, &>, >|, <<
 CONTINUATION = "\\\n"
 
@@ -1794,7 +1795,7 @@ def main():
         record_push(command, cwd, payload)
         return 0
 
-    log("guard_bash", "deny", payload, f"{reason} | {command[:200]}")
+    log("guard_bash", "deny", payload, f"{reason} | {redact(command, 200)}")
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

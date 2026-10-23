@@ -101,6 +101,13 @@ def names_the_approvals_that_would_lift_a_block(base):
     assert run(env, "needed").returncode == 2, "no payload"
 
 
+def a_profile_that_didnt_load_offers_no_dialog(base):
+    env = new_home(base)
+    open(os.path.join(base, "profiles", "work", "mcp-writes.json"), "w").write('{"direct": {"x": "("}}')
+    got = needed(env, mcp("mcp__linear__save_issue"))
+    assert got == {"names": [], "what": "", "scope": ""}, f"the guard denies it whatever is approved: {got}"
+
+
 def names_the_merge_and_protected_push_approvals(base):
     env = new_home(base)
     got = needed(env, bash("gh pr merge 12 --squash"))
@@ -171,7 +178,7 @@ def a_grant_is_the_turn_approval_a_message_would_write(base):
             f"{verb} cut short takes back the names it wrote"
 
 
-for test in (names_the_approvals_that_would_lift_a_block, names_the_merge_and_protected_push_approvals, a_grant_is_the_turn_approval_a_message_would_write):
+for test in (names_the_approvals_that_would_lift_a_block, a_profile_that_didnt_load_offers_no_dialog, names_the_merge_and_protected_push_approvals, a_grant_is_the_turn_approval_a_message_would_write):
     base = tempfile.mkdtemp(prefix="agents-test-approve-")
     try:
         test(base)

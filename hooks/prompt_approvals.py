@@ -16,7 +16,9 @@ service, naming it ("¿Quieres que la cree en Linear?"), and the user's message 
 WCCOM…", "dale", "go ahead"), that service is approved until the next message. Only the transcript's tail is read, and
 anything it can't show for sure (a missing or corrupt file, a turn that ended on a tool call) approves nothing.
 Only the user's own messages reach this hook, so an agent can't grant itself one: it can word the question, but the
-user has to accept it. Mentioning the service only to read from it approves writes for that turn too.
+user has to accept it. Mentioning the service only to read from it approves writes for that turn too. Each message
+first clears the last one's approvals: a folder that can't be removed is moved aside, and one that can't be moved
+either blocks the message.
 The objects guard_mcp.py records a session's approved writes to outlast the user's messages: this hook only deletes
 the ones older than guard_mcp.OBJECT_APPROVAL_HOURS.
 When the message arrives RETURN_GAP_HOURS or more after the newest conversation entry in the transcript's tail, the
@@ -259,15 +261,33 @@ def main():
     session = re.sub(r"[^\w-]", "", str(payload.get("session_id") or ""))
     if not session:
         return 0
-    shutil.rmtree(os.path.join(guard_mcp.TURN_APPROVALS, session), ignore_errors=True)  # the last turn's
+    last_turn = os.path.join(guard_mcp.TURN_APPROVALS, session)
+    try:
+        shutil.rmtree(last_turn)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        # A name no session folder can have (they are [\w-] only), so no guard reads it; the sweep below retries it.
+        aside = f"{last_turn}.unremoved-{time.time_ns()}"
+        try:
+            os.rename(last_turn, aside)
+        except OSError as rename_error:
+            print(f"The last message's approvals in {last_turn} couldn't be removed ({error}) or moved aside "
+                  f"({rename_error}), so they would still be in force for this one. Remove that folder "
+                  f"(`chmod -R u+w {last_turn} && rm -rf {last_turn}`), then send the message again.", file=sys.stderr)
+            log("prompt_approvals", "clear-blocked", payload, f"{last_turn}: {error}; {rename_error}")
+            return 2
+        log("prompt_approvals", "clear-moved-aside", payload, f"{last_turn}: {error}")
     os.makedirs(guard_mcp.TURN_APPROVALS, exist_ok=True)
     for name in os.listdir(guard_mcp.TURN_APPROVALS):  # sessions long gone
         path = os.path.join(guard_mcp.TURN_APPROVALS, name)
         try:
             if time.time() - os.path.getmtime(path) > STALE_SECONDS:
-                shutil.rmtree(path, ignore_errors=True)
-        except OSError:  # another session's hook removed it first
+                shutil.rmtree(path)
+        except FileNotFoundError:  # another session's hook removed it first
             pass
+        except OSError as error:
+            log("prompt_approvals", "clear-failed", payload, f"{path}: {error}")
     for folder, _, records in os.walk(guard_mcp.SESSION_APPROVALS, topdown=False):
         for name in records:
             path = os.path.join(folder, name)

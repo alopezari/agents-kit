@@ -1208,6 +1208,112 @@ def guard_mcp_logs_browser_mcp(base):
     assert logged[-2:] == ["mcp__playwright-headless__browser_navigate", "mcp__claude-in-chrome__navigate"], logged[-3:]
 
 
+def a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through(base):
+    profile = os.path.join(base, "profiles", "work", "mcp-writes.json")
+    os.makedirs(os.path.dirname(profile))
+    env = {"HOME": base, "AGENTS_PROFILES_DIR": os.path.join(base, "profiles")}
+
+    def call(tool, event="PreToolUse"):
+        return run_hook("guard_mcp.py", {"tool_name": tool, "tool_input": {}, "cwd": "/tmp", "session_id": "s1",
+                                         "hook_event_name": event}, env=env)
+
+    run_hook("prompt_approvals.py", {"prompt": "Crea una tarea en Linear", "session_id": "s1", "cwd": "/tmp"}, env=env)
+    assert call("mcp__linear__save_issue") is None, "approved while the profile still loads"
+    for broken in ('{"direct": {"tracker": "("}}', '{"direct": '):
+        open(profile, "w").write(broken)
+        for tool in ("mcp__linear__save_issue", "mcp__tracker__get_issue"):
+            got = call(tool)
+            reason = got and got["hookSpecificOutput"]["permissionDecisionReason"]
+            assert reason and "mcp-writes.json" in reason and "hooks.jsonl" in reason, (broken, tool, got)
+        assert call("mcp__playwright-headless__browser_navigate") is None, "browser calls are never blocked"
+        assert call("mcp__linear__save_issue", "PostToolUse") is None, "after the call there is nothing to block"
+    done = subprocess.run(["python3", H + "guard_mcp.py"], input="not json", capture_output=True, text=True,
+                          env={**os.environ, **env})
+    assert done.returncode == 0 and not done.stdout, done
+    logged = [json.loads(l) for l in open(os.path.join(base, ".agents", "logs", "hooks.jsonl"))]
+    assert any(l["hook"] == "guard_mcp" and l["decision"] == "error" and "mcp-writes.json" in l["detail"]
+               for l in logged), logged[-3:]
+    turn = os.path.join(base, ".agents", "approvals", "turn", "s1")
+    assert os.path.isdir(turn), "the grant is there before the next message"
+    run_hook("prompt_approvals.py", {"prompt": "now fix the failing test", "session_id": "s1", "cwd": "/tmp"}, env=env)
+    assert not os.path.exists(turn), "a broken profile doesn't keep the last turn's approvals"
+
+
+def the_hook_log_keeps_secrets_out(base):
+    log = os.path.expanduser("~/.agents/logs/hooks.jsonl")
+    ghp, slack, anthropic, openai = "ghp_" + "A1b2C3d4" * 5, "xoxb-1234567890-abcdefABCDEF", "sk-ant-api03-" + "Zz9" * 10, \
+        "sk-proj-" + "Qq8" * 10
+    cases = [  # the command, the values it must not log, and a part of it that must stay
+        ("PGPASSWORD=hunter2pw psql -h db -c 'select 1'", ["hunter2pw"], "psql -h db"),
+        ("GH_TOKEN=tok3nvalue gh api user", ["tok3nvalue"], "gh api user"),
+        ("export AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG'", ["wJalrXUtnFEMI"], "export AWS_SECRET_ACCESS_KEY="),
+        ("curl --token=abcdef123456 https://api.example.com", ["abcdef123456"], "https://api.example.com"),
+        ('wp user create bob b@x.test --password "correct horse"', ["correct", "horse"], "wp user create bob"),
+        ("tool --api-key k3yk3yk3y --secret=s3cr3tval run", ["k3yk3yk3y", "s3cr3tval"], " run"),
+        ("mysql -uroot -pR00tpass wordpress", ["R00tpass"], "-uroot"),
+        ("curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc' https://x.test", ["eyJhbGciOiJIUzI1NiJ9"], "https://x.test"),
+        ("git clone https://bob:pa55w0rd@example.com/r.git", ["pa55w0rd"], "example.com/r.git"),
+        (f"echo {ghp} {slack} {anthropic} {openai} AKIAIOSFODNN7EXAMPLE",
+         [ghp[:10], slack[:10], anthropic[:12], openai[:12], "AKIAIOSFODNN7"], "echo "),
+        # The shell guard cuts the command at 200 characters: these secrets start before the cut and end after it.
+        ("echo " + "a" * 186 + " " + ghp, [ghp[:6]], "a" * 50),
+        ("echo " + "b" * 170 + " https://bob:pa55w0rdpa55w0rd@example.com", ["pa55w"], "b" * 50),
+    ]
+    for command, secrets, kept in cases:
+        assert guard(f"{command}; git reset --hard") == "deny", command
+        line = [l for l in open(log) if '"guard_bash"' in l and '"deny"' in l][-1]
+        detail = json.loads(line)["detail"]
+        for secret in secrets:
+            assert secret not in line, (secret, line)
+        assert "[redact" in detail and kept in detail, detail  # "[redacte" where the cut falls in it
+        if len(command) < 150:
+            assert "git reset --hard" in detail, ("the rule's command is kept", detail)
+    for innocent in ["tar -pxf a.tar", "ls --token-file x", "grep -r KEYS docs"]:
+        assert guard(f"{innocent}; git reset --hard") == "deny"
+        assert innocent in json.loads([l for l in open(log) if '"deny"' in l][-1])["detail"], innocent
+
+
+def a_turn_approval_that_cant_be_removed_is_moved_aside(base):
+    if os.geteuid() == 0:
+        return  # root ignores the read-only modes this test relies on
+    env = {"HOME": base, "AGENTS_PROFILES_DIR": os.path.join(base, "profiles")}
+    turns = os.path.join(base, ".agents", "approvals", "turn")
+
+    def prompt(text):
+        return subprocess.run(["python3", H + "prompt_approvals.py"], capture_output=True, text=True,
+                              input=json.dumps({"prompt": text, "session_id": "s1", "cwd": "/tmp"}),
+                              env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, **env})
+
+    def write():
+        got = run_hook("guard_mcp.py", {"tool_name": "mcp__linear__save_issue", "tool_input": {}, "cwd": "/tmp",
+                                        "session_id": "s1"}, env=env)
+        return "deny" if got else "allow"
+
+    stuck = os.path.join(turns, "gone", "x")
+    os.makedirs(stuck)
+    os.utime(os.path.dirname(stuck), (time.time() - 2 * 86400,) * 2)
+    os.chmod(os.path.dirname(stuck), 0o555)
+    session = os.path.join(turns, "s1")
+    try:
+        assert prompt("Crea una tarea en Linear").returncode == 0 and write() == "allow"
+        os.chmod(session, 0o555)
+        done = prompt("now fix the failing test")
+        assert done.returncode == 0, done
+        assert not os.path.exists(session) and write() == "deny", "the last turn's approval no longer counts"
+        assert [n for n in os.listdir(turns) if n.startswith("s1.")], os.listdir(turns)
+        assert prompt("Crea otra tarea en Linear").returncode == 0 and write() == "allow", "this message's own count"
+        logged = [json.loads(l) for l in open(os.path.join(base, ".agents", "logs", "hooks.jsonl"))]
+        assert any(l["decision"] == "clear-failed" and "gone" in l["detail"] for l in logged), \
+            "a long-gone session's folder that can't be removed is logged"
+        os.chmod(session, 0o555)
+        os.chmod(turns, 0o555)
+        done = prompt("now fix the failing test")
+        assert done.returncode == 2 and session in done.stderr, done
+    finally:
+        for folder, dirs, _ in os.walk(turns):
+            os.chmod(folder, 0o755)
+
+
 # --- stamps and the PR gate ---------------------------------------------------------------------
 def pr_gate_review_and_validation(base):
     repo = new_repo(base)
@@ -2460,7 +2566,7 @@ def impeccable_guard_edge_cases(base):
 
     assert "rewrites remote history" in shell("git push --force origin x"), \
         "a broken profile's MCP rules don't take the shell guard down"
-    assert "guard failed" in shell("echo x > PRODUCT.md"), "and this guard fails closed, saying why"
+    assert "PRODUCT.md" in shell("echo x > PRODUCT.md"), "nor this one, which still asks before the file"
     os.remove(os.path.join(profiles, "broken", "mcp-writes.json"))
     for command in [f"cp {src}/PRODUCT.md .", f"mv {src}/DESIGN.md .", f"cp -R {src}/PRODUCT.md packages",
                     'echo x >"packages/web/DESIGN.md"', "env NODE_ENV=dev impeccable live", "CI=1 impeccable hooks on",
@@ -2984,6 +3090,10 @@ def only_the_user_runs_the_switch_cli(base):
                 "bash <<'EOF'\npython3 hooks/phase_switches.py set off x\nEOF", "cat <<EOF | sh\npython3 hooks/phase_switches.py set off x\nEOF",
                 "python3 ~/.agents/hooks/phase_switches.py set review-rounds 2 --global"]:
         assert guard(cmd, repo) == "deny", f"should deny: {cmd}"
+    said = run_hook("guard_bash.py", {"tool_input": {"command": "python3 hooks/phase_switches.py set review-rounds 0"},
+                                      "cwd": repo, "session_id": "test"})["hookSpecificOutput"]["permissionDecisionReason"]
+    for form in ("`phase off|on", "`review-rounds <0-9>", "`/flow off|on", "`/flow review-rounds <0-9>"):
+        assert form in said, (form, said)
     for cmd in ["python3 -m py_compile hooks/phase_switches.py", "grep -n 'set' hooks/phase_switches.py",
                 "~/.agents/bin/phase switches", "git log --grep 'phase_switches set'", "echo phase_switches.py; set -e",
                 "rg -n 'phase_switches.py set' hooks", 'git commit -m "Run phase_switches.py set from /flow"',
@@ -3241,7 +3351,7 @@ def a_stacked_branch_is_measured_against_its_parent(base):
 TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, the_old_self_review_name_still_switches_the_review, coming_back_after_hours_asks_for_the_status_first, a_review_rounds_line_sets_the_re_checks_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
-         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
+         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
