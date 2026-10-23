@@ -51,6 +51,13 @@ def branches(main):
     return set(sh(main, "git", "branch", "--format=%(refname:short)").stdout.split())
 
 
+def branch_store(home):
+    """The store's folder of branch switches for the one repo whose phases the test switched."""
+    root = os.path.join(home, ".agents", "approvals", "phases", "branch")
+    (repo,) = os.listdir(root)
+    return os.path.join(root, repo)
+
+
 def removes_merged_and_keeps_the_rest_with_reasons(base):
     main = setup(base)
     done = worktree(base, main, "done")
@@ -131,7 +138,7 @@ def forgets_the_phase_switches_of_the_branches_it_deletes(base):
         switched = subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"],
                                   cwd=path, capture_output=True, text=True, env=env)
         assert switched.returncode == 0, switched.stdout + switched.stderr
-    store = os.path.join(home, ".agents", "approvals", "phases", "branch", "shop")
+    store = branch_store(home)
     assert sorted(os.listdir(store)) == ["done.json", "open.json"], os.listdir(store)
     dry = subprocess.run([PRUNE, "--dry-run"], cwd=main, capture_output=True, text=True, env=env)
     assert "would delete branch done and its phase switches" in dry.stdout, dry.stdout
@@ -145,6 +152,29 @@ def forgets_the_phase_switches_of_the_branches_it_deletes(base):
     assert not os.path.exists(label), "a new branch named done must not show the old branch's label"
 
 
+def forgets_only_the_switches_of_its_own_repo(base):
+    home = os.path.join(base, "home")
+    os.makedirs(home)
+    env = {**os.environ, "HOME": home}
+    checkouts = []
+    for owner in ("a", "b"):  # two repos whose main checkouts are both named shop
+        os.makedirs(os.path.join(base, owner))
+        main = setup(os.path.join(base, owner))
+        fix = worktree(os.path.join(base, owner), main, "fix")
+        subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"], cwd=fix,
+                       capture_output=True, text=True, env=env, check=True)
+        checkouts.append((main, fix))
+    (a, a_fix), (b, b_fix) = checkouts
+    sh(a, "git", "worktree", "remove", a_fix)
+    out = subprocess.run([PRUNE], cwd=a, capture_output=True, text=True, env=env)
+    assert out.returncode == 0 and "deleted branch fix and its phase switches" in out.stdout, out
+    read = ("import sys; sys.path.insert(0, sys.argv[1]); import phase_switches; "
+            "print(phase_switches.phases_off(sys.argv[2]))")
+    left = subprocess.run(["python3", "-c", read, os.path.join(KIT, "hooks"), b_fix], capture_output=True, text=True,
+                          env=env)
+    assert left.stdout.strip() == "{'audit': 'branch'}", f"the other shop keeps its fix's switches: {left}"
+
+
 def says_when_it_cannot_check_the_switches(base):
     main = setup(base)
     home = os.path.join(base, "home")
@@ -154,7 +184,7 @@ def says_when_it_cannot_check_the_switches(base):
     subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"], cwd=done,
                    capture_output=True, text=True, env=env, check=True)
     sh(main, "git", "worktree", "remove", done)
-    store = os.path.join(home, ".agents", "approvals", "phases", "branch", "shop")
+    store = branch_store(home)
     os.chmod(store, 0o600)  # can't be searched: whether done.json is there is unknown, not no
     try:
         dry = subprocess.run([PRUNE, "--dry-run"], cwd=main, capture_output=True, text=True, env=env)
@@ -188,7 +218,7 @@ def deletes_the_branch_even_when_its_switches_stay(base):
     done = worktree(base, main, "done")
     subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"], cwd=done,
                    capture_output=True, text=True, env=env, check=True)
-    store = os.path.join(home, ".agents", "approvals", "phases", "branch", "shop")
+    store = branch_store(home)
     os.chmod(store, 0o500)  # the switch file can't be removed
     try:
         out = subprocess.run([PRUNE], cwd=main, capture_output=True, text=True, env=env)
@@ -200,7 +230,7 @@ def deletes_the_branch_even_when_its_switches_stay(base):
 
 for test in (removes_merged_and_keeps_the_rest_with_reasons, keeps_the_worktree_it_runs_in,
              a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect,
-             forgets_the_phase_switches_of_the_branches_it_deletes, deletes_the_branch_even_when_its_switches_stay,
+             forgets_the_phase_switches_of_the_branches_it_deletes, forgets_only_the_switches_of_its_own_repo, deletes_the_branch_even_when_its_switches_stay,
              says_when_it_cannot_check_the_switches, keeps_the_switches_when_it_cannot_name_the_repo):
     base = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-"))
     try:

@@ -3217,7 +3217,7 @@ def a_phase_line_switches_phases_by_scope(base):
     said = phase_line("phase off verify", a)
     assert "Switched verify off" in said and "every phase counts as on" in said, \
         f"the switch is saved, and the message says another scope's file keeps every phase on: {said}"
-    assert json.load(open(os.path.join(PHASE_STORE, "branch", "zz-phase-a", "feature.json")))["verify"] == "off"
+    assert json.load(open(switch_file(a, "feature")))["verify"] == "off"
     label = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "--refresh"], cwd=a, capture_output=True, text=True)
     assert "switches unreadable" in label.stdout, label.stdout + label.stderr
     with open(store, "w") as fh:
@@ -3261,8 +3261,8 @@ def the_old_self_review_name_still_switches_the_review(base):
         assert "validation" in pr_gate(), f"a stored self-review: off lifts the review gate: {pr_gate()}"
         phase_line("phase on review", a)
         assert phases_off(a) == {}, "a branch's on under the new name overrides a global off under the old one"
-        os.remove(os.path.join(PHASE_STORE, "branch", "zz-phase-alias", "feature.json"))
-        repo_store = os.path.join(PHASE_STORE, "repo", "zz-phase-alias.json")
+        os.remove(switch_file(a, "feature"))
+        repo_store = switch_file(a)
         os.makedirs(os.path.dirname(repo_store), exist_ok=True)
         repo_file({"self-review": "on", "review": "off", "verify": "off"})
         assert phases_off(a) == {"review": "repo", "verify": "repo"}, f"the new name wins within one file: {phases_off(a)}"
@@ -3282,6 +3282,162 @@ def the_old_self_review_name_still_switches_the_review(base):
         else:
             with open(store, "w") as fh:
                 fh.write(kept)
+
+
+def switch_file(cwd, branch=None):
+    """The store's file for the repo in cwd, or for one of its branches, wherever the layout puts it."""
+    sys.path.insert(0, H)
+    import phase_switches
+    common = git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    return dict(phase_switches.store_files(common, branch))["branch" if branch else "repo"]
+
+
+def renamed_branch(base, name, *lines):
+    """A repo whose branch `old`, with verify off and review-rounds 3 there and validate off for the repo, was renamed
+    to `new` and not read since."""
+    repo = new_repo(base, name)
+    git(repo, "switch", "-q", "-c", "old")
+    for line in ("phase off verify", "review-rounds 3", "phase off validate repo", *lines):
+        assert "Switched" in phase_line(line, repo), line
+    git(repo, "branch", "-m", "old", "new")
+    return repo
+
+
+def switches_follow_a_branch_rename(base):
+    kept = {"verify": "branch", "validate": "repo"}
+    repo = renamed_branch(base, "zz-rename-read")
+    assert phases_off(repo) == kept, f"the first read after the rename: {phases_off(repo)}"
+    assert review_rounds(repo) == (3, "branch")
+    assert review_rounds(renamed_branch(base, "zz-rename-rounds")) == (3, "branch"), "review-rounds read first"
+    repo = renamed_branch(base, "zz-rename-gate", "phase off review")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    gate = run_hook("guard_bash.py", {"tool_input": {"command": "gh pr create --fill"}, "cwd": repo, "session_id": "test"})
+    assert gate is None, f"the PR gate, read first, skips the review switched off before the rename: {gate}"
+    repo = renamed_branch(base, "zz-rename-stop")
+    verify, ran = os.path.expanduser("~/.agents/repos/zz-rename-stop/verify"), os.path.join(base, "verify-ran")
+    os.makedirs(os.path.dirname(verify))
+    with open(verify, "w") as fh:
+        fh.write(f"#!/bin/sh\necho x >> '{ran}'\necho 'ran: pytest'\nexit 0\n")
+    os.chmod(verify, 0o755)
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    stop(RUN + "rename", repo, [os.path.join(repo, "app.py")])
+    assert not os.path.exists(ran), "the stop hook, read first, skips the verify switched off before the rename"
+
+    repo = renamed_branch(base, "zz-rename-write")
+    said = phase_line("phase off spec", repo)
+    assert "Phases off here now: spec (branch), validate (repo), verify (branch)." in said, said
+    assert review_rounds(repo) == (3, "branch"), "a write keeps what the old name had"
+    repo = renamed_branch(base, "zz-rename-flow")
+    done = subprocess.run(["python3", H + "phase_switches.py", "set", "review-rounds", "5"], cwd=repo, capture_output=True,
+                          text=True, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+    assert done.returncode == 0 and phases_off(repo) == kept and review_rounds(repo) == (5, "branch"), done.stdout
+
+    repo = renamed_branch(base, "zz-rename-twice")
+    git(repo, "branch", "-m", "new", "newer")
+    assert phases_off(repo) == kept and review_rounds(repo) == (3, "branch"), "old → new → newer"
+
+    repo = renamed_branch(base, "zz-rename-after")
+    assert phases_off(repo) == kept
+    git(repo, "switch", "-q", "-c", "old")
+    assert phases_off(repo) == {"validate": "repo"} and review_rounds(repo) == (1, "default"), \
+        "a branch created as old later has no branch switches, and the repo's still apply"
+    git(repo, "switch", "-q", "new")
+    assert phases_off(repo) == kept
+    repo = renamed_branch(base, "zz-rename-before")
+    git(repo, "branch", "old")
+    assert phases_off(repo) == {"validate": "repo"} and review_rounds(repo) == (1, "default"), \
+        "new takes nothing from a branch old that exists again"
+
+
+def a_rename_is_followed_in_the_checkout_read(base):
+    repo = renamed_branch(base, "zz-rename-target")
+    elsewhere = new_repo(base, "zz-rename-elsewhere")
+    git(elsewhere, "switch", "-q", "-c", "new")  # the same branch name, never renamed
+    read = ("import sys; sys.path.insert(0, sys.argv[1]); import phase_switches; "
+            "print(sorted(phase_switches.phases_off(sys.argv[2]).items()))")
+    done = subprocess.run(["python3", "-c", read, H, repo], cwd=elsewhere, capture_output=True, text=True)
+    assert done.stdout.strip() == "[('validate', 'repo'), ('verify', 'branch')]", done.stdout + done.stderr
+
+    reftable = os.path.join(base, "zz-rename-reftable")
+    if git(base, "init", "-q", "-b", "trunk", "--ref-format=reftable", reftable).returncode == 0:  # git 2.45 and later
+        git(reftable, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base")
+        git(reftable, "switch", "-q", "-c", "old")
+        phase_line("phase off verify", reftable)
+        git(reftable, "branch", "-m", "old", "new")
+        assert phases_off(reftable) == {"verify": "branch"}, "a reftable repository keeps no reflog files"
+
+    repo = renamed_branch(base, "zz-rename-unreadable", "phase off review")
+    reflog = os.path.join(repo, ".git", "logs", "refs", "heads", "new")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    os.chmod(reflog, 0)
+    try:
+        done = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "switches"], cwd=repo, capture_output=True,
+                              text=True)
+        assert done.returncode == 1 and "reflog" in done.stderr, done.stdout + done.stderr
+        gate = run_hook("guard_bash.py", {"tool_input": {"command": "gh pr create --fill"}, "cwd": repo,
+                                          "session_id": "test"})
+        said = gate["hookSpecificOutput"]["permissionDecisionReason"] if gate else ""
+        assert "No review recorded" in said and "reflog" in said and "every phase counts as on" in said, said
+    finally:
+        os.chmod(reflog, 0o644)
+
+
+def same_named_repos_keep_their_own_switches(base):
+    a, b = new_repo(base, os.path.join("a", "app")), new_repo(base, os.path.join("b", "app"))
+    git(a, "remote", "add", "origin", "https://example.com/team/app.git")
+    for repo in (a, b):
+        git(repo, "switch", "-q", "-c", "fix")
+    phase_line("phase off verify repo", a)
+    assert phases_off(a) == {"verify": "repo"} and phases_off(b) == {}, "the other app has no repo switches"
+    phase_line("phase off audit", a)
+    phase_line("phase off ci", b)
+    assert phases_off(a) == {"verify": "repo", "audit": "branch"} and phases_off(b) == {"ci": "branch"}, \
+        "nor the switches of its own branch fix"
+    worktree = os.path.join(base, "app-wt")
+    git(a, "switch", "-q", "-c", "elsewhere")
+    git(a, "worktree", "add", "-q", worktree, "fix")
+    assert phases_off(worktree) == {"verify": "repo", "audit": "branch"}, "two worktrees of one repo share switches"
+    names = [name for _, folders, files in os.walk(PHASE_STORE) for name in folders + files]
+    assert not any("example" in name for name in names), f"no remote in a file name: {names}"
+    hook_log = os.path.expanduser("~/.agents/logs/hooks.jsonl")
+    assert "example.com" not in (open(hook_log).read() if os.path.exists(hook_log) else ""), "nor in the log"
+    os.makedirs(os.path.join(PHASE_STORE, "branch", "app"))
+    with open(os.path.join(PHASE_STORE, "repo", "app.json"), "w") as fh:
+        json.dump({"spec": "off"}, fh)
+    with open(os.path.join(PHASE_STORE, "branch", "app", "fix.json"), "w") as fh:
+        json.dump({"review": "off"}, fh)
+    assert phases_off(b) == {"ci": "branch"}, f"an old-layout file has no effect: {phases_off(b)}"
+
+
+def a_review_rounds_line_says_what_an_unreadable_file_means(base):
+    repo = new_repo(base, "zz-rounds-unreadable")
+    git(repo, "switch", "-q", "-c", "feature")
+    store = os.path.join(PHASE_STORE, "global.json")
+    os.makedirs(PHASE_STORE, exist_ok=True)
+
+    def flow(rounds):
+        done = subprocess.run(["python3", H + "phase_switches.py", "set", "review-rounds", rounds, "--repo"], cwd=repo,
+                              capture_output=True, text=True, env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+        assert done.returncode == 0, f"the value is saved, so /flow succeeded: {done.returncode} {done.stdout}"
+        return done.stdout
+
+    for rounds, set_rounds in (("3", lambda: phase_line("review-rounds 3 repo", repo)), ("4", lambda: flow("4"))):
+        with open(store, "w") as fh:
+            fh.write("{not json")
+        said = set_rounds()
+        assert store in said and "saved" in said.lower(), f"the reply names the file and says the value was saved: {said}"
+        assert "the review runs 1 re-check round (the default)" in said and "until that file is fixed or deleted" in said, said
+        assert "every phase counts as on" not in said and "that many" not in said, said
+        done = subprocess.run([os.path.expanduser("~/.agents/bin/phase"), "review-rounds"], cwd=repo, capture_output=True,
+                              text=True)
+        assert done.returncode == 1, "an unreadable store still makes review-rounds exit 1"
+        os.remove(store)
+        assert review_rounds(repo) == (int(rounds), "repo"), "once the file is gone, the saved value applies"
+    with open(store, "w") as fh:
+        fh.write("{not json")
+    said = phase_line("phase off spec", repo)
+    assert "every phase counts as on" in said and "Confirm it" in said, f"a phase line keeps its wording: {said}"
+    os.remove(store)
 
 
 def coming_back_after_hours_asks_for_the_status_first(base):
@@ -3703,7 +3859,7 @@ def a_stacked_branch_is_measured_against_its_parent(base):
     assert git(repo, "config", "--get-regexp", r"branch\.renamed\.").stdout == "", "and goes with `git branch -D`"
 
 
-TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, the_old_self_review_name_still_switches_the_review, coming_back_after_hours_asks_for_the_status_first, a_review_rounds_line_sets_the_re_checks_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
+TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, the_old_self_review_name_still_switches_the_review, switches_follow_a_branch_rename, a_rename_is_followed_in_the_checkout_read, same_named_repos_keep_their_own_switches, a_review_rounds_line_says_what_an_unreadable_file_means, coming_back_after_hours_asks_for_the_status_first, a_review_rounds_line_sets_the_re_checks_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
          guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
