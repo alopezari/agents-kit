@@ -638,8 +638,18 @@ def unreviewed_pr(command, cwd):
     cwd = pr_checkout(command, cwd)
     stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_stamp.py")
 
+    failures = []
+
     def ok(*args):
-        return subprocess.run([sys.executable, stamp, *args], cwd=cwd, timeout=time_left()).returncode == 0
+        result = subprocess.run([sys.executable, stamp, *args], cwd=cwd, capture_output=True, text=True,
+                                timeout=time_left())
+        if result.returncode > 1:  # it couldn't tell (git failed, no common commit): not the same as "no stamp"
+            failures.append(f"`review_stamp.py {' '.join(args)}` failed: "
+                            f"{' '.join(result.stderr.split()) or f'exit {result.returncode}'}")
+        return result.returncode == 0
+
+    def refused(reason):
+        return " ".join(failures) + store if failures else reason + order + store
 
     # The stamps are read before anything in the command runs, so one written by the same command can't count yet.
     order = (" This command writes a stamp itself, but the guard checks before anything in it runs: run "
@@ -655,12 +665,14 @@ def unreviewed_pr(command, cwd):
                 return (matched.stdout.strip() or matched.stderr.strip()
                         or f"review_stamp.py base failed (exit {matched.returncode}), so the PR's target can't be checked.")
     if "review" not in off and not ok("check", "--kind", "review"):
-        return ("No review recorded for the current change. Run the kit-review skill first "
-                "(it ends with review_stamp.py write); any edit after the review needs a new one." + order + store)
-    if "validate" not in off and ok("needs-validate") and not ok("check", "--kind", "validate"):
-        return ("The change touches behavior but has no validation recorded for it. Run the kit-validate skill "
-                "(it ends with review_stamp.py write --kind validate); any edit after validating needs a new run."
-                + order + store)
+        return refused("No review recorded for the current change. Run the kit-review skill first "
+                       "(it ends with review_stamp.py write); any edit after the review needs a new one.")
+    if "validate" not in off:
+        needs = ok("needs-validate")
+        if failures or (needs and not ok("check", "--kind", "validate")):
+            return refused("The change touches behavior but has no validation recorded for it. Run the kit-validate "
+                           "skill (it ends with review_stamp.py write --kind validate); any edit after validating "
+                           "needs a new run.")
     return None
 
 

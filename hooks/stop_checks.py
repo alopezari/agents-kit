@@ -33,6 +33,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hooklog import log  # noqa: E402
 import phase_switches  # noqa: E402
+import post_edit  # noqa: E402
 import review_stamp  # noqa: E402
 
 MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
@@ -169,7 +170,7 @@ def main():
     read = edited = None
     if os.path.exists(marker):
         # Cleared only once the checks finish (clear_checked): a stop that crashes or is killed leaves it for the next.
-        with open(marker) as fh:
+        with post_edit.marker_lock(marker), open(marker) as fh:
             read = fh.read()
         edited = [p for p in read.splitlines() if p]
     # Runs even when the notice above speaks: it records the branches the session works on.
@@ -219,6 +220,7 @@ def main():
                                           "the next stop."] * (hidden > 0)
     streak = record_verify_streak(session, any_verify_failed)
     block(payload, listed, streak, notice)
+    sys.stdout.flush()  # the block is out before its questions are recorded as asked
     mark_asked(session, asked)
     clear_checked(marker, read, [path for path in edited if path in unfinished or root_of.get(path) in unfinished])
     return 0
@@ -227,29 +229,33 @@ def main():
 def checkout_of(path):
     """The top level of the checkout holding path, found from its nearest existing directory, since a deleted file's
     directories may be gone too; "" outside a repository."""
-    start = path if os.path.isdir(path) else os.path.dirname(path)
+    directory = start = path if os.path.isdir(path) else os.path.dirname(path)
     while not os.path.isdir(start) and os.path.dirname(start) != start:
         start = os.path.dirname(start)
-    return git(["rev-parse", "--show-toplevel"], start).strip()
+    root = git(["rev-parse", "--show-toplevel"], start).strip()
+    # A removed worktree nested in its main checkout (an ignored directory) would otherwise read as the main's edit.
+    if root and start != directory and review_stamp.run_git(
+            ["check-ignore", "-q", "--no-index", os.path.relpath(os.path.realpath(path), root)], cwd=root).returncode == 0:
+        return ""
+    return root
 
 
 def clear_checked(marker, read, kept):
     """Remove from the edit marker the lines this stop read, keeping `kept` (paths it couldn't check) and every line
     post_edit appended meanwhile: a subagent can edit while the checks run."""
-    moved = f"{marker}.{os.getpid()}"
-    try:  # post_edit appends: once renamed, its next edit starts a new marker this stop never reads
-        os.rename(marker, moved)
-    except FileNotFoundError:
-        later = ""
-    else:
-        with open(moved) as fh:
-            later = fh.read()
-        later = later.removeprefix(read)
-    if kept or later:
-        with open(marker, "a") as fh:
-            fh.write("".join(path + "\n" for path in kept) + later)
-    if os.path.exists(moved):
-        os.remove(moved)
+    with post_edit.marker_lock(marker):
+        try:
+            with open(marker) as fh:
+                later = fh.read().removeprefix(read)
+        except FileNotFoundError:
+            later = ""
+        rest = "".join(path + "\n" for path in kept) + later
+        if rest:
+            with open(f"{marker}.{os.getpid()}", "w") as fh:
+                fh.write(rest)
+            os.replace(fh.name, marker)
+        elif os.path.exists(marker):
+            os.remove(marker)
 
 
 def context_tokens(transcript):
@@ -435,7 +441,14 @@ def unmapped_files(root, session):
     """Changed code files the branch's spec has no Change map entry for, leaving out those already asked about in
     this session (mark_asked)."""
     # path.sh finds the spec wherever it is kept: after a branch rename, in a worktree's old place or in $TMPDIR.
-    spec = subprocess.run([SPEC_PATH], cwd=root, capture_output=True, text=True).stdout.strip()
+    try:
+        found = subprocess.run([SPEC_PATH], cwd=root, capture_output=True, text=True)
+    except OSError as error:
+        raise RuntimeError(f"couldn't look up the spec with {SPEC_PATH}: {error}") from None
+    if found.returncode != 0:  # not "no spec": path.sh prints where a missing one would go
+        raise RuntimeError(f"couldn't look up the spec: {SPEC_PATH} failed (exit {found.returncode}): "
+                           f"{' '.join(found.stderr.split())}")
+    spec = found.stdout.strip()
     if not os.path.isfile(spec):
         return []
     change_map = re.search(r"^## Change map\s*$(.*?)(?=^## |\Z)", open(spec, errors="ignore").read(), re.M | re.S | re.I)
@@ -503,7 +516,13 @@ def ci_after_push(session, payload):
         if "ci" in off:
             followed[root] = at  # still followed: switched back on, the push is asked about
             continue
-        sha = git(["rev-parse", "--verify", "--quiet", "@{upstream}"], root).strip()
+        try:
+            sha = git(["rev-parse", "--verify", "--quiet", "@{upstream}"], root).strip()
+        except RuntimeError as error:  # timed out: ask about it, and read it again next stop
+            followed[root] = at
+            problems.append(f"Couldn't read the pushed commit of {root} to check its CI: {error}. It is read again "
+                            "at the next stop.")
+            continue
         if not sha:
             continue  # the push failed, or pushed nothing this checkout tracks
         wait = f"`~/.agents/bin/ci-wait --sha {sha}`"
@@ -556,10 +575,15 @@ def save_verify_report(root, verify, output, verdict):
     """Keep the last verify run as evidence for the end-of-run summary (`~/.agents/bin/reports`). Returns why it
     couldn't, or None: an earlier run's report left in place would read as this run's result, so it is removed."""
     reports = os.path.expanduser("~/.agents/bin/reports")
-    found = subprocess.run([reports, "path", "verify"], cwd=root, capture_output=True, text=True)
+    stale = "an earlier report, if there is one, still reads as the last result."
+    try:
+        found = subprocess.run([reports, "path", "verify"], cwd=root, capture_output=True, text=True)
+    except OSError as error:
+        return f"Couldn't save the verify report: `{reports}` didn't run ({error}); {stale}"
     path = found.stdout.strip()
     if not path:
-        return f"Couldn't save the verify report: `{reports} path verify` gave no path ({' '.join(found.stderr.split())})."
+        return (f"Couldn't save the verify report: `{reports} path verify` gave no path "
+                f"({' '.join(found.stderr.split())}); {stale}")
     output = output.strip()[-6000:] or "(no output)"
     try:
         with open(path, "w") as report:
@@ -692,9 +716,13 @@ def run_verify(root):
     try:
         checked_fingerprint = in_checkout(root, review_stamp.fingerprint)
     except RuntimeError as error:
-        # An earlier run's stamp must not outlive a run that couldn't check anything.
-        return finish([f"Couldn't fingerprint the change, so verify can't stamp it: {error}"],
-                      f"FAIL (couldn't fingerprint the change: {error})")
+        # An earlier run's report and stamp must not outlive a run that couldn't check anything. A timeout is
+        # raised, so the stop keeps the checkout's edits for the next one; another failure would only repeat.
+        result = finish([f"Couldn't fingerprint the change, so verify can't stamp it: {error}"],
+                        f"FAIL (couldn't fingerprint the change: {error})")
+        if isinstance(error, review_stamp.GitTimeout):
+            raise
+        return result
     try:
         result = run_snapshot(verify, root) if verify != AUTO_VERIFY else subprocess.run(
             [verify], cwd=root, capture_output=True, text=True, errors="replace", timeout=VERIFY_TIMEOUT)

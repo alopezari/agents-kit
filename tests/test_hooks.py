@@ -2099,7 +2099,8 @@ def stop_skips_a_checkout_removed_while_checked(base):
 
 
 FAKE_GIT = """#!/bin/sh
-# git, except inside $FAKE_GIT_ROOT: $FAKE_GIT_SLOW hangs, $FAKE_GIT_FAIL fails as git does on a repository it won't read.
+# git, except inside $FAKE_GIT_ROOT: $FAKE_GIT_SLOW hangs, $FAKE_GIT_FAIL fails as git does on a repository it won't read,
+# $FAKE_GIT_LOCALIZED answers in French unless LC_ALL=C.
 sub=""; skip=""
 for a in "$@"; do
   if [ -n "$skip" ]; then skip=""; continue; fi
@@ -2107,7 +2108,9 @@ for a in "$@"; do
 done
 case "$PWD/" in "$FAKE_GIT_ROOT"/*)
   [ "$sub" = "${FAKE_GIT_SLOW:-}" ] && exec sleep 5
-  [ "$sub" = "${FAKE_GIT_FAIL:-}" ] && { echo "fatal: detected dubious ownership in repository at '$PWD'" >&2; exit 128; } ;;
+  [ "$sub" = "${FAKE_GIT_FAIL:-}" ] && { echo "fatal: detected dubious ownership in repository at '$PWD'" >&2; exit 128; }
+  [ "$sub" = "${FAKE_GIT_LOCALIZED:-}" ] && [ "${LC_ALL:-}" != C ] && {
+    echo "fatal: ni ceci ni aucun de ses répertoires parents n'est un dépôt git : .git" >&2; exit 128; } ;;
 esac
 exec %s "$@"
 """
@@ -2175,6 +2178,35 @@ def a_git_call_that_hangs_times_out_and_keeps_the_edits(base):
     verify = in_hooks(f"sys.path.insert(0, {shared!r}); import verify_changed\nrs.GIT_TIMEOUT = 1\n"
                       "verify_changed.changed_lines(os.getcwd())", slow, env)
     assert verify.returncode != 0 and "git diff timed out after 1s" in verify.stderr, (verify.returncode, verify.stderr[-500:])
+    auto = in_hooks(f"sys.path.insert(0, {shared!r}); import verify_auto\nrs.GIT_TIMEOUT = 1\n"
+                    "verify_auto.tracked_files(os.getcwd())", slow, fake_git(base, slow, slow="ls-files"))
+    assert auto.returncode != 0 and "git ls-files timed out after 1s" in auto.stderr, (auto.returncode, auto.stderr[-500:])
+
+    # Fingerprinting for verify is part of the check: a timeout there keeps the edit too.
+    record_edits(session, base, [os.path.join(slow, "app.py")])
+    done = in_hooks("rs.GIT_TIMEOUT = 1\nsys.exit(s.main())", base, fake_git(base, slow, slow="hash-object"),
+                    json.dumps({"session_id": session, "cwd": base}))
+    assert "git hash-object timed out after 1s" in done.stdout and os.path.exists(edit_marker(session)), \
+        (done.stdout, done.stderr[-500:])
+    os.remove(edit_marker(session))
+
+    # So is reading a pushed checkout's commit for its CI: the other checkouts are still checked.
+    with open(os.path.join(os.path.dirname(edit_marker(session)), f"{session}.pushed"), "w") as fh:
+        fh.write(f"{os.path.realpath(slow)}\t{time.time()}\n")
+    record_edits(session, base, [os.path.join(fine, "app.py")])
+    done = in_hooks("real = s.git\ndef git(args, cwd):\n    if '@{upstream}' in args:\n"
+                    "        raise RuntimeError('git rev-parse timed out after 30s')\n    return real(args, cwd)\n"
+                    "s.git = git\nsys.exit(s.main())", base, stdin=json.dumps({"session_id": session, "cwd": base}))
+    reason = json.loads(done.stdout or "{}").get("reason", "")
+    assert done.returncode == 0 and "git rev-parse timed out after 30s" in reason and "Debug leftover" in reason, \
+        (reason, done.stderr[-500:])
+
+    # The advisory notices skip quietly.
+    quiet = in_hooks("def hang(*args, **kwargs):\n    raise RuntimeError('git rev-parse timed out after 30s')\n"
+                     "s.git = hang\n"
+                     "print(s.fresh_session_notice('q', {'cwd': os.getcwd(), 'transcript_path': '/nonexistent'}),"
+                     " s.new_change_notice('q', {'cwd': os.getcwd(), 'transcript_path': sys.argv[0]}, []))", slow)
+    assert quiet.returncode == 0 and quiet.stdout.strip() == "None None", (quiet.stdout, quiet.stderr[-500:])
 
 
 def stop_clears_only_the_edits_it_checked(base):
@@ -2195,6 +2227,13 @@ def stop_clears_only_the_edits_it_checked(base):
     assert added.returncode == 0, added.stderr
     with open(edit_marker(session)) as fh:
         assert fh.read().split() == [os.path.realpath(later)], "an edit recorded while checking survives"
+    # post_edit can open the marker just before the stop clears it, and write just after: its edit still survives.
+    raced = in_hooks(f"import threading, time, post_edit\nmarker = {edit_marker(session)!r}\nread = open(marker).read()\n"
+                     "with post_edit.marker_lock(marker):\n    fh = open(marker, 'a')\n"
+                     "    clearing = threading.Thread(target=s.clear_checked, args=(marker, read, []))\n"
+                     "    clearing.start()\n    time.sleep(0.3)\n    fh.write('/raced.py\\n')\n    fh.close()\n"
+                     "clearing.join()\nprint(open(marker).read().split())", repo)
+    assert raced.stdout.strip() == "['/raced.py']", (raced.stdout, raced.stderr[-500:])
 
 
 def a_delete_only_patch_is_checked(base):
@@ -2210,6 +2249,10 @@ def a_delete_only_patch_is_checked(base):
     run_hook("post_edit.py", {"session_id": session, "cwd": repo, "tool_name": "apply_patch", "tool_input": {"patch": patch}})
     reason = (run_hook("stop_checks.py", {"session_id": session, "cwd": base}) or {}).get("reason", "")
     assert "Test file deleted: pkg/tests/test_x.py" in reason, f"a delete-only patch is checked: {reason!r}"
+    # A removed worktree nested in an ignored directory of its main checkout is not that checkout's edit.
+    open(os.path.join(repo, ".gitignore"), "a").write("worktrees/\n")
+    nested = in_hooks(f"print(repr(s.checkout_of({os.path.join(repo, 'worktrees', 'gone', 'app.py')!r})))", base)
+    assert nested.stdout.strip() == "''", (nested.stdout, nested.stderr[-500:])
     moved = "*** Begin Patch\n*** Update File: app.py\n*** Move to: lib/app.py\n@@\n-x = 1\n+x = 2\n*** End Patch\n"
     run_hook("post_edit.py", {"session_id": session, "cwd": repo, "tool_name": "apply_patch", "tool_input": {"patch": moved}})
     with open(edit_marker(session)) as fh:
@@ -2265,6 +2308,10 @@ def a_verify_report_that_cant_be_written_is_said(base):
             os.remove(report)
     failed = in_hooks("def broken():\n    raise RuntimeError('git hash-object failed')\nrs.fingerprint = broken\n"
                       "print(s.run_verify(os.getcwd()))", repo)
+    nowhere = in_hooks(f"os.environ['HOME'] = {base!r}\nprint(s.save_verify_report(os.getcwd(), 'verify', 'out', 'PASS'))", repo)
+    assert "earlier report" in nowhere.stdout, ("no reports helper: said, not raised", nowhere.stdout, nowhere.stderr[-500:])
+    lost = in_hooks("s.SPEC_PATH = '/usr/bin/false'\nprint(s.unmapped_files(os.getcwd(), 'x'))", repo)
+    assert "RuntimeError" in lost.stderr and "spec" in lost.stderr, ("a spec lookup that fails isn't an empty map", lost.stderr[-500:])
     with open(report) as fh:
         assert fh.read().startswith("# Verify: FAIL"), "a fingerprint failure leaves a FAIL report"
     assert "git hash-object failed" in failed.stdout, failed.stdout
@@ -2289,12 +2336,23 @@ def a_base_with_no_common_commit_fails_the_stamps(base):
     assert stamp("check", cwd=os.path.join(base, "plain")).returncode == 0, "outside a repository there is nothing to stamp"
     refused = stamp("check", env=fake_git(base, repo, fail="rev-parse"))
     assert refused.returncode == 2 and "dubious ownership" in refused.stderr, (refused.returncode, refused.stderr)
+    plain = os.path.join(base, "plain")
+    localized = stamp("check", cwd=plain, env=fake_git(base, plain, localized="rev-parse"))
+    assert localized.returncode == 0, ("a translated git outside a repository", localized.returncode, localized.stderr)
+    broken = stamp("check", env=fake_git(base, repo, fail="merge-base"))
+    assert broken.returncode == 2 and "dubious ownership" in broken.stderr and "no common commit" not in broken.stderr, \
+        (broken.returncode, broken.stderr)
+    said = run_hook("guard_bash.py", {"tool_input": {"command": "gh pr create --base trunk --title t"}, "cwd": repo,
+                                      "session_id": "test"})
+    said = said["hookSpecificOutput"]["permissionDecisionReason"] if said else ""
+    assert "no common commit" in said and "agentsBase" in said, f"the PR gate says why it can't measure: {said}"
     unborn = os.path.join(base, "zz-unborn")
     os.makedirs(unborn)
     git(unborn, "init", "-q")
-    open(os.path.join(unborn, "app.py"), "w").write("x = 1\n")
+    open(os.path.join(unborn, "app.py"), "w").write("breakpoint()\n")
     reason = stop(RUN + "unborn", unborn, [os.path.join(unborn, "app.py")]).get("reason", "")
-    assert "Couldn't finish checking" not in reason, f"a repository with no commit yet keeps the HEAD fallback: {reason}"
+    assert "Couldn't finish checking" not in reason and "Debug leftover" in reason, \
+        f"a repository with no commit yet keeps the HEAD fallback: {reason}"
 
 
 def the_problem_cap_never_hides_a_question(base):
@@ -2313,11 +2371,15 @@ def the_problem_cap_never_hides_a_question(base):
     crash = in_hooks("def broken(*args, **kwargs):\n    raise ValueError('boom')\ns.block = broken\nsys.exit(s.main())",
                      base, stdin=payload)
     assert "boom" in crash.stderr, crash.stderr
+    # A kill right after recording the question as asked still leaves the block written.
+    killed = in_hooks("s.mark_asked = lambda *args: os._exit(0)\nsys.exit(s.main())", base, stdin=payload)
+    assert "[zz-mapped] Changed code files" in killed.stdout, (killed.stdout[-300:], killed.stderr[-300:])
+    record_edits(session, base, edited)
     reason = (run_hook("stop_checks.py", {"session_id": session, "cwd": base}) or {}).get("reason", "")
     lines = reason.split("\n- ")[1:]
     assert any("[zz-mapped] Changed code files" in line and "`extra.py`" in line for line in lines), \
         f"a question not shown before the crash is asked now, past the cap: {lines}"
-    assert len(lines) == 21 and re.search(r"\d+ more problems? not listed", lines[-1]), lines[-3:]
+    assert len(lines) == 21 and lines[-1].startswith("…and 7 more problems not listed"), lines[-3:]
 
 
 def stop_catches_committed_leftover(base):

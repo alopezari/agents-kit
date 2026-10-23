@@ -41,8 +41,13 @@ VERIFY_KINDS = ("verify", "verify-empty")
 STAMP_KINDS = ("review", "validate", *VERIFY_KINDS)
 COMMANDS = ("check", "write", "base", "branch-key", "follow-renames", "needs-validate")
 # Normal calls take milliseconds. A git that hangs (a stuck lock, a network filesystem) would hang every stop and PR
-# gate that asks it; the hooks and verify scripts all run git through run_git.
+# gate that asks it. The stamps, the stop hook and the verify scripts' lookups run git through run_git; phase_switches
+# and the branch-name notice set their own timeout, and --red-check's tree copy runs under verify's limit.
 GIT_TIMEOUT = 30
+
+
+class GitTimeout(RuntimeError):
+    pass
 
 
 def run_git(args, cwd=None, env=None, text=True):
@@ -52,7 +57,7 @@ def run_git(args, cwd=None, env=None, text=True):
     except subprocess.TimeoutExpired:
         command = next((arg for at, arg in enumerate(args)
                         if not arg.startswith("-") and (at == 0 or args[at - 1] not in ("-c", "-C"))), "")
-        raise RuntimeError(f"git {command} timed out after {GIT_TIMEOUT}s") from None
+        raise GitTimeout(f"git {command} timed out after {GIT_TIMEOUT}s") from None
 
 
 def git(*args, cwd=None):
@@ -152,6 +157,8 @@ def merge_base(cwd=None):
         return found.stdout.strip()
     if not git("rev-parse", "--verify", "--quiet", "HEAD", cwd=cwd):
         return "HEAD"
+    if found.returncode != 1:  # 1 is git's "no common ancestor"; anything else is git failing
+        raise RuntimeError(f"git merge-base HEAD {base} failed: {' '.join(found.stderr.split())}")
     branch = git("branch", "--show-current", cwd=cwd)
     raise RuntimeError(f"git merge-base HEAD {base} found no common commit, so the change can't be measured. Record "
                        f"the branch it starts from with `git config branch.{branch}.agentsBase <branch>`, or fetch "
@@ -456,7 +463,7 @@ def main():
         print("A verify stamp comes only from running verify: run `python3 ~/.agents/hooks/stop_checks.py verify`, "
               "which stamps the change when it passes.", file=sys.stderr)
         return 2
-    git_dir = run_git(["rev-parse", "--absolute-git-dir"])
+    git_dir = run_git(["rev-parse", "--absolute-git-dir"], env={**os.environ, "LC_ALL": "C"})  # the check reads English
     if git_dir.returncode != 0:
         if "not a git repository" in git_dir.stderr:
             return 0
