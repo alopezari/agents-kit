@@ -155,12 +155,16 @@ def main():
                 print(f"kept branch {branch}: {error}")
                 failed = True
                 continue
-            if unnamed or unfollowed:
-                print(f"deleted branch {branch}, but kept its phase switches: {unnamed or unfollowed}")
+            if unnamed:
+                print(f"deleted branch {branch}, but kept its phase switches: {unnamed}")
                 failed = True
                 continue
             try:
                 forgot = phase_switches.forget_branch(common, branch)
+                if unfollowed:  # its own file and label are gone; only its earlier name's file stays
+                    print(f"deleted branch {branch}, but kept the phase switches of its earlier name: {unfollowed}")
+                    failed = True
+                    continue
                 print(f"deleted branch {branch}{' and its phase switches' if forgot else ''}")
             except OSError as error:
                 print(f"deleted branch {branch}, but kept its phase switches: {error}")

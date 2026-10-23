@@ -191,6 +191,26 @@ def forgets_the_switches_of_a_renamed_branch_never_read(base):
     assert out.returncode == 0 and "deleted branch done and its phase switches" in out.stdout, out
     assert os.listdir(branch_store(home)) == [], "old's file must not wait for a branch named old"
 
+    gone = worktree(base, main, "gone")
+    subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"], cwd=gone,
+                   capture_output=True, text=True, env=env, check=True)
+    sh(gone, "git", "branch", "-m", "gone", "unread")
+    sh(main, "git", "worktree", "remove", gone)
+    label = os.path.join(main, ".git", "agents", "phase", "unread.json")
+    os.makedirs(os.path.dirname(label), exist_ok=True)
+    for path in (label, label[:-len(".json")] + ".lock"):
+        open(path, "w").close()
+    reflog = os.path.join(main, ".git", "logs", "refs", "heads", "unread")
+    os.chmod(reflog, 0)
+    try:
+        out = subprocess.run([PRUNE], cwd=main, capture_output=True, text=True, env=env)
+    finally:
+        if os.path.exists(reflog):
+            os.chmod(reflog, 0o644)
+    assert out.returncode == 1 and "deleted branch unread, but kept the phase switches of its earlier name: " \
+        "couldn't follow its rename" in out.stdout, out
+    assert os.listdir(os.path.dirname(label)) == [], "the deleted branch's label and lock go even so"
+
 
 def says_when_it_cannot_check_the_switches(base):
     main = setup(base)
