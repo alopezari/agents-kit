@@ -223,6 +223,14 @@ def turns_tabs_into_spaces(base):
         assert line in out.stdout, repr(out.stdout)
 
 
+def a_long_unclosed_link_is_read_in_time(base):
+    repo = new_repo(base)
+    write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
+    write(repo, "review", "Review (risk: low)\nFixed: [the total](" + "(x)\t" * 20000 + " — cart.py:52.\n")
+    out = subprocess.run([PR_VALIDATION], cwd=repo, capture_output=True, text=True, timeout=5)
+    assert out.returncode == 0 and "\t" not in out.stdout, out.stderr
+
+
 def a_missing_verify_or_review_fails_naming_it(base):
     repo = new_repo(base)
     write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
@@ -281,7 +289,8 @@ for test in (names_the_phases_the_user_switched_off, builds_the_section_from_eve
              lists_pre_existing_findings_only_when_there_are_some,
              keeps_qualified_verdicts_and_bounded_sections,
              a_guide_with_only_steps_after_the_merge_lists_them, says_when_the_guide_has_no_steps_or_cannot_be_read,
-             counts_findings_listed_under_their_label, a_missing_verify_or_review_fails_naming_it, turns_tabs_into_spaces):
+             counts_findings_listed_under_their_label, a_missing_verify_or_review_fails_naming_it, turns_tabs_into_spaces,
+             a_long_unclosed_link_is_read_in_time):
     base = tempfile.mkdtemp(prefix="agents-test-pr-validation-")
     try:
         test(base)
