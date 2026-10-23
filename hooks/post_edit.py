@@ -4,6 +4,8 @@
 Runs a fast syntax check on each edited file and records that the session
 edited files, so the Stop hook only runs its checks after real changes.
 """
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -36,9 +38,17 @@ def edited_paths(payload):
     patch = tool_input.get("patch") or tool_input.get("input") or tool_input.get("command") or ""
     if isinstance(patch, list):
         patch = "\n".join(map(str, patch))
-    paths += re.findall(r"^\*\*\* (?:Add|Update) File: (.+)$", patch, re.MULTILINE)
+    paths += re.findall(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$", patch, re.MULTILINE)
     cwd = payload.get("cwd") or os.getcwd()
     return [os.path.join(cwd, p) for p in paths if p]
+
+
+@contextlib.contextmanager
+def marker_lock(marker):
+    """Held while the edit marker is appended to or rewritten: the stop hook rewrites it while subagents edit."""
+    with open(marker + ".lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 def check(path):
@@ -74,7 +84,8 @@ def main():
         return 0
     os.makedirs(MARKER_DIR, exist_ok=True)
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
-    with open(os.path.join(MARKER_DIR, f"{session}.edited"), "a") as fh:
+    marker = os.path.join(MARKER_DIR, f"{session}.edited")
+    with marker_lock(marker), open(marker, "a") as fh:
         fh.writelines(os.path.realpath(p) + "\n" for p in paths)
 
     errors = [e for e in (check(p) for p in paths) if e]

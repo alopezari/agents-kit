@@ -8,7 +8,7 @@
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
   review_stamp.py branch-key                       # the current branch as it appears in those file names
-  review_stamp.py base [--matches <branch>]        # the ref the change is measured against (see branch_base), or
+  review_stamp.py base [--matches <branch>]        # (both options also take --name=value) the ref the change is measured against (see branch_base), or
                                                    # exit 1, saying why, when a PR targeting <branch> (empty: the
                                                    # default branch) would show a different change
 
@@ -40,15 +40,33 @@ NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?\Z|(^|/)changelog\.d/[
 VERIFY_KINDS = ("verify", "verify-empty")
 STAMP_KINDS = ("review", "validate", *VERIFY_KINDS)
 COMMANDS = ("check", "write", "base", "branch-key", "follow-renames", "needs-validate")
+# Normal calls take milliseconds. A git that hangs (a stuck lock, a network filesystem) would hang every stop and PR
+# gate that asks it. The stamps, the stop hook and the verify scripts' lookups run git through run_git; phase_switches
+# and the branch-name notice set their own timeout, and --red-check's tree copy runs under verify's limit.
+GIT_TIMEOUT = 30
+
+
+class GitTimeout(RuntimeError):
+    pass
+
+
+def run_git(args, cwd=None, env=None, text=True):
+    """git's completed process; raises RuntimeError naming the command when it runs past GIT_TIMEOUT."""
+    try:
+        return subprocess.run(["git", *args], capture_output=True, text=text, cwd=cwd, env=env, timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        command = next((arg for at, arg in enumerate(args)
+                        if not arg.startswith("-") and (at == 0 or args[at - 1] not in ("-c", "-C"))), "")
+        raise GitTimeout(f"git {command} timed out after {GIT_TIMEOUT}s") from None
 
 
 def git(*args, cwd=None):
-    return subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd).stdout.strip()
+    return run_git(args, cwd=cwd).stdout.strip()
 
 
 def git_checked(*args, env=None):
     """git's output as bytes; a failure raises, since an empty answer would make every change look stamped."""
-    result = subprocess.run(["git", *args], capture_output=True, env=env)
+    result = run_git(args, env=env, text=False)
     if result.returncode != 0:
         raise RuntimeError(f"git {args[0]} failed: {' '.join(result.stderr.decode(errors='replace').split())}")
     return result.stdout
@@ -131,8 +149,20 @@ def branch_name(ref, cwd=None):
 
 
 def merge_base(cwd=None):
-    """Where this branch left its base (branch_base); HEAD when on the default branch itself."""
-    return git("merge-base", "HEAD", branch_base(cwd)[0], cwd=cwd) or "HEAD"
+    """Where this branch left its base (branch_base); HEAD when on the default branch itself, or on a branch with no
+    commit yet. Raises when they share no commit: measuring from HEAD would leave every committed line unchecked."""
+    base = branch_base(cwd)[0]
+    found = run_git(["merge-base", "HEAD", base], cwd=cwd)
+    if found.returncode == 0:
+        return found.stdout.strip()
+    if not git("rev-parse", "--verify", "--quiet", "HEAD", cwd=cwd):
+        return "HEAD"
+    if found.returncode != 1:  # 1 is git's "no common ancestor"; anything else is git failing
+        raise RuntimeError(f"git merge-base HEAD {base} failed: {' '.join(found.stderr.split())}")
+    branch = git("branch", "--show-current", cwd=cwd)
+    raise RuntimeError(f"git merge-base HEAD {base} found no common commit, so the change can't be measured. Record "
+                       f"the branch it starts from with `git config branch.{branch}.agentsBase <branch>`, or fetch "
+                       "the history a shallow clone is missing (`git fetch --unshallow`).")
 
 
 def changed_paths():
@@ -264,8 +294,8 @@ def quality_log():
     if not linked or os.environ.get("AGENTS_KIT_UNDER_TEST"):
         return os.path.join(kit, "logs", "quality.jsonl")
     # -C doesn't override a GIT_DIR the caller exported, which would name another repository.
-    listed = subprocess.run(["git", "-C", kit, "worktree", "list", "--porcelain", "-z"], capture_output=True, text=True,
-                            env={key: value for key, value in os.environ.items() if not key.startswith("GIT_")})
+    listed = run_git(["-C", kit, "worktree", "list", "--porcelain", "-z"],
+                     env={key: value for key, value in os.environ.items() if not key.startswith("GIT_")})
     main = listed.stdout.partition("\0")[0].removeprefix("worktree ") if listed.returncode == 0 else ""
     # git lists the git dir, not a checkout, for a repository made with --separate-git-dir.
     if main and os.path.exists(os.path.join(main, ".git")):
@@ -305,7 +335,7 @@ def move_out_of_tmpdir(common, repo, key):
 
 
 def branch_exists(name):
-    return subprocess.run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{name}"]).returncode == 0
+    return run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{name}"]).returncode == 0
 
 
 def stamp_path(kind):
@@ -406,9 +436,23 @@ def record_verify(kind, checked_fingerprint):
             fh.write(checked_fingerprint)
 
 
+def option(args, name):
+    """The value of `--name value` or `--name=value`: None when the option is absent, "" when it has no value."""
+    for at, arg in enumerate(args):
+        if arg == name:
+            return args[at + 1] if at + 1 < len(args) else ""
+        if arg.startswith(name + "="):
+            return arg[len(name) + 1:]
+    return None
+
+
 def main():
     args = sys.argv[1:]
-    kind = args[args.index("--kind") + 1] if "--kind" in args else "review"
+    kind = option(args, "--kind")
+    if kind == "":
+        print(f"--kind needs a value: one of {', '.join(STAMP_KINDS)}.", file=sys.stderr)
+        return 2
+    kind = kind or "review"
     command = args[0] if args else "check"
     if command not in COMMANDS or kind not in STAMP_KINDS:
         print(f"Unknown {'command' if command not in COMMANDS else 'stamp kind'} "
@@ -419,18 +463,21 @@ def main():
         print("A verify stamp comes only from running verify: run `python3 ~/.agents/hooks/stop_checks.py verify`, "
               "which stamps the change when it passes.", file=sys.stderr)
         return 2
-    if not git("rev-parse", "--absolute-git-dir"):
-        return 0
+    git_dir = run_git(["rev-parse", "--absolute-git-dir"], env={**os.environ, "LC_ALL": "C"})  # the check reads English
+    if git_dir.returncode != 0:
+        if "not a git repository" in git_dir.stderr:
+            return 0
+        raise RuntimeError(f"git rev-parse failed: {' '.join(git_dir.stderr.split())}")
     os.chdir(git("rev-parse", "--show-toplevel"))
     if command == "branch-key":
         print(branch_key(git("branch", "--show-current")))
         return 0
     if command == "base":
         base = branch_base()[0]
-        if "--matches" not in args:
+        target = option(args, "--matches")
+        if target is None:
             print(base)
             return 0
-        target = args[args.index("--matches") + 1] if len(args) > args.index("--matches") + 1 else ""
         # Without --base, gh targets the branch's gh-merge-base, else the repository's default branch.
         branch = git("branch", "--show-current")
         target = target or git("config", "--get", f"branch.{branch}.gh-merge-base") or branch_name(base_ref())
