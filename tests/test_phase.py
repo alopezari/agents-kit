@@ -2,6 +2,8 @@
 """bin/phase: each step of the flow, stepping back when the change moves, branch renames, and the cached fast path."""
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import concurrent.futures
+import importlib.machinery
+import importlib.util
 import json
 import os
 import shutil
@@ -334,6 +336,65 @@ def fast_path_serves_cache_and_refreshes(base):
     assert not os.path.exists(cache.replace(".json", ".lock")), "the refresh releases its lock"
 
 
+def concurrent_refreshes_each_write_their_own_file(base):
+    repo = new_repo(base)
+    sh(repo, "git", "checkout", "-q", "-b", "feature/x")
+    loader = importlib.machinery.SourceFileLoader("phase_cli", PHASE)
+    cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("phase_cli", loader))
+    writes_bytecode, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # bin/__pycache__ would break bin/docs
+    try:
+        loader.exec_module(cli)
+    finally:
+        sys.dont_write_bytecode = writes_bytecode
+    replace, second = os.replace, []
+
+    def paused(src, dst):  # the first refresh stops between its temporary file and the cache while a second one runs
+        if dst.endswith(os.sep + "feature~x.json") and not second:
+            second.append(subprocess.run([PHASE, "--refresh"], cwd=repo, capture_output=True, text=True))
+        replace(src, dst)
+
+    here = os.getcwd()
+    os.chdir(repo)
+    os.replace = paused
+    try:
+        label = cli.refresh(cli.cache_files())
+    finally:
+        os.replace = replace
+        os.chdir(here)
+    assert second and second[0].returncode == 0 and second[0].stdout.strip() == "spec", second
+    cache = os.path.join(repo, ".git", "agents", "phase", "feature~x.json")
+    assert label == "spec" and json.load(open(cache))["label"] == "spec", open(cache).read()
+    assert not [n for n in os.listdir(os.path.dirname(cache)) if n.endswith(".tmp")], "no temporary file is left"
+
+
+def a_branch_recreated_after_prune_gets_its_own_label(base):
+    origin, repo = os.path.join(base, "origin.git"), os.path.join(base, "shop")
+    sh(base, "git", "init", "-q", "--bare", "-b", "trunk", origin)
+    sh(base, "git", "clone", "-q", origin, repo)
+    sh(repo, "git", "switch", "-q", "-c", "trunk")
+    sh(repo, "git", "commit", "-q", "--allow-empty", "-m", "init")
+    sh(repo, "git", "push", "-q", "-u", "origin", "trunk")
+    sh(repo, "git", "remote", "set-head", "origin", "trunk")
+    sh(repo, "git", "branch", "done")  # merged: it points at trunk
+    cache = os.path.join(repo, ".git", "agents", "phase", "done.json")
+    sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
+    import review_stamp  # bin/phase's own lock path: a copy here would pass after bin/phase renamed its lock
+    lock = review_stamp.phase_lock(os.path.join(repo, ".git"), "done")
+    os.makedirs(os.path.dirname(cache))
+    with open(cache, "w") as fh:
+        json.dump({"label": "ship", "computed_at": time.time()}, fh)
+    open(lock, "w").close()  # a refresh of the old branch, as far as bin/phase can tell, for another 60 s
+    pruned = subprocess.run([os.path.expanduser("~/.agents/bin/prune-merged")], cwd=repo, capture_output=True, text=True)
+    assert "deleted branch done" in pruned.stdout, pruned.stdout + pruned.stderr
+    sh(repo, "git", "switch", "-q", "-c", "done")
+    phase(repo, refresh=False)  # the status line's call: it starts the refresh
+    for _ in range(100):
+        if os.path.exists(cache) and not os.path.exists(lock):
+            break
+        time.sleep(0.1)
+    assert phase(repo, refresh=False) == "spec", "the recreated branch gets its own label, not after the old lock's 60 s"
+
+
 def switch(repo, line):
     """Send the user's phase line through the prompt hook, as Claude Code and Codex do."""
     payload = json.dumps({"prompt": line, "session_id": "phase-test", "cwd": repo})
@@ -370,7 +431,8 @@ TESTS = (switched_off_phases_leave_the_flow, status_line_names_the_branch, walks
          red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
          a_rename_log_that_cannot_be_written_leaves_the_spec_path,
          slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,
-         fast_path_serves_cache_and_refreshes)
+         fast_path_serves_cache_and_refreshes, concurrent_refreshes_each_write_their_own_file,
+         a_branch_recreated_after_prune_gets_its_own_label)
 
 if sys.argv[1:]:
     by_name = {t.__name__: t for t in TESTS}

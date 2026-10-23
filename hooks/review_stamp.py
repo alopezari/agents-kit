@@ -97,6 +97,11 @@ def phase_cache(common, branch):
     return os.path.join(common, "agents", "phase", branch_key(branch) + ".json")
 
 
+def phase_lock(common, branch):
+    """bin/phase's lock on refreshing that label."""
+    return os.path.join(common, "agents", "phase", branch_key(branch) + ".lock")
+
+
 def repo_name_of(common):
     """repo_name() from the absolute git common dir."""
     name = os.path.basename(common)

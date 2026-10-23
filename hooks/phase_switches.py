@@ -6,12 +6,14 @@ The user switches a phase with the first line of a message, `phase off <phase> [
 runs through `phase_switches.py set`. The store is in ~/.agents/approvals, which guard_bash.py and
 guard_files.py keep the agent out of: only the user switches a phase.
 
-The narrowest switch set wins (branch over repo over global). A skip writes no stamp, so a phase switched back on
-needs a real one again.
+A repo is the path of its git common dir, so its worktrees share switches and a clone elsewhere doesn't; a renamed
+branch keeps its switches. The narrowest switch set wins (branch over repo over global). A skip writes no stamp, so a
+phase switched back on needs a real one again.
 
 The same files hold how many re-check rounds the review runs after its first pass, set the same ways with
 `review-rounds <0-9> [branch|repo|global]` or `/flow review-rounds …`, and read with `bin/phase review-rounds`.
 """
+import hashlib
 import json
 import os
 import re
@@ -36,6 +38,7 @@ PHASE_LINE = re.compile(r"\A[ \t]*phase[ \t]+(off|on)(?=\s|\Z)(.*)", re.I)
 ROUNDS = "review-rounds"
 ROUNDS_LINE = re.compile(r"\A[ \t]*review-rounds(?=\s|\Z)(.*)", re.I)
 DEFAULT_ROUNDS = 1
+RENAMED = re.compile(r"Branch: renamed refs/heads/(.+) to refs/heads/")
 
 
 class StoreError(Exception):
@@ -55,7 +58,7 @@ def checkout(cwd, timeout=5):
             return None, None, None
         raise OSError(f"git rev-parse failed in {cwd}: {common.stderr.strip()[-200:]}")
     repo = review_stamp.repo_name_of(common.stdout.strip())
-    if repo in ("", ".", ".."):  # `..` would turn a repo's file into a path outside its directory
+    if repo in ("", ".", ".."):  # no name to show the user or to start the store's file names with
         raise OSError(f"can't name the repository of {cwd}")
     # The full ref: --short, like rev-parse --abbrev-ref, says heads/<branch> when a tag has the branch's name.
     head = subprocess.run(["git", "symbolic-ref", "--quiet", "HEAD"], cwd=cwd, capture_output=True, text=True,
@@ -66,14 +69,109 @@ def checkout(cwd, timeout=5):
     return repo, ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else None, common.stdout.strip()
 
 
-def store_files(repo, branch):
-    """[(scope, path)] from the widest scope to the narrowest, for the scopes that apply."""
+def repo_key(common):
+    """The repo's name in the store: its directory name, plus a short hash of its git common dir's path, so two repos
+    with one name keep their own switches and every worktree of one shares them."""
+    real = os.path.realpath(common)
+    return f"{review_stamp.repo_name_of(common)}-{hashlib.sha256(os.fsencode(real)).hexdigest()[:8]}"
+
+
+def store_files(common, branch):
+    """[(scope, path)] from the widest scope to the narrowest, for the scopes that apply to a branch of the repo whose
+    git common dir is `common`."""
     files = [("global", os.path.join(STORE, "global.json"))]
-    if repo:
-        files.append(("repo", os.path.join(STORE, "repo", repo + ".json")))
+    if common:
+        key = repo_key(common)
+        files.append(("repo", os.path.join(STORE, "repo", key + ".json")))
         if branch:
-            files.append(("branch", os.path.join(STORE, "branch", repo, review_stamp.branch_key(branch) + ".json")))
+            files.append(("branch", os.path.join(STORE, "branch", key, review_stamp.branch_key(branch) + ".json")))
     return files
+
+
+def followed_checkout(cwd, timeout):
+    """(git common dir, branch) of the checkout in cwd, once a renamed branch has its earlier name's switches."""
+    deadline = time.monotonic() + timeout
+    _, branch, common = checkout(cwd, timeout)
+    if branch:
+        follow_rename(common, branch, deadline)
+    return common, branch
+
+
+def follow_rename(common, branch, deadline):
+    """Move the switches of this branch's earlier name to it, the first time it is read or written after
+    `git branch -m`: before then the guard may read it, so no stamp path can do this. Raises OSError or
+    subprocess.SubprocessError when its reflog or the move fails."""
+    if earlier_switches(common, branch, deadline):
+        with open(os.path.join(STORE, ".lock"), "w") as lock:
+            while True:  # not a blocking flock: the guard must answer within its budget, not wait on a writer
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() > deadline:
+                        raise TimeoutError("the phase switch store stayed locked, so a renamed branch's switches "
+                                           "couldn't be followed") from None
+                    time.sleep(0.05)
+            source = earlier_switches(common, branch, deadline)  # again: another process may have moved them
+            if source:
+                os.rename(source, dict(store_files(common, branch))["branch"])
+                log("phase_switches", "phase-switch-rename", {"cwd": common},
+                    f"moved {os.path.basename(source)} to the renamed branch {branch}")
+
+
+def earlier_switches(common, branch, deadline):
+    """The switch file of this branch's newest earlier name that has one, or None when the branch has its own. A name
+    that is a branch again keeps its file: a fallback read would hand it to whichever branch read it first."""
+    if branch_switches(common, branch):
+        return None
+    for name in earlier_names(common, branch, deadline):
+        source = branch_switches(common, name) if name != branch else None
+        if source and not branch_exists(common, name, deadline):
+            return source
+    return None
+
+
+def earlier_names(common, branch, deadline):
+    """Earlier names of this branch, newest first: git carries a branch's reflog across renames. Read from the file, as
+    this runs on the guard's path, and through git only where refs live in a reftable, which has no such files."""
+    if os.path.isdir(os.path.join(common, "reftable")):
+        shown = subprocess.run(["git", "--git-dir", common, "reflog", "show", "--format=%gs", f"refs/heads/{branch}",
+                                "--"], capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"},
+                               timeout=time_left(deadline))
+        if shown.returncode != 0 and "bad revision" not in shown.stderr:  # bad revision: no commit yet
+            raise OSError(f"git reflog failed for branch {branch}: {shown.stderr.strip()[-200:]}")
+        messages = shown.stdout.splitlines()
+    else:
+        try:
+            with open(os.path.join(common, "logs", "refs", "heads", branch), errors="replace") as fh:
+                messages = [line.partition("\t")[2] for line in fh][::-1]
+        except FileNotFoundError:  # no commit yet, or core.logAllRefUpdates off: git kept no record of a rename
+            return []
+        except OSError as error:
+            raise OSError(f"Couldn't read the reflog of branch {branch} to follow a rename: {error}") from error
+    names = []
+    for message in messages:
+        if message.startswith("Branch: copied "):  # `git branch -c` copies the reflog: older names are the source's
+            break
+        renamed = RENAMED.match(message)
+        if renamed:
+            names.append(renamed.group(1))
+    return names
+
+
+def time_left(deadline):
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("ran out of time following a branch rename")
+    return left
+
+
+def branch_exists(common, name, deadline):
+    shown = subprocess.run(["git", "--git-dir", common, "show-ref", "--verify", "--quiet", f"refs/heads/{name}"],
+                           capture_output=True, text=True, timeout=time_left(deadline))
+    if shown.returncode not in (0, 1):
+        raise OSError(f"git show-ref failed for branch {name}: {shown.stderr.strip()[-200:]}")
+    return shown.returncode == 0
 
 
 def read(path):
@@ -98,12 +196,12 @@ def valid_switch(key, value):
 
 def phases_off(cwd, timeout=5):
     """{phase: why it is off} for the checkout in cwd. Raises StoreError when a switch file can't be read."""
-    return phases_off_in(*checkout(cwd, timeout)[:2])
+    return phases_off_in(*followed_checkout(cwd, timeout))
 
 
-def phases_off_in(repo, branch):
+def phases_off_in(common, branch):
     state = {}
-    for scope, path in store_files(repo, branch):
+    for scope, path in store_files(common, branch):
         switches = read(path)
         # Within one file the current name wins over the former one; across files the narrowest scope still does.
         switches = {**{FORMER_NAMES[k]: v for k, v in switches.items() if k in FORMER_NAMES}, **switches}
@@ -115,12 +213,12 @@ def phases_off_in(repo, branch):
 def review_rounds(cwd, timeout=5):
     """(re-check rounds after the review's first pass, the scope that set them or "default"). Raises StoreError
     when a switch file can't be read."""
-    return review_rounds_in(*checkout(cwd, timeout)[:2])
+    return review_rounds_in(*followed_checkout(cwd, timeout))
 
 
-def review_rounds_in(repo, branch):
+def review_rounds_in(common, branch):
     rounds = DEFAULT_ROUNDS, "default"
-    for scope, path in store_files(repo, branch):
+    for scope, path in store_files(common, branch):
         switches = read(path)
         if ROUNDS in switches:
             rounds = switches[ROUNDS], scope
@@ -146,7 +244,7 @@ def apply_phase_line(prompt, cwd):
     if rounds:
         switched, said, hint = switch(ROUNDS, rounds.group(1).lower().split(), cwd,
                                       f"`{ROUNDS} <0-9> [branch|repo|global]`")
-        then = ("Confirm it to the user in one line; the review runs that many re-checks." if switched else
+        then = ("Confirm it to the user in one line; the review runs that many re-checks." if switched and not hint else
                 f"Tell the user; {hint}")
         return f"The user's `{ROUNDS}` line: {said} {then}"
     line = PHASE_LINE.match(prompt)
@@ -161,7 +259,8 @@ def apply_phase_line(prompt, cwd):
 
 def switch(action, words, cwd, form):
     """Record `<action> <words>` for the checkout in cwd, asked in `form`: (whether it was recorded, what happened,
-    and when it wasn't, what the user can do instead). The action is off, on or review-rounds."""
+    and when it wasn't, or a review-rounds value was but doesn't apply yet, what the user can do). The action is off,
+    on or review-rounds."""
     if not 1 <= len(words) <= 2:
         return False, f"Not {form}: nothing was switched.", \
             f"the form is {form}, branch when left out." if action == ROUNDS else f"the phases are {', '.join(PHASES)}."
@@ -189,7 +288,15 @@ def switch(action, words, cwd, form):
     if scope == "branch" and not branch:
         return False, f"Can't switch {what} for this branch: HEAD in {cwd} is on no branch, so nothing was " \
             "switched.", "the repo or global scope works there."
-    path = dict(store_files(repo, branch))[scope]
+    unfollowed = None
+    try:
+        if branch:  # before the write reads its file: a renamed branch keeps what its earlier name had
+            follow_rename(common, branch, time.monotonic() + 5)
+    except (OSError, subprocess.SubprocessError) as error:
+        if scope == "branch":  # only the branch's own file depends on its earlier name
+            return False, f"Couldn't switch {what}: {error}. Nothing was switched.", "try again once that is fixed."
+        unfollowed = StoreError(str(error))
+    path = dict(store_files(common, branch))[scope]
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         # Two sessions switching at once: the lock keeps one from writing back what it read before the other wrote.
@@ -213,11 +320,18 @@ def switch(action, words, cwd, form):
             pass
     where = {"branch": f"branch {branch} of {repo}", "repo": f"every branch of {repo}", "global": "every repo"}[scope]
     try:
-        off = phases_off_in(repo, branch)
-        rounds, set_in = review_rounds_in(repo, branch)
+        if unfollowed:
+            raise unfollowed
+        off = phases_off_in(common, branch)
+        rounds, set_in = review_rounds_in(common, branch)
     except StoreError as error:
-        return True, (f"Switched {what} for {where}, but {str(error)[0].lower() + str(error)[1:]}, so every "
-                      "phase counts as on here until that file is fixed or deleted."), None
+        problem = str(error)[0].lower() + str(error)[1:]
+        if action == ROUNDS:  # the review reads an unreadable store as the default, not as the value just saved
+            return True, (f"Saved {what} for {where}, but {problem}, so the review runs {DEFAULT_ROUNDS} re-check "
+                          "round (the default) here until that file is fixed or deleted."), \
+                "fix or delete the file the error names, and the saved value applies."
+        return True, (f"Switched {what} for {where}, but {problem}, so every phase counts as on here until that file "
+                      "is fixed or deleted."), None
     if action == ROUNDS:
         still = " A narrower setting overrides it here." if set_in != scope else ""
         return True, f"Switched {what} for {where}.{still} Review re-check rounds here now: {rounds} ({set_in}).", None
@@ -229,9 +343,9 @@ def switch(action, words, cwd, form):
 REFUSED = 3  # not 1: Python exits 1 on a crash, which may come after the write
 
 
-def branch_switches(repo, branch):
+def branch_switches(common, branch):
     """The file holding a branch's own switches, or None when it has none. Raises OSError when it can't tell."""
-    path = dict(store_files(repo, branch))["branch"]
+    path = dict(store_files(common, branch))["branch"]
     try:
         os.stat(path)  # not os.path.exists, which says no when the store can't be searched
     except FileNotFoundError:
@@ -239,17 +353,18 @@ def branch_switches(repo, branch):
     return path
 
 
-def forget_branch(repo, branch, common):
-    """Remove a deleted branch's switches and bin/phase's cached label for it, so a new branch of that name starts with
-    every phase on. True when it had switches. Raises OSError."""
-    try:
-        os.remove(review_stamp.phase_cache(common, branch))
-    except FileNotFoundError:
-        pass
+def forget_branch(common, branch):
+    """Remove a deleted branch's switches, and bin/phase's cached label for it with its refresh lock, so a new branch of
+    that name starts with every phase on and gets its own label at once. True when it had switches. Raises OSError."""
+    for path in (review_stamp.phase_cache(common, branch), review_stamp.phase_lock(common, branch)):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
     try:
         with open(os.path.join(STORE, ".lock"), "w") as lock:  # not under a switch() writing it back
             fcntl.flock(lock, fcntl.LOCK_EX)
-            os.remove(dict(store_files(repo, branch))["branch"])
+            os.remove(dict(store_files(common, branch))["branch"])
     except FileNotFoundError:  # no store, or no switches for this branch
         return False
     return True
