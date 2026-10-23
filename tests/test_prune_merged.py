@@ -219,25 +219,30 @@ def forgets_the_switches_of_a_renamed_branch_never_read(base):
     assert out.returncode == 0 and "deleted branch done and its phase switches" in out.stdout, out
     assert os.listdir(branch_store(home)) == [], "old's file must not wait for a branch named old"
 
+
+
+def keeps_a_branch_whose_rename_history_it_cannot_read(base):
+    main = setup(base)
+    home = os.path.join(base, "home")
+    env = {**os.environ, "HOME": home}
     gone = worktree(base, main, "gone")
     subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"], cwd=gone,
                    capture_output=True, text=True, env=env, check=True)
     sh(gone, "git", "branch", "-m", "gone", "unread")
     sh(main, "git", "worktree", "remove", gone)
-    label = os.path.join(main, ".git", "agents", "phase", "unread.json")
-    os.makedirs(os.path.dirname(label), exist_ok=True)
-    for path in (label, label[:-len(".json")] + ".lock"):
-        open(path, "w").close()
+    files = kit_files(main, "unread") + kit_files(main, "gone")  # a guide of the earlier name it can't find may wait
     reflog = os.path.join(main, ".git", "logs", "refs", "heads", "unread")
     os.chmod(reflog, 0)
     try:
+        dry = subprocess.run([PRUNE, "--dry-run"], cwd=main, capture_output=True, text=True, env=env)
         out = subprocess.run([PRUNE], cwd=main, capture_output=True, text=True, env=env)
     finally:
-        if os.path.exists(reflog):
-            os.chmod(reflog, 0o644)
-    assert out.returncode == 1 and "deleted branch unread, but kept the phase switches of its earlier name: " \
-        "couldn't follow its rename" in out.stdout, out
-    assert os.listdir(os.path.dirname(label)) == [], "the deleted branch's label and lock go even so"
+        os.chmod(reflog, 0o644)
+    for run in (dry, out):
+        assert run.returncode == 1 and line_of(run, "unread").startswith(
+            "kept branch unread: couldn't read its rename history to find its files"), run
+    assert "unread" in branches(main) and all(os.path.exists(path) for path in files), out.stdout
+    assert os.listdir(branch_store(home)) == ["gone.json"], "its switches stay with it"
 
 
 def says_when_it_cannot_check_the_switches(base):
@@ -329,8 +334,13 @@ def deletes_the_files_of_a_renamed_branch_but_not_of_a_copy_source(base):
     sh(main, "git", "-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "merge copy", "copy")
     sh(main, "git", "push", "-q", "origin", "trunk")
     kept = kit_files(main, "orig")
+    reused = worktree(base, main, "was")
+    sh(reused, "git", "branch", "-m", "was", "now")
+    sh(main, "git", "worktree", "remove", reused)
+    worktree(base, main, "was", merged=False)  # a new branch takes the earlier name: its files are its own
+    kept += kit_files(main, "was")
     out = sh(main, PRUNE)
-    assert out.returncode == 0 and {"done", "copy"}.isdisjoint(branches(main)), out
+    assert out.returncode == 0 and {"done", "copy", "now"}.isdisjoint(branches(main)), out
     assert not [path for path in gone if os.path.exists(path)], f"the earlier names' files go: {out.stdout}"
     assert all(os.path.exists(path) for path in kept), f"a copy's source keeps its earlier name's files: {out.stdout}"
 
@@ -345,6 +355,8 @@ def keeps_a_branch_whose_steps_after_the_merge_have_not_passed(base):
                   + table.format(2, "| P2 | NOT RUN | again after the fix |\n"), "P2"),
         "failed": (head + table.format(1, "| P1 | FAIL | p1.txt |\n| P2 | PASS | p2.txt |\n"), "P1"),
         "sub-step": (head + table.format(1, "| P1 | PASS | p1.txt |\n| P2a | PASS | p2a.txt |\n| P2b | NOT RUN | |\n"), "P2"),
+        "declared": (head.replace("### P2. One full run\n", "### P2a. A full run\n\n### P2b. A second one\n")
+                     + table.format(1, "| P1 | PASS | p1.txt |\n| P2a | PASS | p2a.txt |\n"), "P2"),
         "passed": (head + "\n### M1. Pay on a phone\n" + table.format(1, "| P1 | PASS | p1.txt |\n| P2a | PASS | p2a.txt |\n"
                                                                           "| P2b | PASS | p2b.txt |\n"), None),
     }
@@ -358,6 +370,13 @@ def keeps_a_branch_whose_steps_after_the_merge_have_not_passed(base):
         os.remove(os.path.join(where, "checks-guide-shop-legacy.md"))
         files["legacy"].remove(os.path.join(where, "checks-guide-shop-legacy.md"))
         open(os.path.join(where, "staging-guide-shop-legacy.md"), "w").write(head)
+    passed = guides["passed"][0]
+    sh(main, "git", "branch", "tmp-only", "trunk")  # pending only in the copy a sandbox kept in $TMPDIR
+    files["tmp-only"] = kit_files(main, "tmp-only", passed)
+    open(os.path.join(os.environ["TMPDIR"], "agents-specs", "checks-guide-shop-tmp-only.md"), "w").write(head)
+    sh(main, "git", "branch", "was", "trunk")  # pending only under the name it had before
+    files["now"] = kit_files(main, "was", head) + kit_files(main, "now", passed)
+    sh(main, "git", "branch", "-m", "was", "now")
     sh(main, "git", "branch", "unreadable", "trunk")
     files["unreadable"] = kit_files(main, "unreadable", head + table.format(1, "| P1 | PASS | p1.txt |\n| P2 | PASS | p2.txt |\n"))
     unreadable = os.path.join(main, ".git", "agents", "checks-guide-shop-unreadable.md")
@@ -374,6 +393,9 @@ def keeps_a_branch_whose_steps_after_the_merge_have_not_passed(base):
                 assert line.startswith(f"kept branch {name}:") and "after the merge" in line and pending in line, \
                     (name, run.stdout)
             assert name in branches(main) and all(os.path.exists(path) for path in files[name]), (name, out.stdout)
+    for name in ("tmp-only", "now"):
+        assert "haven't passed: P1, P2" in line_of(out, name) and name in branches(main), (name, out.stdout)
+        assert all(os.path.exists(path) for path in files[name]), (name, out.stdout)
     assert "P1, P2" in line_of(out, "legacy") and "legacy" in branches(main), out.stdout
     assert all(os.path.exists(path) for path in files["legacy"]), out.stdout
     line = line_of(out, "unreadable")
@@ -384,11 +406,25 @@ def keeps_a_branch_whose_steps_after_the_merge_have_not_passed(base):
     assert out.returncode == 0, out
 
 
+def keeps_a_branch_when_it_cannot_search_for_its_guide(base):
+    main = setup(base)
+    sh(main, "git", "branch", "done", "trunk")
+    files = kit_files(main, "done")
+    tmp = os.path.join(os.environ["TMPDIR"], "agents-specs")
+    os.chmod(tmp, 0)
+    try:
+        out = sh(main, PRUNE)
+    finally:
+        os.chmod(tmp, 0o755)
+    assert line_of(out, "done").startswith("kept branch done: couldn't read its checks guide"), out.stdout
+    assert "done" in branches(main) and all(os.path.exists(path) for path in files), out.stdout
+
+
 def names_the_files_it_cannot_delete(base):
     main = setup(base)
-    for name in ("stuck", "other"):
+    for name in ("stuck", "zz-other"):  # one handled after the failure: git lists branches by name
         sh(main, "git", "branch", name, "trunk")
-    stuck, other = kit_files(main, "stuck"), kit_files(main, "other")
+    stuck, other = kit_files(main, "stuck"), kit_files(main, "zz-other")
     evidence = os.path.join(main, ".git", "agents", "evidence-shop-stuck")
     os.chmod(evidence, 0o500)  # E1.txt can't be removed from it
     try:
@@ -400,13 +436,15 @@ def names_the_files_it_cannot_delete(base):
     assert line.startswith("deleted branch stuck") and f"couldn't delete {evidence}" in line, out.stdout
     assert os.path.exists(os.path.join(evidence, "E1.txt")), "the file it couldn't delete is still there"
     assert not [path for path in stuck if path != evidence and os.path.exists(path)], out.stdout
-    assert not any(os.path.exists(path) for path in other) and "other" not in branches(main), \
+    assert not any(os.path.exists(path) for path in other) and "zz-other" not in branches(main), \
         f"the other branches still go: {out.stdout}"
 
 
 for test in (removes_merged_and_keeps_the_rest_with_reasons, keeps_the_worktree_it_runs_in,
              a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect,
-             forgets_the_phase_switches_of_the_branches_it_deletes, forgets_only_the_switches_of_its_own_repo, forgets_the_switches_of_a_renamed_branch_never_read, deletes_the_branch_even_when_its_switches_stay,
+             forgets_the_phase_switches_of_the_branches_it_deletes, forgets_only_the_switches_of_its_own_repo,
+             forgets_the_switches_of_a_renamed_branch_never_read, keeps_a_branch_whose_rename_history_it_cannot_read,
+             deletes_the_branch_even_when_its_switches_stay, keeps_a_branch_when_it_cannot_search_for_its_guide,
              says_when_it_cannot_check_the_switches, keeps_the_switches_when_it_cannot_name_the_repo,
              deletes_the_files_kept_for_the_branches_it_deletes, deletes_the_files_of_a_renamed_branch_but_not_of_a_copy_source,
              keeps_a_branch_whose_steps_after_the_merge_have_not_passed, names_the_files_it_cannot_delete):

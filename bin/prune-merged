@@ -12,7 +12,7 @@ origin/<default> and checked out nowhere is deleted, if it hasn't moved since, w
 (`phase off … branch`) and the kit's files for it: its stamps, spec, reports and evidence, in .git/agents and
 $TMPDIR/agents-specs, also under the earlier names it was renamed from. A new branch of that name starts with every phase
 on and no reports. A branch whose checks guide has a step after the merge that hasn't passed, or can't be read, is kept
-with its files. Prints one line per linked worktree and merged branch: what it removed, or why it kept it, exiting 1
+with its files, as is one whose rename history can't be read. Prints one line per linked worktree and merged branch: what it removed, or why it kept it, exiting 1
 when something it should have removed stays. --dry-run prints what it would do and changes nothing else.
 """
 import importlib.machinery
@@ -91,11 +91,10 @@ def branch_keys(root, branch, deadline):
     """The keys the kit's files for this branch sit under: its own, and those of its earlier names (to a `git branch -c`
     copy) and its dashed key from before `~`, each only while no branch holds that name. Raises OSError or
     subprocess.SubprocessError when its rename history can't be read."""
-    earlier = [name for name in phase_switches.earlier_names(root, branch, deadline)
-               if name != branch and not phase_switches.branch_exists(root, name, deadline)]
+    live = {ref.removeprefix("refs/heads/") for ref in git(root, "for-each-ref", "--format=%(refname)", "refs/heads").split()}
+    earlier = [name for name in dict.fromkeys(phase_switches.earlier_names(root, branch, deadline)) if name not in live]
     keys = [review_stamp.branch_key(name) for name in [branch] + earlier]
-    keys += [name.replace("/", "-") for name in [branch] + earlier
-             if "/" in name and not phase_switches.branch_exists(root, name.replace("/", "-"), deadline)]
+    keys += [name.replace("/", "-") for name in [branch] + earlier if "/" in name and name.replace("/", "-") not in live]
     return list(dict.fromkeys(keys))
 
 
@@ -113,15 +112,17 @@ def unfinished_guide(root, repo, keys):
     for where in (os.path.join(root, "agents"), review_stamp.TMP_SPECS):
         for key in keys:
             # Guides written before checks-guide were named staging-guide: reports reads that one only without the other.
-            guides = [os.path.join(where, f"{kind}-{repo}-{key}.md") for kind in ("checks-guide", "staging-guide")]
-            guide = next((path for path in guides if os.path.lexists(path)), None)
-            if not guide:
+            for guide in [os.path.join(where, f"{kind}-{repo}-{key}.md") for kind in ("checks-guide", "staging-guide")]:
+                try:
+                    with open(guide) as fh:
+                        steps = review_stamp.guide_steps(fh.read())
+                    break
+                except FileNotFoundError:
+                    continue
+                except (OSError, UnicodeDecodeError) as error:  # unknown is never safe, a directory it can't search too
+                    return f"couldn't read its checks guide {guide}: {error}"
+            else:
                 continue
-            try:
-                with open(guide) as fh:
-                    steps = review_stamp.guide_steps(fh.read())
-            except (OSError, UnicodeDecodeError) as error:  # unknown is never safe
-                return f"couldn't read its checks guide {guide}: {error}"
             pending = [step for step, info in steps.items() if step.startswith("P") and info["result"] != "PASS"]
             if pending:
                 return f"its checks guide {guide} has steps after the merge that haven't passed: {', '.join(pending)}"
@@ -199,18 +200,20 @@ def main():
             checked_out = {b for p, b, _ in worktrees(root) if b and p not in gone}
             if symref or branch == local_default or branch in checked_out:
                 continue
-            deadline = time.monotonic() + 5
             try:  # while the reflog that names its earlier names still exists: deleting the branch removes it
-                keys, unread = branch_keys(root, branch, deadline), None
-            except (OSError, subprocess.SubprocessError) as error:
-                keys, unread = [review_stamp.branch_key(branch)], f"kept any files of its earlier names: {error}"
+                keys = branch_keys(root, branch, time.monotonic() + 5)
+            except (OSError, subprocess.SubprocessError, GitFailed) as error:  # its earlier names' guides went unread
+                print(f"kept branch {branch}: couldn't read its rename history to find its files: {error}")
+                failed = True
+                continue
             unfinished = unfinished_guide(root, repo, keys)
             if unfinished:
                 print(f"kept branch {branch}: {unfinished}")
                 continue
             files = kit_files(root, repo, keys)
+            deadline = time.monotonic() + 5
             if dry:
-                problems = [unread] if unread else []
+                problems = []
                 try:
                     if unnamed:
                         problems.insert(0, unnamed)
@@ -220,7 +223,6 @@ def main():
                     switched = False
                     problems.insert(0, f"couldn't check its phase switches: {error}")
                 print(branch_line("would delete", branch, switched, files, problems))
-                failed = failed or bool(unread)
                 continue
             unfollowed = None
             if not unnamed:
@@ -235,7 +237,7 @@ def main():
                 print(f"kept branch {branch}: {error}")
                 failed = True
                 continue
-            problems = delete(files) + ([unread] if unread else [])
+            problems = delete(files)
             forgot = False
             if unnamed:
                 problems.insert(0, f"kept its phase switches: {unnamed}")

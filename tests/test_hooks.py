@@ -1783,13 +1783,15 @@ def evidence_needs_a_branch(base):
         f"every detached checkout would share one evidence directory: {detached}"
     assert evidence_dirs() == [], evidence_dirs()
     ran = subprocess.run([evidence, "A1", "echo", "seen"], cwd=repo, capture_output=True, text=True)
-    assert ran.returncode == 74 and "needs a branch" in ran.stderr and "seen" not in ran.stdout, ran
+    assert ran.returncode == 74 and "needs a branch" in ran.stderr and "EVIDENCE_DIR" in ran.stderr \
+        and "seen" not in ran.stdout, ran
     assert evidence_dirs() == [], evidence_dirs()
     elsewhere = os.path.join(base, "guide-evidence")
     os.makedirs(elsewhere)
     ran = subprocess.run([evidence, "A1", "echo", "seen"], cwd=repo, capture_output=True, text=True,
                          env={**os.environ, "EVIDENCE_DIR": elsewhere})
-    assert ran.returncode == 0 and "seen" in open(os.path.join(elsewhere, "A1.txt")).read(), ran
+    assert ran.returncode == 0 and ran.stdout == "seen\n", ran
+    assert open(os.path.join(elsewhere, "A1.txt")).read().endswith("\n\nseen\n"), "the output, after the header"
     named = subprocess.run([reports, "--branch", "trunk", "path", "evidence"], cwd=repo, capture_output=True, text=True)
     assert named.returncode == 0 and os.path.isdir(named.stdout.strip()), named
     assert named.stdout.strip().endswith("evidence-shop-trunk"), named.stdout

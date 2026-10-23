@@ -279,7 +279,7 @@ docs            regenerate docs/framework.md
 docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the pre-commit hook)
 ```
 
-**`bin/evidence`**: Run a validation check and keep what it showed: evidence <id> <command> [args...] Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`, which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned. EVIDENCE_DIR saves there instead, from any directory: a checks guide's steps run outside the repository.
+**`bin/evidence`**: Run a validation check and keep what it showed: evidence <id> <command> [args...] Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the command, directory, time, exit code and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`, which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned. EVIDENCE_DIR saves there instead, from any directory: a checks guide's steps run outside the repository. Without it, a detached HEAD has no evidence directory, so it exits 74.
 
 **`bin/free-branch`**: Free a pushed branch from its worktree, so the user can switch to it in the main checkout.
 

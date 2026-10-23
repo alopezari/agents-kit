@@ -126,14 +126,17 @@ made_codex_dir=0; [ -d "$home/.codex" ] || { mkdir "$home/.codex"; made_codex_di
 settings_files=("$home/.claude/settings.json" "$home/.codex/hooks.json" "$home/.codex/config.toml")
 for f in "${settings_files[@]}"; do [ -e "$f" ] && mv "$f" "$f.saved"; done
 sums() { for f in "${settings_files[@]}"; do cksum < "$f"; done; }
-for claude_settings in '{"permissions": {' '{"statusLine": "custom"}'; do
+# Pairs of a settings.json and a hooks.json: not JSON, then shapes jq reads but the kit's steps can't use.
+for pair in '{"permissions": {|{"hooks": {' '{"statusLine": "custom"}|{"hooks": {"Stop": "custom"}}' \
+            '{"statusLine": false}|{"hooks": {"Stop": [{"hooks": ["custom"]}]}}' '{"hooks": false}|{"hooks": false}' ' |'; do
+  claude_settings=${pair%%|*}
   printf '%s' "$claude_settings" > "$home/.claude/settings.json"
-  echo '{"hooks": {"Stop": "custom"}}' > "$home/.codex/hooks.json"
+  printf '%s\n' "${pair#*|}" > "$home/.codex/hooks.json"
   printf 'model = "\xff\xfe"\n' > "$home/.codex/config.toml"  # not UTF-8: the baseline helper can't apply to it
   before=$(sums)
   for mode in --doctor --yes; do
     out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" $mode 2>&1); status=$?
-    check "install.sh $mode on settings.json $claude_settings, a hooks.json of the wrong shape and a config.toml it can't read: named, untouched, every section runs" \
+    check "install.sh $mode on settings.json $claude_settings, hooks.json ${pair#*|} and a config.toml it can't read: named, untouched, every section runs" \
       '[ $status = 0 ] && [ "$(sums)" = "$before" ] \
        && grep -q "  warn  $home/.claude/settings.json can.t be read as the kit expects" <<<"$out" \
        && grep -q "  warn  $home/.codex/hooks.json can.t be read as the kit expects" <<<"$out" \
@@ -159,6 +162,7 @@ made_codex_dir=0; [ -d "$home/.codex" ] || { mkdir "$home/.codex"; made_codex_di
 cp "$home/.agents/profiles/work/deps.txt" "$home/deps.saved"
 printf '%s\n' "required hungdep brew:hungdep a test" "required fastdep>=3.0 brew:fastdep a test" >> "$home/.agents/profiles/work/deps.txt"
 hung_calls=4  # hungdep, claude in the requirements and for the kit plugin, codex
+for mode in --doctor --yes; do
 started=$SECONDS
 # A hard cap past the bound, so a run that hangs fails here instead of hanging the suite.
 python3 -c 'import os, signal, subprocess, sys
@@ -172,9 +176,9 @@ try:
 except ProcessLookupError:
     pass
 sys.exit(code)' "$home/hung.out" $((hung_calls * 10 + 60)) \
-  env PATH="$home/fakes/hung:$PATH" HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor; status=$?
+  env PATH="$home/fakes/hung:$PATH" HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" $mode; status=$?
 elapsed=$((SECONDS - started)); out=$(cat "$home/hung.out")
-check "a --version that never answers gives up after 10 s each ($elapsed s for $hung_calls), says so and the run goes on" \
+check "install.sh $mode: a --version that never answers gives up after 10 s each ($elapsed s for $hung_calls), says so and the run goes on" \
   '[ $status = 0 ] && [ $elapsed -lt $((hung_calls * 10 + 20)) ] \
    && grep -q "  warn  hungdep didn.t answer .hungdep --version. within 10s" <<<"$out" \
    && grep -q "  info  claude didn.t answer .claude --version. within 10s" <<<"$out" \
@@ -182,6 +186,7 @@ check "a --version that never answers gives up after 10 s each ($elapsed s for $
    && grep -q "  warn  codex didn.t answer .codex --version. within 10s" <<<"$out" \
    && grep -q "  ok    fastdep 3.4.5" <<<"$out" && grep -qx "Done." <<<"$out"'
 [ $status = 0 ] || echo "     exit $status: $(tail -3 <<<"$out" | tr '\n' ' ')"
+done
 mv "$home/deps.saved" "$home/.agents/profiles/work/deps.txt"
 rm -r "$home/fakes/hung" "$home/hung.out"
 [ $made_codex_dir = 1 ] && rm -r "$home/.codex"

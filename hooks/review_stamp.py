@@ -404,11 +404,13 @@ GUIDE_STEP = r"([MSP]\d+)[a-z]*\b"  # S: a step before the merge in a guide from
 def guide_steps(text):
     """{step: {"name", "owner": "agent" or "you", "result": "PASS", "FAIL" or None, "date": " (<date>)" or ""}} for each
     step of a checks guide, its result the latest one its results tables give, None while it has none to stand on."""
-    steps = {}
+    steps, declared = {}, {}  # declared: the sub-steps given a heading of their own (### P2a, ### P2b)
     # A step ends at the next heading of any level; a results table only at the next `## `, past its own lines.
-    for step, name, body in re.findall(rf"^### {GUIDE_STEP}\.?[ \t]*([^\n]*)\n?(.*?)(?=^##|\Z)", text, re.M | re.S):
+    for step, sub, name, body in re.findall(r"^### ([MSP]\d+)([a-z]*)\b\.?[ \t]*([^\n]*)\n?(.*?)(?=^##|\Z)", text, re.M | re.S):
         where = re.search(r"^[-*\s]*(?:\*\*)?Where:?(?:\*\*)?:?\s*the agent\b", body, re.M)
         steps[step] = {"name": name.strip(), "owner": "agent" if where else "you", "result": None, "date": ""}
+        if sub:
+            declared.setdefault(step, set()).add(step + sub)
     # Every results table counts, ship's `## Results after the deploy` too; a later NOT RUN asks for the step again.
     rows, dates = {}, {}  # the latest result of each row (P2 or its sub-step P2b), and each step's latest table
     for heading, table in re.findall(r"^## Results([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S):
@@ -418,7 +420,9 @@ def guide_steps(text):
             if step:
                 rows.setdefault(step.group(2), {})[step.group(1)] = result
                 dates[step.group(2)] = f" ({when.group(1)})" if when else ""
-    for step, found in rows.items():  # a step's sub-steps add up: any FAIL fails it, any NOT RUN leaves it to run
+    for step, found in rows.items():  # a step's sub-steps add up: any FAIL fails it, any NOT RUN or none leaves it to run
+        if step not in found:
+            found.update({sub: "NOT RUN" for sub in declared.get(step, ()) if sub not in found})
         result = next(r for r in ("FAIL", "NOT RUN", "PASS") if r in found.values())
         info = steps.setdefault(step, {"name": "", "owner": "you"})
         info["result"], info["date"] = (None, "") if result == "NOT RUN" else (result, dates[step])
@@ -440,6 +444,8 @@ def rows_without_evidence():
             lines = fh.read().splitlines()
     except OSError:
         return [f"No validation report at {report}: save it first (kit-validate skill, step 5)."]
+    if not evidence:  # reports path evidence refuses on a detached HEAD
+        return ["No evidence directory: a detached HEAD has none. Validate from the branch's checkout."]
     missing = unbacked_rows(lines, evidence)
     if missing:
         return [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for output, "

@@ -65,11 +65,12 @@ usable_json() {
   [ -e "$1" ] || return 0
   local why
   why=$(jq -r 'if type != "object" then "it is not a JSON object"
-    elif (.hooks // {} | type != "object" or any(.[]; type != "array" or any(.[]; type != "object"
-      or (.hooks // [] | type != "array")))) then "its hooks are not lists of entries per event"
-    elif (.statusLine // {} | type != "object") then "its statusLine is not an object"
-    else "" end' "$1" 2>&1) || why="it is not valid JSON ($(tail -1 <<<"$why"))"
-  [ -z "$why" ] && return 0
+    elif (.hooks | . != null and (type != "object" or any(.[]; type != "array" or any(.[]; type != "object"
+      or (.hooks | . != null and (type != "array" or any(.[]; type != "object"))))))) then "its hooks are not lists of entries per event"
+    elif (.statusLine | . != null and type != "object") then "its statusLine is not an object"
+    else "usable" end' "$1" 2>&1) || why="it is not valid JSON ($(tail -1 <<<"$why"))"
+  [ "$why" = usable ] && return 0
+  [ -n "$why" ] || why="it is empty"  # jq reads an empty file as no value at all
   warn "$1 can't be read as the kit expects: $why, so $2 were skipped; fix it and run install.sh again"
   return 1
 }

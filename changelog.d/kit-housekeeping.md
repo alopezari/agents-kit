@@ -1,7 +1,7 @@
-- `bin/prune-merged` now deletes what the kit kept for each merged branch it deletes, also under the branch's earlier names: its stamps, spec, reports, browser A/B spec and evidence. A branch whose checks guide still has a step after the merge that hasn't passed is kept, files and all, with the steps named; a file it can't delete is named and makes it exit 1.
+- `bin/prune-merged` now deletes what the kit kept for each merged branch it deletes, also under the branch's earlier names: its stamps, spec, reports, browser A/B spec and evidence. A branch whose checks guide still has a step after the merge that hasn't passed is kept, files and all, with the steps named, and so is one whose rename history can't be read; either, or a file it can't delete, is named and makes it exit 1.
 - `install.sh` and `--doctor` no longer stop on a `~/.claude/settings.json` or `~/.codex/hooks.json` they can't read as the kit expects (bad JSON, or a key such as `statusLine` or `hooks` of the wrong shape), or on baseline settings they can't apply: they name the file, skip only the steps that need it, leave it as it was and run every later section.
 - `install.sh` gives up on a program's `--version` after 10 seconds, even when the program leaves a child holding its output, and reports it (info for an optional requirement) instead of hanging.
 - `reports path evidence` refuses on a detached HEAD unless given `--branch`, as `pr-body` does, so two detached checkouts no longer share one evidence directory.
 - The PR's validation section turns tabs in a report's text into spaces.
-- The generated framework doc no longer splits the hooks table with a blank line after the status line row.
+- The generated framework doc no longer splits the profile's extension-point table with a blank line after the status line row.
 - Following a branch's earlier names for its phase switches keeps to its time budget when reading the reflog is slow.
