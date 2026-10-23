@@ -119,12 +119,78 @@ if echo "$doctor" | grep -q "  warn  codex does not run .*$home/fakes/dangling-c
 else echo "FAIL --doctor on a dangling codex link: $(echo "$doctor" | grep -i codex | head -3)"; fail=1; fi
 [ $made_codex_dir = 1 ] && rmdir "$home/.codex"
 
+check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
+# A settings file the kit can't read as it expects is named, left byte for byte, and only the steps that need it skip.
+made_claude_dir=0; [ -d "$home/.claude" ] || { mkdir "$home/.claude"; made_claude_dir=1; }
+made_codex_dir=0; [ -d "$home/.codex" ] || { mkdir "$home/.codex"; made_codex_dir=1; }
+settings_files=("$home/.claude/settings.json" "$home/.codex/hooks.json" "$home/.codex/config.toml")
+for f in "${settings_files[@]}"; do [ -e "$f" ] && mv "$f" "$f.saved"; done
+sums() { for f in "${settings_files[@]}"; do cksum < "$f"; done; }
+for claude_settings in '{"permissions": {' '{"statusLine": "custom"}'; do
+  printf '%s' "$claude_settings" > "$home/.claude/settings.json"
+  echo '{"hooks": {"Stop": "custom"}}' > "$home/.codex/hooks.json"
+  printf 'model = "\xff\xfe"\n' > "$home/.codex/config.toml"  # not UTF-8: the baseline helper can't apply to it
+  before=$(sums)
+  for mode in --doctor --yes; do
+    out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" $mode 2>&1); status=$?
+    check "install.sh $mode on settings.json $claude_settings, a hooks.json of the wrong shape and a config.toml it can't read: named, untouched, every section runs" \
+      '[ $status = 0 ] && [ "$(sums)" = "$before" ] \
+       && grep -q "  warn  $home/.claude/settings.json can.t be read as the kit expects" <<<"$out" \
+       && grep -q "  warn  $home/.codex/hooks.json can.t be read as the kit expects" <<<"$out" \
+       && grep -q "  warn  couldn.t apply the kit.s baseline settings to $home/.codex/config.toml" <<<"$out" \
+       && grep -qx "Codex" <<<"$out" && grep -qx "Scheduled jobs" <<<"$out" && grep -qx "Done." <<<"$out" \
+       && grep -q "  ok    $home/.codex/AGENTS.md" <<<"$out" && ! grep -q "Traceback" <<<"$out"'
+    [ $status = 0 ] && [ "$(sums)" = "$before" ] && grep -qx "Done." <<<"$out" \
+      || echo "     exit $status, files $([ "$(sums)" = "$before" ] && echo kept || echo changed), ended: $(tail -1 <<<"$out")"
+  done
+done
+for f in "${settings_files[@]}"; do rm -f "$f"; [ -e "$f.saved" ] && mv "$f.saved" "$f"; done
+[ $made_codex_dir = 1 ] && rm -r "$home/.codex"
+[ $made_claude_dir = 1 ] && rm -r "$home/.claude"
+
+# A program whose --version never answers, even one leaving a child that holds its output, costs 10 s, not the run.
+mkdir -p "$home/fakes/hung"
+printf '#!/bin/sh\nsleep 600\n' > "$home/fakes/hung/hungdep"
+printf '#!/bin/sh\necho "fastdep 3.4.5"\n' > "$home/fakes/hung/fastdep"
+printf '#!/bin/sh\n[ "$1" = --version ] || exit 1\nsleep 600 &\necho "2.9.0 (Claude Code)"\n' > "$home/fakes/hung/claude"
+printf '#!/bin/sh\nsleep 600\n' > "$home/fakes/hung/codex"
+chmod +x "$home/fakes/hung/"*
+made_codex_dir=0; [ -d "$home/.codex" ] || { mkdir "$home/.codex"; made_codex_dir=1; }
+cp "$home/.agents/profiles/work/deps.txt" "$home/deps.saved"
+printf '%s\n' "required hungdep brew:hungdep a test" "required fastdep>=3.0 brew:fastdep a test" >> "$home/.agents/profiles/work/deps.txt"
+hung_calls=4  # hungdep, claude in the requirements and for the kit plugin, codex
+started=$SECONDS
+# A hard cap past the bound, so a run that hangs fails here instead of hanging the suite.
+python3 -c 'import os, signal, subprocess, sys
+p = subprocess.Popen(sys.argv[3:], stdout=open(sys.argv[1], "w"), stderr=subprocess.STDOUT, start_new_session=True)
+try:
+    code = p.wait(timeout=float(sys.argv[2]))
+except subprocess.TimeoutExpired:
+    code = 124
+try:
+    os.killpg(p.pid, signal.SIGKILL)  # and whatever it left behind
+except ProcessLookupError:
+    pass
+sys.exit(code)' "$home/hung.out" $((hung_calls * 10 + 60)) \
+  env PATH="$home/fakes/hung:$PATH" HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor; status=$?
+elapsed=$((SECONDS - started)); out=$(cat "$home/hung.out")
+check "a --version that never answers gives up after 10 s each ($elapsed s for $hung_calls), says so and the run goes on" \
+  '[ $status = 0 ] && [ $elapsed -lt $((hung_calls * 10 + 20)) ] \
+   && grep -q "  warn  hungdep didn.t answer .hungdep --version. within 10s" <<<"$out" \
+   && grep -q "  info  claude didn.t answer .claude --version. within 10s" <<<"$out" \
+   && grep -q "  warn  kit plugin: claude didn.t answer .claude --version. within 10s" <<<"$out" \
+   && grep -q "  warn  codex didn.t answer .codex --version. within 10s" <<<"$out" \
+   && grep -q "  ok    fastdep 3.4.5" <<<"$out" && grep -qx "Done." <<<"$out"'
+[ $status = 0 ] || echo "     exit $status: $(tail -3 <<<"$out" | tr '\n' ' ')"
+mv "$home/deps.saved" "$home/.agents/profiles/work/deps.txt"
+rm -r "$home/fakes/hung" "$home/hung.out"
+[ $made_codex_dir = 1 ] && rm -r "$home/.codex"
+
 # The sample profile, installed as a user would: each extension point must do what its README says.
 semgrep_dir=$(dirname "$(PATH="$real_path" command -v semgrep 2>/dev/null || echo /nonexistent/semgrep)")
 kit="$home/.agents"; sample="$kit/examples/sample-profile"
 mkdir -p "$home/.claude"  # Claude Code is wired by its directory when it isn't installed (CI)
 out=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$kit/install.sh" --yes --profile "$sample" 2>&1)
-check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
 check "sample profile: repo overlay, skill and research linked into the kit and the harness" \
   '[ -L "$kit/repos/example-plugin" ] && [ -L "$kit/skills/release-notes" ] && [ -L "$kit/research/example-study.md" ] \
    && [ "$(readlink "$home/.claude/skills/release-notes")" = "$kit/skills/release-notes" ]'

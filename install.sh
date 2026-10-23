@@ -59,14 +59,57 @@ settings_file() {
   mkdir -p "$(dirname "$1")"; echo "$2" > "$1"; fix "$1 created"
 }
 
+# usable_json <settings file> <the steps that need it>: whether the kit's steps can read it (an object, its hooks lists
+# of entries per event, its statusLine an object). A file they can't is named and left as it is; a missing one is usable.
+usable_json() {
+  [ -e "$1" ] || return 0
+  local why
+  why=$(jq -r 'if type != "object" then "it is not a JSON object"
+    elif (.hooks // {} | type != "object" or any(.[]; type != "array" or any(.[]; type != "object"
+      or (.hooks // [] | type != "array")))) then "its hooks are not lists of entries per event"
+    elif (.statusLine // {} | type != "object") then "its statusLine is not an object"
+    else "" end' "$1" 2>&1) || why="it is not valid JSON ($(tail -1 <<<"$why"))"
+  [ -z "$why" ] && return 0
+  warn "$1 can't be read as the kit expects: $why, so $2 were skipped; fix it and run install.sh again"
+  return 1
+}
+
 # baseline <settings file> <kit baseline>: add the kit's recommended settings where a key is missing.
 baseline() {
   local check=""; [ $DOCTOR = 1 ] && check=--check
-  # --check exits 1 when it lists missing keys; only a failure that printed nothing stops the install.
-  local out; out=$(python3 "$KIT/adapters/apply_baseline.py" "$1" "$2" $check) || [ -n "$out" ]
+  local out status=0 err; err=$(mktemp)
+  out=$(python3 "$KIT/adapters/apply_baseline.py" "$1" "$2" $check 2>"$err") || status=$?
+  # --check exits 1 when it lists missing keys; any other failure leaves the file as it was and the run going.
+  if [ $status != 0 ] && { [ -z "$check" ] || [ -z "$out" ]; }; then
+    warn "couldn't apply the kit's baseline settings to $1: $(tail -1 "$err")"; rm -f "$err"; return
+  fi
+  rm -f "$err"
   if [ -z "$out" ]; then ok "$(basename "$1") has the kit's baseline settings"; return; fi
   [ $DOCTOR = 1 ] || backup "$1"
   while read -r line; do if [ $DOCTOR = 1 ]; then warn "$(basename "$1") $line"; else fix "$(basename "$1") $line"; fi; done <<<"$out"
+}
+
+# bounded <program> [args...]: run it on no input for at most VERSION_TIMEOUT seconds, then exit 124. The whole process
+# group goes: a child left holding its output would keep $(...) waiting after the program itself exits. macOS has no timeout.
+VERSION_TIMEOUT=10
+bounded() {
+  python3 - "$VERSION_TIMEOUT" "$@" <<'PY'
+import os, signal, subprocess, sys
+try:
+    run = subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           start_new_session=True)
+except OSError as error:
+    print(f"{sys.argv[2]}: {error.strerror}", file=sys.stderr)
+    sys.exit(127)
+try:
+    out, err = run.communicate(timeout=float(sys.argv[1]))
+except subprocess.TimeoutExpired:
+    os.killpg(run.pid, signal.SIGKILL)
+    sys.exit(124)
+sys.stdout.buffer.write(out)
+sys.stderr.buffer.write(err)
+sys.exit(run.returncode if run.returncode >= 0 else 128 - run.returncode)
+PY
 }
 
 skills() {  # link every kit skill into a harness skills dir, and drop its links to kit folders that hold none
@@ -217,8 +260,14 @@ older_than() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" != "$2" ];
 while read -r tier spec how purpose; do
   program=${spec%%>=*}; minimum=${spec#"$program"}; minimum=${minimum#>=}
   if installed "$program"; then
-    version=""  # chrome is an app; an impeccable on PATH may be a launcher that downloads, and its cache is pinned
-    [ "$program" = impeccable ] || version=$("$program" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1) || true
+    version="" said="" answered=0  # chrome is an app; an impeccable on PATH may be a launcher that downloads, and its cache is pinned
+    [ "$program" = impeccable ] || said=$(bounded "$program" --version 2>/dev/null) || answered=$?
+    if [ $answered = 124 ]; then
+      msg="$program didn't answer \`$program --version\` within ${VERSION_TIMEOUT}s, so its version is unknown"
+      if [ "$tier" = optional ]; then info "$msg"; else warn "$msg"; fi
+      continue
+    fi
+    version=$(grep -oE '[0-9]+(\.[0-9]+)+' <<<"$said" | head -1) || true
     if [ -z "$minimum" ] || [ -z "$version" ] || ! older_than "$version" "$minimum"; then ok "$program${version:+ $version}"; continue; fi
     msg="$program $version is older than $minimum, needed for $purpose: $(install_hint "$how")"
     if [ "$tier" = optional ]; then info "$msg"; else warn "$msg"; fi
@@ -276,7 +325,9 @@ KIT_PLUGIN_MIN_CLAUDE=$(awk '$2 ~ /^claude>=/ { sub(/^claude>=/, "", $2); print 
 kit_plugin() {
   local version market plugin
   if ! command -v claude >/dev/null; then info "kit plugin: claude is not installed, so the /flow mod is not wired"; return; fi
-  version=$(claude --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1) || true
+  local said answered=0; said=$(bounded claude --version 2>/dev/null) || answered=$?
+  if [ $answered = 124 ]; then warn "kit plugin: claude didn't answer \`claude --version\` within ${VERSION_TIMEOUT}s"; return; fi
+  version=$(grep -oE '[0-9]+(\.[0-9]+)+' <<<"$said" | head -1) || true
   if [ -z "$version" ]; then warn "kit plugin: couldn't read the version of claude (claude --version)"; return; fi
   if older_than "$version" $KIT_PLUGIN_MIN_CLAUDE; then
     warn "kit plugin: Claude Code $version is older than $KIT_PLUGIN_MIN_CLAUDE, the first to run mods: update it"; return
@@ -311,27 +362,32 @@ if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
   link "$KIT/AGENTS.md" "$HOME/.claude/CLAUDE.md"
   skills "$HOME/.claude/skills"
   S="$HOME/.claude/settings.json"; settings_file "$S" '{}'
-  baseline "$S" "$KIT/adapters/claude/settings.baseline.json"
-  hook "$S" PreToolUse  "Bash" guard_bash.py 10
-  hook "$S" PreToolUse  "mcp__.*" guard_mcp.py 10
-  hook "$S" PreToolUse  "Edit|Write|MultiEdit|NotebookEdit" guard_files.py 10
-  hook "$S" UserPromptSubmit "" prompt_approvals.py 10
-  hook "$S" PostToolUse "Edit|Write|MultiEdit|NotebookEdit" post_edit.py 30
-  hook "$S" PostToolUse "mcp__.*" guard_mcp.py 10
-  hook "$S" Stop        "" stop_checks.py 660
-  # Tools that add their own status line may point statusLine at a wrapper script that runs ours;
-  # that keeps our line, so it counts as installed. Anything else loses it.
-  line="$KIT/adapters/claude/statusline.sh"
-  current=$(jq -r '.statusLine.command // ""' "$S" 2>/dev/null)
-  if [ "$current" = "$line" ] || grep -qF "$line" "$current" 2>/dev/null; then ok "status line"
-  elif [ $DOCTOR = 1 ]; then warn "status line neither is nor wraps $line"
-  else backup "$S"; tmp=$(mktemp); jq --arg c "$line" '.statusLine = {type: "command", command: $c}' "$S" > "$tmp" && mv "$tmp" "$S"; fix "status line"; fi
-  kit_plugin
+  if usable_json "$S" "the baseline settings, the kit's hooks, the status line and the kit plugin"; then
+    baseline "$S" "$KIT/adapters/claude/settings.baseline.json"
+    hook "$S" PreToolUse  "Bash" guard_bash.py 10
+    hook "$S" PreToolUse  "mcp__.*" guard_mcp.py 10
+    hook "$S" PreToolUse  "Edit|Write|MultiEdit|NotebookEdit" guard_files.py 10
+    hook "$S" UserPromptSubmit "" prompt_approvals.py 10
+    hook "$S" PostToolUse "Edit|Write|MultiEdit|NotebookEdit" post_edit.py 30
+    hook "$S" PostToolUse "mcp__.*" guard_mcp.py 10
+    hook "$S" Stop        "" stop_checks.py 660
+    # Tools that add their own status line may point statusLine at a wrapper script that runs ours;
+    # that keeps our line, so it counts as installed. Anything else loses it.
+    line="$KIT/adapters/claude/statusline.sh"
+    current=$(jq -r '.statusLine.command // ""' "$S" 2>/dev/null)
+    if [ "$current" = "$line" ] || grep -qF "$line" "$current" 2>/dev/null; then ok "status line"
+    elif [ $DOCTOR = 1 ]; then warn "status line neither is nor wraps $line"
+    else backup "$S"; tmp=$(mktemp); jq --arg c "$line" '.statusLine = {type: "command", command: $c}' "$S" > "$tmp" && mv "$tmp" "$S"; fix "status line"; fi
+    kit_plugin
+  fi
 fi
 
 if command -v codex >/dev/null || [ -d "$HOME/.codex" ]; then
   echo "Codex"
-  if codex_out=$(codex --version 2>&1); then ok "codex runs ($codex_out)"
+  answered=0; codex_out=$(bounded codex --version 2>&1) || answered=$?
+  if [ $answered = 0 ]; then ok "codex runs ($codex_out)"
+  elif [ $answered = 124 ]; then
+    warn "codex didn't answer \`codex --version\` within ${VERSION_TIMEOUT}s: the review's cross-model pass and the spec's second reading need it. Reinstall Codex or relink it."
   else
     if ! command -v codex >/dev/null; then
       codex_out="not found on PATH"
@@ -346,20 +402,22 @@ if command -v codex >/dev/null || [ -d "$HOME/.codex" ]; then
   skills "$HOME/.codex/skills"
   H="$HOME/.codex/hooks.json"; settings_file "$H" '{"hooks":{}}'
   baseline "$HOME/.codex/config.toml" "$KIT/adapters/codex/config.baseline.toml"
-  hook "$H" PreToolUse  "Bash|shell|exec_command|local_shell" guard_bash.py 10
-  hook "$H" PreToolUse  "mcp__.*" guard_mcp.py 10
-  hook "$H" PreToolUse  "apply_patch|Edit|Write" guard_files.py 10
-  hook "$H" UserPromptSubmit "" prompt_approvals.py 10
-  hook "$H" PostToolUse "apply_patch|Edit|Write" post_edit.py 30
-  hook "$H" PostToolUse "mcp__.*" guard_mcp.py 10
-  hook "$H" Stop        "" stop_checks.py 660
-  # Codex silently skips hooks the user hasn't trusted; trust lives in config.toml [hooks.state].
-  jq -r '.hooks | to_entries[] | .key as $e | .value | to_entries[] | .key as $i | .value.hooks | to_entries[]
-    | "\($e)\t\($i)\t\(.key)\t\(.value.command)"' "$H" 2>/dev/null | while IFS=$'\t' read -r ev i j cmd; do
-    snake=$(sed -E 's/([a-z])([A-Z])/\1_\2/g' <<<"$ev" | tr '[:upper:]' '[:lower:]')
-    grep -qF "hooks.json:$snake:$i:$j\"]" "$HOME/.codex/config.toml" 2>/dev/null \
-      || warn "codex hook not trusted yet (skipped silently): $ev → ${cmd##*/}. Open Codex and approve it."
-  done
+  if usable_json "$H" "the kit's hooks and the check that Codex trusts them"; then
+    hook "$H" PreToolUse  "Bash|shell|exec_command|local_shell" guard_bash.py 10
+    hook "$H" PreToolUse  "mcp__.*" guard_mcp.py 10
+    hook "$H" PreToolUse  "apply_patch|Edit|Write" guard_files.py 10
+    hook "$H" UserPromptSubmit "" prompt_approvals.py 10
+    hook "$H" PostToolUse "apply_patch|Edit|Write" post_edit.py 30
+    hook "$H" PostToolUse "mcp__.*" guard_mcp.py 10
+    hook "$H" Stop        "" stop_checks.py 660
+    # Codex silently skips hooks the user hasn't trusted; trust lives in config.toml [hooks.state].
+    jq -r '.hooks // {} | to_entries[] | .key as $e | .value | to_entries[] | .key as $i | .value.hooks // [] | to_entries[]
+      | "\($e)\t\($i)\t\(.key)\t\(.value.command)"' "$H" 2>/dev/null | while IFS=$'\t' read -r ev i j cmd; do
+      snake=$(sed -E 's/([a-z])([A-Z])/\1_\2/g' <<<"$ev" | tr '[:upper:]' '[:lower:]')
+      grep -qF "hooks.json:$snake:$i:$j\"]" "$HOME/.codex/config.toml" 2>/dev/null \
+        || warn "codex hook not trusted yet (skipped silently): $ev → ${cmd##*/}. Open Codex and approve it."
+    done
+  fi
   grep -q '^hooks = false' "$HOME/.codex/config.toml" 2>/dev/null \
     && warn "hooks are disabled in ~/.codex/config.toml ([features] hooks = false)" || ok "codex hooks feature enabled"
   for profile in deep light; do link "$KIT/adapters/codex/$profile.config.toml" "$HOME/.codex/$profile.config.toml"; done
