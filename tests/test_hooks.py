@@ -2401,7 +2401,12 @@ def the_problem_cap_never_hides_a_question(base):
     lines = reason.split("\n- ")[1:]
     assert any("[zz-mapped] Changed code files" in line and "`extra.py`" in line for line in lines), \
         f"a question not shown before the crash is asked now, past the cap: {lines}"
-    assert len(lines) == 21 and lines[-1].startswith("…and 7 more problems not listed"), lines[-3:]
+    report = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "verify"], cwd=noisy,
+                            capture_output=True, text=True).stdout.strip()
+    verify_failed = open(report).read().startswith("# Verify: FAIL")  # only where ruff is installed
+    shown = sum("Debug leftover" in line for line in lines)
+    hidden = 25 - shown + verify_failed
+    assert len(lines) == 21 and lines[-1].startswith(f"…and {hidden} more problems not listed"), lines[-3:]
 
 
 def stop_catches_committed_leftover(base):
