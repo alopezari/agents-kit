@@ -1786,6 +1786,13 @@ def evidence_needs_a_branch(base):
     assert ran.returncode == 74 and "needs a branch" in ran.stderr and "EVIDENCE_DIR" in ran.stderr \
         and "seen" not in ran.stdout, ran
     assert evidence_dirs() == [], evidence_dirs()
+    report = subprocess.run([reports, "path", "validation"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    with open(report, "w") as fh:
+        fh.write("| # | Check | Result | Evidence |\n|---|---|---|---|\n| A1 | seen | PASS | [output](A1.txt) |\n")
+    stamp = subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo,
+                           capture_output=True, text=True)
+    assert stamp.returncode == 2 and "detached HEAD" in stamp.stderr, f"the stamp says why it has no evidence: {stamp}"
+    assert evidence_dirs() == [], evidence_dirs()
     elsewhere = os.path.join(base, "guide-evidence")
     os.makedirs(elsewhere)
     ran = subprocess.run([evidence, "A1", "echo", "seen"], cwd=repo, capture_output=True, text=True,
