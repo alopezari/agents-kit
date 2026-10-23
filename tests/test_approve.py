@@ -103,7 +103,7 @@ def names_the_approvals_that_would_lift_a_block(base):
 
 def a_profile_that_didnt_load_offers_no_dialog(base):
     env = new_home(base)
-    for broken in ('{"direct": {"x": "("}}', '{"gateways": [{"tool": "("}]}'):
+    for broken in ('{"direct": {"x": "("}}', '{"gateways": [{"tool": "(", "service_field": "p", "operation_fields": ["t"], "writes": {}}]}'):
         open(os.path.join(base, "profiles", "work", "mcp-writes.json"), "w").write(broken)
         got = needed(env, mcp("mcp__linear__save_issue"))
         assert got == {"names": [], "what": "", "scope": ""}, f"the guard denies it whatever is approved: {broken} {got}"

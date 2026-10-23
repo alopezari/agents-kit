@@ -1228,7 +1228,8 @@ def a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through(base):
 
     run_hook("prompt_approvals.py", {"prompt": "Crea una tarea en Linear", "session_id": "s1", "cwd": "/tmp"}, env=env)
     assert call("mcp__linear__save_issue") is None, "approved while the profile still loads"
-    for broken in ('{"direct": {"tracker": "("}}', '{"direct": ', '{"gateways": [{"tool": "("}]}',
+    gateway = {"service_field": "provider", "operation_fields": ["tool"], "writes": {"tracker": ["create-issue"]}}
+    for broken in ('{"direct": {"tracker": "("}}', '{"direct": ', json.dumps({"gateways": [{**gateway, "tool": "("}]}),
                    '{"gateways": [{"tool": "gateway__execute$"}]}'):
         open(profile, "w").write(broken)
         logged = len(errors())
@@ -1267,6 +1268,9 @@ def the_hook_log_keeps_secrets_out(base):
         ("tool --api-key k3yk3yk3y --secret=s3cr3tval run", ["k3yk3yk3y", "s3cr3tval"], " run"),
         ("mysql -uroot -pR00tpass wordpress", ["R00tpass"], "-uroot"),
         ("curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc' https://x.test", ["eyJhbGciOiJIUzI1NiJ9"], "https://x.test"),
+        ("curl -H 'Authorization: n0sch3mes3cret' https://x.test", ["n0sch3mes3cret"], "https://x.test"),
+        ("curl -H 'Authorization: Negotiate dGhpcy1pcy1hLXNlY3JldA==' https://x.test", ["dGhpcy1pcy1h"], "https://x.test"),
+        ("mysql -p0nepass --host=db -ptw0pass wordpress", ["0nepass", "tw0pass"], "--host=db"),
         ("git clone https://bob:pa55w0rd@example.com/r.git", ["pa55w0rd"], "example.com/r.git"),
         (f"echo {ghp} {slack} {anthropic} {openai} AKIAIOSFODNN7EXAMPLE",
          [ghp[:10], slack[:10], anthropic[:12], openai[:12], "AKIAIOSFODNN7"], "echo "),
@@ -1288,12 +1292,19 @@ def the_hook_log_keeps_secrets_out(base):
         assert innocent in json.loads([l for l in open(log) if '"deny"' in l][-1])["detail"], innocent
     # Every hook's detail is redacted, not only the shell guard's: one that logs a payload's text unredacted.
     logs = os.path.join(base, "direct-log")
-    secret = "x" * 480 + " GH_TOKEN=" + "t0k3n" * 20
+    secret = "x" * 480 + " GH_TOKEN=" + "t0k3n" * 20 + " ghp_" + "A1b2C3d4" * 5
     subprocess.run(["python3", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import hooklog; "
                     "hooklog.log('test', 'error', {}, sys.argv[2])", H, secret],
                    env={**os.environ, "AGENTS_LOG_DIR": logs}, check=True)
-    detail = json.loads(open(os.path.join(logs, "hooks.jsonl")).read())["detail"]
-    assert "t0k3n" not in detail and len(detail) == 500 and detail.startswith("x" * 480), detail[470:]
+    for secret in ("x" * 495 + " ghp_" + "A1b2C3d4" * 5,  # cut at 500, the token's first characters match no pattern
+                   "https://bob:" + "passphrase" * 80 + "@example.com"):  # one word longer than the scan
+        subprocess.run(["python3", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import hooklog; "
+                        "hooklog.log('test', 'error', {}, sys.argv[2])", H, secret],
+                       env={**os.environ, "AGENTS_LOG_DIR": logs}, check=True)
+    first, cut, word = [json.loads(l)["detail"] for l in open(os.path.join(logs, "hooks.jsonl"))]
+    assert "passphrase" not in word, word[:40]
+    assert "t0k3n" not in first and len(first) == 500 and first.startswith("x" * 480), first[470:]
+    assert "ghp_" not in cut and "A1b" not in cut, cut[490:]
 
 
 def a_turn_approval_that_cant_be_removed_is_moved_aside(base):
@@ -1339,6 +1350,8 @@ def a_turn_approval_that_cant_be_removed_is_moved_aside(base):
         os.chmod(turns, 0o555)  # the approval file goes, the folder can't: nothing is left to block for
         assert prompt("now fix the failing test").returncode == 0 and write() == "deny"
         assert "clear-emptied" in open(os.path.join(base, ".agents", "logs", "hooks.jsonl")).read()
+        done = prompt("Crea otra tarea en Linear")  # the folder that stayed takes this message's approvals
+        assert done.returncode == 0 and write() == "allow", done.stderr
     finally:
         for folder, dirs, _ in os.walk(turns):
             os.chmod(folder, 0o755)

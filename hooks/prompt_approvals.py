@@ -329,7 +329,7 @@ def main():
     import guard_bash  # after the clearing: if it fails to load, the last turn's approvals are already gone
     named += guard_bash.database_approval_names(prompt) + guard_bash.action_approval_names(prompt)
     if named:
-        os.makedirs(os.path.join(guard_mcp.TURN_APPROVALS, session))
+        os.makedirs(os.path.join(guard_mcp.TURN_APPROVALS, session), exist_ok=True)  # emptied, not removed
         for service in named:
             open(os.path.join(guard_mcp.TURN_APPROVALS, session, service), "w").close()
         log("prompt_approvals", "approve-turn", payload, ",".join(named))
