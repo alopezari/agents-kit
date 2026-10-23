@@ -324,15 +324,20 @@ test('/flow off|on typed at the prompt runs the switch CLI in the session direct
 
 test('/flow review-rounds runs the switch CLI like a phase switch, and says how to set it from elsewhere', async ($, on) => {
   const SET = 'Switched review-rounds to 2 for every repo. Review re-check rounds here now: 2 (global).'
+  // the CLI's reply when a file at another scope can't be read: the context must not say the saved value runs
+  const UNREADABLE = 'Saved review-rounds to 4 for every branch of app, but global.json is not JSON, so the review runs 1 re-check round (the default) here until that file is fixed or deleted.'
   const { ran, cwds } = stub(on, repo({
     [SWITCH_CLI + ' review-rounds 2 --global']: { exitCode: 0, stdout: SET + '\n' },
+    [SWITCH_CLI + ' review-rounds 4 --repo']: { exitCode: 0, stdout: UNREADABLE + '\n' },
     [SWITCH_CLI + ' review-rounds 12']: { exitCode: 3, stdout: "`12` isn't a number of re-check rounds from 0 to 9: nothing was switched.\n" },
     [SWITCH_CLI + ' review-rounds 3']: { exitCode: 1, stderr: 'Traceback (most recent call last):\n  boom' },
   }), { panes: () => [] })
   const answer = await $.command.run(typed('Review-Rounds 2 --global'))
   expect(answer.text).toBe(SET)
-  expect(answer.context).toEqual([`The user set the review re-check rounds with /flow: ${SET} The review runs that many re-checks.`])
+  expect(answer.context).toEqual([`The user set the review re-check rounds with /flow: ${SET}`])
   expect(cwds).toEqual([SESSION_CWD])
+  const saved = await $.command.run(typed('review-rounds 4 --repo'))
+  expect(saved.context).toEqual([`The user set the review re-check rounds with /flow: ${UNREADABLE}`])
   const refused = await $.command.run(typed('review-rounds 12'))
   expect(refused.text).toMatch(/^`12` isn't a number/)
   expect(refused.context).toBeUndefined()
@@ -342,7 +347,7 @@ test('/flow review-rounds runs the switch CLI like a phase switch, and says how 
   expect(crashed.context).toEqual(['A /flow review-rounds setting may or may not have been recorded: read `~/.agents/bin/phase review-rounds` before the review.'])
   const elsewhere = await $.command.run({ command: 'flow', args: 'review-rounds 0 --repo' } as any)
   expect(elsewhere.text).toBe("/flow review-rounds sets the re-check rounds only when typed at this terminal's prompt: nothing was switched. A message opening with `review-rounds 0 repo` does it from anywhere.")
-  expect(ran).toEqual([SWITCH_CLI + ' review-rounds 2 --global', SWITCH_CLI + ' review-rounds 12', SWITCH_CLI + ' review-rounds 3'])
+  expect(ran).toEqual([SWITCH_CLI + ' review-rounds 2 --global', SWITCH_CLI + ' review-rounds 4 --repo', SWITCH_CLI + ' review-rounds 12', SWITCH_CLI + ' review-rounds 3'])
 })
 
 test('/flow followed by anything but off or on opens the pane', async ($, on) => {

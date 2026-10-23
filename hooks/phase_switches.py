@@ -58,7 +58,7 @@ def checkout(cwd, timeout=5):
             return None, None, None
         raise OSError(f"git rev-parse failed in {cwd}: {common.stderr.strip()[-200:]}")
     repo = review_stamp.repo_name_of(common.stdout.strip())
-    if repo in ("", ".", ".."):  # `..` would turn a repo's file into a path outside its directory
+    if repo in ("", ".", ".."):  # no name to show the user or to start the store's file names with
         raise OSError(f"can't name the repository of {cwd}")
     # The full ref: --short, like rev-parse --abbrev-ref, says heads/<branch> when a tag has the branch's name.
     head = subprocess.run(["git", "symbolic-ref", "--quiet", "HEAD"], cwd=cwd, capture_output=True, text=True,
@@ -103,7 +103,15 @@ def follow_rename(common, branch, deadline):
     subprocess.SubprocessError when its reflog or the move fails."""
     if earlier_switches(common, branch, deadline):
         with open(os.path.join(STORE, ".lock"), "w") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            while True:  # not a blocking flock: the guard must answer within its budget, not wait on a writer
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() > deadline:
+                        raise TimeoutError("the phase switch store stayed locked, so a renamed branch's switches "
+                                           "couldn't be followed") from None
+                    time.sleep(0.05)
             source = earlier_switches(common, branch, deadline)  # again: another process may have moved them
             if source:
                 os.rename(source, dict(store_files(common, branch))["branch"])
@@ -129,7 +137,7 @@ def earlier_names(common, branch, deadline):
     if os.path.isdir(os.path.join(common, "reftable")):
         shown = subprocess.run(["git", "--git-dir", common, "reflog", "show", "--format=%gs", f"refs/heads/{branch}",
                                 "--"], capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"},
-                               timeout=max(deadline - time.monotonic(), 0.1))
+                               timeout=time_left(deadline))
         if shown.returncode != 0 and "bad revision" not in shown.stderr:  # bad revision: no commit yet
             raise OSError(f"git reflog failed for branch {branch}: {shown.stderr.strip()[-200:]}")
         messages = shown.stdout.splitlines()
@@ -141,12 +149,26 @@ def earlier_names(common, branch, deadline):
             return []
         except OSError as error:
             raise OSError(f"Couldn't read the reflog of branch {branch} to follow a rename: {error}") from error
-    return [match.group(1) for match in map(RENAMED.match, messages) if match]
+    names = []
+    for message in messages:
+        if message.startswith("Branch: copied "):  # `git branch -c` copies the reflog: older names are the source's
+            break
+        renamed = RENAMED.match(message)
+        if renamed:
+            names.append(renamed.group(1))
+    return names
+
+
+def time_left(deadline):
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("ran out of time following a branch rename")
+    return left
 
 
 def branch_exists(common, name, deadline):
     shown = subprocess.run(["git", "--git-dir", common, "show-ref", "--verify", "--quiet", f"refs/heads/{name}"],
-                           capture_output=True, text=True, timeout=max(deadline - time.monotonic(), 0.1))
+                           capture_output=True, text=True, timeout=time_left(deadline))
     if shown.returncode not in (0, 1):
         raise OSError(f"git show-ref failed for branch {name}: {shown.stderr.strip()[-200:]}")
     return shown.returncode == 0
@@ -266,11 +288,14 @@ def switch(action, words, cwd, form):
     if scope == "branch" and not branch:
         return False, f"Can't switch {what} for this branch: HEAD in {cwd} is on no branch, so nothing was " \
             "switched.", "the repo or global scope works there."
+    unfollowed = None
     try:
         if branch:  # before the write reads its file: a renamed branch keeps what its earlier name had
             follow_rename(common, branch, time.monotonic() + 5)
     except (OSError, subprocess.SubprocessError) as error:
-        return False, f"Couldn't switch {what}: {error}. Nothing was switched.", "try again once that is fixed."
+        if scope == "branch":  # only the branch's own file depends on its earlier name
+            return False, f"Couldn't switch {what}: {error}. Nothing was switched.", "try again once that is fixed."
+        unfollowed = StoreError(str(error))
     path = dict(store_files(common, branch))[scope]
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -295,6 +320,8 @@ def switch(action, words, cwd, form):
             pass
     where = {"branch": f"branch {branch} of {repo}", "repo": f"every branch of {repo}", "global": "every repo"}[scope]
     try:
+        if unfollowed:
+            raise unfollowed
         off = phases_off_in(common, branch)
         rounds, set_in = review_rounds_in(common, branch)
     except StoreError as error:
@@ -329,8 +356,7 @@ def branch_switches(common, branch):
 def forget_branch(common, branch):
     """Remove a deleted branch's switches, and bin/phase's cached label for it with its refresh lock, so a new branch of
     that name starts with every phase on and gets its own label at once. True when it had switches. Raises OSError."""
-    cache = review_stamp.phase_cache(common, branch)
-    for path in (cache, cache[:-len(".json")] + ".lock"):
+    for path in (review_stamp.phase_cache(common, branch), review_stamp.phase_lock(common, branch)):
         try:
             os.remove(path)
         except FileNotFoundError:

@@ -465,7 +465,7 @@ async function switchPhase($, e) {
   // After a failure too: a run that died or timed out may have written the switch first.
   refreshIfOpen($, 'a switch')
   const said = done.stdout?.trim()
-  if (done.exitCode === 0 && rounds) return { text: said, context: [`The user set the review re-check rounds with /flow: ${said} The review runs that many re-checks.`] }
+  if (done.exitCode === 0 && rounds) return { text: said, context: [`The user set the review re-check rounds with /flow: ${said}`] }
   if (done.exitCode === 0) return { text: said, context: [`The user switched a phase with /flow: ${said} Skip the steps of the phases off.`] }
   if (done.exitCode === SWITCH_REFUSED) return { text: said }
   if (rounds) {

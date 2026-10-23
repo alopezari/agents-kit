@@ -7,6 +7,7 @@ Run: python3 ~/.agents/tests/test_hooks.py          every test, each in its own 
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import concurrent.futures
 import datetime
+import fcntl
 import json
 import os
 import re
@@ -3348,6 +3349,13 @@ def switches_follow_a_branch_rename(base):
     assert phases_off(repo) == {"validate": "repo"} and review_rounds(repo) == (1, "default"), \
         "new takes nothing from a branch old that exists again"
 
+    repo = renamed_branch(base, "zz-rename-copy")
+    git(repo, "branch", "-c", "new", "copy")  # copies new's reflog, its rename from old included
+    git(repo, "switch", "-q", "copy")
+    assert phases_off(repo) == {"validate": "repo"}, f"a copy takes nothing from old: {phases_off(repo)}"
+    git(repo, "switch", "-q", "new")
+    assert phases_off(repo) == kept, "and new still has them"
+
 
 def a_rename_is_followed_in_the_checkout_read(base):
     repo = renamed_branch(base, "zz-rename-target")
@@ -3378,8 +3386,22 @@ def a_rename_is_followed_in_the_checkout_read(base):
                                           "session_id": "test"})
         said = gate["hookSpecificOutput"]["permissionDecisionReason"] if gate else ""
         assert "No review recorded" in said and "reflog" in said and "every phase counts as on" in said, said
+        said = phase_line("phase off ci", repo)
+        assert "Couldn't switch ci off" in said and "reflog" in said, said
+        assert not os.path.exists(switch_file(repo, "new")), "a branch write would hide old's switches for good"
+        said = phase_line("phase off spec repo", repo)
+        assert "Switched spec off for every branch" in said and "reflog" in said, f"the repo's file needs no reflog: {said}"
+        assert json.load(open(switch_file(repo))) == {"spec": "off", "validate": "off"}
     finally:
         os.chmod(reflog, 0o644)
+
+    repo = renamed_branch(base, "zz-rename-locked")
+    read = ("import sys; sys.path.insert(0, sys.argv[1]); import phase_switches; "
+            "print(phase_switches.phases_off_or_error(sys.argv[2], 1)[1])")
+    with open(os.path.join(PHASE_STORE, ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # a writer that doesn't let go: the guard must still answer in its budget
+        done = subprocess.run(["python3", "-c", read, H, repo], capture_output=True, text=True, timeout=30)
+    assert "stayed locked" in done.stdout and "every phase counts as on" in done.stdout, done.stdout + done.stderr
 
 
 def same_named_repos_keep_their_own_switches(base):
@@ -3404,9 +3426,12 @@ def same_named_repos_keep_their_own_switches(base):
     os.makedirs(os.path.join(PHASE_STORE, "branch", "app"))
     with open(os.path.join(PHASE_STORE, "repo", "app.json"), "w") as fh:
         json.dump({"spec": "off"}, fh)
-    with open(os.path.join(PHASE_STORE, "branch", "app", "fix.json"), "w") as fh:
-        json.dump({"review": "off"}, fh)
+    for branch in ("fix", "other"):
+        with open(os.path.join(PHASE_STORE, "branch", "app", f"{branch}.json"), "w") as fh:
+            json.dump({"review": "off"}, fh)
     assert phases_off(b) == {"ci": "branch"}, f"an old-layout file has no effect: {phases_off(b)}"
+    git(b, "switch", "-q", "-c", "other")  # no file of the new layout to stand in front of the old one
+    assert phases_off(b) == {}, f"nor without a new-layout file: {phases_off(b)}"
 
 
 def a_review_rounds_line_says_what_an_unreadable_file_means(base):

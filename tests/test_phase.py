@@ -377,7 +377,9 @@ def a_branch_recreated_after_prune_gets_its_own_label(base):
     sh(repo, "git", "remote", "set-head", "origin", "trunk")
     sh(repo, "git", "branch", "done")  # merged: it points at trunk
     cache = os.path.join(repo, ".git", "agents", "phase", "done.json")
-    lock = cache[:-len(".json")] + ".lock"
+    sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
+    import review_stamp  # bin/phase's own lock path: a copy here would pass after bin/phase renamed its lock
+    lock = review_stamp.phase_lock(os.path.join(repo, ".git"), "done")
     os.makedirs(os.path.dirname(cache))
     with open(cache, "w") as fh:
         json.dump({"label": "ship", "computed_at": time.time()}, fh)

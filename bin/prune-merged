@@ -17,6 +17,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import time
 
 sys.dont_write_bytecode = True  # loading free-branch would leave bin/__pycache__ behind
 _loader = importlib.machinery.SourceFileLoader(
@@ -135,11 +136,18 @@ def main():
             if dry:
                 try:
                     switches = (f", but {unnamed}" if unnamed else
-                                " and its phase switches" if phase_switches.branch_switches(common, branch) else "")
-                except OSError as error:
+                                " and its phase switches" if phase_switches.branch_switches(common, branch) or
+                                phase_switches.earlier_switches(common, branch, time.monotonic() + 5) else "")
+                except (OSError, subprocess.SubprocessError) as error:
                     switches = f", but couldn't check its phase switches: {error}"
                 print(f"would delete branch {branch}{switches}")
                 continue
+            unfollowed = None
+            if not unnamed:
+                try:  # while the reflog that names its earlier names still exists: deleting the branch removes it
+                    phase_switches.follow_rename(common, branch, time.monotonic() + 5)
+                except (OSError, subprocess.SubprocessError) as error:
+                    unfollowed = f"couldn't follow its rename: {error}"
             try:
                 # Only if it still points where --merged saw it: a branch moved since keeps its new commits.
                 git(root, "update-ref", "--no-deref", "-d", ref, oid)
@@ -147,8 +155,8 @@ def main():
                 print(f"kept branch {branch}: {error}")
                 failed = True
                 continue
-            if unnamed:
-                print(f"deleted branch {branch}, but kept its phase switches: {unnamed}")
+            if unnamed or unfollowed:
+                print(f"deleted branch {branch}, but kept its phase switches: {unnamed or unfollowed}")
                 failed = True
                 continue
             try:

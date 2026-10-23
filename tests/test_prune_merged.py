@@ -175,6 +175,23 @@ def forgets_only_the_switches_of_its_own_repo(base):
     assert left.stdout.strip() == "{'audit': 'branch'}", f"the other shop keeps its fix's switches: {left}"
 
 
+def forgets_the_switches_of_a_renamed_branch_never_read(base):
+    main = setup(base)
+    home = os.path.join(base, "home")
+    os.makedirs(home)
+    env = {**os.environ, "HOME": home}
+    done = worktree(base, main, "old")
+    subprocess.run(["python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "audit"], cwd=done,
+                   capture_output=True, text=True, env=env, check=True)
+    sh(done, "git", "branch", "-m", "old", "done")  # nothing reads done's switches before prune
+    sh(main, "git", "worktree", "remove", done)
+    dry = subprocess.run([PRUNE, "--dry-run"], cwd=main, capture_output=True, text=True, env=env)
+    assert "would delete branch done and its phase switches" in dry.stdout, dry
+    out = subprocess.run([PRUNE], cwd=main, capture_output=True, text=True, env=env)
+    assert out.returncode == 0 and "deleted branch done and its phase switches" in out.stdout, out
+    assert os.listdir(branch_store(home)) == [], "old's file must not wait for a branch named old"
+
+
 def says_when_it_cannot_check_the_switches(base):
     main = setup(base)
     home = os.path.join(base, "home")
@@ -230,7 +247,7 @@ def deletes_the_branch_even_when_its_switches_stay(base):
 
 for test in (removes_merged_and_keeps_the_rest_with_reasons, keeps_the_worktree_it_runs_in,
              a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect,
-             forgets_the_phase_switches_of_the_branches_it_deletes, forgets_only_the_switches_of_its_own_repo, deletes_the_branch_even_when_its_switches_stay,
+             forgets_the_phase_switches_of_the_branches_it_deletes, forgets_only_the_switches_of_its_own_repo, forgets_the_switches_of_a_renamed_branch_never_read, deletes_the_branch_even_when_its_switches_stay,
              says_when_it_cannot_check_the_switches, keeps_the_switches_when_it_cannot_name_the_repo):
     base = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-"))
     try:

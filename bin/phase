@@ -40,8 +40,8 @@ def cache_files():
     out = git("rev-parse", "--path-format=absolute", "--git-common-dir", "--symbolic-full-name", "HEAD").splitlines()
     if len(out) != 2 or not out[1].startswith("refs/heads/"):
         return None
-    cache = review_stamp.phase_cache(out[0], out[1][len("refs/heads/"):])
-    return cache, cache[:-len(".json")] + ".lock"
+    common, branch = out[0], out[1][len("refs/heads/"):]
+    return review_stamp.phase_cache(common, branch), review_stamp.phase_lock(common, branch)
 
 
 def read_cache(path):
