@@ -36,7 +36,7 @@ def edited_paths(payload):
     patch = tool_input.get("patch") or tool_input.get("input") or tool_input.get("command") or ""
     if isinstance(patch, list):
         patch = "\n".join(map(str, patch))
-    paths += re.findall(r"^\*\*\* (?:Add|Update) File: (.+)$", patch, re.MULTILINE)
+    paths += re.findall(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$", patch, re.MULTILINE)
     cwd = payload.get("cwd") or os.getcwd()
     return [os.path.join(cwd, p) for p in paths if p]
 

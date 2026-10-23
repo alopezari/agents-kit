@@ -69,7 +69,7 @@ GENERATED_FILE = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn
 
 
 def git(args, cwd):
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True).stdout
+    return review_stamp.run_git(args, cwd=cwd).stdout
 
 
 def added_lines(root):
@@ -104,7 +104,7 @@ def new_options_near_caches(root, lines):
             if name in seen:
                 continue
             seen.add(name)
-            existed = subprocess.run(["git", "grep", "-q", "-F", name, "HEAD", "--"], cwd=root).returncode == 0
+            existed = review_stamp.run_git(["grep", "-q", "-F", name, "HEAD", "--"], cwd=root).returncode == 0
             if existed:
                 continue
             module = os.path.dirname(path) or "."
@@ -166,10 +166,12 @@ def main():
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
     notice = fresh_session_notice(session, payload)
     marker = os.path.join(MARKER_DIR, f"{session}.edited")
-    edited = None
+    read = edited = None
     if os.path.exists(marker):
-        edited = [p for p in open(marker).read().splitlines() if p]
-        os.remove(marker)
+        # Cleared only once the checks finish (clear_checked): a stop that crashes or is killed leaves it for the next.
+        with open(marker) as fh:
+            read = fh.read()
+        edited = [p for p in read.splitlines() if p]
     # Runs even when the notice above speaks: it records the branches the session works on.
     next_change = new_change_notice(session, payload, edited or [])
     if next_change and not notice:
@@ -181,26 +183,73 @@ def main():
 
     # Check every checkout the session touched (worktrees included), not only the session's cwd.
     cwd = payload.get("cwd") or os.getcwd()
-    roots = []
+    root_of, unfinished = {}, {}
     for path in edited or [cwd]:
-        start = path if os.path.isdir(path) else os.path.dirname(path)
-        root = git(["rev-parse", "--show-toplevel"], start).strip() if os.path.isdir(start) else ""
-        if root and root not in roots:
-            roots.append(root)
+        try:
+            root_of[path] = checkout_of(path)
+        except RuntimeError as error:
+            unfinished[path] = error
+    roots = list(dict.fromkeys(root for root in root_of.values() if root))
+    questions, others, asked = list(problems), [], []
     any_verify_failed = False
     for root in roots:
         try:
-            found, failed_verify = check_checkout(root, session, payload)
+            unmapped, found, failed_verify = check_checkout(root, session, payload)
+            name = f"[{review_stamp.repo_name(root)}] " if len(roots) > 1 else ""
         except FileNotFoundError:
             if os.path.isdir(root):
                 raise
+        except RuntimeError as error:  # a git call timed out or failed: say so, and check its edits again next stop
+            unfinished[root] = error
+            continue
         if not os.path.isdir(root):  # removed while checked, e.g. a worktree freed as the session ends
             log("stop_checks", "checkout-removed", payload, root)
             continue
-        problems += [f"[{review_stamp.repo_name(root)}] {p}" if len(roots) > 1 else p for p in found]
+        if unmapped:
+            questions.append(name + unmapped_question(unmapped))
+            asked += [(root, path) for path in unmapped]
+        others += [name + p for p in found]
         any_verify_failed = any_verify_failed or failed_verify
+    questions += [f"Couldn't finish checking {where}: {error}. Its edits are checked again at the next stop."
+                  for where, error in unfinished.items()]
+    # The cut hides only problems the next check finds again; a question is asked once, so it is always shown.
+    room = max(MAX_PROBLEMS - len(questions), 0)
+    hidden = len(others) - room
+    listed = questions + others[:room] + [f"…and {hidden} more problems not listed: fixing these brings them up at "
+                                          "the next stop."] * (hidden > 0)
     streak = record_verify_streak(session, any_verify_failed)
-    return block(payload, problems, streak, notice)
+    block(payload, listed, streak, notice)
+    mark_asked(session, asked)
+    clear_checked(marker, read, [path for path in edited if path in unfinished or root_of.get(path) in unfinished])
+    return 0
+
+
+def checkout_of(path):
+    """The top level of the checkout holding path, found from its nearest existing directory, since a deleted file's
+    directories may be gone too; "" outside a repository."""
+    start = path if os.path.isdir(path) else os.path.dirname(path)
+    while not os.path.isdir(start) and os.path.dirname(start) != start:
+        start = os.path.dirname(start)
+    return git(["rev-parse", "--show-toplevel"], start).strip()
+
+
+def clear_checked(marker, read, kept):
+    """Remove from the edit marker the lines this stop read, keeping `kept` (paths it couldn't check) and every line
+    post_edit appended meanwhile: a subagent can edit while the checks run."""
+    moved = f"{marker}.{os.getpid()}"
+    try:  # post_edit appends: once renamed, its next edit starts a new marker this stop never reads
+        os.rename(marker, moved)
+    except FileNotFoundError:
+        later = ""
+    else:
+        with open(moved) as fh:
+            later = fh.read()
+        later = later.removeprefix(read)
+    if kept or later:
+        with open(marker, "a") as fh:
+            fh.write("".join(path + "\n" for path in kept) + later)
+    if os.path.exists(moved):
+        os.remove(moved)
 
 
 def context_tokens(transcript):
@@ -249,7 +298,7 @@ def fresh_session_notice(session, payload):
     try:  # the session's directory may be gone: another session removed its worktree
         out = git(["rev-parse", "--path-format=absolute", "--git-common-dir", "--abbrev-ref", "HEAD"],
                   payload.get("cwd") or os.getcwd()).splitlines()
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):
         return None
     if len(out) != 2 or out[1] == "HEAD":
         return None
@@ -313,7 +362,7 @@ def new_change_notice(session, payload, edited):
         return None
     try:
         return record_branches_and_notice(session, transcript, payload, edited)
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         return None
 
 
@@ -366,10 +415,10 @@ def block(payload, problems, streak, notice=None):
             "Before finishing, resolve these or explain to the user why they are intended. If you can't resolve one "
             "honestly, report it under **Blocked on me** with what you tried; never work around a check "
             "(skipping or loosening tests, deleting files, disabling a rule, editing the hook):\n- "
-            + "\n- ".join(problems[:MAX_PROBLEMS])
+            + "\n- ".join(problems)
         )
         output = {"decision": "block", "reason": reason}
-        for problem in problems[:MAX_PROBLEMS]:
+        for problem in problems:
             log("stop_checks", "block", payload, problem)
         if streak >= 2:
             # Hooks can't change effort; on Opus 5.5 raising it mid-session keeps the cache, so nudge the user.
@@ -383,7 +432,8 @@ def block(payload, problems, streak, notice=None):
 
 
 def unmapped_files(root, session):
-    """Changed code files the branch's spec has no Change map entry for, each returned once per session."""
+    """Changed code files the branch's spec has no Change map entry for, leaving out those already asked about in
+    this session (mark_asked)."""
     # path.sh finds the spec wherever it is kept: after a branch rename, in a worktree's old place or in $TMPDIR.
     spec = subprocess.run([SPEC_PATH], cwd=root, capture_output=True, text=True).stdout.strip()
     if not os.path.isfile(spec):
@@ -402,14 +452,23 @@ def unmapped_files(root, session):
         asked = set(open(asked_path).read().splitlines())
     except OSError:
         asked = set()
-    new = [p for p in unmapped if f"{root}\t{p}" not in asked]
+    return [p for p in unmapped if f"{root}\t{p}" not in asked]
+
+
+def unmapped_question(unmapped):
+    return ("Changed code files the spec's Change map doesn't name: " + ", ".join(f"`{p}`" for p in unmapped)
+            + ". Add each to the map with what it changes, or split it into another branch.")
+
+
+def mark_asked(session, asked):
+    """Record the (checkout, file) Change-map questions a block showed, so each is asked once per session. Written
+    after the block: a stop that fails before showing one asks it again."""
     try:
         os.makedirs(MARKER_DIR, exist_ok=True)
-        with open(asked_path, "a") as fh:
-            fh.writelines(f"{root}\t{p}\n" for p in new)
+        with open(os.path.join(MARKER_DIR, f"{session}.map-asked"), "a") as fh:
+            fh.writelines(f"{root}\t{path}\n" for root, path in asked)
     except OSError:
         pass  # asking again next stop beats not asking
-    return new
 
 
 def ci_after_push(session, payload):
@@ -494,18 +553,28 @@ def checked_something(output):
 
 
 def save_verify_report(root, verify, output, verdict):
-    """Keep the last verify run as evidence for the end-of-run summary (`~/.agents/bin/reports`)."""
+    """Keep the last verify run as evidence for the end-of-run summary (`~/.agents/bin/reports`). Returns why it
+    couldn't, or None: an earlier run's report left in place would read as this run's result, so it is removed."""
     reports = os.path.expanduser("~/.agents/bin/reports")
-    path = subprocess.run([reports, "path", "verify"], cwd=root, capture_output=True, text=True).stdout.strip()
+    found = subprocess.run([reports, "path", "verify"], cwd=root, capture_output=True, text=True)
+    path = found.stdout.strip()
     if not path:
-        return
+        return f"Couldn't save the verify report: `{reports} path verify` gave no path ({' '.join(found.stderr.split())})."
     output = output.strip()[-6000:] or "(no output)"
     try:
         with open(path, "w") as report:
             report.write(f"# Verify: {verdict}\n\n{time.strftime('%Y-%m-%d %H:%M:%S')} · `{verify}` in `{root}`\n\n"
                          f"```\n{output}\n```\n")
-    except OSError:
-        pass
+    except OSError as error:
+        problem = f"Couldn't save the verify report {path}: {error}."
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as removal:
+            return f"{problem} The earlier one couldn't be removed either ({removal}): the stale report is still there."
+        return problem
+    return None
 
 
 def primary_checkout(root):
@@ -554,15 +623,12 @@ def leftover_overrides():
 
 
 def check_checkout(root, session, payload):
-    """Return (problems, verify_failed) for one checkout."""
+    """Return (changed files the Change map doesn't name, other problems, verify_failed) for one checkout."""
     off, unreadable = phase_switches.phases_off_or_error(root)
     if unreadable:  # not a problem to block on: the agent can't fix the user's store; the gates and status line say it
         log("stop_checks", "phase-switches", payload, unreadable)
     problems = []
     unmapped = [] if "spec" in off else unmapped_files(root, session)
-    if unmapped:  # first, so the cap on listed problems never hides a file it has marked as asked
-        problems.append("Changed code files the spec's Change map doesn't name: " + ", ".join(f"`{p}`" for p in unmapped)
-                        + ". Add each to the map with what it changes, or split it into another branch.")
     lines = list(added_lines(root))
     problems += new_options_near_caches(root, lines)
     problems += leaked_secrets(lines)
@@ -582,12 +648,12 @@ def check_checkout(root, session, payload):
     problems += [f"Test file deleted: {p}" for p in deleted if TEST_FILE.search(p)]
 
     if "verify" in off:
-        return problems, False
+        return unmapped, problems, False
     verify_problems, verify_failed, _, _, stamp_error = run_verify(root)
     problems += verify_problems
     if stamp_error:  # logged, not blocking: a missing stamp only makes a skill run verify again
         log("stop_checks", "verify-stamp", payload, f"{root}: {stamp_error}")
-    return problems, verify_failed
+    return unmapped, problems, verify_failed
 
 
 def run_snapshot(overlay, root):
@@ -611,16 +677,24 @@ def run_verify(root):
     verify = os.path.expanduser(f"~/.agents/repos/{review_stamp.repo_name(root)}/verify")
     if not os.access(verify, os.X_OK):
         verify = AUTO_VERIFY
+
+    def finish(problems, verdict, output="", checked=False, kind=None, checked_fingerprint=""):
+        """Every run leaves a report and a stamp; one that failed, or checked nothing, leaves no verify stamp."""
+        report_error = save_verify_report(root, verify, output, verdict)
+        failed = verdict.startswith("FAIL")
+        return (problems + [report_error] * bool(report_error), failed, output, checked,
+                record_verify(root, kind, checked_fingerprint))
+
     if not os.access(verify, os.X_OK):
-        problems = [f"No verify to run: neither {verify} nor ~/.agents/repos/<repo>/verify is executable."]
-        save_verify_report(root, verify, "", "FAIL (no verify to run)")
-        return problems, True, "", False, record_verify(root, None, "")
+        return finish([f"No verify to run: neither {verify} nor ~/.agents/repos/<repo>/verify is executable."],
+                      "FAIL (no verify to run)")
     # Stamped with the content verify started from: an edit made while it ran leaves the change unstamped.
     try:
         checked_fingerprint = in_checkout(root, review_stamp.fingerprint)
     except RuntimeError as error:
         # An earlier run's stamp must not outlive a run that couldn't check anything.
-        return [f"Couldn't fingerprint the change, so verify can't stamp it: {error}"], True, "", False, record_verify(root, None, "")
+        return finish([f"Couldn't fingerprint the change, so verify can't stamp it: {error}"],
+                      f"FAIL (couldn't fingerprint the change: {error})")
     try:
         result = run_snapshot(verify, root) if verify != AUTO_VERIFY else subprocess.run(
             [verify], cwd=root, capture_output=True, text=True, errors="replace", timeout=VERIFY_TIMEOUT)
@@ -628,21 +702,18 @@ def run_verify(root):
         # On POSIX the partial output comes back as bytes even with text=True.
         output = "".join(part.decode(errors="replace") if isinstance(part, bytes) else part or ""
                          for part in (timeout.stdout, timeout.stderr))
-        save_verify_report(root, verify, output, f"FAIL (timed out after {VERIFY_TIMEOUT}s)")
-        return [f"{verify} timed out after {VERIFY_TIMEOUT}s."], True, output, False, record_verify(root, None, "")
+        return finish([f"{verify} timed out after {VERIFY_TIMEOUT}s."], f"FAIL (timed out after {VERIFY_TIMEOUT}s)", output)
     except OSError as error:
-        save_verify_report(root, verify, "", f"FAIL (couldn't start: {error})")
-        return [f"{verify} couldn't start: {error}"], True, "", False, record_verify(root, None, "")
+        return finish([f"{verify} couldn't start: {error}"], f"FAIL (couldn't start: {error})")
     output = result.stdout + result.stderr
-    checked = checked_something(result.stdout + "\n" + result.stderr)
     if result.returncode != 0:
-        save_verify_report(root, verify, output, f"FAIL (exit {result.returncode})")
-        problems = [f"{verify} failed (exit {result.returncode}):\n{output.strip()[-3000:]}"]
-        return problems, True, output, False, record_verify(root, None, "")
-    save_verify_report(root, verify, output, "PASS" if checked else "PASS, but nothing was checked")
+        return finish([f"{verify} failed (exit {result.returncode}):\n{output.strip()[-3000:]}"],
+                      f"FAIL (exit {result.returncode})", output)
+    checked = checked_something(result.stdout + "\n" + result.stderr)
     # Lets the skills skip re-running verify on a change it already passed. A run that checked nothing
     # gets its own stamp, so the flow moves on without reporting it as a pass.
-    return [], False, output, checked, record_verify(root, "verify" if checked else "verify-empty", checked_fingerprint)
+    return finish([], "PASS" if checked else "PASS, but nothing was checked", output, checked,
+                  "verify" if checked else "verify-empty", checked_fingerprint)
 
 
 def in_checkout(root, action, *args):
@@ -672,18 +743,21 @@ def record_verify(root, kind, checked_fingerprint):
 
 def verify_here():
     """`stop_checks.py verify`: run verify on the checkout in the working directory now, as the stop hook would."""
-    toplevel = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    if toplevel.returncode != 0:
-        print(f"stop_checks.py verify: verify runs on a repository's changes; {toplevel.stderr.strip()}", file=sys.stderr)
+    try:
+        toplevel = review_stamp.run_git(["rev-parse", "--show-toplevel"])
+        if toplevel.returncode != 0:
+            print(f"stop_checks.py verify: verify runs on a repository's changes; {toplevel.stderr.strip()}", file=sys.stderr)
+            return 1
+        problems, failed, output, checked, stamp_error = run_verify(toplevel.stdout.strip())
+    except RuntimeError as error:  # a git call timed out or failed
+        print(f"stop_checks.py verify: {error}", file=sys.stderr)
         return 1
-    root = toplevel.stdout.strip()
-    problems, failed, output, checked, stamp_error = run_verify(root)
     print(output, end="")
     for problem in problems + [stamp_error] * bool(stamp_error):
         print(problem.splitlines()[0], file=sys.stderr)
     if not failed and not checked:
         print("verify passed, but it checked nothing: no check printed a ran: line", file=sys.stderr)
-    return 1 if failed or stamp_error else 0
+    return 1 if problems or stamp_error else 0
 
 
 if __name__ == "__main__":

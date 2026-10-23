@@ -65,7 +65,7 @@ def new_repo(base, name="repo", branch="trunk"):
     return path
 
 
-def write_stamp(cwd, kind):
+def write_stamp(cwd, kind, equals=False):
     """Write a stamp as the skills do: validate first saves a report whose check names its evidence."""
     if kind == "validate":
         reports = os.path.expanduser("~/.agents/bin/reports")
@@ -76,7 +76,8 @@ def write_stamp(cwd, kind):
             fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | app runs | + | PASS | a1.txt |\n")
         with open(os.path.join(evidence, "a1.txt"), "w") as fh:
             fh.write("$ python3 app.py\nexit 0\n")
-    return subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", kind], cwd=cwd, capture_output=True, text=True)
+    flags = [f"--kind={kind}"] if equals else ["--kind", kind]
+    return subprocess.run(["python3", H + "review_stamp.py", "write", *flags], cwd=cwd, capture_output=True, text=True)
 
 
 def guard(command, cwd="/tmp"):
@@ -2097,6 +2098,228 @@ def stop_skips_a_checkout_removed_while_checked(base):
         shutil.rmtree(vdir, ignore_errors=True)
 
 
+FAKE_GIT = """#!/bin/sh
+# git, except inside $FAKE_GIT_ROOT: $FAKE_GIT_SLOW hangs, $FAKE_GIT_FAIL fails as git does on a repository it won't read.
+sub=""; skip=""
+for a in "$@"; do
+  if [ -n "$skip" ]; then skip=""; continue; fi
+  case "$a" in -c|-C) skip=1 ;; -*) ;; *) sub=$a; break ;; esac
+done
+case "$PWD/" in "$FAKE_GIT_ROOT"/*)
+  [ "$sub" = "${FAKE_GIT_SLOW:-}" ] && exec sleep 5
+  [ "$sub" = "${FAKE_GIT_FAIL:-}" ] && { echo "fatal: detected dubious ownership in repository at '$PWD'" >&2; exit 128; } ;;
+esac
+exec %s "$@"
+"""
+
+
+def fake_git(base, root, **env):
+    """PATH and env for a git that misbehaves inside root (slow=<subcommand> hangs, fail=<subcommand> fails)."""
+    shim = os.path.join(base, "fake-git")
+    os.makedirs(shim, exist_ok=True)
+    with open(os.path.join(shim, "git"), "w") as fh:
+        fh.write(FAKE_GIT % shutil.which("git"))
+    os.chmod(os.path.join(shim, "git"), 0o755)
+    return {"PATH": f"{shim}:{os.environ['PATH']}", "FAKE_GIT_ROOT": os.path.realpath(root),
+            **{f"FAKE_GIT_{key.upper()}": value for key, value in env.items()}}
+
+
+def in_hooks(code, cwd, env=None, stdin=""):
+    """Python with stop_checks as s and review_stamp as rs imported, in a child process as the hooks run, so a test can
+    lower a timeout or break a step."""
+    return subprocess.run([sys.executable, "-c", f"import sys, os; sys.path.insert(0, {H!r}); import stop_checks as s, "
+                           f"review_stamp as rs\n{code}"], input=stdin, cwd=cwd, capture_output=True, text=True,
+                          env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, **(env or {})})
+
+
+def edit_marker(session):
+    return os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks", f"{session}.edited")
+
+
+def record_edits(session, cwd, paths):
+    for path in paths:
+        run_hook("post_edit.py", {"session_id": session, "cwd": cwd, "tool_input": {"file_path": path}})
+
+
+def a_git_call_that_hangs_times_out_and_keeps_the_edits(base):
+    slow, fine = new_repo(base, "zz-slow"), new_repo(base, "zz-fine")
+    for repo in (slow, fine):
+        open(os.path.join(repo, "app.py"), "a").write("breakpoint()\n")
+    session = RUN + "hang"
+    record_edits(session, base, [os.path.join(slow, "app.py"), os.path.join(fine, "app.py")])
+    env = fake_git(base, slow, slow="diff")
+    done = in_hooks("rs.GIT_TIMEOUT = 1\nsys.exit(s.main())", base, env, json.dumps({"session_id": session, "cwd": base}))
+    reason = json.loads(done.stdout or "{}").get("reason", "")
+    assert f"Couldn't finish checking {os.path.realpath(slow)}" in reason and "git diff timed out after 1s" in reason, \
+        (reason, done.stderr)
+    assert "[zz-fine] Debug leftover" in reason, f"the other checkout is still checked: {reason}"
+    with open(edit_marker(session)) as fh:
+        assert fh.read().split() == [os.path.realpath(os.path.join(slow, "app.py"))], "only the unchecked checkout's edit is kept"
+    again = run_hook("stop_checks.py", {"session_id": session, "cwd": base}) or {}
+    assert "Debug leftover" in again.get("reason", "") and "zz-fine" not in again.get("reason", ""), again
+    assert not os.path.exists(edit_marker(session)), "a check that finished clears what it checked"
+
+    # Finding a path's checkout can hang too.
+    record_edits(session, base, [os.path.join(slow, "app.py")])
+    env = fake_git(base, slow, slow="rev-parse")
+    done = in_hooks("rs.GIT_TIMEOUT = 1\nsys.exit(s.main())", base, env, json.dumps({"session_id": session, "cwd": base}))
+    assert "Couldn't finish checking" in done.stdout and os.path.exists(edit_marker(session)), (done.stdout, done.stderr)
+    os.remove(edit_marker(session))
+
+    # The stamps' CLI and the verify scripts fail on it instead of hanging.
+    env = fake_git(base, slow, slow="diff")
+    cli = in_hooks("rs.GIT_TIMEOUT = 1\nsys.argv = ['review_stamp.py', 'check']\ntry:\n    rs.main()\n"
+                   "except RuntimeError as error:\n    print('raised', error)", slow, env)
+    assert "raised git diff timed out after 1s" in cli.stdout, (cli.stdout, cli.stderr[-500:])
+    shared = os.path.join(KIT, "repos", "_shared")
+    verify = in_hooks(f"sys.path.insert(0, {shared!r}); import verify_changed\nrs.GIT_TIMEOUT = 1\n"
+                      "verify_changed.changed_lines(os.getcwd())", slow, env)
+    assert verify.returncode != 0 and "git diff timed out after 1s" in verify.stderr, (verify.returncode, verify.stderr[-500:])
+
+
+def stop_clears_only_the_edits_it_checked(base):
+    repo = new_repo(base, "zz-marker")
+    session = RUN + "marker"
+    app, later = os.path.join(repo, "app.py"), os.path.join(repo, "later.py")
+    record_edits(session, repo, [app])
+    payload = json.dumps({"session_id": session, "cwd": repo})
+    crash = in_hooks("def broken(*args):\n    raise ValueError('boom')\ns.check_checkout = broken\nsys.exit(s.main())",
+                     repo, stdin=payload)
+    assert crash.returncode != 0 and "boom" in crash.stderr, crash.stderr
+    with open(edit_marker(session)) as fh:
+        assert fh.read().split() == [os.path.realpath(app)], "a crash mid-check leaves the marker whole"
+    # A subagent's edit recorded while the checks ran is the next stop's.
+    added = in_hooks(f"real = s.check_checkout\ndef with_an_edit(*args):\n    open({edit_marker(session)!r}, 'a').write("
+                     f"{os.path.realpath(later)!r} + '\\n')\n    return real(*args)\ns.check_checkout = with_an_edit\n"
+                     "sys.exit(s.main())", repo, stdin=payload)
+    assert added.returncode == 0, added.stderr
+    with open(edit_marker(session)) as fh:
+        assert fh.read().split() == [os.path.realpath(later)], "an edit recorded while checking survives"
+
+
+def a_delete_only_patch_is_checked(base):
+    repo = new_repo(base, "zz-delete")
+    os.makedirs(os.path.join(repo, "pkg", "tests"))
+    open(os.path.join(repo, "pkg", "tests", "test_x.py"), "w").write("def test_x(): pass\n")
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "tests")
+    git(repo, "switch", "-q", "-c", "feature")
+    shutil.rmtree(os.path.join(repo, "pkg"))
+    session = RUN + "delete"
+    patch = "*** Begin Patch\n*** Delete File: pkg/tests/test_x.py\n*** End Patch\n"
+    run_hook("post_edit.py", {"session_id": session, "cwd": repo, "tool_name": "apply_patch", "tool_input": {"patch": patch}})
+    reason = (run_hook("stop_checks.py", {"session_id": session, "cwd": base}) or {}).get("reason", "")
+    assert "Test file deleted: pkg/tests/test_x.py" in reason, f"a delete-only patch is checked: {reason!r}"
+    moved = "*** Begin Patch\n*** Update File: app.py\n*** Move to: lib/app.py\n@@\n-x = 1\n+x = 2\n*** End Patch\n"
+    run_hook("post_edit.py", {"session_id": session, "cwd": repo, "tool_name": "apply_patch", "tool_input": {"patch": moved}})
+    with open(edit_marker(session)) as fh:
+        recorded = fh.read().split()
+    assert recorded == [os.path.realpath(os.path.join(repo, p)) for p in ("app.py", "lib/app.py")], recorded
+
+
+def stamp_flags_take_an_equals_sign(base):
+    repo = new_repo(base, "zz-flags")
+    git(repo, "switch", "-q", "-c", "feature")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+
+    def stamp(*args):
+        return subprocess.run(["python3", H + "review_stamp.py", *args], cwd=repo, capture_output=True, text=True).returncode
+    verified = in_hooks("rs.record_verify('verify', rs.fingerprint())", repo)
+    assert verified.returncode == 0, verified.stderr
+    assert (stamp("check", "--kind=verify"), stamp("check", "--kind", "verify"), stamp("check")) == (0, 0, 1)
+    in_hooks("rs.record_verify(None, '')", repo)
+    assert stamp("check", "--kind=verify") == 1, "the kind after = is the one checked"
+    assert write_stamp(repo, "validate", equals=True).returncode == 0 and stamp("check", "--kind", "validate") == 0
+    assert (stamp("base", "--matches=trunk"), stamp("base", "--matches=other"), stamp("base", "--matches=")) == (0, 1, 0)
+    assert stamp("base", "--matches") == 0, "no target given: the default branch"
+    assert stamp("check", "--kind") == 2, "a --kind with no value is an error, not a crash"
+
+
+def a_verify_report_that_cant_be_written_is_said(base):
+    repo = new_repo(base, "zz-report")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    report = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "verify"], cwd=repo,
+                            capture_output=True, text=True).stdout.strip()
+    with open(report, "w") as fh:
+        fh.write("# Verify: PASS\n\nan old run\n")
+    os.chmod(report, 0o444)
+    try:
+        by_hand = subprocess.run(["python3", H + "stop_checks.py", "verify"], cwd=repo, capture_output=True, text=True,
+                                 env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+        assert by_hand.returncode == 1 and "verify report" in by_hand.stderr, (by_hand.returncode, by_hand.stderr)
+        assert not os.path.exists(report), "the stale PASS is removed"
+        with open(report, "w") as fh:
+            fh.write("# Verify: PASS\n\nan old run\n")
+        os.chmod(report, 0o444)
+        reason = stop(RUN + "report", repo, [os.path.join(repo, "app.py")]).get("reason", "")
+        assert "Couldn't save the verify report" in reason and not os.path.exists(report), reason
+        with open(report, "w") as fh:
+            fh.write("# Verify: PASS\n\nan old run\n")
+        os.chmod(report, 0o444)
+        stuck = in_hooks("os.remove = lambda path: (_ for _ in ()).throw(PermissionError(13, 'denied', path))\n"
+                         "print(s.save_verify_report(os.getcwd(), 'verify', 'out', 'PASS'))", repo)
+        assert "the stale report is still there" in stuck.stdout, (stuck.stdout, stuck.stderr)
+    finally:
+        if os.path.exists(report):
+            os.chmod(report, 0o644)
+            os.remove(report)
+    failed = in_hooks("def broken():\n    raise RuntimeError('git hash-object failed')\nrs.fingerprint = broken\n"
+                      "print(s.run_verify(os.getcwd()))", repo)
+    with open(report) as fh:
+        assert fh.read().startswith("# Verify: FAIL"), "a fingerprint failure leaves a FAIL report"
+    assert "git hash-object failed" in failed.stdout, failed.stdout
+
+
+def a_base_with_no_common_commit_fails_the_stamps(base):
+    repo = new_repo(base, "zz-orphan")
+    git(repo, "switch", "-q", "--orphan", "feature")
+    open(os.path.join(repo, "other.py"), "w").write("z = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "unrelated")
+
+    def stamp(*args, cwd=repo, env=None):
+        return subprocess.run(["python3", H + "review_stamp.py", *args], cwd=cwd, capture_output=True, text=True,
+                              env={**os.environ, **(env or {})})
+    checked = stamp("check")
+    assert checked.returncode == 2 and "merge-base" in checked.stderr, (checked.returncode, checked.stderr)
+    open(os.path.join(repo, "other.py"), "a").write("breakpoint()\n")
+    reason = stop(RUN + "orphan", repo, [os.path.join(repo, "other.py")]).get("reason", "")
+    assert "Couldn't finish checking" in reason and "merge-base" in reason, reason
+    os.makedirs(os.path.join(base, "plain"))
+    assert stamp("check", cwd=os.path.join(base, "plain")).returncode == 0, "outside a repository there is nothing to stamp"
+    refused = stamp("check", env=fake_git(base, repo, fail="rev-parse"))
+    assert refused.returncode == 2 and "dubious ownership" in refused.stderr, (refused.returncode, refused.stderr)
+    unborn = os.path.join(base, "zz-unborn")
+    os.makedirs(unborn)
+    git(unborn, "init", "-q")
+    open(os.path.join(unborn, "app.py"), "w").write("x = 1\n")
+    reason = stop(RUN + "unborn", unborn, [os.path.join(unborn, "app.py")]).get("reason", "")
+    assert "Couldn't finish checking" not in reason, f"a repository with no commit yet keeps the HEAD fallback: {reason}"
+
+
+def the_problem_cap_never_hides_a_question(base):
+    noisy, mapped = new_repo(base, "zz-noisy"), new_repo(base, "zz-mapped")
+    open(os.path.join(noisy, "app.py"), "a").write("".join(f"def f{i}(): breakpoint()\n" for i in range(25)))
+    git(mapped, "switch", "-q", "-c", "feat/mapped")
+    spec = subprocess.run([os.path.expanduser("~/.agents/skills/kit-spec/path.sh")], cwd=mapped, capture_output=True,
+                          text=True).stdout.strip()
+    with open(spec, "w") as fh:
+        fh.write("# Mapped\n\nGoal: x.\n\n## Change map\n- Ways in: the app — app.py:1\n")
+    open(os.path.join(mapped, "extra.py"), "w").write("y = 1\n")
+    session = RUN + "cap"
+    edited = [os.path.join(noisy, "app.py"), os.path.join(mapped, "extra.py")]
+    record_edits(session, base, edited)
+    payload = json.dumps({"session_id": session, "cwd": base})
+    crash = in_hooks("def broken(*args, **kwargs):\n    raise ValueError('boom')\ns.block = broken\nsys.exit(s.main())",
+                     base, stdin=payload)
+    assert "boom" in crash.stderr, crash.stderr
+    reason = (run_hook("stop_checks.py", {"session_id": session, "cwd": base}) or {}).get("reason", "")
+    lines = reason.split("\n- ")[1:]
+    assert any("[zz-mapped] Changed code files" in line and "`extra.py`" in line for line in lines), \
+        f"a question not shown before the crash is asked now, past the cap: {lines}"
+    assert len(lines) == 21 and re.search(r"\d+ more problems? not listed", lines[-1]), lines[-3:]
+
+
 def stop_catches_committed_leftover(base):
     repo = new_repo(base)
     git(repo, "switch", "-q", "-c", "feature")
@@ -3403,7 +3626,9 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
           stop_asks_once_about_files_outside_the_change_map, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, stop_suggests_a_fresh_session_for_the_next_change, guard_records_the_pushed_checkout,
-          post_edit_syntax_feedback, impeccable_files_in_a_shared_repo_need_the_user_first, impeccable_guard_edge_cases, impeccable_guard_reads_prose_as_text]
+          post_edit_syntax_feedback, a_git_call_that_hangs_times_out_and_keeps_the_edits, stop_clears_only_the_edits_it_checked,
+          a_delete_only_patch_is_checked, stamp_flags_take_an_equals_sign, a_verify_report_that_cant_be_written_is_said,
+          a_base_with_no_common_commit_fails_the_stamps, the_problem_cap_never_hides_a_question, impeccable_files_in_a_shared_repo_need_the_user_first, impeccable_guard_edge_cases, impeccable_guard_reads_prose_as_text]
 
 if sys.argv[1:]:
     by_name = {t.__name__: t for t in TESTS}

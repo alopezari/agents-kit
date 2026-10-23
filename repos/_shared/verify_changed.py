@@ -29,7 +29,7 @@ import review_stamp  # noqa: E402
 
 
 def git(args, cwd):
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True).stdout
+    return review_stamp.run_git(args, cwd=cwd).stdout
 
 
 def changed_lines(root):

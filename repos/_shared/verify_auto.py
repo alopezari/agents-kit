@@ -12,7 +12,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -80,9 +79,7 @@ def decode_json(text, opener):
 
 
 def tracked_files(root):
-    out = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard"],
-                         cwd=root, capture_output=True, text=True).stdout
-    return out.splitlines()
+    return verify_changed.git(["ls-files", "--cached", "--others", "--exclude-standard"], root).splitlines()
 
 
 # --- JS / TS ----------------------------------------------------------------------------------
@@ -390,7 +387,7 @@ CHECKS = (
 
 
 def main():
-    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    root = verify_changed.git(["rev-parse", "--show-toplevel"], None).strip()
     if not root:
         print("skipped: verify (not inside a git repository)")
         return 0
