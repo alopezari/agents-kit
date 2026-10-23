@@ -1,1 +1,0 @@
-- `bin/browse` keeps `playwright-cli`'s session logs in a temp folder instead of `.playwright-cli/` inside the repository under test.

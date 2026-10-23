@@ -69,12 +69,16 @@ Make every check repeatable in one command, because a fix sends you back to re-r
   Call REST routes with `rest_do_request()` and read secrets with the app's own accessors, never by echoing them.
 - **HTTP and auth:** bash with `curl` and a `chk` helper that prints `PASS`/`FAIL` with expected vs actual. Pipe to `jq` to project only the fields you assert on.
 - **CLI:** run both from source and the built artifact when both ship, and diff their output. Check exit codes, including the error ones.
-- **UI:** an A/B test between Playwright CLI and agent-browser is running until 2026-11-05, so don't pick the tool yourself:
-  1. Run `~/.agents/bin/browse assign` once per validation run. It prints the tool assigned to this run.
-  2. Send every browser command through `~/.agents/bin/browse <command>`, using the assigned tool's syntax (`playwright-cli --help` or `agent-browser --help`). Log in, assert on the DOM with explicit selectors and expected values, and take a screenshot of every state a check asserts on, saved to `$EV/<id>-<state>.png`.
-  3. End with `~/.agents/bin/browse finish --checks <N> --passed <P> --tool-issues <K> --notes "<what the tool made hard, if anything>"`.
+- **UI:** drive the browser with agent-browser, called directly (`agent-browser --help` and `agent-browser skills get core` for the syntax). Log in where a check needs it, assert on the DOM with explicit selectors and expected values, and take a screenshot of every state a check asserts on, saved to `$EV/<id>-<state>.png`. What earlier validations had to learn:
+  - Give the run its own session, `--session <name>` on every command, and end it with `agent-browser --session <name> close`.
+  - Use CSS selectors: `text=` selectors aren't supported.
+  - `eval` prints its result JSON-encoded (a string comes back quoted): decode it (`jq -r .`, `json.loads`) before comparing.
+  - After `open`, or a `click` that navigates, `wait` for what the next assertion reads (`wait <selector>`, `wait --url <pattern>`): the click returns before the new page has loaded.
+  - Set sizes with `set viewport <w> <h>`.
+  - For an SVG or content revealed on scroll, `scrollintoview <selector>` and then take a viewport screenshot (`screenshot <path>`): an element screenshot of it comes out blank.
+  - When a reload must see an edit, `open` the URL with a new query string (`?v=2`): `reload` can serve the cached page.
 
-  Don't use the Playwright MCP for validation while the test runs, so the data stays comparable. You choose the selectors and judge the results, so don't add an AI browser layer (Stagehand and the like) on top: it adds nondeterminism and a second model to a check that has to be reproducible.
+  With agent-browser missing, the UI checks are NOT RUN, with `npm install -g agent-browser && agent-browser install` as the step to run them. Use playwright-cli only for a check agent-browser can't do, and name that check and why in the report. Don't drive a browser through an MCP or add an AI layer on top (`agent-browser chat`, Stagehand and the like): you choose the selectors and judge the results, and a check has to be a reproducible script whose evidence lands in `$EV`.
 
 **Advanced tests, only when triage selects them:**
 - **Query budget:** `~/.agents/bin/wp-query-profile` runs a REST route or PHP snippet inside the local WordPress and reports the query count and repeated query patterns (N+1). Run it on the affected endpoint or code path with a realistic number of items. Repeated patterns that grow with the item count are findings.

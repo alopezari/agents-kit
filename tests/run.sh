@@ -45,7 +45,7 @@ PY
 sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wrapper" "baselines|harness baselines"
   "semgrep|semgrep rules" "phase|flow phase" "quality-log|quality log input"
   "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree" "prune-merged|remove merged worktrees and branches"
-  "pr-validation|pull request validation section" "approve|approvals from a dialog" "spec|spec lint and second reading" "browse|browser A/B harness" "build-ab|build-model A/B"
+  "pr-validation|pull request validation section" "approve|approvals from a dialog" "spec|spec lint and second reading" "build-ab|build-model A/B"
   "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes" "review-eval|review evals"
   "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
@@ -71,7 +71,6 @@ section_prune_merged() { python3 test_prune_merged.py; }
 section_pr_validation() { python3 test_pr_validation.py; }
 section_approve() { python3 test_approve.py; }
 section_spec() { python3 test_spec.py; }
-section_browse() { python3 test_browse.py; }
 section_build_ab() { python3 test_build_ab.py; }
 section_verify_changed() { python3 test_verify_changed.py; }
 section_deps() { python3 test_deps.py; }

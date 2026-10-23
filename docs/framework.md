@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **19 command-line tools**: a11y-check, approve, browse, build-ab, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
+- **18 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -246,14 +246,6 @@ approve once <session> <name>...     write them for one call, unless the turn ha
 approve revoke <session> <name>...   remove the ones `once` wrote; a turn approval stays
 ```
 
-**`bin/browse`**: A/B harness for browser tooling in the kit-validate skill: Playwright CLI vs agent-browser.
-
-```
-browse assign                         pick the tool for this validation run (balanced alternation)
-browse <tool args...>                 run the assigned tool with these args, logging the call
-browse finish --checks N --passed P [--tool-issues K] [--notes "..."]
-```
-
 **`bin/build-ab`**: A/B harness for the build's model: Sonnet vs Opus, effort held at the build agent's per-tier value.
 
 ```
@@ -438,8 +430,8 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | recommended | `gitleaks` | brew install gitleaks | the secrets check at the end of each turn |
 | recommended | `php` | brew install php | the generic verify's PHP checks; tests/run.sh |
 | optional | `claude ≥ 2.1.287` | https://claude.com/claude-code | the kit plugin (mods, from this version on) and the scheduled jobs (they run `claude -p`) |
-| optional | `playwright-cli` | npm install -g @playwright/cli | browser checks in the kit-validate skill (bin/browse) |
-| optional | `agent-browser` | npm install -g agent-browser | browser checks in the kit-validate skill (bin/browse) |
+| optional | `agent-browser` | npm install -g agent-browser | browser checks in the kit-validate skill |
+| optional | `playwright-cli` | npm install -g @playwright/cli | agent-browser's fallback, for a browser check it can't do |
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
 | optional | `impeccable` | https://github.com/pbakaus/impeccable/releases | the Design lens and validate's design check (the impeccable skill fetches it on first use) |
 | optional | `docker` | https://www.docker.com | repository verifies that run in containers |
