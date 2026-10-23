@@ -3,6 +3,7 @@
 nothing would be lost, and says why it keeps each of the others."""
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +13,7 @@ PRUNE = os.path.join(KIT, "bin", "prune-merged")
 RESULTS = []
 # prune-merged deletes phase switches in HOME's store: never the user's own, whatever the test sets.
 os.environ["HOME"] = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-home-"))
+KINDS = ("spec", "verify", "review", "validation", "checks-guide", "staging-guide", "follow-pr", "pr-body")
 
 
 def sh(cwd, *cmd):
@@ -56,6 +58,32 @@ def branch_store(home):
     root = os.path.join(home, ".agents", "approvals", "phases", "branch")
     (repo,) = os.listdir(root)
     return os.path.join(root, repo)
+
+
+def kit_files(main, key, guide=None):
+    """Every file the kit keeps for a branch key, in .git/agents and in $TMPDIR/agents-specs, its evidence and stamps
+    holding a file each; the checks guide holds `guide` when given."""
+    paths = []
+    for where in (os.path.join(main, ".git", "agents"), os.path.join(os.environ["TMPDIR"], "agents-specs")):
+        os.makedirs(where, exist_ok=True)
+        for kind in KINDS:
+            paths.append(os.path.join(where, f"{kind}-shop-{key}.md"))
+            open(paths[-1], "w").write(guide if guide is not None and kind == "checks-guide" else f"# {kind}\n")
+        paths.append(os.path.join(where, f"browser-ab-spec-shop-{key}.json"))
+        open(paths[-1], "w").write("{}\n")
+        paths.append(os.path.join(where, f"evidence-shop-{key}"))
+        os.makedirs(paths[-1])
+        open(os.path.join(paths[-1], "E1.txt"), "w").write("ran\n")
+    paths.append(os.path.join(main, ".git", "agents", "stamps", key))
+    os.makedirs(paths[-1])
+    open(os.path.join(paths[-1], "self-review.stamp"), "w").write("abc\n")
+    return paths
+
+
+def line_of(out, branch):
+    """The line prune-merged printed about `branch`, or ""."""
+    said = re.compile(rf"(deleted|would delete|kept) branch {re.escape(branch)}(?=[ ,:]|$)")
+    return next((line for line in out.stdout.splitlines() if said.match(line)), "")
 
 
 def removes_merged_and_keeps_the_rest_with_reasons(base):
@@ -265,11 +293,127 @@ def deletes_the_branch_even_when_its_switches_stay(base):
     assert "done" not in branches(main) and os.listdir(store) == ["done.json"], (branches(main), os.listdir(store))
 
 
+def deletes_the_files_kept_for_the_branches_it_deletes(base):
+    main = setup(base)
+    done = worktree(base, main, "done")
+    sh(main, "git", "worktree", "remove", done)
+    sh(main, "git", "branch", "fix/a", "trunk")  # merged; its files under the old dash key fix-a belong to...
+    live = worktree(base, main, "fix-a", merged=False)  # ...the branch named fix-a, which is live
+    gone = kit_files(main, "done") + kit_files(main, "fix~a")
+    kept = kit_files(main, "fix-a") + kit_files(main, "open")
+    worktree(base, main, "open", merged=False)
+    dry = sh(main, PRUNE, "--dry-run")
+    assert dry.returncode == 0 and all(os.path.exists(path) for path in gone + kept), dry
+    for path in gone:
+        assert path in dry.stdout, f"--dry-run lists {path}: {dry.stdout}"
+    out = sh(main, PRUNE)
+    assert out.returncode == 0, out
+    assert "done" not in branches(main) and "fix/a" not in branches(main), out.stdout
+    left = [path for path in gone if os.path.exists(path)]
+    assert not left, f"left behind: {left}\n{out.stdout}"
+    assert all(path in out.stdout for path in gone), out.stdout
+    assert all(os.path.exists(path) for path in kept), f"a live branch's files stay: {out.stdout}"
+    assert os.path.isdir(live)
+
+
+def deletes_the_files_of_a_renamed_branch_but_not_of_a_copy_source(base):
+    main = setup(base)
+    renamed = worktree(base, main, "feat/old")
+    sh(renamed, "git", "branch", "-m", "feat/old", "done")
+    sh(main, "git", "worktree", "remove", renamed)
+    gone = kit_files(main, "feat~old") + kit_files(main, "feat-old")
+    source = worktree(base, main, "orig", merged=False)
+    sh(source, "git", "branch", "-m", "orig", "src")
+    sh(source, "git", "branch", "-c", "src", "copy")  # copies src's reflog, orig's rename included
+    commit(source, "more on src")  # src stays live: its worktree has work not in origin
+    sh(main, "git", "-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "merge copy", "copy")
+    sh(main, "git", "push", "-q", "origin", "trunk")
+    kept = kit_files(main, "orig")
+    out = sh(main, PRUNE)
+    assert out.returncode == 0 and {"done", "copy"}.isdisjoint(branches(main)), out
+    assert not [path for path in gone if os.path.exists(path)], f"the earlier names' files go: {out.stdout}"
+    assert all(os.path.exists(path) for path in kept), f"a copy's source keeps its earlier name's files: {out.stdout}"
+
+
+def keeps_a_branch_whose_steps_after_the_merge_have_not_passed(base):
+    main = setup(base)
+    table = "\n## Results (2026-10-0{})\n\n| Step | Result | Evidence |\n|---|---|---|\n{}"
+    head = "# Checks guide\n\n## After the merge\n\n### P1. Load the job\n\n### P2. One full run\n"
+    guides = {
+        "no-result": (head + table.format(1, "| P1 | PASS | p1.txt |\n"), "P2"),
+        "rerun": (head + table.format(1, "| P1 | PASS | p1.txt |\n| P2 | PASS | p2.txt |\n")
+                  + table.format(2, "| P2 | NOT RUN | again after the fix |\n"), "P2"),
+        "failed": (head + table.format(1, "| P1 | FAIL | p1.txt |\n| P2 | PASS | p2.txt |\n"), "P1"),
+        "sub-step": (head + table.format(1, "| P1 | PASS | p1.txt |\n| P2a | PASS | p2a.txt |\n| P2b | NOT RUN | |\n"), "P2"),
+        "passed": (head + "\n### M1. Pay on a phone\n" + table.format(1, "| P1 | PASS | p1.txt |\n| P2a | PASS | p2a.txt |\n"
+                                                                          "| P2b | PASS | p2b.txt |\n"), None),
+    }
+    files = {}
+    for name, (guide, _) in guides.items():
+        sh(main, "git", "branch", name, "trunk")
+        files[name] = kit_files(main, name, guide)
+    sh(main, "git", "branch", "legacy", "trunk")  # a guide from before checks-guide, under its old name only
+    files["legacy"] = kit_files(main, "legacy")
+    for where in (os.path.join(main, ".git", "agents"), os.path.join(os.environ["TMPDIR"], "agents-specs")):
+        os.remove(os.path.join(where, "checks-guide-shop-legacy.md"))
+        files["legacy"].remove(os.path.join(where, "checks-guide-shop-legacy.md"))
+        open(os.path.join(where, "staging-guide-shop-legacy.md"), "w").write(head)
+    sh(main, "git", "branch", "unreadable", "trunk")
+    files["unreadable"] = kit_files(main, "unreadable", head + table.format(1, "| P1 | PASS | p1.txt |\n| P2 | PASS | p2.txt |\n"))
+    unreadable = os.path.join(main, ".git", "agents", "checks-guide-shop-unreadable.md")
+    os.chmod(unreadable, 0)
+    try:
+        dry = sh(main, PRUNE, "--dry-run")
+        out = sh(main, PRUNE)
+    finally:
+        os.chmod(unreadable, 0o644)
+    for name, (_, pending) in guides.items():
+        if pending:
+            for run in (dry, out):
+                line = line_of(run, name)
+                assert line.startswith(f"kept branch {name}:") and "after the merge" in line and pending in line, \
+                    (name, run.stdout)
+            assert name in branches(main) and all(os.path.exists(path) for path in files[name]), (name, out.stdout)
+    assert "P1, P2" in line_of(out, "legacy") and "legacy" in branches(main), out.stdout
+    assert all(os.path.exists(path) for path in files["legacy"]), out.stdout
+    line = line_of(out, "unreadable")
+    assert line.startswith("kept branch unreadable: couldn't read its checks guide") and unreadable in line, out.stdout
+    assert "unreadable" in branches(main) and all(os.path.exists(path) for path in files["unreadable"])
+    assert "passed" not in branches(main) and not any(os.path.exists(path) for path in files["passed"]), out.stdout
+    assert line_of(dry, "passed").startswith("would delete branch passed"), dry.stdout
+    assert out.returncode == 0, out
+
+
+def names_the_files_it_cannot_delete(base):
+    main = setup(base)
+    for name in ("stuck", "other"):
+        sh(main, "git", "branch", name, "trunk")
+    stuck, other = kit_files(main, "stuck"), kit_files(main, "other")
+    evidence = os.path.join(main, ".git", "agents", "evidence-shop-stuck")
+    os.chmod(evidence, 0o500)  # E1.txt can't be removed from it
+    try:
+        out = sh(main, PRUNE)
+    finally:
+        os.chmod(evidence, 0o700)
+    assert out.returncode == 1, out
+    line = line_of(out, "stuck")
+    assert line.startswith("deleted branch stuck") and f"couldn't delete {evidence}" in line, out.stdout
+    assert os.path.exists(os.path.join(evidence, "E1.txt")), "the file it couldn't delete is still there"
+    assert not [path for path in stuck if path != evidence and os.path.exists(path)], out.stdout
+    assert not any(os.path.exists(path) for path in other) and "other" not in branches(main), \
+        f"the other branches still go: {out.stdout}"
+
+
 for test in (removes_merged_and_keeps_the_rest_with_reasons, keeps_the_worktree_it_runs_in,
              a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect,
              forgets_the_phase_switches_of_the_branches_it_deletes, forgets_only_the_switches_of_its_own_repo, forgets_the_switches_of_a_renamed_branch_never_read, deletes_the_branch_even_when_its_switches_stay,
-             says_when_it_cannot_check_the_switches, keeps_the_switches_when_it_cannot_name_the_repo):
+             says_when_it_cannot_check_the_switches, keeps_the_switches_when_it_cannot_name_the_repo,
+             deletes_the_files_kept_for_the_branches_it_deletes, deletes_the_files_of_a_renamed_branch_but_not_of_a_copy_source,
+             keeps_a_branch_whose_steps_after_the_merge_have_not_passed, names_the_files_it_cannot_delete):
     base = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-"))
+    # the copies of reports a sandbox keeps in $TMPDIR/agents-specs: never the user's own, nor another test's.
+    os.environ["TMPDIR"] = os.path.join(base, "tmp")
+    os.makedirs(os.environ["TMPDIR"])
     try:
         test(base)
         RESULTS.append((test.__name__, None))

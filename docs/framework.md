@@ -331,7 +331,7 @@ quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --cate
 ```
 reports path <verify|review|validation|checks-guide|follow-pr>   where the stop hook or a skill saves that report
 reports path pr-body                             where kit-ship and kit-follow-pr save the PR description; left out of the listings
-reports path evidence                            the directory (created) for validation evidence: outputs, screenshots
+reports path evidence                            the directory (created) for validation evidence: outputs, screenshots; needs a branch, as pr-body does
 reports                                          every report that exists, with its path, the evidence, the phases off
 reports brief                                    the phase and one line per report, to pick a branch up in a new session
 reports --branch <name> …                        the same for another branch of this repo, without phase and switches
@@ -389,7 +389,6 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `deps.txt` | more programs to install and check, in the core's format; a program in both takes the stricter tier |
 | `private-terms.txt` | case-insensitive regexes, one per line, that must never reach the public kit: its commits and pull requests are refused when they match |
 | `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |
-
 | `after-turn` | an executable the Stop hook starts in the background after every turn, with its JSON on stdin (with `transcript_path`); it doesn't wait for it or read its output, so the script handles its own overlap, rate limits and logging. Its environment has `AGENTS_AFTER_TURN=1`, and the stops of a session it starts (`codex exec`, `claude -p`) start no after-turn. A script that can't start is logged as `profile-after-turn-failed` |
 
 ## What the agents are told

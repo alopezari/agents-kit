@@ -398,6 +398,33 @@ def result_rows(lines, evidence):
     return rows
 
 
+GUIDE_STEP = r"([MSP]\d+)[a-z]*\b"  # S: a step before the merge in a guide from before checks-guide; M3a: a sub-step of M3
+
+
+def guide_steps(text):
+    """{step: {"name", "owner": "agent" or "you", "result": "PASS", "FAIL" or None, "date": " (<date>)" or ""}} for each
+    step of a checks guide, its result the latest one its results tables give, None while it has none to stand on."""
+    steps = {}
+    # A step ends at the next heading of any level; a results table only at the next `## `, past its own lines.
+    for step, name, body in re.findall(rf"^### {GUIDE_STEP}\.?[ \t]*([^\n]*)\n?(.*?)(?=^##|\Z)", text, re.M | re.S):
+        where = re.search(r"^[-*\s]*(?:\*\*)?Where:?(?:\*\*)?:?\s*the agent\b", body, re.M)
+        steps[step] = {"name": name.strip(), "owner": "agent" if where else "you", "result": None, "date": ""}
+    # Every results table counts, ship's `## Results after the deploy` too; a later NOT RUN asks for the step again.
+    rows, dates = {}, {}  # the latest result of each row (P2 or its sub-step P2b), and each step's latest table
+    for heading, table in re.findall(r"^## Results([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S):
+        when = re.search(r"\(([^)]*)\)", heading)
+        for first, result, _, _ in result_rows(table.splitlines(), None):
+            step = re.match(r"[*_]*(" + GUIDE_STEP + ")", first)
+            if step:
+                rows.setdefault(step.group(2), {})[step.group(1)] = result
+                dates[step.group(2)] = f" ({when.group(1)})" if when else ""
+    for step, found in rows.items():  # a step's sub-steps add up: any FAIL fails it, any NOT RUN leaves it to run
+        result = next(r for r in ("FAIL", "NOT RUN", "PASS") if r in found.values())
+        info = steps.setdefault(step, {"name": "", "owner": "you"})
+        info["result"], info["date"] = (None, "") if result == "NOT RUN" else (result, dates[step])
+    return steps
+
+
 def unbacked_rows(lines, evidence):
     """The PASS/FAIL rows whose Evidence cell names no saved file, as "<first cell>: <evidence cell>"."""
     return [f"{first}: {cell or '(empty)'}" for first, result, cell, backed in result_rows(lines, evidence)
