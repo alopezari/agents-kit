@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
@@ -127,10 +128,15 @@ def refresh(files):
     except RuntimeError as error:  # a git query the stamps need failed: say so instead of an old label
         label, extra = f"stamps: {error}"[:80], {}
     os.makedirs(os.path.dirname(cache), exist_ok=True)
-    tmp = cache + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump({"label": label, "computed_at": time.time(), **extra}, fh)
-    os.replace(tmp, cache)
+    # A file of its own: two refreshes of one branch at once must not replace the cache with each other's file.
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(cache), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"label": label, "computed_at": time.time(), **extra}, fh)
+        os.replace(tmp, cache)
+    except BaseException:
+        os.remove(tmp)
+        raise
     return label
 
 
