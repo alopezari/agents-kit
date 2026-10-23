@@ -1,0 +1,4 @@
+- The MCP guard now blocks a call when it fails, as the shell guard does, instead of letting it through: a profile's `mcp-writes.json` that doesn't load, or an error while judging a call, blocks every MCP call but the browser's, with the error named and logged. The doctor reports a profile that doesn't load.
+- The hook log redacts passwords, tokens, keys and a URL's password in the commands it records, so a denied command no longer leaves a secret in `~/.agents/logs/hooks.jsonl`.
+- The shell guard's refusal to run the switches CLI names the review's re-check rounds and their `/flow` form too.
+- If the last message's approvals can't be removed, they are moved aside so they stop counting; if they can't be moved either, the new message is blocked with the folder to remove, instead of carrying them over.

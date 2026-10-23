@@ -16,7 +16,9 @@ service, naming it ("¿Quieres que la cree en Linear?"), and the user's message 
 WCCOM…", "dale", "go ahead"), that service is approved until the next message. Only the transcript's tail is read, and
 anything it can't show for sure (a missing or corrupt file, a turn that ended on a tool call) approves nothing.
 Only the user's own messages reach this hook, so an agent can't grant itself one: it can word the question, but the
-user has to accept it. Mentioning the service only to read from it approves writes for that turn too.
+user has to accept it. Mentioning the service only to read from it approves writes for that turn too. Each message
+first clears the last one's approvals: a folder that can't be removed is moved aside, and one that can't be moved
+either blocks the message.
 The objects guard_mcp.py records a session's approved writes to outlast the user's messages: this hook only deletes
 the ones older than guard_mcp.OBJECT_APPROVAL_HOURS.
 When the message arrives RETURN_GAP_HOURS or more after the newest conversation entry in the transcript's tail, the
@@ -27,6 +29,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import time
@@ -259,15 +262,44 @@ def main():
     session = re.sub(r"[^\w-]", "", str(payload.get("session_id") or ""))
     if not session:
         return 0
-    shutil.rmtree(os.path.join(guard_mcp.TURN_APPROVALS, session), ignore_errors=True)  # the last turn's
+    last_turn = os.path.join(guard_mcp.TURN_APPROVALS, session)
+    try:
+        shutil.rmtree(last_turn)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        # A name no session folder can have (they are [\w-] only), so no guard reads it; the sweep below removes it
+        # once it is stale.
+        aside = f"{last_turn}.unremoved-{time.time_ns()}"
+        try:
+            os.rename(last_turn, aside)
+        except OSError as rename_error:
+            try:
+                emptied = not os.listdir(last_turn)  # only the folder itself stayed: it grants nothing
+            except OSError:  # unreadable: it may still hold approvals
+                emptied = False
+            if emptied:
+                log("prompt_approvals", "clear-emptied", payload, f"{last_turn}: {error}")
+            else:
+                parent, folder = shlex.quote(guard_mcp.TURN_APPROVALS), shlex.quote(last_turn)
+                print(f"The last message's approvals in {last_turn} couldn't be removed ({error}) or moved aside "
+                      f"({rename_error}), so they would still be in force for this one. Remove that folder "
+                      f"(`chmod u+w {parent} && chmod -R u+w {folder} && rm -rf {folder}`), then send the message "
+                      "again.", file=sys.stderr)
+                log("prompt_approvals", "clear-blocked", payload, f"{last_turn}: {error}; {rename_error}")
+                return 2
+        else:
+            log("prompt_approvals", "clear-moved-aside", payload, f"{last_turn}: {error}")
     os.makedirs(guard_mcp.TURN_APPROVALS, exist_ok=True)
     for name in os.listdir(guard_mcp.TURN_APPROVALS):  # sessions long gone
         path = os.path.join(guard_mcp.TURN_APPROVALS, name)
         try:
             if time.time() - os.path.getmtime(path) > STALE_SECONDS:
-                shutil.rmtree(path, ignore_errors=True)
-        except OSError:  # another session's hook removed it first
+                shutil.rmtree(path)
+        except FileNotFoundError:  # another session's hook removed it first
             pass
+        except OSError as error:
+            log("prompt_approvals", "clear-failed", payload, f"{path}: {error}")
     for folder, _, records in os.walk(guard_mcp.SESSION_APPROVALS, topdown=False):
         for name in records:
             path = os.path.join(folder, name)
@@ -297,7 +329,7 @@ def main():
     import guard_bash  # after the clearing: if it fails to load, the last turn's approvals are already gone
     named += guard_bash.database_approval_names(prompt) + guard_bash.action_approval_names(prompt)
     if named:
-        os.makedirs(os.path.join(guard_mcp.TURN_APPROVALS, session))
+        os.makedirs(os.path.join(guard_mcp.TURN_APPROVALS, session), exist_ok=True)  # emptied, not removed
         for service in named:
             open(os.path.join(guard_mcp.TURN_APPROVALS, session, service), "w").close()
         log("prompt_approvals", "approve-turn", payload, ",".join(named))

@@ -14,6 +14,9 @@ the input's object fields, and the id a create returns. For OBJECT_APPROVAL_HOUR
 approved, the same session can write to those objects again without a new approval (an edit, a comment, an
 attachment), but not create one; prompt_approvals.py deletes expired records.
 
+A profile's rules that don't load, or an error while judging a call, block every MCP call but the browser's, naming
+the error: Claude Code and Codex let a call through when its hook crashes.
+
 Browser MCP calls (Playwright, Chrome DevTools, Claude in Chrome) are logged and never blocked, so the
 monthly job can tell validation runs that went around the browser A/B (bin/browse) from runs with no UI.
 
@@ -52,11 +55,20 @@ DIRECT_WRITE = {
 BROWSER_MCP = re.compile(r"^mcp__(playwright|chrome-devtools|claude-in-chrome)[\w-]*__")
 DIRECT_OBJECTS = {}
 GATEWAYS = []  # MCP tools that reach several services through one generic "execute" tool
+LOAD_ERROR = None  # a profile's rules that didn't load: main() denies every call, and each importer decides for itself
 for path in sorted(glob.glob(os.path.join(PROFILES, "*", "mcp-writes.json"))):
-    rules = json.load(open(path))
-    DIRECT_WRITE.update({server: re.compile(rx) for server, rx in rules.get("direct", {}).items()})
-    DIRECT_OBJECTS.update(rules.get("direct_objects", {}))
-    GATEWAYS += rules.get("gateways", [])
+    try:
+        with open(path) as fh:
+            rules = json.load(fh)
+        DIRECT_WRITE.update({server: re.compile(rx) for server, rx in rules.get("direct", {}).items()})
+        DIRECT_OBJECTS.update(rules.get("direct_objects", {}))
+        for gateway in rules.get("gateways", []):  # checked here, so a broken one is a LOAD_ERROR, not a crash on a call
+            re.compile(gateway["tool"])
+            gateway["service_field"], gateway["operation_fields"], gateway["writes"].items()
+        GATEWAYS += rules.get("gateways", [])
+    except Exception as error:
+        LOAD_ERROR = f"{path}: {type(error).__name__}: {error}"
+        break
 
 
 def classify(tool_name, tool_input):
@@ -202,23 +214,40 @@ def main():
     tool_name = payload.get("tool_name") or ""
     if payload.get("hook_event_name") == "PostToolUse":
         if not BROWSER_MCP.match(tool_name):
-            record_objects(payload)
+            try:
+                record_objects(payload)
+            except Exception as error:  # the write already happened: nothing left to block
+                log("guard_mcp", "error", payload, f"recording {tool_name}: {type(error).__name__}: {error}")
         return 0
     if BROWSER_MCP.match(tool_name):
         log("guard_mcp", "browser-mcp", payload, tool_name)
         return 0
-    tool_input = payload.get("tool_input") or {}
-    hit = classify(tool_name, tool_input)
-    if not hit:
-        return 0
-    service, operation, objects = hit
-    if approved(service, payload.get("session_id")):
-        log("guard_mcp", "allow-approved", payload, f"{service}:{operation}")
-        if objects:
-            mark_approved_call(payload, service, operation)
-        return 0
-    if object_approved(service, operation, objects, tool_input, payload.get("session_id")):
-        log("guard_mcp", "allow-object", payload, f"{service}:{operation}:{','.join(object_ids(tool_input, objects))}")
+    try:
+        if LOAD_ERROR:
+            raise RuntimeError(f"couldn't load {LOAD_ERROR}")
+        tool_input = payload.get("tool_input") or {}
+        hit = classify(tool_name, tool_input)
+        if not hit:
+            return 0
+        service, operation, objects = hit
+        if approved(service, payload.get("session_id")):
+            log("guard_mcp", "allow-approved", payload, f"{service}:{operation}")
+            if objects:
+                mark_approved_call(payload, service, operation)
+            return 0
+        if object_approved(service, operation, objects, tool_input, payload.get("session_id")):
+            log("guard_mcp", "allow-object", payload, f"{service}:{operation}:{','.join(object_ids(tool_input, objects))}")
+            return 0
+    except Exception as error:  # Claude Code and Codex both let a call through when its hook crashes
+        detail = f"{type(error).__name__}: {error}"
+        log("guard_mcp", "error", payload, f"{tool_name}: {detail}")
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                f"Blocked by ~/.agents/hooks/guard_mcp.py: the guard failed ({detail}), so it can't tell whether "
+                f"`{tool_name}` writes to a shared system. Tell the user: the error is in ~/.agents/logs/hooks.jsonl."),
+        }}))
         return 0
     # Both: the payload tells a Codex hook apart, the environment a Claude Code session apart from a bare run.
     no_dialog = harness(payload) == "claude-code" and session_harness() == "claude-code" \

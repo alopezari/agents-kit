@@ -47,8 +47,7 @@ def file_named(rule):
 
 
 def guard_mcp():
-    """guard_mcp reads every profile's mcp-writes.json when imported: a broken one must not take the shell guard
-    down with it, so it loads only when a design file is at stake (inside the callers' error handling)."""
+    """guard_mcp reads every profile's mcp-writes.json when imported: it loads only when a design file is at stake."""
     import guard_mcp as module
     return module
 
