@@ -430,7 +430,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | recommended | `gitleaks` | brew install gitleaks | the secrets check at the end of each turn |
 | recommended | `php` | brew install php | the generic verify's PHP checks; tests/run.sh |
 | optional | `claude ≥ 2.1.287` | https://claude.com/claude-code | the kit plugin (mods, from this version on) and the scheduled jobs (they run `claude -p`) |
-| optional | `agent-browser` | npm install -g agent-browser | browser checks in the kit-validate skill |
+| optional | `agent-browser` | npm install -g agent-browser | browser checks in the kit-validate skill (then `agent-browser install` for its browser) |
 | optional | `playwright-cli` | npm install -g @playwright/cli | agent-browser's fallback, for a browser check it can't do |
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
 | optional | `impeccable` | https://github.com/pbakaus/impeccable/releases | the Design lens and validate's design check (the impeccable skill fetches it on first use) |

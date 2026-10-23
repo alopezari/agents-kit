@@ -58,7 +58,7 @@ validate    (before PR)          →  the triggered test types; e2e positive/neg
 | **Mutation testing on changed lines** | Weak assertions, untested branches in new code | Infection `--git-diff-lines` (PHP), Stryker incremental (JS). Time-boxed, and an agent triages survivors | High risk with non-trivial logic | 2–10 min |
 | **Property-based tests** | Edge cases across the input domain (the ISO week-53 class of bug) | eris (PHPUnit), fast-check (JS) | Parsers, validators, date/version/price calculations | Minutes to write, seconds to run |
 | **Query budget** | N+1 and query explosions that pass functional tests | WordPress `SAVEQUERIES` count on the affected page/endpoint, before vs after the change | Performance lens triggered, or queries/loops in the diff | ~1 min |
-| **Automated accessibility** | Contrast, labels, roles, keyboard traps | axe-core through the A/B browser tool on changed pages | UI changes | ~1 min per page |
+| **Automated accessibility** | Contrast, labels, roles, keyboard traps | axe-core through `bin/a11y-check` on changed pages | UI changes | ~1 min per page |
 | **Runtime compatibility** | Syntax or APIs unavailable on supported versions | `php -l` on changed files in a `php:7.4-cli` container (for a project that supports PHP 7.4) | Repos with an older minimum PHP | Seconds |
 | **Migration round-trip** | Migrations that can't run twice, or can't be rolled back | Run up/down/up on a copy of local data | Schema or migration files | Minutes |
 
