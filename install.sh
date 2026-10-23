@@ -126,7 +126,7 @@ done
 if compgen -G "$KIT/profiles/*/personal-repos.txt" >/dev/null; then ok "personal repositories listed (personal-repos.txt)"
 else info "no profile has personal-repos.txt: every repository with a remote counts as shared, and Impeccable's PRODUCT.md, DESIGN.md and .impeccable/ wait for your say-so in all of them"; fi
 # A profile's rules that don't load make guard_mcp.py block every MCP call but the browser's.
-load_error=$(AGENTS_PROFILES_DIR="$KIT/profiles" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import guard_mcp; print(guard_mcp.LOAD_ERROR or "")' "$KIT/hooks")
+load_error=$(AGENTS_PROFILES_DIR="$KIT/profiles" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import guard_mcp; print(guard_mcp.LOAD_ERROR or "")' "$KIT/hooks") || load_error="guard_mcp.py didn't import"
 if [ -n "$load_error" ]; then warn "MCP write rules didn't load, so the MCP guard blocks every MCP call but the browser's: $load_error"; fi
 # guard_mcp.py merges every profile's direct MCP servers into one table, so a later profile replaces earlier rules.
 python3 - "$KIT" <<'PY' | while read -r line; do warn "$line"; done

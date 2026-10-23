@@ -62,6 +62,9 @@ for path in sorted(glob.glob(os.path.join(PROFILES, "*", "mcp-writes.json"))):
             rules = json.load(fh)
         DIRECT_WRITE.update({server: re.compile(rx) for server, rx in rules.get("direct", {}).items()})
         DIRECT_OBJECTS.update(rules.get("direct_objects", {}))
+        for gateway in rules.get("gateways", []):  # checked here, so a broken one is a LOAD_ERROR, not a crash on a call
+            re.compile(gateway["tool"])
+            gateway["service_field"], gateway["operation_fields"], gateway["writes"].items()
         GATEWAYS += rules.get("gateways", [])
     except Exception as error:
         LOAD_ERROR = f"{path}: {type(error).__name__}: {error}"

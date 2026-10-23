@@ -29,6 +29,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import time
@@ -267,17 +268,28 @@ def main():
     except FileNotFoundError:
         pass
     except OSError as error:
-        # A name no session folder can have (they are [\w-] only), so no guard reads it; the sweep below retries it.
+        # A name no session folder can have (they are [\w-] only), so no guard reads it; the sweep below removes it
+        # once it is stale.
         aside = f"{last_turn}.unremoved-{time.time_ns()}"
         try:
             os.rename(last_turn, aside)
         except OSError as rename_error:
-            print(f"The last message's approvals in {last_turn} couldn't be removed ({error}) or moved aside "
-                  f"({rename_error}), so they would still be in force for this one. Remove that folder "
-                  f"(`chmod -R u+w {last_turn} && rm -rf {last_turn}`), then send the message again.", file=sys.stderr)
-            log("prompt_approvals", "clear-blocked", payload, f"{last_turn}: {error}; {rename_error}")
-            return 2
-        log("prompt_approvals", "clear-moved-aside", payload, f"{last_turn}: {error}")
+            try:
+                emptied = not os.listdir(last_turn)  # only the folder itself stayed: it grants nothing
+            except OSError:  # unreadable: it may still hold approvals
+                emptied = False
+            if emptied:
+                log("prompt_approvals", "clear-emptied", payload, f"{last_turn}: {error}")
+            else:
+                parent, folder = shlex.quote(guard_mcp.TURN_APPROVALS), shlex.quote(last_turn)
+                print(f"The last message's approvals in {last_turn} couldn't be removed ({error}) or moved aside "
+                      f"({rename_error}), so they would still be in force for this one. Remove that folder "
+                      f"(`chmod u+w {parent} && chmod -R u+w {folder} && rm -rf {folder}`), then send the message "
+                      "again.", file=sys.stderr)
+                log("prompt_approvals", "clear-blocked", payload, f"{last_turn}: {error}; {rename_error}")
+                return 2
+        else:
+            log("prompt_approvals", "clear-moved-aside", payload, f"{last_turn}: {error}")
     os.makedirs(guard_mcp.TURN_APPROVALS, exist_ok=True)
     for name in os.listdir(guard_mcp.TURN_APPROVALS):  # sessions long gone
         path = os.path.join(guard_mcp.TURN_APPROVALS, name)

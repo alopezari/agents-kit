@@ -1213,26 +1213,41 @@ def a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through(base):
     os.makedirs(os.path.dirname(profile))
     env = {"HOME": base, "AGENTS_PROFILES_DIR": os.path.join(base, "profiles")}
 
-    def call(tool, event="PreToolUse"):
-        return run_hook("guard_mcp.py", {"tool_name": tool, "tool_input": {}, "cwd": "/tmp", "session_id": "s1",
-                                         "hook_event_name": event}, env=env)
+    log = os.path.join(base, ".agents", "logs", "hooks.jsonl")
+
+    def call(tool, event="PreToolUse", tool_input=None):
+        return run_hook("guard_mcp.py", {"tool_name": tool, "tool_input": tool_input or {}, "cwd": "/tmp",
+                                         "session_id": "s1", "hook_event_name": event}, env=env)
+
+    def errors():
+        return [json.loads(l)["detail"] for l in open(log) if '"guard_mcp"' in l and '"error"' in l]
+
+    def denied_because(got, *said):
+        reason = got and got["hookSpecificOutput"]["permissionDecisionReason"]
+        return got and got["hookSpecificOutput"]["permissionDecision"] == "deny" and all(s in reason for s in said)
 
     run_hook("prompt_approvals.py", {"prompt": "Crea una tarea en Linear", "session_id": "s1", "cwd": "/tmp"}, env=env)
     assert call("mcp__linear__save_issue") is None, "approved while the profile still loads"
-    for broken in ('{"direct": {"tracker": "("}}', '{"direct": '):
+    for broken in ('{"direct": {"tracker": "("}}', '{"direct": ', '{"gateways": [{"tool": "("}]}',
+                   '{"gateways": [{"tool": "gateway__execute$"}]}'):
         open(profile, "w").write(broken)
+        logged = len(errors())
         for tool in ("mcp__linear__save_issue", "mcp__tracker__get_issue"):
             got = call(tool)
-            reason = got and got["hookSpecificOutput"]["permissionDecisionReason"]
-            assert reason and "mcp-writes.json" in reason and "hooks.jsonl" in reason, (broken, tool, got)
+            assert denied_because(got, "mcp-writes.json", "hooks.jsonl"), (broken, tool, got)
+        assert len(errors()) == logged + 2 and "mcp-writes.json" in errors()[-1], (broken, errors()[-1:])
         assert call("mcp__playwright-headless__browser_navigate") is None, "browser calls are never blocked"
         assert call("mcp__linear__save_issue", "PostToolUse") is None, "after the call there is nothing to block"
+    # Rules that load, and a call that makes judging it raise: a tool input that isn't an object.
+    json.dump({"gateways": [{"tool": "gateway__execute$", "service_field": "provider", "operation_fields": ["tool"],
+                             "writes": {"tracker": ["create-issue"]}}]}, open(profile, "w"))
+    got = call("mcp__plugin_gateway__execute", tool_input="create-issue")
+    assert denied_because(got, "the guard failed", "AttributeError"), got
+    assert call("mcp__plugin_gateway__execute", "PostToolUse", tool_input="create-issue") is None
+    assert "recording mcp__plugin_gateway__execute: AttributeError" in errors()[-1], errors()[-1:]
     done = subprocess.run(["python3", H + "guard_mcp.py"], input="not json", capture_output=True, text=True,
                           env={**os.environ, **env})
     assert done.returncode == 0 and not done.stdout, done
-    logged = [json.loads(l) for l in open(os.path.join(base, ".agents", "logs", "hooks.jsonl"))]
-    assert any(l["hook"] == "guard_mcp" and l["decision"] == "error" and "mcp-writes.json" in l["detail"]
-               for l in logged), logged[-3:]
     turn = os.path.join(base, ".agents", "approvals", "turn", "s1")
     assert os.path.isdir(turn), "the grant is there before the next message"
     run_hook("prompt_approvals.py", {"prompt": "now fix the failing test", "session_id": "s1", "cwd": "/tmp"}, env=env)
@@ -1271,6 +1286,14 @@ def the_hook_log_keeps_secrets_out(base):
     for innocent in ["tar -pxf a.tar", "ls --token-file x", "grep -r KEYS docs"]:
         assert guard(f"{innocent}; git reset --hard") == "deny"
         assert innocent in json.loads([l for l in open(log) if '"deny"' in l][-1])["detail"], innocent
+    # Every hook's detail is redacted, not only the shell guard's: one that logs a payload's text unredacted.
+    logs = os.path.join(base, "direct-log")
+    secret = "x" * 480 + " GH_TOKEN=" + "t0k3n" * 20
+    subprocess.run(["python3", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import hooklog; "
+                    "hooklog.log('test', 'error', {}, sys.argv[2])", H, secret],
+                   env={**os.environ, "AGENTS_LOG_DIR": logs}, check=True)
+    detail = json.loads(open(os.path.join(logs, "hooks.jsonl")).read())["detail"]
+    assert "t0k3n" not in detail and len(detail) == 500 and detail.startswith("x" * 480), detail[470:]
 
 
 def a_turn_approval_that_cant_be_removed_is_moved_aside(base):
@@ -1287,7 +1310,7 @@ def a_turn_approval_that_cant_be_removed_is_moved_aside(base):
     def write():
         got = run_hook("guard_mcp.py", {"tool_name": "mcp__linear__save_issue", "tool_input": {}, "cwd": "/tmp",
                                         "session_id": "s1"}, env=env)
-        return "deny" if got else "allow"
+        return got["hookSpecificOutput"]["permissionDecision"] if got else "allow"
 
     stuck = os.path.join(turns, "gone", "x")
     os.makedirs(stuck)
@@ -1309,6 +1332,13 @@ def a_turn_approval_that_cant_be_removed_is_moved_aside(base):
         os.chmod(turns, 0o555)
         done = prompt("now fix the failing test")
         assert done.returncode == 2 and session in done.stderr, done
+        fix = re.search(r"`(chmod [^`]+)`", done.stderr).group(1)
+        assert subprocess.run(["bash", "-c", fix]).returncode == 0, fix
+        assert prompt("now fix the failing test").returncode == 0 and write() == "deny", "the hint clears it"
+        assert prompt("Crea otra tarea en Linear").returncode == 0 and write() == "allow"
+        os.chmod(turns, 0o555)  # the approval file goes, the folder can't: nothing is left to block for
+        assert prompt("now fix the failing test").returncode == 0 and write() == "deny"
+        assert "clear-emptied" in open(os.path.join(base, ".agents", "logs", "hooks.jsonl")).read()
     finally:
         for folder, dirs, _ in os.walk(turns):
             os.chmod(folder, 0o755)
