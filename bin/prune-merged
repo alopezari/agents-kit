@@ -117,7 +117,9 @@ def unfinished_guide(root, repo, keys):
                     with open(guide) as fh:
                         steps = review_stamp.guide_steps(fh.read())
                     break
-                except FileNotFoundError:
+                except FileNotFoundError as error:
+                    if os.path.lexists(guide):  # a link to a guide that's gone: unknown, as an unreadable one
+                        return f"couldn't read its checks guide {guide}: {error}"
                     continue
                 except (OSError, UnicodeDecodeError) as error:  # unknown is never safe, a directory it can't search too
                     return f"couldn't read its checks guide {guide}: {error}"

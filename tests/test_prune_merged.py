@@ -420,6 +420,18 @@ def keeps_a_branch_when_it_cannot_search_for_its_guide(base):
     assert "done" in branches(main) and all(os.path.exists(path) for path in files), out.stdout
 
 
+def keeps_a_branch_whose_guide_link_is_dangling(base):
+    main = setup(base)
+    sh(main, "git", "branch", "done", "trunk")
+    files = kit_files(main, "done")
+    guide = os.path.join(main, ".git", "agents", "checks-guide-shop-done.md")
+    os.remove(guide)
+    os.symlink(os.path.join(base, "gone.md"), guide)  # its target was removed: the guide exists but can't be read
+    out = sh(main, PRUNE)
+    assert line_of(out, "done").startswith("kept branch done: couldn't read its checks guide"), out.stdout
+    assert "done" in branches(main) and all(os.path.lexists(path) for path in files), out.stdout
+
+
 def names_the_files_it_cannot_delete(base):
     main = setup(base)
     for name in ("stuck", "zz-other"):  # one handled after the failure: git lists branches by name
@@ -445,6 +457,7 @@ for test in (removes_merged_and_keeps_the_rest_with_reasons, keeps_the_worktree_
              forgets_the_phase_switches_of_the_branches_it_deletes, forgets_only_the_switches_of_its_own_repo,
              forgets_the_switches_of_a_renamed_branch_never_read, keeps_a_branch_whose_rename_history_it_cannot_read,
              deletes_the_branch_even_when_its_switches_stay, keeps_a_branch_when_it_cannot_search_for_its_guide,
+             keeps_a_branch_whose_guide_link_is_dangling,
              says_when_it_cannot_check_the_switches, keeps_the_switches_when_it_cannot_name_the_repo,
              deletes_the_files_kept_for_the_branches_it_deletes, deletes_the_files_of_a_renamed_branch_but_not_of_a_copy_source,
              keeps_a_branch_whose_steps_after_the_merge_have_not_passed, names_the_files_it_cannot_delete):
