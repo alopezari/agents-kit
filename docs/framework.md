@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **18 command-line tools**: a11y-check, approve, browse, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
+- **19 command-line tools**: a11y-check, approve, browse, build-ab, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -227,7 +227,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 |  | A dialog that can't ask (`bin/approve` failed, or it closed without an answer) said in the transcript, and an MCP write block in a session without the mod says no dialog will show | none: Codex has no dialog, and its blocks say how to approve |
 | `kit:review-<lens>` agents: One reviewer agent type per review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/kit-review/lenses.md` |
 |  | Each lens on Opus at high effort, whatever the session runs on | the session's model |
-| `kit:build-<tier>` agents: One builder agent type per risk tier | `build-low` on Sonnet at medium effort, `build-standard` (also without a spec) on Sonnet at high, `build-high` on Opus at high, each with the session's tools and CLAUDE.md | the session builds it, on its own model |
+| `kit:build-<tier>` agents: One builder agent type per risk tier | `build-low` on Sonnet at medium effort, `build-standard` (also without a spec) on Sonnet at high, `build-high` on Opus at high, each with the session's tools and CLAUDE.md; until 2026-11-13 `bin/build-ab` gives low and standard builds Sonnet or Opus in turn, at the same effort | the session builds it, on its own model |
 | `kit:validate-runner` agent: A runner for the validation's local checks | `validate-runner` runs the checks through `bin/evidence` on Sonnet at medium effort and reports what each printed, leaving the verdict to the session | the session runs the checks itself |
 | `kit:pr-description` agent: A writer for the pull request's description | `pr-description` writes the title and description into the body file on Sonnet at medium effort, following kit-write-pr-description; the session opens the PR | the session writes it |
 
@@ -252,6 +252,12 @@ approve revoke <session> <name>...   remove the ones `once` wrote; a turn approv
 browse assign                         pick the tool for this validation run (balanced alternation)
 browse <tool args...>                 run the assigned tool with these args, logging the call
 browse finish --checks N --passed P [--tool-issues K] [--notes "..."]
+```
+
+**`bin/build-ab`**: A/B harness for the build's model: Sonnet vs Opus, effort held at the build agent's per-tier value.
+
+```
+build-ab assign <low|standard|high>   print the model to give kit:build-<tier> on this branch
 ```
 
 **`bin/changelog`**: Cut a release from the changelog entries: each pull request adds its own changelog.d/<branch>.md, without a number.

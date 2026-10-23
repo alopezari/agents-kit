@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""A/B harness for the build's model: Sonnet vs Opus, effort held at the build agent's per-tier value.
+
+  build-ab assign <low|standard|high>   print the model to give kit:build-<tier> on this branch
+
+A branch keeps the arm it was first given. low and standard alternate by tier, the arm with fewer
+assignments going next; high stays on Opus and isn't logged. Each assignment goes to
+~/.agents/logs/build-ab.jsonl; what the build cost and ran on comes from its transcript (usage/extract_sessions.py).
+"""
+import fcntl
+import json
+import os
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
+from hooklog import session_harness  # noqa: E402
+
+ARMS = ["sonnet", "opus"]
+TIERS = ("low", "standard")
+OUTSIDE_THE_TEST = {"high": "opus"}
+LOG = os.path.expanduser("~/.agents/logs/build-ab.jsonl")
+
+
+def assign(tier):
+    if tier in OUTSIDE_THE_TEST:
+        print(OUTSIDE_THE_TEST[tier])
+        return 0
+    if tier not in TIERS:
+        print(f"build-ab: unknown tier {tier!r}; expected low, standard or high", file=sys.stderr)
+        return 2
+    branch = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
+    if not branch:
+        print("build-ab: no branch checked out here; a build's arm belongs to its branch", file=sys.stderr)
+        return 2
+    repo = subprocess.run([os.path.expanduser("~/.agents/bin/repo-name")], capture_output=True, text=True).stdout.strip()
+    if not repo:
+        print("build-ab: bin/repo-name named no repository here; a build's arm belongs to its repo and branch", file=sys.stderr)
+        return 2
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    with open(LOG, "a+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)  # read the counts and append under one lock, or two sessions pick the same arm
+        fh.seek(0)
+        counts, broken, kept, line = {arm: 0 for arm in ARMS}, 0, None, "\n"
+        for line in fh:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                event = None
+            if not isinstance(event, dict):
+                broken += 1
+                continue
+            if event.get("repo") == repo and event.get("branch") == branch and event.get("model") in ARMS:
+                kept = kept or event["model"]
+            elif event.get("tier") == tier and event.get("model") in counts:
+                counts[event["model"]] += 1
+        if broken:
+            print(f"build-ab: skipped {broken} line{'s' if broken > 1 else ''} of {LOG} that don't parse", file=sys.stderr)
+        if kept:
+            print(kept)
+            return 0
+        model = min(ARMS, key=lambda arm: (counts[arm], ARMS.index(arm)))
+        if not line.endswith("\n"):
+            fh.write("\n")  # a write cut short would swallow this event into its broken line
+        fh.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": "assign", "repo": repo, "branch": branch,
+                             "tier": tier, "model": model, "harness": session_harness() or "unknown"}) + "\n")
+    print(model)
+    return 0
+
+
+def main():
+    argv = sys.argv[1:]
+    if len(argv) == 2 and argv[0] == "assign":
+        return assign(argv[1])
+    print(__doc__, file=sys.stderr if argv and argv[0] not in ("-h", "--help") else sys.stdout)
+    return 0 if argv and argv[0] in ("-h", "--help") else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
