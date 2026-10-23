@@ -1292,18 +1292,18 @@ def the_hook_log_keeps_secrets_out(base):
         assert innocent in json.loads([l for l in open(log) if '"deny"' in l][-1])["detail"], innocent
     # Every hook's detail is redacted, not only the shell guard's: one that logs a payload's text unredacted.
     logs = os.path.join(base, "direct-log")
-    secret = "x" * 480 + " GH_TOKEN=" + "t0k3n" * 20 + " ghp_" + "A1b2C3d4" * 5
+    secret = "x" * 480 + " GH_TOKEN=" + "t0k3n" * 60 + " ghp_" + "A1b2C3d4" * 5  # past the scan: its cut runs
     subprocess.run(["python3", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import hooklog; "
                     "hooklog.log('test', 'error', {}, sys.argv[2])", H, secret],
                    env={**os.environ, "AGENTS_LOG_DIR": logs}, check=True)
-    for secret in ("x" * 495 + " ghp_" + "A1b2C3d4" * 5,  # cut at 500, the token's first characters match no pattern
+    for secret in ("x" * 495 + " ghp_" + "A1b2C3d4" * 5 + " " + "y" * 300,  # cut at 500, its start matches no pattern
                    "https://bob:" + "passphrase" * 80 + "@example.com"):  # one word longer than the scan
         subprocess.run(["python3", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import hooklog; "
                         "hooklog.log('test', 'error', {}, sys.argv[2])", H, secret],
                        env={**os.environ, "AGENTS_LOG_DIR": logs}, check=True)
     first, cut, word = [json.loads(l)["detail"] for l in open(os.path.join(logs, "hooks.jsonl"))]
     assert "passphrase" not in word, word[:40]
-    assert "t0k3n" not in first and len(first) == 500 and first.startswith("x" * 480), first[470:]
+    assert first == "x" * 480, f"the word the scan's cut splits goes whole: {first[470:]}"
     assert "ghp_" not in cut and "A1b" not in cut, cut[490:]
 
 
