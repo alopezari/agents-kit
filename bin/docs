@@ -449,7 +449,7 @@ def render():
       "a job that runs something under `__PROFILE__`, like the kit's that run something in the kit |")
     w("| `deps.txt` | more programs to install and check, in the core's format; a program in both takes the stricter tier |")
     w("| `private-terms.txt` | case-insensitive regexes, one per line, that must never reach the public kit: its commits and pull requests are refused when they match |")
-    w("| `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |\n")
+    w("| `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |")
     w("| `after-turn` | an executable the Stop hook starts in the background after every turn, with its JSON on stdin "
       "(with `transcript_path`); it doesn't wait for it or read its output, so the script "
       "handles its own overlap, rate limits and logging. Its environment has `AGENTS_AFTER_TURN=1`, and the stops of a "

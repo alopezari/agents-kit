@@ -117,6 +117,7 @@ node_deps() {
 section_docs() {
   local f=0
   python3 test_skill_names.py || f=1
+  python3 test_docs.py || f=1
   node_deps tools/mermaid || return 1
   ~/.agents/bin/docs --check || f=1
   node ~/.agents/tools/mermaid/check.mjs ~/.agents/docs/framework.md || f=1
