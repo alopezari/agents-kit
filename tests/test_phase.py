@@ -427,12 +427,42 @@ def switched_off_phases_leave_the_flow(base):
         "the default branch has its repo's and the global switches"
 
 
+def reading_a_reflog_keeps_to_the_deadline(base):
+    common = os.path.join(base, "common")
+    os.makedirs(os.path.join(common, "logs", "refs", "heads"))
+    with open(os.path.join(common, "logs", "refs", "heads", "done"), "w") as fh:
+        fh.write(f"{'0' * 40} {'1' * 40} t <t@t> 1 +0000\tBranch: renamed refs/heads/old to refs/heads/done\n")
+    sys.path.insert(0, os.path.join(KIT, "hooks"))
+    writes_bytecode, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        import phase_switches
+    finally:
+        sys.dont_write_bytecode = writes_bytecode
+    assert phase_switches.earlier_names(common, "done", time.monotonic() + 5) == ["old"], "a read within its budget"
+    clock = [0.0]
+
+    def slow_open(*args, **kwargs):  # the read itself outlasts the deadline: a reflog on a stalled disk
+        clock[0] += 10
+        return open(*args, **kwargs)
+
+    phase_switches.time, phase_switches.open = type("Clock", (), {"monotonic": staticmethod(lambda: clock[0])}), slow_open
+    try:
+        phase_switches.earlier_names(common, "done", 5)
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("a read that ends past the deadline must raise TimeoutError")
+    finally:
+        phase_switches.time = time
+        del phase_switches.open
+
+
 TESTS = (switched_off_phases_leave_the_flow, status_line_names_the_branch, walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate,
          red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
          a_rename_log_that_cannot_be_written_leaves_the_spec_path,
          slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,
          fast_path_serves_cache_and_refreshes, concurrent_refreshes_each_write_their_own_file,
-         a_branch_recreated_after_prune_gets_its_own_label)
+         a_branch_recreated_after_prune_gets_its_own_label, reading_a_reflog_keeps_to_the_deadline)
 
 if sys.argv[1:]:
     by_name = {t.__name__: t for t in TESTS}

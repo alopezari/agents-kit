@@ -149,6 +149,7 @@ def earlier_names(common, branch, deadline):
             return []
         except OSError as error:
             raise OSError(f"Couldn't read the reflog of branch {branch} to follow a rename: {error}") from error
+        time_left(deadline)  # a read has no timeout of its own: one that outlasts the budget still ends it
     names = []
     for message in messages:
         if message.startswith("Branch: copied "):  # `git branch -c` copies the reflog: older names are the source's
