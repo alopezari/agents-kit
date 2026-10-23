@@ -341,7 +341,11 @@ def concurrent_refreshes_each_write_their_own_file(base):
     sh(repo, "git", "checkout", "-q", "-b", "feature/x")
     loader = importlib.machinery.SourceFileLoader("phase_cli", PHASE)
     cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("phase_cli", loader))
-    loader.exec_module(cli)
+    writes_bytecode, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # bin/__pycache__ would break bin/docs
+    try:
+        loader.exec_module(cli)
+    finally:
+        sys.dont_write_bytecode = writes_bytecode
     replace, second = os.replace, []
 
     def paused(src, dst):  # the first refresh stops between its temporary file and the cache while a second one runs
