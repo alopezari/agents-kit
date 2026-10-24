@@ -204,8 +204,8 @@ def line_ranges(lines):
     return [f"{start}-{end}" if end > start else str(start) for start, end in ranges]
 
 
-def diff_coverage(changes, candidates, report):
-    """How many changed lines of the `candidates` the coverage `report` ({path: (executed lines, executable lines)})
+def diff_coverage(changes, candidates, lines_by_file):
+    """How many changed lines of the `candidates` the coverage report `lines_by_file` ({path: (executed lines, executable lines)})
     saw run: (summary, None), or (None, the reason) when no changed line is executable code in it.
 
     A candidate missing from the report counts neither way: it may have never loaded, or been excluded or unmapped.
@@ -213,10 +213,10 @@ def diff_coverage(changes, candidates, report):
     covered = measured = 0
     uncovered, absent = [], []
     for path in candidates:
-        if path not in report:
+        if path not in lines_by_file:
             absent.append(path)
             continue
-        executed, executable = report[path]
+        executed, executable = lines_by_file[path]
         lines = executable if changes[path] is None else executable & changes[path]
         measured += len(lines)
         covered += len(lines & executed)

@@ -373,9 +373,9 @@ def render():
       "(`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped. When a change edits both tests "
       "and code, the red check runs the changed tests on a pristine copy of the merge-base, where at least one must fail, through pytest or `npm test` "
       "(npm from `PATH`); one it can't run is skipped. Diff coverage runs the related pytest run under coverage.py, when "
-      "the Python behind pytest (its venv's, or the one its shebang names) imports it, and the Vitest or Jest run (without "
-      "one, the red check's working-tree `npm test`) under `node_modules/.bin/c8`, collecting only the changed non-test "
-      "files: `ran: diff coverage` says how many changed executable lines the tests ran and lists the uncovered ones "
+      "the Python behind pytest (its venv's, or the one its shebang names) imports it and pytest-cov isn't installed, and, "
+      "in a project without Vitest or Jest, has `node_modules/.bin/c8` report the V8 coverage of the red check's "
+      "working-tree `npm test`, in both cases for at most 50 changed non-test files: `ran: diff coverage` says how many changed executable lines the tests ran and lists the uncovered ones "
       "and the changed files missing from the report. It is report-only, never fails the run, and is skipped with the "
       "reason when it can't measure.\n")
     w("### Hand-written, per repository\n")
