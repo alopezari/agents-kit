@@ -3,8 +3,10 @@
 
   review_stamp.py write [--kind review|validate]   # end of review / validate; verify stamps come only from
                                                    # its runner (stop_checks.py), through record_verify(); validate
-                                                   # needs a report whose PASS/FAIL rows name their evidence,
-                                                   # and no empty recording among it
+                                                   # needs a report whose PASS/FAIL rows name their evidence, no empty
+                                                   # recording among it, every criterion of the spec covered by a PASS
+                                                   # and a negative row (or a reasoned NOT RUN when its check is
+                                                   # manual), and a Test types row for each type bin/triage selects
   review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
@@ -21,6 +23,8 @@ keeps them unless it moves the changed lines or their context; verify's holds th
 written in, so they are still read from the main checkout once kit-ship frees the branch. They also follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
 """
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import os
 import re
@@ -36,6 +40,11 @@ NOT_BEHAVIOR = re.compile(
     r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$|(^|/)(CHANGELOG|README)",
     re.I,
 )
+SPEC_LOOKUP_SECS = 10
+TRIAGE_SECS = 60
+NEGATIVE_CASE = re.compile(r"[\u2212\u00b1]|(?<![\w-])-(?![\w-])")  # −, ± or a lone hyphen; `regression` and `+` aren't
+# A criterion no test can check: its `verify:` starts with manual/by hand, or says it can't be automated.
+MANUAL_VERIFY = re.compile(r"\W*(manual(ly)?|by hand)\b|.*\b(can[\u2019']t be automated|cannot be automated|not automatable)", re.I)
 # CI checks the changelog entry, and it is often written last: adding it re-runs nothing.
 NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?\Z|(^|/)changelog\.d/[^/]+\.md\Z", re.I)
 VERIFY_KINDS = ("verify", "verify-empty")
@@ -376,26 +385,48 @@ def report_paths(*kinds):
     return [subprocess.run([reports, "path", kind], capture_output=True, text=True).stdout.strip() for kind in kinds]
 
 
+def table_cells(line):
+    """The cells of a Markdown table row (outer pipes optional, \\| is a pipe inside a cell), or None for a line that has no pipe."""
+    if not re.search(r"(?<!\\)\|", line):
+        return None
+    return [c.strip() for c in re.split(r"(?<!\\)\|", re.sub(r"^\s*\||(?<!\\)\|\s*$", "", line))]
+
+
+def evidence_files(evidence):
+    """The names of the non-empty files in the evidence directory."""
+    return [name for name in os.listdir(evidence) if os.path.isfile(os.path.join(evidence, name))
+            and os.path.getsize(os.path.join(evidence, name)) > 0] if evidence and os.path.isdir(evidence) else []
+
+
+def names_a_file(cell, files):
+    return any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files)
+
+
+def has_reason(cell):
+    return bool(cell.strip(" \t-\u2013\u2014"))
+
+
 def result_rows(lines, evidence):
     """The PASS, FAIL and NOT RUN rows of the tables in lines that have Result and Evidence columns, as (first cell,
-    result, evidence cell, whether that cell names a non-empty file of the evidence directory)."""
-    files = [name for name in os.listdir(evidence) if os.path.isfile(os.path.join(evidence, name))
-             and os.path.getsize(os.path.join(evidence, name)) > 0] if evidence and os.path.isdir(evidence) else []
+    result, evidence cell, whether that cell names a non-empty file of the evidence directory, the criteria numbers
+    its AC cell names (None in a table with no AC column), its Case cell)."""
+    files = evidence_files(evidence)
     rows, columns = [], None
     for line in lines:
-        # Markdown tables: outer pipes optional, \| is a pipe inside a cell.
-        cells = [c.strip() for c in re.split(r"(?<!\\)\|", re.sub(r"^\s*\||(?<!\\)\|\s*$", "", line))] if re.search(r"(?<!\\)\|", line) else None
+        cells = table_cells(line)
         if not cells:
             columns = None  # a table per block, each with its own header
         elif {"Result", "Evidence"} <= {c.strip("*_") for c in cells}:
             names = [c.strip("*_") for c in cells]
-            columns = (names.index("Result"), names.index("Evidence"))
+            columns = (names.index("Result"), names.index("Evidence"), names.index("AC") if "AC" in names else None,
+                       next((i for i, n in enumerate(names) if n.startswith("Case")), None))
         elif columns and len(cells) > columns[0]:
             result = re.match(r"[*_]*(?:(PASS|FAIL|NOT RUN)\b)?", cells[columns[0]]).group(1)
             cell = cells[columns[1]] if len(cells) > columns[1] else ""
-            backed = any(re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", cell) for name in files)
+            ac, case = (cells[i] if i is not None and len(cells) > i else "" for i in columns[2:])
+            acs = None if columns[2] is None else [int(n) for n in re.findall(r"\bAC(\d+)\b", ac)]
             if result:
-                rows.append((cells[0], result, cell, backed))
+                rows.append((cells[0], result, cell, names_a_file(cell, files), acs, case))
     return rows
 
 
@@ -416,7 +447,7 @@ def guide_steps(text):
     rows, dates = {}, {}  # the latest result of each row (P2 or its sub-step P2b), and each step's latest table
     for heading, table in re.findall(r"^## Results([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S):
         when = re.search(r"\(([^)]*)\)", heading)
-        for first, result, _, _ in result_rows(table.splitlines(), None):
+        for first, result, *_ in result_rows(table.splitlines(), None):
             step = re.match(r"[*_]*(" + GUIDE_STEP + ")", first)
             if step:
                 rows.setdefault(step.group(2), {})[step.group(1)] = result
@@ -432,7 +463,7 @@ def guide_steps(text):
 
 def unbacked_rows(lines, evidence):
     """The PASS/FAIL rows whose Evidence cell names no saved file, as "<first cell>: <evidence cell>"."""
-    return [f"{first}: {cell or '(empty)'}" for first, result, cell, backed in result_rows(lines, evidence)
+    return [f"{first}: {cell or '(empty)'}" for first, result, cell, backed, *_ in result_rows(lines, evidence)
             if result in ("PASS", "FAIL") and not backed]
 
 
@@ -445,18 +476,120 @@ def empty_recordings(evidence):
                   if name.endswith(".webm") and os.path.getsize(os.path.join(evidence, name)) == 0)
 
 
-def rows_without_evidence():
-    """Why the validation report can't back a validate stamp: it's missing, PASS/FAIL rows whose Evidence cell names
-    no non-empty file of the evidence directory, or an empty recording. Empty when it can."""
+def spec_criteria():
+    """(spec path, its numbered criteria, None), (path, None, None) when path.sh names no file, or (None, None, why the
+    spec can't be read)."""
+    kit_spec = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "kit-spec")
+    try:
+        found = subprocess.run([os.path.join(kit_spec, "path.sh")], capture_output=True, text=True, timeout=SPEC_LOOKUP_SECS)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:  # ValueError: output that isn't UTF-8
+        return None, None, f"The spec lookup failed: {error}."
+    path = found.stdout.strip()
+    if found.returncode or not path:
+        why = (found.stderr.strip().splitlines() or [f"exit {found.returncode}, no path printed"])[-1]
+        return None, None, f"The spec lookup (skills/kit-spec/path.sh) failed: {why}."
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return path, None, None
+    except OSError as error:
+        return None, None, f"Can't read the spec {path}: {error.strerror}."
+    except ValueError as error:
+        return None, None, f"Can't read the spec {path}: not UTF-8 ({error.reason} at byte {error.start})."
+    sys.dont_write_bytecode = True  # as in bin/triage: no __pycache__ left in the skill
+    loader = importlib.machinery.SourceFileLoader("spec_lint", os.path.join(kit_spec, "lint.py"))
+    lint = importlib.util.module_from_spec(importlib.util.spec_from_loader("spec_lint", loader))
+    loader.exec_module(lint)
+    return path, lint.criteria(text), None
+
+
+def criteria_problems(items, rows):
+    """Why the results rows don't cover the spec's criteria: each needs a PASS row and a negative row that ran, both naming
+    it in the AC column, or, when its `verify:` can't be automated, a NOT RUN row with a reason."""
+    numbers = [int(re.match(r"\d+", item).group()) for item in items]
+    if not numbers:
+        return ["The spec has no numbered acceptance criteria, so the rows have none to cover: number them `1.`, `2.`... under "
+                "`## Acceptance criteria` (kit-spec skill)."]
+    repeated = sorted({n for n in numbers if numbers.count(n) > 1})
+    if repeated:
+        return [f"The spec numbers criterion {', '.join(map(str, repeated))} more than once, so `AC{repeated[0]}` is ambiguous: renumber its criteria."]
+    problems = [f"{row[0]} names AC{n}, which is no criterion of the spec (it has {', '.join(f'AC{k}' for k in numbers)})."
+                for row in rows for n in row[4] or [] if n not in numbers]
+    for number, item in zip(numbers, items):
+        mine = [row for row in rows if number in (row[4] or [])]
+        verify = re.search(r"(?<![`\w])verify:\s*(.*)$", item, re.I)  # not a `verify:` quoted in the criterion's own words
+        if verify and MANUAL_VERIFY.match(verify.group(1)) and any(r[1] == "NOT RUN" and has_reason(r[2]) for r in mine):
+            continue
+        manual = " (or, as its check is manual, a NOT RUN row naming it with the reason in Evidence)" if verify and MANUAL_VERIFY.match(verify.group(1)) else ""
+        if not any(r[1] == "PASS" for r in mine):
+            problems.append(f"AC{number} has no PASS row: add a row with AC{number} in its AC cell and Result PASS{manual}.")
+        if not any(r[1] in ("PASS", "FAIL") and NEGATIVE_CASE.search(r[5]) for r in mine):
+            problems.append(f"AC{number} has no negative (\u2212) row that ran: add a row with AC{number} in its AC cell, a Case with \u2212 "
+                            f"(or \u00b1) and Result PASS or FAIL{manual}.")
+    unnamed = [row[0] for row in rows if row[4] is None]
+    if problems and unnamed:
+        problems.append(f"These rows are in a table with no AC column, so they count toward no criterion: add an `AC` column "
+                        f"(`# | AC | Check | Case (+/\u2212) | Result | Evidence`): {', '.join(unnamed[:8])}.")
+    return problems
+
+
+def selected_test_types():
+    """([test type labels bin/triage selects for the change], None), or (None, why triage can't say)."""
+    triage = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "triage")
+    try:
+        done = subprocess.run([triage, "--json"], capture_output=True, text=True, timeout=TRIAGE_SECS)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        return None, f"bin/triage --json didn't finish: {error}."
+    if done.returncode:
+        return None, f"bin/triage --json failed (exit {done.returncode}): {' '.join(done.stderr.split()) or 'no message'}"
+    try:
+        tests = json.loads(done.stdout)["tests"]
+    except (ValueError, KeyError, TypeError):
+        tests = None
+    if not isinstance(tests, dict):
+        return None, "bin/triage --json printed no `tests` object."
+    return list(tests), None
+
+
+def test_type_problems(text, evidence):
+    """Why the report's `## Test types` table (`| Type | Ran | Evidence |`) leaves out a type triage selects: each needs a
+    row whose Type holds the first words of its label, run with a saved file as evidence or not run with a reason."""
+    selected, why = selected_test_types()
+    if why:
+        return [why]
+    section = re.search(r"^## Test types[ \t]*$(.*?)(?=^## |\Z)", text, re.M | re.S | re.I)
+    files, rows, columns = evidence_files(evidence), [], None
+    for line in (section.group(1) if section else "").splitlines():
+        cells = table_cells(line)
+        if not cells:
+            columns = None
+        elif {"Type", "Ran", "Evidence"} <= {c.strip("*_") for c in cells}:
+            columns = [[c.strip("*_") for c in cells].index(name) for name in ("Type", "Ran", "Evidence")]
+        elif columns and len(cells) > max(columns):
+            kind, ran, cell = (cells[i] for i in columns)
+            ran = re.sub(r"[\s*_`]", "", ran).lower()
+            if (ran == "yes" and names_a_file(cell, files)) or (ran == "no" and has_reason(cell)):
+                rows.append(re.findall(r"[a-z0-9]+", kind.lower()))
+    missing = [label for label in selected
+               if not any(words and re.findall(r"[a-z0-9]+", label.lower())[:len(words)] == words for words in rows)]
+    return [f"The report's `## Test types` table doesn't account for: {'; '.join(missing)}. bin/triage selects them for this change; "
+            "add a row `| <type> | yes | <link to a saved file> |` or `| <type> | no | <why not> |` for each."] if missing else []
+
+
+def validation_report_problems():
+    """Why the validation report can't back a validate stamp: it's missing, PASS/FAIL rows whose Evidence cell names no
+    non-empty file of the evidence directory, an empty recording, a criterion of the spec without its PASS and negative
+    rows, or a test type triage selects that its Test types table leaves out. Empty when it can."""
     report, evidence = report_paths("validation", "evidence")
     try:
         with open(report) as fh:
-            lines = fh.read().splitlines()
+            text = fh.read()
     except OSError:
         return [f"No validation report at {report}: save it first (kit-validate skill, step 5)."]
     if not evidence:  # reports path evidence refuses on a detached HEAD
         return ["No evidence directory: a detached HEAD has none. Validate from the branch's checkout."]
-    problems = []
+    lines, problems = text.splitlines(), []
     missing = unbacked_rows(lines, evidence)
     if missing:
         problems += [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for "
@@ -465,7 +598,14 @@ def rows_without_evidence():
     if empty:
         problems += [f"These recordings in {evidence} are empty: the browser closed before `agent-browser record stop` "
                      "saved them. Record those checks again, stopping the recording before the next check or `close`:"] + empty
-    return problems
+    path, items, why = spec_criteria()
+    if why:
+        problems.append(why)
+    elif items is None:
+        print(f"No spec at {path}: the per-criterion check was skipped.")
+    else:
+        problems += criteria_problems(items, result_rows(lines, evidence))
+    return problems + test_type_problems(text, evidence)
 
 
 def record_verify(kind, checked_fingerprint):
@@ -546,7 +686,7 @@ def main():
         return 0
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
-    unbacked = rows_without_evidence() if command == "write" and kind == "validate" else []
+    unbacked = validation_report_problems() if command == "write" and kind == "validate" else []
     if unbacked:
         print("\n".join(unbacked), file=sys.stderr)
         return 2
