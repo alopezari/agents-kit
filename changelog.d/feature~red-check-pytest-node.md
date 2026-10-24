@@ -1,0 +1,1 @@
+- The automatic verify (repos without a hand-written one) runs a red check for pytest and for the package.json `test` script: when a change edits both tests and code, the changed tests run on a pristine copy of the merge-base, and verify fails when they all pass there, since they then cannot catch the change. A red check it cannot run is reported as `skipped:`.

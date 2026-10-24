@@ -370,7 +370,9 @@ def render():
         w(f"| {files} | {cell(doc)} |")
     w("\nESLint, Ruff and pytest come from the project (`node_modules/.bin`, `.venv/bin`) when installed there, "
       "else from `PATH`. PHP tools and JavaScript test runners only run when the project installs them "
-      "(`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped.\n")
+      "(`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped. The red check runs the changed "
+      "tests on a pristine copy of the merge-base, where at least one must fail, through pytest or `npm test` "
+      "(npm from `PATH`); one it can't run is skipped.\n")
     w("### Hand-written, per repository\n")
     w("A repository that needs more (a Docker stack, known failing tests, project rules) gets an executable "
       "`repos/<repo>/verify` (`<repo>` as `bin/repo-name` prints it, the same from any worktree), usually built on `repos/_shared/verify_changed.py`:\n")

@@ -5,13 +5,19 @@ Runs from the repo root at the end of every agent turn, so it only looks at chan
 and only runs tests related to them, never full suites. Output follows verify_changed.py:
 `ran: ` (what executed), `warning: `, `error: `, plus `skipped: <check> (<reason>)` for
 checks that don't apply or whose tool is missing. Exit 1 only for findings on changed
-lines or failing related tests; a skipped check never fails the run.
+lines, failing related tests, or changed tests that pass without the change; a skipped
+check never fails the run.
+
+The red check: when a change edits both tests and code of a stack (pytest, or the
+package.json `test` script), the changed tests also run on a pristine copy of the
+merge-base, where at least one must fail.
 """
 import importlib.util
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -26,10 +32,19 @@ changed_lines, on_changed_line, execute, TEST_FILE = (
 MAX_PER_CHECK = 30
 LINT_TIMEOUT = 120
 TEST_TIMEOUT = 300
+RED_CHECK_TIMEOUT = 120  # per run: up to two (npm test in the working tree, then in the copy) per stack
 NOT_STARTED = (124, 127)  # execute(): timed out, binary missing
 JS_EXT = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
 PHPCS_CONFIGS = ("phpcs.xml", "phpcs.xml.dist", ".phpcs.xml", ".phpcs.xml.dist")
 PHPSTAN_CONFIGS = ("phpstan.neon", "phpstan.neon.dist")
+PY_TEST_FILE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
+JS_TEST_FILE = re.compile(r"(^|/)__tests__/|\.(test|spec)\.\w+$")
+# Changed files the changed tests may need in the pristine copy: fixtures, helpers, conftest.py.
+TEST_SUPPORT = re.compile(r"(^|/)(tests?|__tests__)/|(^|/)conftest\.py$")
+NPM_PLACEHOLDER_TEST = "Error: no test specified"
+JS_FAILURE_SUMMARY = re.compile(
+    r"^\s*(?:(?:Tests|Test Suites|Test Files):?\s+[1-9]\d* failed|[1-9]\d* failing|[#ℹ] fail [1-9]\d*)", re.M)
+ANSI_COLOR = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class Report:
@@ -82,9 +97,27 @@ def tracked_files(root):
     return verify_changed.git(["ls-files", "--cached", "--others", "--exclude-standard"], root).splitlines()
 
 
+# --- Red check --------------------------------------------------------------------------------
+def red_check_scope(root, changes, files, test_file):
+    """(changed test files to run, changed files to copy into the pristine copy) when the change edits both tests
+    and code of a stack; None for a tests-only or code-only change."""
+    tests = [f for f in files if test_file.search(f)]
+    if not tests or all(f in tests or TEST_SUPPORT.search(f) for f in files):
+        return None
+    support = {p for p in changes if TEST_SUPPORT.search(p) and os.path.isfile(os.path.join(root, p))}
+    return tests, sorted(support | set(tests))
+
+
+def tests_pass_without_change(tests):
+    return (f"[red check] The changed tests ({', '.join(tests)}) all pass without your change (on the merge-base), "
+            "so they don't test it. Make at least one of them fail without the change, or say why "
+            "they intentionally pin existing behavior.")
+
+
 # --- JS / TS ----------------------------------------------------------------------------------
 def check_js(root, changes, files, report):
-    """ESLint on changed lines; Vitest or Jest on the tests related to the changed files."""
+    """ESLint on changed lines; Vitest or Jest on the tests related to the changed files; the red check through
+    the package.json `test` script."""
     if not os.path.isfile(os.path.join(root, "package.json")):
         report.skip("eslint", "no package.json at the repo root")
         return
@@ -112,6 +145,7 @@ def check_js(root, changes, files, report):
     except (OSError, ValueError) as err:
         report.skip("JS related tests", f"package.json unreadable: {err}")
         return
+    npm_test_red_check(root, changes, files, pkg, report)
     deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
     runners = [(name, args) for name, args in (
         ("vitest", ["related", "--run", "--passWithNoTests", *files]),
@@ -133,6 +167,69 @@ def check_js(root, changes, files, report):
         failed = sorted({line.strip() for line in (proc.stdout + proc.stderr).splitlines()
                          if re.match(r"\s*(FAIL|×|✕|●)\s", line)})
         report.add([f"[{name}] {f}" for f in failed] or [f"[{name}] related tests failed:\n{tail(proc)}"])
+
+
+def workspace_link(root):
+    """A top-level node_modules entry linked to a directory of the repo outside node_modules (a workspace package),
+    or None. Through it, the pristine copy would run the working tree's code."""
+    modules = os.path.join(root, "node_modules")
+    real_root, real_modules = os.path.realpath(root), os.path.realpath(modules)
+    try:
+        names = os.listdir(modules)
+        names += [f"{scope}/{name}" for scope in names if scope.startswith("@") and os.path.isdir(os.path.join(modules, scope))
+                  for name in os.listdir(os.path.join(modules, scope))]
+    except OSError:
+        return None
+    for name in names:
+        path = os.path.join(modules, name)
+        target = os.path.realpath(path)
+        if (os.path.islink(path) and os.path.commonpath([target, real_root]) == real_root
+                and os.path.commonpath([target, real_modules]) != real_modules):
+            return name
+    return None
+
+
+def npm_test_red_check(root, changes, files, pkg, report):
+    """`npm test -- <changed test files>` in the working tree, then on the merge-base, where it must fail."""
+    scope = red_check_scope(root, changes, files, JS_TEST_FILE)
+    if not scope:
+        return
+    tests, copied = scope
+    script = (pkg.get("scripts") or {}).get("test")
+    if not script or NPM_PLACEHOLDER_TEST in script:
+        report.skip("red check", "npm test: package.json has no test script")
+        return
+    npm = shutil.which("npm")
+    if not npm:
+        report.skip("red check", "npm not on PATH")
+        return
+    link = workspace_link(root)
+    if link:
+        report.skip("red check", f"npm test: node_modules/{link} links into the repo, so the merge-base copy would "
+                                 "run the change through it")
+        return
+    proc = execute([npm, "test", "--", *tests], root, RED_CHECK_TIMEOUT)
+    if proc.returncode:
+        reason = tail(proc, 300) if proc.returncode in NOT_STARTED else \
+            f"the changed tests fail in the working tree (exit {proc.returncode})"
+        report.skip("red check", f"npm test: {reason}")
+        return
+    try:
+        with verify_changed.pristine_copy(root, copied) as copy:
+            proc = execute([npm, "test", "--", *tests], copy, RED_CHECK_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as err:
+        report.skip("red check", f"npm test: could not build or run in the pristine copy: {err}")
+        return
+    if proc.returncode in NOT_STARTED:
+        report.skip("red check", f"npm test: {tail(proc, 300)}")
+    elif not proc.returncode:
+        report.add([tests_pass_without_change(tests)])
+    elif JS_FAILURE_SUMMARY.search(ANSI_COLOR.sub("", proc.stdout + proc.stderr)):
+        report.ran.append(f"red check: npm test on {len(tests)} changed test files fails on the merge-base, "
+                          f"passes with the change ({', '.join(tests)})")
+    else:
+        report.skip("red check", f"npm test: exit {proc.returncode} on the merge-base with no test failure summary: "
+                                 f"{tail(proc, 300)}")
 
 
 # --- PHP --------------------------------------------------------------------------------------
@@ -221,7 +318,7 @@ VENV_DIRS = (".venv/bin", "venv/bin")
 
 
 def related_python_tests(root, files):
-    tests = {f for f in files if re.search(r"(^|/)(test_[^/]*|[^/]*_test)\.py$", f)}
+    tests = {f for f in files if PY_TEST_FILE.search(f)}
     modules = {os.path.splitext(os.path.basename(f))[0] for f in files if f not in tests}
     names = {f"test_{m}.py" for m in modules} | {f"{m}_test.py" for m in modules}
     tests.update(p for p in tracked_files(root) if os.path.basename(p) in names and os.path.isfile(os.path.join(root, p)))
@@ -229,7 +326,8 @@ def related_python_tests(root, files):
 
 
 def check_python(root, changes, files, report):
-    """Ruff on changed lines; pytest on the related test_<module>.py or <module>_test.py files."""
+    """Ruff on changed lines; pytest on the related test_<module>.py or <module>_test.py files, then the red check
+    on the changed ones."""
     ruff, why = find_tool(root, "ruff", VENV_DIRS)
     if not ruff:
         report.skip("ruff", why)
@@ -247,6 +345,7 @@ def check_python(root, changes, files, report):
             report.add(errors)
             report.ran.append(f"ruff on {len(files)} changed files (changed lines only)")
 
+    red_check = red_check_scope(root, changes, files, PY_TEST_FILE)
     tests = related_python_tests(root, files)
     if not tests:
         report.skip("pytest", "no related test_<module>.py or <module>_test.py")
@@ -254,6 +353,8 @@ def check_python(root, changes, files, report):
     pytest, why = find_tool(root, "pytest", VENV_DIRS)
     if not pytest:
         report.skip("pytest", why)
+        if red_check:
+            report.skip("red check", why)
         return
     proc = execute([pytest, "-q", *tests], root, TEST_TIMEOUT)
     if proc.returncode == 5:
@@ -265,6 +366,40 @@ def check_python(root, changes, files, report):
             report.add([f"[pytest] {f}" for f in failed] or [f"[pytest] related tests failed:\n{tail(proc)}"])
     else:
         report.skip("pytest", f"exit {proc.returncode}: {tail(proc, 300)}")
+    if red_check and proc.returncode:
+        report.skip("red check", f"pytest: the related tests don't pass in the working tree (exit {proc.returncode})")
+    elif red_check:
+        pytest_red_check(root, pytest, *red_check, report)
+
+
+def pytest_red_check(root, pytest, tests, copied, report):
+    """The changed test files on the merge-base, with a JUnit report: at least one case must fail or error there."""
+    try:
+        with verify_changed.pristine_copy(root, copied) as copy:
+            src = os.path.join(copy, "src")
+            pythonpath = [copy, *([src] if os.path.isdir(src) else []), *filter(None, [os.environ.get("PYTHONPATH")])]
+            junit = os.path.join(copy, ".agents-red-junit.xml")
+            proc = execute([pytest, "-q", f"--junitxml={junit}", *tests], copy, RED_CHECK_TIMEOUT,
+                           {**os.environ, "PYTHONPATH": os.pathsep.join(pythonpath)})
+            try:
+                cases = list(ET.parse(junit).getroot().iter("testcase"))
+            except (ET.ParseError, OSError):
+                cases = []
+    except (OSError, subprocess.SubprocessError) as err:
+        report.skip("red check", f"pytest: could not build or run in the pristine copy: {err}")
+        return
+    if proc.returncode in NOT_STARTED:
+        report.skip("red check", f"pytest: {tail(proc, 300)}")
+        return
+    if not cases:
+        report.skip("red check", f"pytest: no JUnit report or no test cases in it (exit {proc.returncode}): {tail(proc, 300)}")
+        return
+    failed = [c for c in cases if c.find("failure") is not None or c.find("error") is not None]
+    if not failed:
+        report.add([tests_pass_without_change(tests)])
+        return
+    report.ran.append(f"red check: pytest on {len(tests)} changed test files: {len(failed)} of {len(cases)} cases fail "
+                      f"on the merge-base, pass with the change")
 
 
 # --- Go ---------------------------------------------------------------------------------------

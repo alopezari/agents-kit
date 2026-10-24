@@ -151,14 +151,14 @@ Used when a repository has no hand-written verify. Only tests related to the cha
 
 | Files | What runs |
 |---|---|
-| `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` | ESLint on changed lines; Vitest or Jest on the tests related to the changed files. |
+| `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` | ESLint on changed lines; Vitest or Jest on the tests related to the changed files; the red check through the package.json `test` script. |
 | `.php` | php -l; PHPCS and PHPStan on changed lines when the project configures them; PHPUnit on related test classes. |
-| `.py` | Ruff on changed lines; pytest on the related test_<module>.py or <module>_test.py files. |
+| `.py` | Ruff on changed lines; pytest on the related test_<module>.py or <module>_test.py files, then the red check on the changed ones. |
 | `.go` | gofmt -l on changed files; go vet and go test on the changed packages. |
 | `.rs` | cargo check on the crate. |
 | `.sh`, `.bash` | ShellCheck on changed lines. |
 
-ESLint, Ruff and pytest come from the project (`node_modules/.bin`, `.venv/bin`) when installed there, else from `PATH`. PHP tools and JavaScript test runners only run when the project installs them (`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped.
+ESLint, Ruff and pytest come from the project (`node_modules/.bin`, `.venv/bin`) when installed there, else from `PATH`. PHP tools and JavaScript test runners only run when the project installs them (`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped. The red check runs the changed tests on a pristine copy of the merge-base, where at least one must fail, through pytest or `npm test` (npm from `PATH`); one it can't run is skipped.
 
 ### Hand-written, per repository
 

@@ -46,9 +46,16 @@ def new_repo(base, files):
     return repo
 
 
-def verify(repo, path=None):
-    env = {**os.environ, "PATH": path} if path else os.environ
-    proc = subprocess.run([sys.executable, SCRIPT], cwd=repo, capture_output=True, text=True, env=env, timeout=120)
+def verify(repo, path=None, red_check_timeout=None, **env):
+    env = {**os.environ, **({"PATH": path} if path else {}), **env}
+    args = [sys.executable, SCRIPT]
+    if red_check_timeout:
+        lowered = ("import importlib.util, sys\n"
+                   f"spec = importlib.util.spec_from_file_location('verify_auto', {SCRIPT!r})\n"
+                   "module = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(module)\n"
+                   f"module.RED_CHECK_TIMEOUT = {red_check_timeout}\nsys.exit(module.main())")
+        args = [sys.executable, "-c", lowered]
+    proc = subprocess.run(args, cwd=repo, capture_output=True, text=True, env=env, timeout=120)
     return proc.returncode, proc.stdout + proc.stderr
 
 
@@ -230,11 +237,238 @@ def shell_and_go_without_tools_are_skipped(base):
     assert "skipped: go (no go.mod at the repo root)" in out, out
 
 
+# --- red check: the changed tests run on a pristine merge-base copy, where at least one must fail ----------------
+# The fakes tell the base from the change by reading the source file in their cwd: only the change says "fixed".
+FAKE_NPM = """#!/bin/sh
+echo "$(pwd -P) $*" >> "$(dirname "$0")/calls"
+if grep -q fixed src/sum.js; then echo "  1 passing"; exit 0; fi
+{base}
+"""
+MOCHA_FAILING = 'echo "  1 failing"; exit 1'
+JS_BASE = {"package.json": '{"scripts": {"test": "mocha"}}\n', "src/sum.js": "a;\n"}
+
+
+def js_change(base, files=JS_BASE, on_base=MOCHA_FAILING):
+    """A change to src/sum.js with a new src/sum.test.js; PATH has a fake npm and no vitest or jest."""
+    repo = new_repo(base, files)
+    write(repo, "src/sum.js", "fixed;\n")
+    write(repo, "src/sum.test.js", "test;\n")
+    write(base, "bin/npm", FAKE_NPM.format(base=on_base), executable=True)
+    return repo, f"{base}/bin:{MINIMAL_PATH}"
+
+
+def npm_calls(base):
+    path = os.path.join(base, "bin/calls")
+    return open(path).read().splitlines() if os.path.exists(path) else []
+
+
+def npm_test_red_check_runs_changed_tests_on_the_base(base):
+    repo, path = js_change(base)
+    write(repo, "node_modules/lodash/index.js", "x;\n")  # an ordinary installed package is a directory, not a link
+    code, out = verify(repo, path)
+    assert code == 0, out
+    assert "skipped: JS related tests (neither vitest nor jest" in out, out
+    assert [l for l in lines(out, "ran: red check: ") if "npm test" in l and "src/sum.test.js" in l], out
+    calls = npm_calls(base)
+    assert len(calls) == 2, calls
+    assert calls[0] == f"{os.path.realpath(repo)} test -- src/sum.test.js", calls
+    copy = calls[1].split()[0]
+    assert "agents-red-" in copy and calls[1].endswith(" test -- src/sum.test.js"), calls
+    assert not os.path.exists(copy), "the pristine copy was left behind"
+
+
+def npm_test_red_check_errors_when_tests_pass_on_the_base(base):
+    repo, path = js_change(base, on_base='echo "  1 passing"; exit 0')
+    code, out = verify(repo, path)
+    assert code == 1, out
+    errors = [l for l in lines(out, "error: ") if "[red check]" in l]
+    assert len(errors) == 1 and "src/sum.test.js" in errors[0] and "pass without your change" in errors[0], out
+    assert not lines(out, "ran: red check"), out
+
+
+def npm_test_red_check_without_failure_summary_is_skipped(base):
+    repo, path = js_change(base, on_base="echo 'Error: Cannot find module mocha'; exit 1")
+    code, out = verify(repo, path)
+    assert code == 0, out
+    assert [l for l in lines(out, "skipped: red check (") if "no test failure summary" in l], out
+    assert not lines(out, "ran: red check") and not lines(out, "error: "), out
+
+
+def npm_placeholder_or_missing_test_script_is_skipped(base):
+    placeholder = '{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}}\n'
+    repo, path = js_change(base, {**JS_BASE, "package.json": placeholder})
+    code, out = verify(repo, path)
+    assert code == 0 and [l for l in lines(out, "skipped: red check (") if "no test script" in l], out
+    write(repo, "package.json", "{}\n")
+    code, out = verify(repo, path)
+    assert code == 0 and [l for l in lines(out, "skipped: red check (") if "no test script" in l], out
+    assert npm_calls(base) == [], npm_calls(base)
+
+
+def npm_test_red_check_hanging_runner_is_skipped(base):
+    repo, path = js_change(base, on_base="exec sleep 30")
+    code, out = verify(repo, path, red_check_timeout=1)
+    assert code == 0, out
+    assert [l for l in lines(out, "skipped: red check (") if "timed out after 1s" in l], out
+    calls = npm_calls(base)
+    assert len(calls) == 2 and "agents-red-" in calls[1], calls
+    assert not os.path.exists(calls[1].split()[0]), "the pristine copy was left behind after the timeout"
+
+
+def npm_test_red_check_skips_workspace_links(base):
+    repo, path = js_change(base, {**JS_BASE, "packages/lib/index.js": "lib;\n"})
+    os.makedirs(os.path.join(repo, "node_modules/@acme"))
+    os.symlink("../../packages/lib", os.path.join(repo, "node_modules/@acme/lib"))
+    code, out = verify(repo, path)
+    assert code == 0, out
+    assert [l for l in lines(out, "skipped: red check (") if "@acme/lib" in l], out
+    assert not [c for c in npm_calls(base) if "agents-red-" in c], npm_calls(base)
+
+
+def npm_test_red_check_skips_tests_failing_in_the_working_tree(base):
+    repo, path = js_change(base)
+    write(base, "bin/npm", '#!/bin/sh\necho "$*" >> "$(dirname "$0")/calls"\necho "  1 failing"; exit 1\n',
+          executable=True)
+    code, out = verify(repo, path)
+    assert code == 0, out
+    assert [l for l in lines(out, "skipped: red check (") if "working tree" in l], out
+    assert len(npm_calls(base)) == 1, npm_calls(base)
+
+
+# The related run (no --junitxml) passes; the red-check run records what it saw and writes a JUnit report.
+FAKE_PYTEST = """#!/bin/sh
+bin=$(dirname "$0")
+junit=""
+for a in "$@"; do case "$a" in --junitxml=*) junit="${{a#--junitxml=}}";; esac; done
+[ -z "$junit" ] && exit {related_exit}
+{{ pwd -P; echo "$PYTHONPATH"; echo "$*"; cat tests/conftest.py; }} > "$bin/red"
+if grep -q fixed src/pkg/mod.py; then case=''; else case='{on_base}'; fi
+echo "<testsuites><testsuite>$case</testsuite></testsuites>" > "$junit"
+[ -z "$case" ]
+"""
+FAILING_CASE = '<testcase classname="tests.test_mod" name="test_a"><failure message="assert 1 == 2"/></testcase>'
+PY_BASE = {"src/pkg/__init__.py": "", "src/pkg/mod.py": "a = 1\n", "tests/conftest.py": "",
+           "tests/test_mod.py": "def test_a(): pass\n"}
+
+
+def py_change(base, on_base=FAILING_CASE, related_exit=0, with_pytest=True):
+    """A fix in src/pkg/mod.py with an edited tests/test_mod.py, a new tests/test_extra.py and an edited conftest."""
+    repo = new_repo(base, PY_BASE)
+    write(repo, "src/pkg/mod.py", "a = 2  # fixed\n")
+    write(repo, "tests/test_mod.py", "def test_a(): assert True\n")
+    write(repo, "tests/test_extra.py", "def test_b(): pass\n")
+    write(repo, "tests/conftest.py", "# new fixture\n")
+    if with_pytest:
+        write(repo, ".venv/bin/pytest", FAKE_PYTEST.format(on_base=on_base, related_exit=related_exit), executable=True)
+    return repo
+
+
+def red_run(repo):
+    path = os.path.join(repo, ".venv/bin/red")
+    return open(path).read().splitlines() if os.path.exists(path) else None
+
+
+def pytest_red_check_runs_changed_tests_on_the_base(base):
+    repo = py_change(base)
+    code, out = verify(repo, MINIMAL_PATH, PYTHONPATH="/already/set")
+    assert code == 0, out
+    assert [l for l in lines(out, "ran: red check: ") if "pytest" in l], out
+    copy, pythonpath, args, conftest = red_run(repo)
+    assert "agents-red-" in copy and not os.path.exists(copy), copy
+    entries = pythonpath.split(os.pathsep)
+    assert [os.path.realpath(e) for e in entries[:2]] == [copy, os.path.join(copy, "src")], pythonpath
+    assert entries[2:] == ["/already/set"], pythonpath
+    assert args.split()[0] == "-q" and args.split()[1].startswith("--junitxml="), args
+    assert args.split()[2:] == ["tests/test_extra.py", "tests/test_mod.py"], args
+    assert conftest == "# new fixture", "the changed conftest.py was not copied in"
+
+
+def pytest_red_check_errors_when_tests_pass_on_the_base(base):
+    repo = py_change(base, on_base='<testcase classname="tests.test_mod" name="test_a"/>')
+    write(repo, ".venv/bin/pytest", open(os.path.join(repo, ".venv/bin/pytest")).read().replace(
+        "grep -q fixed src/pkg/mod.py", "false").replace('[ -z "$case" ]', "exit 0"), executable=True)
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 1, out
+    errors = [l for l in lines(out, "error: ") if "[red check]" in l]
+    assert len(errors) == 1 and "tests/test_mod.py" in errors[0] and "pass without your change" in errors[0], out
+    assert not lines(out, "ran: red check"), out
+
+
+def pytest_red_check_counts_a_collection_error(base):
+    repo = py_change(base, on_base='<testcase classname="" name="tests.test_mod">'
+                                   '<error message="collection failure">ImportError: cannot import name b</error></testcase>')
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and [l for l in lines(out, "ran: red check: ") if "pytest" in l], out
+
+
+def pytest_red_check_with_empty_report_is_skipped(base):
+    repo = py_change(base, on_base="")
+    write(repo, ".venv/bin/pytest", open(os.path.join(repo, ".venv/bin/pytest")).read().replace(
+        '[ -z "$case" ]', "exit 5"), executable=True)
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0, out
+    assert [l for l in lines(out, "skipped: red check (") if "pytest" in l and "no test cases" in l], out
+    assert not lines(out, "ran: red check") and not lines(out, "error: "), out
+
+
+def pytest_red_check_without_pytest_is_skipped(base):
+    repo = py_change(base, with_pytest=False)
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0, out
+    assert [l for l in lines(out, "skipped: red check (") if "pytest not installed" in l], out
+
+
+def pytest_red_check_skips_tests_failing_in_the_working_tree(base):
+    repo = py_change(base, related_exit=1)
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 1 and "error: [pytest] related tests failed" in out, out
+    assert [l for l in lines(out, "skipped: red check (") if "working tree" in l], out
+    assert red_run(repo) is None, "the red check ran although the changed tests fail with the change"
+
+
+def pytest_red_check_copy_build_error_is_skipped(base):
+    repo = py_change(base)
+    unreadable = os.path.join(repo, "tests/test_extra.py")
+    os.chmod(unreadable, 0)
+    try:
+        code, out = verify(repo, MINIMAL_PATH)
+    finally:
+        os.chmod(unreadable, 0o644)
+    assert code == 0, out
+    assert [l for l in lines(out, "skipped: red check (") if "pristine copy" in l], out
+    assert red_run(repo) is None and not lines(out, "ran: red check"), out
+
+
+def red_check_needs_tests_and_code_of_the_stack(base):
+    repo = new_repo(base, {**PY_BASE, **JS_BASE, "src/sum.test.js": "test;\n"})
+    write(repo, ".venv/bin/pytest", FAKE_PYTEST.format(on_base=FAILING_CASE, related_exit=0), executable=True)
+    write(base, "bin/npm", FAKE_NPM.format(base=MOCHA_FAILING), executable=True)
+    path = f"{base}/bin:{MINIMAL_PATH}"
+    write(repo, "tests/test_mod.py", "def test_a(): assert True\n")
+    write(repo, "src/sum.test.js", "test2;\n")
+    code, out = verify(repo, path)
+    assert code == 0 and "red check" not in out, "tests-only change:\n" + out
+    git(repo, "checkout", "--", ".")
+    write(repo, "src/pkg/mod.py", "a = 2  # fixed\n")
+    write(repo, "src/sum.js", "fixed;\n")
+    code, out = verify(repo, path)
+    assert code == 0 and "red check" not in out, "code-only change:\n" + out
+    assert red_run(repo) is None and npm_calls(base) == [], (red_run(repo), npm_calls(base))
+
+
 for t in [no_changes_is_nothing_to_check, unsupported_files_only, eslint_reports_only_changed_lines,
           eslint_missing_is_skipped, vitest_failure_is_error, vitest_dependency_not_installed_is_skipped,
           ruff_reports_only_changed_lines, committed_branch_work_is_checked, pytest_runs_related_tests, php_lint_catches_syntax_error,
           phpunit_runs_related_test_and_reports_failures, phpunit_that_cannot_start_is_skipped,
-          shell_and_go_without_tools_are_skipped]:
+          shell_and_go_without_tools_are_skipped,
+          npm_test_red_check_runs_changed_tests_on_the_base, npm_test_red_check_errors_when_tests_pass_on_the_base,
+          npm_test_red_check_without_failure_summary_is_skipped, npm_placeholder_or_missing_test_script_is_skipped,
+          npm_test_red_check_hanging_runner_is_skipped, npm_test_red_check_skips_workspace_links,
+          npm_test_red_check_skips_tests_failing_in_the_working_tree, pytest_red_check_runs_changed_tests_on_the_base,
+          pytest_red_check_errors_when_tests_pass_on_the_base, pytest_red_check_counts_a_collection_error,
+          pytest_red_check_with_empty_report_is_skipped, pytest_red_check_without_pytest_is_skipped,
+          pytest_red_check_skips_tests_failing_in_the_working_tree, pytest_red_check_copy_build_error_is_skipped,
+          red_check_needs_tests_and_code_of_the_stack]:
     test(t)
 
 failed = [(n, e) for n, e in RESULTS if e]
