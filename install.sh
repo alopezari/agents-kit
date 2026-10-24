@@ -495,7 +495,7 @@ if [ -d "$APPLICATIONS/Xirp.app" ] || [ -d "$APPLICATIONS/Orca.app" ] \
     unreadable) info "status line: ~/.claude/settings.json can't be read" ;;
   esac
   if [ -d "$APPLICATIONS/Orca.app" ] && [[ ", $xirp_claude," = *", PermissionRequest,"* ]]; then
-    warn "Xirp's PermissionRequest hook also runs in Orca's sessions: a permission prompt there can wait up to 30 s for Xirp"
+    info "Xirp's PermissionRequest hook also runs in Orca's sessions: a permission prompt there can wait up to 30 s for Xirp"
   fi
 fi
 

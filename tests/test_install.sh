@@ -257,7 +257,7 @@ report_is "with both, the doctor warns that Xirp's PermissionRequest hook can ho
   "  info  Xirp: app installed; hooks in $xirp_where" \
   "  info  Orca: app installed; hooks in $orca_where" \
   "  info  status line: none" \
-  "  warn  Xirp's PermissionRequest hook also runs in Orca's sessions: a permission prompt there can wait up to 30 s for Xirp"
+  "  info  Xirp's PermissionRequest hook also runs in Orca's sessions: a permission prompt there can wait up to 30 s for Xirp"
 fresh; xirp_hooks; orca_hooks; doctor
 report_is "the doctor warns about Xirp and Orca hooks left without their app, beside the kit's status line" \
   "  warn  Xirp isn't in $apps, yet its hooks are in $xirp_where: remove them if Xirp is gone for good" \
