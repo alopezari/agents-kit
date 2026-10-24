@@ -242,6 +242,7 @@ def shell_and_go_without_tools_are_skipped(base):
 # The fakes tell the base from the change by reading the source file in their cwd: only the change says "fixed".
 FAKE_NPM = """#!/bin/sh
 echo "$(pwd -P) $* CI=$CI" >> "$(dirname "$0")/calls"
+[ -f src/sum.test.js ] || {{ echo "src/sum.test.js: no such file"; exit 1; }}
 if grep -q fixed src/sum.js; then echo "  1 passing"; exit 0; fi
 {base}
 """
@@ -375,7 +376,7 @@ bin=$(dirname "$0")
 junit=""
 for a in "$@"; do case "$a" in --junitxml=*) junit="${{a#--junitxml=}}";; esac; done
 [ -z "$junit" ] && exit {related_exit}
-{{ pwd -P; echo "$PYTHONPATH"; echo "$*"; cat tests/conftest.py; echo "bytecode=$PYTHONDONTWRITEBYTECODE"; }} > "$bin/red"
+{{ pwd -P; echo "$PYTHONPATH"; echo "$*"; cat tests/conftest.py; echo "bytecode=$PYTHONDONTWRITEBYTECODE"; cat tests/test_mod.py; }} > "$bin/red"
 if grep -q fixed src/pkg/mod.py; then case=''; else case='{on_base}'; fi
 echo "<testsuites><testsuite>$case</testsuite></testsuites>" > "$junit"
 [ -z "$case" ]
@@ -407,7 +408,7 @@ def pytest_red_check_runs_changed_tests_on_the_base(base):
     code, out = verify(repo, MINIMAL_PATH, PYTHONPATH="/already/set")
     assert code == 0, out
     assert [l for l in lines(out, "ran: red check: ") if "pytest" in l], out
-    copy, pythonpath, args, conftest, bytecode = red_run(repo)
+    copy, pythonpath, args, conftest, bytecode, test_mod = red_run(repo)
     assert "agents-red-" in copy and not os.path.exists(copy), copy
     entries = pythonpath.split(os.pathsep)
     assert [os.path.realpath(e) for e in entries[:2]] == [copy, os.path.join(copy, "src")], pythonpath
@@ -415,6 +416,7 @@ def pytest_red_check_runs_changed_tests_on_the_base(base):
     assert args.split()[:3] == ["-q", "-p", "no:cacheprovider"] and args.split()[3].startswith("--junitxml="), args
     assert args.split()[4:] == ["tests/test_extra.py", "tests/test_mod.py"], args
     assert conftest == "# new fixture", "the changed conftest.py was not copied in"
+    assert test_mod == "def test_a(): assert True", "the edited test ran in its base version"
     assert bytecode == "bytecode=1", "the run on the base may write __pycache__ through the linked dirs"
 
 
@@ -432,6 +434,8 @@ def pytest_red_check_errors_when_tests_pass_on_the_base(base):
 def pytest_red_check_counts_a_collection_error(base):
     repo = py_change(base, on_base='<testcase classname="" name="tests.test_mod">'
                                    '<error message="collection failure">ImportError: cannot import name b</error></testcase>')
+    write(repo, ".venv/bin/pytest", open(os.path.join(repo, ".venv/bin/pytest")).read().replace(
+        '[ -z "$case" ]', '[ -z "$case" ] || exit 2'), executable=True)  # pytest's exit status on a collection error
     code, out = verify(repo, MINIMAL_PATH)
     assert code == 0 and [l for l in lines(out, "ran: red check: ") if "pytest" in l], out
 
