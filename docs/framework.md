@@ -428,10 +428,10 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | recommended | `semgrep` | brew install semgrep | verify's semgrep rules; tests/run.sh |
 | recommended | `gitleaks` | brew install gitleaks | the secrets check at the end of each turn |
 | recommended | `php` | brew install php | the generic verify's PHP checks; tests/run.sh |
+| recommended | `agent-browser` | brew install agent-browser | the kit-validate skill's browser checks (install.sh also downloads its Chrome) |
+| recommended | `ffmpeg` | brew install ffmpeg | the videos of browser checks (agent-browser's record) in the kit-validate skill |
 | optional | `claude ≥ 2.1.287` | https://claude.com/claude-code | the kit plugin (mods, from this version on) and the scheduled jobs (they run `claude -p`) |
-| optional | `agent-browser` | npm install -g agent-browser | browser checks in the kit-validate skill (then `agent-browser install` for its browser) |
 | optional | `playwright-cli` | npm install -g @playwright/cli | agent-browser's fallback, for a browser check it can't do |
-| optional | `ffmpeg` | brew install ffmpeg | the videos of browser checks (agent-browser's record) in the kit-validate skill |
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
 | optional | `impeccable` | https://github.com/pbakaus/impeccable/releases | the Design lens and validate's design check (the impeccable skill fetches it on first use) |
 | optional | `docker` | https://www.docker.com | repository verifies that run in containers |
