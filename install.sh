@@ -262,7 +262,8 @@ while read -r tier spec how purpose; do
   program=${spec%%>=*}; minimum=${spec#"$program"}; minimum=${minimum#>=}
   if installed "$program"; then
     version="" said="" answered=0  # chrome is an app; an impeccable on PATH may be a launcher that downloads, and its cache is pinned
-    [ "$program" = impeccable ] || said=$(bounded "$program" --version 2>/dev/null) || answered=$?
+    # semgrep --version also asks semgrep.dev for a newer release: a network wait the time-out would count.
+    [ "$program" = impeccable ] || said=$(SEMGREP_ENABLE_VERSION_CHECK=0 bounded "$program" --version 2>/dev/null) || answered=$?
     if [ $answered = 124 ]; then
       msg="$program didn't answer \`$program --version\` within ${VERSION_TIMEOUT}s, so its version is unknown"
       if [ "$tier" = optional ]; then info "$msg"; else warn "$msg"; fi

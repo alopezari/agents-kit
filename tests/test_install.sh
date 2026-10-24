@@ -142,7 +142,7 @@ for pair in '{"permissions": {|{"hooks": {' '{"statusLine": "custom"}|{"hooks": 
        && grep -q "  warn  $home/.codex/hooks.json can.t be read as the kit expects" <<<"$out" \
        && grep -q "  warn  couldn.t apply the kit.s baseline settings to $home/.codex/config.toml" <<<"$out" \
        && grep -qx "Codex" <<<"$out" && grep -qx "Scheduled jobs" <<<"$out" && grep -qx "Done." <<<"$out" \
-       && grep -q "  ok    $home/.codex/AGENTS.md" <<<"$out" && ! grep -q "Traceback" <<<"$out"'
+       && grep -qF "$home/.codex/AGENTS.md" <<<"$out" && ! grep -q "Traceback" <<<"$out"'
     [ $status = 0 ] && [ "$(sums)" = "$before" ] && grep -qx "Done." <<<"$out" \
       || echo "     exit $status, files $([ "$(sums)" = "$before" ] && echo kept || echo changed), ended: $(tail -1 <<<"$out")"
   done
@@ -157,12 +157,14 @@ printf '#!/bin/sh\nsleep 600\n' > "$home/fakes/hung/hungdep"
 printf '#!/bin/sh\necho "fastdep 3.4.5"\n' > "$home/fakes/hung/fastdep"
 printf '#!/bin/sh\n[ "$1" = --version ] || exit 1\nsleep 600 &\necho "2.9.0 (Claude Code)"\n' > "$home/fakes/hung/claude"
 printf '#!/bin/sh\nsleep 600\n' > "$home/fakes/hung/codex"
+# A semgrep that waits on its online update check unless told to skip it, as the real one asks the network.
+printf '#!/bin/sh\n[ "$SEMGREP_ENABLE_VERSION_CHECK" = 0 ] || sleep 600\necho 1.176.0\n' > "$home/fakes/hung/semgrep"
 chmod +x "$home/fakes/hung/"*
 made_codex_dir=0; [ -d "$home/.codex" ] || { mkdir "$home/.codex"; made_codex_dir=1; }
 cp "$home/.agents/profiles/work/deps.txt" "$home/deps.saved"
 printf '%s\n' "required hungdep brew:hungdep a test" "required fastdep>=3.0 brew:fastdep a test" >> "$home/.agents/profiles/work/deps.txt"
 hung_calls=4  # hungdep, claude in the requirements and for the kit plugin, codex
-for mode in --doctor --yes; do
+for mode in --yes --doctor; do  # --yes first: on a machine without Codex the .codex made above has no hooks for the doctor
 started=$SECONDS
 # A hard cap past the bound, so a run that hangs fails here instead of hanging the suite.
 python3 -c 'import os, signal, subprocess, sys
@@ -184,7 +186,7 @@ check "install.sh $mode: a --version that never answers gives up after 10 s each
    && grep -q "  info  claude didn.t answer .claude --version. within 10s" <<<"$out" \
    && grep -q "  warn  kit plugin: claude didn.t answer .claude --version. within 10s" <<<"$out" \
    && grep -q "  warn  codex didn.t answer .codex --version. within 10s" <<<"$out" \
-   && grep -q "  ok    fastdep 3.4.5" <<<"$out" && grep -qx "Done." <<<"$out"'
+   && grep -q "  ok    fastdep 3.4.5" <<<"$out" && grep -q "  ok    semgrep 1.176.0" <<<"$out" && grep -qx "Done." <<<"$out"'
 [ $status = 0 ] || echo "     exit $status: $(tail -3 <<<"$out" | tr '\n' ' ')"
 done
 mv "$home/deps.saved" "$home/.agents/profiles/work/deps.txt"
