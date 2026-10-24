@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 
@@ -59,11 +60,21 @@ def on_changed_line(changes, path, line):
 def execute(args, cwd=None, timeout=600, env=None):
     """Run a tool; a missing binary or a timeout comes back as a failed run, so callers report it as NOT RUN."""
     try:
-        return subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
+        # Own process group: on a timeout the runner's children (npm -> jest -> workers) die with it.
+        proc = subprocess.Popen(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, errors="replace", start_new_session=True)
     except FileNotFoundError as e:
         return subprocess.CompletedProcess(args, 127, "", f"{e.filename or args[0]}: not found")
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
         return subprocess.CompletedProcess(args, 124, "", f"{args[0]}: timed out after {timeout}s")
+    return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
 
 
 def run_json(cmd, cwd, not_run, nothing_in_scope=None):
@@ -145,8 +156,9 @@ def link_ignored_dirs(root, tmp):
 def pristine_copy(root, changed_files):
     """A temp dir holding the merge-base without the change, plus `changed_files` copied in; removed on exit.
 
-    Untracked dependency dirs (vendor/, node_modules/...) are symlinked from the working tree. Building it raises
-    OSError or subprocess.SubprocessError.
+    Untracked dependency dirs (vendor/, node_modules/...) and other ignored files (.env, generated _version.py) are
+    symlinked from the working tree. Building it raises OSError, subprocess.SubprocessError or RuntimeError (no
+    merge-base).
     """
     tmp = tempfile.mkdtemp(prefix="agents-red-")
     try:
@@ -155,12 +167,23 @@ def pristine_copy(root, changed_files):
         subprocess.run(["git", "read-tree", review_stamp.merge_base(root)], cwd=root, env=index, check=True)
         subprocess.run(["git", "checkout-index", "--all", f"--prefix={tmp}/"], cwd=root, env=index, check=True)
         link_ignored_dirs(root, tmp)
+        for rel in git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"], root).splitlines():
+            if not rel.endswith("/") and os.path.isfile(os.path.join(root, rel)) and not os.path.lexists(os.path.join(tmp, rel)):
+                os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
+                os.symlink(os.path.join(root, rel), os.path.join(tmp, rel))
         for path in changed_files:
             os.makedirs(os.path.dirname(os.path.join(tmp, path)), exist_ok=True)
             shutil.copy2(os.path.join(root, path), os.path.join(tmp, path))
         yield tmp
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def tests_pass_without_change(tests):
+    """The red check's finding when every changed test passes on the merge-base."""
+    return (f"[red check] The changed tests ({', '.join(tests)}) all pass without your change (on the merge-base), "
+            "so they don't test it. Make at least one of them fail without the change, or say why "
+            "they intentionally pin existing behavior.")
 
 
 def red_check(root, cwd_rel, cmd, changed_tests, not_run):
@@ -184,11 +207,9 @@ def red_check(root, cwd_rel, cmd, changed_tests, not_run):
                 return None
             failed = [c for c in cases if c.find("failure") is not None or c.find("error") is not None]
             if cases and not failed:
-                return (f"[red check] The changed tests ({', '.join(classes)}) all pass without your change (on the merge-base), "
-                        "so they don't test it. Make at least one of them fail without the change, or say why "
-                        "they intentionally pin existing behavior.")
+                return tests_pass_without_change(classes)
             return None
-    except (OSError, subprocess.SubprocessError) as err:
+    except (OSError, subprocess.SubprocessError, RuntimeError) as err:
         not_run.append(f"red check did not run: {err}")
         return None
 

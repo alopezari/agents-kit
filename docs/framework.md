@@ -158,7 +158,7 @@ Used when a repository has no hand-written verify. Only tests related to the cha
 | `.rs` | cargo check on the crate. |
 | `.sh`, `.bash` | ShellCheck on changed lines. |
 
-ESLint, Ruff and pytest come from the project (`node_modules/.bin`, `.venv/bin`) when installed there, else from `PATH`. PHP tools and JavaScript test runners only run when the project installs them (`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped. The red check runs the changed tests on a pristine copy of the merge-base, where at least one must fail, through pytest or `npm test` (npm from `PATH`); one it can't run is skipped.
+ESLint, Ruff and pytest come from the project (`node_modules/.bin`, `.venv/bin`) when installed there, else from `PATH`. PHP tools and JavaScript test runners only run when the project installs them (`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped. When a change edits both tests and code, the red check runs the changed tests on a pristine copy of the merge-base, where at least one must fail, through pytest or `npm test` (npm from `PATH`); one it can't run is skipped.
 
 ### Hand-written, per repository
 

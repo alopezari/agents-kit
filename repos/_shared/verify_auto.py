@@ -27,8 +27,9 @@ _spec = importlib.util.spec_from_file_location(
     "verify_changed", os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify_changed.py"))
 verify_changed = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(verify_changed)
-changed_lines, on_changed_line, execute, TEST_FILE = (
-    verify_changed.changed_lines, verify_changed.on_changed_line, verify_changed.execute, verify_changed.TEST_FILE)
+changed_lines, on_changed_line, execute, TEST_FILE, tests_pass_without_change = (
+    verify_changed.changed_lines, verify_changed.on_changed_line, verify_changed.execute, verify_changed.TEST_FILE,
+    verify_changed.tests_pass_without_change)
 
 MAX_PER_CHECK = 30
 LINT_TIMEOUT = 120
@@ -41,7 +42,7 @@ PHPSTAN_CONFIGS = ("phpstan.neon", "phpstan.neon.dist")
 PY_TEST_FILE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
 JS_TEST_FILE = re.compile(r"(^|/)__tests__/|\.(test|spec)\.\w+$")
 # Changed files the changed tests may need in the pristine copy: fixtures, helpers, conftest.py.
-TEST_SUPPORT = re.compile(r"(^|/)(tests?|__tests__)/|(^|/)conftest\.py$")
+TEST_SUPPORT = re.compile(r"(^|/)(tests?|__tests__|__snapshots__)/|(^|/)conftest\.py$")
 NPM_PLACEHOLDER_TEST = "Error: no test specified"
 JS_FAILURE_SUMMARY = re.compile(
     r"^\s*(?:(?:Tests|Test Suites|Test Files):?\s+[1-9]\d* failed|[1-9]\d* failing|[#ℹ] fail [1-9]\d*)", re.M)
@@ -109,12 +110,6 @@ def red_check_scope(root, changes, files, test_file):
     return tests, sorted(support | set(tests))
 
 
-def tests_pass_without_change(tests):
-    return (f"[red check] The changed tests ({', '.join(tests)}) all pass without your change (on the merge-base), "
-            "so they don't test it. Make at least one of them fail without the change, or say why "
-            "they intentionally pin existing behavior.")
-
-
 # --- JS / TS ----------------------------------------------------------------------------------
 def check_js(root, changes, files, report):
     """ESLint on changed lines; Vitest or Jest on the tests related to the changed files; the red check through
@@ -171,22 +166,28 @@ def check_js(root, changes, files, report):
 
 
 def workspace_link(root):
-    """A top-level node_modules entry linked to a directory of the repo outside node_modules (a workspace package),
-    or None. Through it, the pristine copy would run the working tree's code."""
-    modules = os.path.join(root, "node_modules")
-    real_root, real_modules = os.path.realpath(root), os.path.realpath(modules)
-    try:
-        names = os.listdir(modules)
-        names += [f"{scope}/{name}" for scope in names if scope.startswith("@") and os.path.isdir(os.path.join(modules, scope))
-                  for name in os.listdir(os.path.join(modules, scope))]
-    except OSError:
-        return None
-    for name in names:
-        path = os.path.join(modules, name)
-        target = os.path.realpath(path)
-        if (os.path.islink(path) and os.path.commonpath([target, real_root]) == real_root
-                and os.path.commonpath([target, real_modules]) != real_modules):
-            return name
+    """A node_modules entry (the root's or a package's) linked to a directory of the repo outside node_modules (a
+    workspace package), or None. Through it, the pristine copy would run the working tree's code."""
+    real_root = os.path.realpath(root)
+    ignored = verify_changed.git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"], root)
+    for rel in ignored.splitlines():
+        if os.path.basename(rel.rstrip("/")) != "node_modules":
+            continue
+        modules = os.path.join(root, rel.rstrip("/"))
+        real_modules = os.path.realpath(modules)
+        try:
+            names = os.listdir(modules)
+            names += [f"{scope}/{name}" for scope in names
+                      if scope.startswith("@") and os.path.isdir(os.path.join(modules, scope))
+                      for name in os.listdir(os.path.join(modules, scope))]
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(modules, name)
+            target = os.path.realpath(path)
+            if (os.path.islink(path) and os.path.commonpath([target, real_root]) == real_root
+                    and os.path.commonpath([target, real_modules]) != real_modules):
+                return os.path.join(rel.rstrip("/"), name)
     return None
 
 
@@ -206,7 +207,7 @@ def npm_test_red_check(root, changes, files, pkg, report):
         return
     link = workspace_link(root)
     if link:
-        report.skip("red check", f"npm test: node_modules/{link} links into the repo, so the merge-base copy would "
+        report.skip("red check", f"npm test: {link} links into the repo, so the merge-base copy would "
                                  "run the change through it")
         return
     # CI=true: Jest writes no new snapshots into the working tree, and watch-mode scripts exit instead of waiting.
@@ -220,7 +221,7 @@ def npm_test_red_check(root, changes, files, pkg, report):
     try:
         with verify_changed.pristine_copy(root, copied) as copy:
             proc = execute([npm, "test", "--", *tests], copy, max(1, round(deadline - time.monotonic())), env)
-    except (OSError, subprocess.SubprocessError) as err:
+    except (OSError, subprocess.SubprocessError, RuntimeError) as err:
         report.skip("red check", f"npm test: could not build or run in the pristine copy: {err}")
         return
     if proc.returncode in NOT_STARTED:
@@ -348,7 +349,7 @@ def check_python(root, changes, files, report):
             report.add(errors)
             report.ran.append(f"ruff on {len(files)} changed files (changed lines only)")
 
-    red_check = red_check_scope(root, changes, files, PY_TEST_FILE)
+    scope = red_check_scope(root, changes, files, PY_TEST_FILE)
     tests = related_python_tests(root, files)
     if not tests:
         report.skip("pytest", "no related test_<module>.py or <module>_test.py")
@@ -356,7 +357,7 @@ def check_python(root, changes, files, report):
     pytest, why = find_tool(root, "pytest", VENV_DIRS)
     if not pytest:
         report.skip("pytest", why)
-        if red_check:
+        if scope:
             report.skip("red check", why)
         return
     proc = execute([pytest, "-q", *tests], root, TEST_TIMEOUT)
@@ -369,10 +370,10 @@ def check_python(root, changes, files, report):
             report.add([f"[pytest] {f}" for f in failed] or [f"[pytest] related tests failed:\n{tail(proc)}"])
     else:
         report.skip("pytest", f"exit {proc.returncode}: {tail(proc, 300)}")
-    if red_check and proc.returncode:
-        report.skip("red check", f"pytest: the related tests don't pass in the working tree (exit {proc.returncode})")
-    elif red_check:
-        pytest_red_check(root, pytest, *red_check, report)
+    if scope and proc.returncode:
+        report.skip("red check", f"pytest: the related run in the working tree didn't pass (exit {proc.returncode})")
+    elif scope:
+        pytest_red_check(root, pytest, *scope, report)
 
 
 def pytest_red_check(root, pytest, tests, copied, report):
@@ -382,13 +383,15 @@ def pytest_red_check(root, pytest, tests, copied, report):
             src = os.path.join(copy, "src")
             pythonpath = [copy, *([src] if os.path.isdir(src) else []), *filter(None, [os.environ.get("PYTHONPATH")])]
             junit = os.path.join(copy, ".agents-red-junit.xml")
-            proc = execute([pytest, "-q", f"--junitxml={junit}", *tests], copy, RED_CHECK_TIMEOUT,
-                           {**os.environ, "PYTHONPATH": os.pathsep.join(pythonpath)})
+            # The cache and bytecode dirs are symlinks into the working tree: write neither from the base.
+            proc = execute([pytest, "-q", "-p", "no:cacheprovider", f"--junitxml={junit}", *tests], copy,
+                           RED_CHECK_TIMEOUT, {**os.environ, "PYTHONPATH": os.pathsep.join(pythonpath),
+                                               "PYTHONDONTWRITEBYTECODE": "1"})
             try:
                 cases = list(ET.parse(junit).getroot().iter("testcase"))
             except (ET.ParseError, OSError):
                 cases = []
-    except (OSError, subprocess.SubprocessError) as err:
+    except (OSError, subprocess.SubprocessError, RuntimeError) as err:
         report.skip("red check", f"pytest: could not build or run in the pristine copy: {err}")
         return
     if proc.returncode in NOT_STARTED:
@@ -398,6 +401,11 @@ def pytest_red_check(root, pytest, tests, copied, report):
         report.skip("red check", f"pytest: no JUnit report or no test cases in it (exit {proc.returncode}): {tail(proc, 300)}")
         return
     failed = [c for c in cases if c.find("failure") is not None or c.find("error") is not None]
+    passed = [c for c in cases if c not in failed and c.find("skipped") is None]
+    if not failed and (proc.returncode or not passed):
+        report.skip("red check", f"pytest: no case failed or passed conclusively on the merge-base "
+                                 f"(exit {proc.returncode}, {len(cases) - len(passed)} of {len(cases)} skipped)")
+        return
     if not failed:
         report.add([tests_pass_without_change(tests)])
         return
