@@ -518,8 +518,10 @@ def criteria_problems(items, rows):
                 for row in rows for n in row[4] or [] if n not in numbers]
     for number, item in zip(numbers, items):
         mine = [row for row in rows if number in (row[4] or [])]
-        # The last `verify:`, as kit-spec ends a criterion with it, and none inside a code span (`verify: x` quoted).
-        verify = re.split(r"(?<!\w)verify:\s*", re.sub(r"`[^`]*`", "", item), flags=re.I)[1:][-1:]
+        # The last `verify:`, as kit-spec ends a criterion with it, and none inside a code span (`verify: x` quoted);
+        # the text after it keeps its code spans: `pytest x` by hand is a command, not a manual check.
+        quoted = re.sub(r"`[^`]*`", lambda span: "\0" * len(span.group()), item)  # same length, and no \s for verify: to skip
+        verify = [item[found.end():] for found in re.finditer(r"(?<!\w)verify:\s*", quoted, re.I)][-1:]
         if verify and MANUAL_VERIFY.match(verify[0]) and any(r[1] == "NOT RUN" and has_reason(r[2]) for r in mine):
             continue
         manual = " (or, as its check is manual, a NOT RUN row naming it with the reason in Evidence)" if verify and MANUAL_VERIFY.match(verify[0]) else ""

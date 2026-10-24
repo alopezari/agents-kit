@@ -1744,6 +1744,7 @@ def validate_stamp_checks_criteria_coverage(base):
     done = attempt(covered, criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: manual on staging; inspect `report verify: output`"))
     assert done.returncode == 0, "a `verify:` inside a longer code span isn't the check either: " + done.stderr
     refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: tests/b.py checks `input verify: manual handling`"))
+    refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: `pytest tests/test_x.py` by hand on staging"))
     for path in ("./manual.py", "/manual/check.py", "manual.sh"):  # a script named manual is a check that runs
         refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", f"2. Two. \u2014 verify: {path}"))
 
