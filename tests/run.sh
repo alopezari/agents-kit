@@ -153,7 +153,6 @@ section_doctor() {
   if [ -n "${AGENTS_SUITE_OWN_HOME:-}" ]; then
     echo "skipped: the doctor checks an installed HOME, and this run made its own; run it from ~/.agents"; return 0
   fi
-  python3 ../.github/diag/semgrep-in-suite.py 2>&1  # TEMPORARY (PR #132): remove before merge
   doctor=$(~/.agents/install.sh --doctor 2>&1); doctor_status=$?
   warnings=$(grep "  warn " <<<"$doctor")
   if [ $doctor_status = 0 ] && [ -z "$warnings" ]; then echo "ok   no warnings"; return 0; fi
