@@ -46,8 +46,15 @@ jobs:
         env:
           AGENTS_SKIP_LAUNCHD: 1 # a runner has no user session to load jobs into
         run: ~/.agents/install.sh --yes
+      # TEMPORARY (PR #132): measure semgrep --version on the runner, before and after the suite. Remove before merge.
+      - name: semgrep timing (after install)
+        if: matrix.part == 'rest'
+        run: .github/diag/semgrep-timing.sh
       - name: Test
         env:
           AGENTS_SKIP_LAUNCHD: 1
           SECTIONS: ${{ matrix.sections }}
         run: ~/.agents/tests/run.sh $SECTIONS
+      - name: semgrep timing (after the suite)
+        if: always() && matrix.part == 'rest'
+        run: .github/diag/semgrep-timing.sh
