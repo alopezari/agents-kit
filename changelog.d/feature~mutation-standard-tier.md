@@ -1,0 +1,1 @@
+- Triage now asks for a light mutation check on standard-risk changes that add code and touch a test path: `mutation, light (changed lines)`, a few hand-made mutants on the changed lines, at most 5 mutants and 5 minutes. High keeps the full check; low gets none.

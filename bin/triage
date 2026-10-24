@@ -635,8 +635,11 @@ def triage(rng=None):
     prop = [f"{p}: {m.group(0)}" for p, l in code_added for m in [PROPERTY_FN.search(l)] if m][:3]
     if prop:
         tests["property-based"] = prop
-    if tier == "high" and any(TEST_OR_DOC.search(p) and "test" in p.lower() for p in files) and code_added:
-        tests["mutation (changed lines)"] = ["high risk with tests in the diff"]
+    if tier != "low" and code_added and any(TEST_OR_DOC.search(p) and "test" in p.lower() for p in files):
+        if tier == "high":
+            tests["mutation (changed lines)"] = ["high risk with tests in the diff"]
+        else:
+            tests["mutation, light (changed lines)"] = ["standard risk with tests in the diff: at most 5 mutants, at most 5 minutes"]
 
     return {"tier": tier, "spec_tier": spec_tier, "diff_tier": diff_tier, "spec_reason": spec_reason, "spec_note": spec_note,
             "budget": BUDGET[tier], "changed_lines": changed_lines, "files": len(files),
