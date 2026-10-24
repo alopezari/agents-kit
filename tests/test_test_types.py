@@ -74,6 +74,14 @@ def a_missing_log_is_an_empty_summary(base):
     assert got["unknown"] == [] and len(got["types"]) == 12 and all(v == ZERO for v in got["types"].values()), got
 
 
+def never_writes_the_summary_over_its_log(base):
+    log = os.path.join(base, "quality.jsonl")
+    open(log, "w").write(FIXTURE)
+    out = summarize(log, os.path.join(base, ".", "quality.jsonl"))
+    assert out.returncode != 0 and "is the log" in out.stderr, out
+    assert open(log).read() == FIXTURE, "the log keeps its rows"
+
+
 def a_malformed_line_fails_and_writes_nothing(base):
     log, summary = os.path.join(base, "quality.jsonl"), os.path.join(base, "summary.json")
     for bad, why in [("{not json", "not JSON"), ("[1, 2]", "not an object"), (row("unit", "two"), "issues not a count"),
@@ -124,7 +132,7 @@ def run_sh_summarizes_before_the_prompt(base):
 
 
 for test in (counts_each_canonical_type, every_alias_lands_on_a_canonical_name, a_missing_log_is_an_empty_summary,
-             a_malformed_line_fails_and_writes_nothing, run_sh_summarizes_before_the_prompt):
+             never_writes_the_summary_over_its_log, a_malformed_line_fails_and_writes_nothing, run_sh_summarizes_before_the_prompt):
     base = tempfile.mkdtemp(prefix="agents-test-test-types-")
     try:
         test(base)

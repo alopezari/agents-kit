@@ -75,6 +75,8 @@ def main():
     parser.add_argument("summary")
     parser.add_argument("--log", default=quality_log())
     args = parser.parse_args()
+    if os.path.exists(args.summary) and os.path.exists(args.log) and os.path.samefile(args.summary, args.log):
+        sys.exit(f"test_types.py: {args.summary} is the log: give the summary another path")
     try:
         with open(args.log) as fh:
             lines = fh.read().splitlines()
