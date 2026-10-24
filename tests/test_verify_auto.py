@@ -355,6 +355,11 @@ def npm_test_red_check_follows_links_that_stay_in_node_modules(base):
     assert code == 0, out
     assert [l for l in lines(out, "skipped: red check (") if "packages/web/node_modules/@acme/app" in l], \
         "a package's own node_modules can link a workspace package too:\n" + out
+    write(repo, "packages/web/node_modules/.gitkeep", "")
+    git(repo, "add", "-f", "packages/web/node_modules/.gitkeep")
+    code, out = verify(repo, path)
+    assert [l for l in lines(out, "skipped: red check (") if "packages/web/node_modules/@acme/app" in l], \
+        "a node_modules with a tracked .gitkeep is listed by its children:\n" + out
 
 
 def js_failure_summary_matches_the_runners_failure_lines(base):
@@ -413,7 +418,7 @@ def pytest_red_check_runs_changed_tests_on_the_base(base):
     entries = pythonpath.split(os.pathsep)
     assert [os.path.realpath(e) for e in entries[:2]] == [copy, os.path.join(copy, "src")], pythonpath
     assert entries[2:] == ["/already/set"], pythonpath
-    assert args.split()[:3] == ["-q", "-p", "no:cacheprovider"] and args.split()[3].startswith("--junitxml="), args
+    assert args.split()[:3] == ["-q", "-o", "cache_dir=.agents-red-cache"] and args.split()[3].startswith("--junitxml="), args
     assert args.split()[4:] == ["tests/test_extra.py", "tests/test_mod.py"], args
     assert conftest == "# new fixture", "the changed conftest.py was not copied in"
     assert test_mod == "def test_a(): assert True", "the edited test ran in its base version"

@@ -170,10 +170,11 @@ def workspace_link(root):
     workspace package), or None. Through it, the pristine copy would run the working tree's code."""
     real_root = os.path.realpath(root)
     ignored = verify_changed.git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"], root)
-    for rel in ignored.splitlines():
-        if os.path.basename(rel.rstrip("/")) != "node_modules":
-            continue
-        modules = os.path.join(root, rel.rstrip("/"))
+    # A node_modules with a tracked file (.gitkeep) is listed by its ignored children (node_modules/@acme/).
+    parts = [rel.rstrip("/").split("/") for rel in ignored.splitlines()]
+    dirs = {"/".join(p[:len(p) - p[::-1].index("node_modules")]) for p in parts if "node_modules" in p}
+    for rel in sorted(dirs):
+        modules = os.path.join(root, rel)
         real_modules = os.path.realpath(modules)
         try:
             names = os.listdir(modules)
@@ -187,7 +188,7 @@ def workspace_link(root):
             target = os.path.realpath(path)
             if (os.path.islink(path) and os.path.commonpath([target, real_root]) == real_root
                     and os.path.commonpath([target, real_modules]) != real_modules):
-                return os.path.join(rel.rstrip("/"), name)
+                return os.path.join(rel, name)
     return None
 
 
@@ -205,7 +206,11 @@ def npm_test_red_check(root, changes, files, pkg, report):
     if not npm:
         report.skip("red check", "npm not on PATH")
         return
-    link = workspace_link(root)
+    try:
+        link = workspace_link(root)
+    except RuntimeError as err:
+        report.skip("red check", f"npm test: {err}")
+        return
     if link:
         report.skip("red check", f"npm test: {link} links into the repo, so the merge-base copy would "
                                  "run the change through it")
@@ -383,8 +388,9 @@ def pytest_red_check(root, pytest, tests, copied, report):
             src = os.path.join(copy, "src")
             pythonpath = [copy, *([src] if os.path.isdir(src) else []), *filter(None, [os.environ.get("PYTHONPATH")])]
             junit = os.path.join(copy, ".agents-red-junit.xml")
-            # The cache and bytecode dirs are symlinks into the working tree: write neither from the base.
-            proc = execute([pytest, "-q", "-p", "no:cacheprovider", f"--junitxml={junit}", *tests], copy,
+            # .pytest_cache and __pycache__ are symlinks into the working tree: write neither from the base, but keep
+            # the cache plugin, whose `cache` fixture the changed tests may use.
+            proc = execute([pytest, "-q", "-o", "cache_dir=.agents-red-cache", f"--junitxml={junit}", *tests], copy,
                            RED_CHECK_TIMEOUT, {**os.environ, "PYTHONPATH": os.pathsep.join(pythonpath),
                                                "PYTHONDONTWRITEBYTECODE": "1"})
             try:
