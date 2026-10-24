@@ -3,7 +3,8 @@
 
   review_stamp.py write [--kind review|validate]   # end of review / validate; verify stamps come only from
                                                    # its runner (stop_checks.py), through record_verify(); validate
-                                                   # needs a report whose PASS/FAIL rows name their evidence
+                                                   # needs a report whose PASS/FAIL rows name their evidence,
+                                                   # and no empty recording among it
   review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
@@ -435,9 +436,18 @@ def unbacked_rows(lines, evidence):
             if result in ("PASS", "FAIL") and not backed]
 
 
+def empty_recordings(evidence):
+    """The browser-check videos of the evidence directory that hold nothing: agent-browser leaves a 0-byte file when its
+    browser closes before `record stop`."""
+    if not evidence or not os.path.isdir(evidence):
+        return []
+    return sorted(name for name in os.listdir(evidence)
+                  if name.endswith(".webm") and os.path.getsize(os.path.join(evidence, name)) == 0)
+
+
 def rows_without_evidence():
-    """Why the validation report can't back a validate stamp: it's missing, or PASS/FAIL rows whose Evidence cell names
-    no non-empty file of the evidence directory. Empty when it can."""
+    """Why the validation report can't back a validate stamp: it's missing, PASS/FAIL rows whose Evidence cell names
+    no non-empty file of the evidence directory, or an empty recording. Empty when it can."""
     report, evidence = report_paths("validation", "evidence")
     try:
         with open(report) as fh:
@@ -446,11 +456,16 @@ def rows_without_evidence():
         return [f"No validation report at {report}: save it first (kit-validate skill, step 5)."]
     if not evidence:  # reports path evidence refuses on a detached HEAD
         return ["No evidence directory: a detached HEAD has none. Validate from the branch's checkout."]
+    problems = []
     missing = unbacked_rows(lines, evidence)
     if missing:
-        return [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for output, "
-                "a screenshot for a UI state):"] + missing
-    return []
+        problems += [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for "
+                     "output, a screenshot for a UI state):"] + missing
+    empty = empty_recordings(evidence)
+    if empty:
+        problems += [f"These recordings in {evidence} are empty: the browser closed before `agent-browser record stop` "
+                     "saved them. Record those checks again, stopping the recording before the next check or `close`:"] + empty
+    return problems
 
 
 def record_verify(kind, checked_fingerprint):

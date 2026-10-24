@@ -1608,6 +1608,33 @@ def validate_stamp_needs_evidence(base):
     assert "A1.txt" in listed and "b1.png" in listed and "\x89PNG" not in listed, listed
 
 
+def validate_stamp_refuses_empty_recordings(base):
+    repo = new_repo(base)
+    git(repo, "switch", "-q", "-c", "feat/recorded")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    reports = os.path.expanduser("~/.agents/bin/reports")
+    report, evidence = (subprocess.run([reports, "path", kind], cwd=repo, capture_output=True, text=True).stdout.strip()
+                        for kind in ("validation", "evidence"))
+    for name, content in (("C1-done.png", b"\x89PNG"), ("C1.contact-sheet.png", b"\x89PNG"), ("C1.webm", b"")):
+        with open(os.path.join(evidence, name), "wb") as fh:
+            fh.write(content)
+    with open(report, "w") as fh:
+        fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
+                 "| C1 | pays | + | PASS | ![done](C1-done.png) ![frames](C1.contact-sheet.png) [video](C1.webm) |\n")
+
+    def write_validate():
+        return subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo,
+                              capture_output=True, text=True)
+
+    done = write_validate()
+    assert done.returncode == 2 and "C1.webm" in done.stderr and "record stop" in done.stderr, \
+        "a row backed by its screenshots still can't hide a video the browser closed on: " + done.stderr
+    with open(os.path.join(evidence, "C1.webm"), "wb") as fh:
+        fh.write(b"\x1aE\xdf\xa3")
+    done = write_validate()
+    assert done.returncode == 0, done.stderr
+
+
 def unrun_checks_never_hold_the_pr(base):
     repo = new_repo(base)
     git(repo, "switch", "-q", "-c", "feat/checks")
@@ -3928,7 +3955,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
-         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
+         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,

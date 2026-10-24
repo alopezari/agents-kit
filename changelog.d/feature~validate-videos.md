@@ -1,0 +1,2 @@
+- kit-validate records every UI check: a video with the pointer and the check's id on the page, and a contact sheet of the frames that changed, which the report shows inline next to a link to the video. A failed check is recorded again at human pace once its cause is known. Recording needs ffmpeg, a new optional dependency.
+- The validate stamp refuses an empty recording in the evidence directory: agent-browser leaves one when the browser closes before `record stop`.
