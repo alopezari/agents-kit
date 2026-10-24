@@ -1713,7 +1713,13 @@ def validate_stamp_checks_criteria_coverage(base):
     both = validation_row("A1", "AC1, AC2", "+ / \u2212", "PASS") + validation_row("A2", "AC1", "\u2212 then +", "PASS")
     done = attempt(both)
     assert done.returncode == 0, "one row may name several criteria, and `+ / \u2212` is a negative case: " + done.stderr
-    assert attempt(validation_row("A1", "AC1", "+", "PASS") + validation_row("A2", "AC1", "-", "FAIL") + both).returncode == 0, "an ASCII `-` counts"
+    for case in ("-", "\u00b1"):  # AC1's only negative row
+        done = attempt(validation_row("A1", "AC1", "+", "PASS") + validation_row("A2", "AC1", case, "FAIL") + two_plus + two_minus_ran)
+        assert done.returncode == 0, f"{case!r} is a negative case: {done.stderr}"
+    for case in ("re-run", "worst-case"):
+        refused(validation_row("A1", "AC1", "+", "PASS") + validation_row("A2", "AC1", case, "PASS") + two_plus + two_minus_ran, "AC1 has no negative")
+    done = attempt(one + two_plus + two_minus_ran, head="| # | AC | Check | Case | Result | Evidence |\n|---|---|---|---|---|---|\n")
+    assert done.returncode == 0, "a plain `Case` header is the Case column too: " + done.stderr
     assert attempt(both + validation_row("R1", "", "regression", "PASS")).returncode == 0, "a row naming no criterion is allowed"
 
     assert "AC3" in refused(both + validation_row("A5", "AC3", "+", "PASS"), "no criterion of the spec")
@@ -1733,6 +1739,8 @@ def validate_stamp_checks_criteria_coverage(base):
     assert attempt(one + two_plus + two_minus_ran, criteria=manual).returncode == 0, "a manual criterion with PASS and \u2212 rows is covered too"
     refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. A `verify:` is manual here \u2014 verify: tests/b.py"))
     refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. Its verify: manual once \u2014 verify: tests/b.py"))
+    done = attempt(covered, criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: manual on staging; see the spec's `verify:` rule"))
+    assert done.returncode == 0, "a quoted `verify:` after the check isn't the check: " + done.stderr
     for path in ("./manual.py", "/manual/check.py", "manual.sh"):  # a script named manual is a check that runs
         refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", f"2. Two. \u2014 verify: {path}"))
 
@@ -1804,6 +1812,36 @@ def validate_stamp_checks_test_types(base):
         assert done.returncode == 2 and "unknown pack" in done.stderr and "triage" in done.stderr, done.stderr
     finally:
         os.remove(packs)
+
+
+def validate_stamp_refuses_failed_lookups(base):
+    # A copy of the hook whose path.sh and triage misbehave: a lookup that failed is not "no spec" or "no test types".
+    kit = os.path.join(base, "kit")
+    shutil.copytree(H, os.path.join(kit, "hooks"))
+    os.makedirs(os.path.join(kit, "skills", "kit-spec"))
+    shutil.copy(KIT + "/skills/kit-spec/lint.py", os.path.join(kit, "skills", "kit-spec"))
+    os.makedirs(os.path.join(kit, "bin"))
+    os.symlink(KIT + "/bin/reports", os.path.join(kit, "bin", "reports"))
+    repo, attempt = validation_fixture(base, "feat/lookups")
+    rows = validation_row("A1", "AC1", "+ / \u2212", "PASS")
+    attempt(rows, criteria=None)
+
+    def fake(name, body):
+        path = os.path.join(kit, name)
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\n" + body)
+        os.chmod(path, 0o755)
+        return subprocess.run(["python3", os.path.join(kit, "hooks", "review_stamp.py"), "write", "--kind", "validate"],
+                              cwd=repo, capture_output=True, text=True)
+
+    os.symlink(KIT + "/bin/triage", os.path.join(kit, "bin", "triage"))
+    for body, said in (("echo 'no branch here' >&2; exit 1\n", "no branch here"), ("exit 0\n", "no path printed")):
+        done = fake("skills/kit-spec/path.sh", body)
+        assert done.returncode == 2 and "spec lookup" in done.stderr and said in done.stderr, done.stdout + done.stderr
+    fake("skills/kit-spec/path.sh", f"echo {os.path.join(base, 'no-spec.md')}\n")
+    os.remove(os.path.join(kit, "bin", "triage"))
+    done = fake("bin/triage", "echo '{\"tier\": \"low\"}'\n")
+    assert done.returncode == 2 and "no `tests` object" in done.stderr, done.stdout + done.stderr
 
 
 def unrun_checks_never_hold_the_pr(base):
@@ -4126,7 +4164,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
-         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types,
+         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
