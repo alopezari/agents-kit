@@ -99,8 +99,9 @@ def parse(argv):
     lens.add_argument("--outcomes", type=outcomes)
     test = kinds.add_parser("test", allow_abbrev=False)
     test.add_argument("name", choices=TEST_TYPES)
-    test.add_argument("--issues", type=count, required=True)
-    test.add_argument("--flake", action="store_true", default=None)  # None when absent: rows without a flake keep no field
+    test.add_argument("--issues", type=count, required=True, help="real issues the run found, never a flake")
+    test.add_argument("--flake", action="store_true", default=None,  # None when absent: rows without a flake keep no field
+                      help="the run hit a test that failed, then passed on a rerun without a code change")
     test.add_argument("--secs", type=count)
     test.add_argument("--notes")
     escape = kinds.add_parser("escape", allow_abbrev=False)

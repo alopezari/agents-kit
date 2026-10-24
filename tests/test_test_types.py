@@ -10,7 +10,7 @@ import tempfile
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 RESULTS = []
-ZERO = {"runs": 0, "runs_with_issue": 0, "flaky_runs": 0, "issues": 0, "secs": 0}
+ZERO = {"runs": 0, "runs_with_issue": 0, "flaky_runs": 0, "issues": 0, "timed_runs": 0, "secs": 0}
 
 
 def row(name, issues, kind="test", **fields):
@@ -44,11 +44,11 @@ def counts_each_canonical_type(base):
     assert open(log, "rb").read() == before, "the log is read, never rewritten"
     got = json.load(open(summary))
     types = got["types"]
-    assert types["regex-worst-case"] == {"runs": 3, "runs_with_issue": 2, "flaky_runs": 0, "issues": 3, "secs": 60}, types
-    assert types["property-based"] == {"runs": 2, "runs_with_issue": 1, "flaky_runs": 0, "issues": 3, "secs": 12}, types
-    assert types["unit"] == {"runs": 4, "runs_with_issue": 2, "flaky_runs": 2, "issues": 3, "secs": 135}, \
-        f"the flake-only run is flaky, not a run with an issue: {types['unit']}"
-    assert types["typecheck"] == {"runs": 1, "runs_with_issue": 1, "flaky_runs": 0, "issues": 1, "secs": 3}, types
+    assert types["regex-worst-case"] == {"runs": 3, "runs_with_issue": 2, "flaky_runs": 0, "issues": 3, "timed_runs": 3, "secs": 60}, types
+    assert types["property-based"] == {"runs": 2, "runs_with_issue": 1, "flaky_runs": 0, "issues": 3, "timed_runs": 2, "secs": 12}, types
+    assert types["unit"] == {"runs": 4, "runs_with_issue": 2, "flaky_runs": 2, "issues": 3, "timed_runs": 3, "secs": 135}, \
+        f"the flake-only run is flaky, not a run with an issue; the run without secs is untimed, not 0s: {types['unit']}"
+    assert types["typecheck"] == {"runs": 1, "runs_with_issue": 1, "flaky_runs": 0, "issues": 1, "timed_runs": 1, "secs": 3}, types
     assert got["unknown"] == ["typecheck"], got["unknown"]
     assert not {"regex", "regex-timing", "property", "correctness", "session-x"} & types.keys(), types.keys()
     assert types["e2e"] == ZERO, "every canonical type is listed, with no runs as zeros"
@@ -77,7 +77,7 @@ def a_missing_log_is_an_empty_summary(base):
 def a_malformed_line_fails_and_writes_nothing(base):
     log, summary = os.path.join(base, "quality.jsonl"), os.path.join(base, "summary.json")
     for bad, why in [("{not json", "not JSON"), ("[1, 2]", "not an object"), (row("unit", "two"), "issues not a count"),
-                     (row("unit", -1), "a negative count"), (row("unit", 1, flake="yes"), "a flake that isn't true"),
+                     (row("unit", -1), "a negative count"), (row("unit", 1, flake="yes"), "a flake that isn't a boolean"),
                      (row("unit", 1, secs="ten"), "secs not a count"), (json.dumps({"kind": "test", "issues": 1}), "no name")]:
         open(log, "w").write(row("unit", 1) + "\n" + bad + "\n" + row("e2e", 0) + "\n")
         out = summarize(log, summary)
@@ -98,6 +98,9 @@ def run_sh_summarizes_before_the_prompt(base):
     error_log = re.search(r'> "(\$RUN/[^"]+\.log)" 2>&1 \|\| true$', lines[1]).group(1)
     prompt = script[prompt_at:script.index("\nEOF\n", prompt_at)]
     assert summary in prompt and error_log in prompt, "the prompt points at the summary and its error log"
+    step4 = re.search(r"^4\. .*?(?=^   Also from quality.jsonl)", prompt, re.M | re.S).group(0)
+    for rule in (os.path.basename(summary), "flaky runs", "never an issue", "timed_runs", "unavailable", os.path.basename(error_log)):
+        assert rule in step4, ("step 4 takes test counts from the summary and states its rules", rule)
 
     home, run = os.path.join(base, "home"), os.path.join(base, "run")
     os.makedirs(os.path.join(home, ".agents", "logs"))

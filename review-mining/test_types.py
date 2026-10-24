@@ -4,8 +4,8 @@ bin/quality-log took only canonical names into those names. Unknown names pass t
 
   test_types.py <summary.json> [--log <quality.jsonl>]
 
-Per type: runs, runs_with_issue (issues > 0; a flake is never an issue), flaky_runs, issues and secs. Reads the log and
-never writes it. A malformed line fails naming its line number, and no summary is written; a missing log is no runs.
+Per type: runs, runs_with_issue (issues > 0; a flake is never an issue), flaky_runs, issues, and secs over the
+timed_runs that logged any. Reads the log and never writes it. A malformed line fails naming its line number, and no summary is written; a missing log is no runs.
 """
 import argparse
 import importlib.machinery
@@ -37,8 +37,11 @@ def is_count(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+FIELDS = ("runs", "runs_with_issue", "flaky_runs", "issues", "timed_runs", "secs")
+
+
 def summarize(lines):
-    types = {name: {"runs": 0, "runs_with_issue": 0, "flaky_runs": 0, "issues": 0, "secs": 0} for name in TEST_TYPES}
+    types = {name: dict.fromkeys(FIELDS, 0) for name in TEST_TYPES}
     for number, line in enumerate(lines, 1):
         try:
             row = json.loads(line)
@@ -48,19 +51,21 @@ def summarize(lines):
             raise ValueError(f"line {number} isn't a JSON object")
         if row.get("kind") != "test":
             continue
-        name, issues, secs, flake = row.get("name"), row.get("issues"), row.get("secs", 0), row.get("flake", False)
+        name, issues, secs, flake = row.get("name"), row.get("issues"), row.get("secs"), row.get("flake", False)
         if not isinstance(name, str) or not name:
             raise ValueError(f"line {number}: a test row without a name")
-        if not is_count(issues) or not is_count(secs):
+        if not is_count(issues) or not (secs is None or is_count(secs)):
             raise ValueError(f"line {number}: issues and secs must be whole numbers, not {issues!r} and {secs!r}")
         if not isinstance(flake, bool):
-            raise ValueError(f"line {number}: flake is {flake!r}, not true")
-        counts = types.setdefault(ALIASES.get(name, name), dict.fromkeys(types["unit"], 0))
+            raise ValueError(f"line {number}: flake is {flake!r}, not true or false")
+        counts = types.setdefault(ALIASES.get(name, name), dict.fromkeys(FIELDS, 0))
         counts["runs"] += 1
         counts["runs_with_issue"] += issues > 0
         counts["flaky_runs"] += flake
         counts["issues"] += issues
-        counts["secs"] += secs
+        if secs is not None:  # older rows logged no --secs: untimed, not 0s
+            counts["timed_runs"] += 1
+            counts["secs"] += secs
     return {"types": types, "unknown": sorted(set(types) - set(TEST_TYPES))}
 
 
