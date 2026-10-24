@@ -305,6 +305,11 @@ if [ ${#missing[@]} -gt 0 ]; then
     read -r program formula tier purpose <<<"$entry"
     if [[ $answer == [Yy]* ]] && brew install --quiet "$formula" </dev/null >/dev/null 2>&1 && installed "$program"; then
       fix "$program installed (brew install $formula)"
+      # agent-browser drives a Chrome for Testing it downloads itself; without one, every browser check fails.
+      if [ "$program" = agent-browser ]; then
+        if agent-browser install </dev/null >/dev/null 2>&1; then fix "agent-browser's Chrome installed (agent-browser install)"
+        else warn "agent-browser has no browser yet: run agent-browser install"; fi
+      fi
     else warn "$program is missing ($tier), needed for $purpose: brew install $formula$asked"; fi
   done
 fi

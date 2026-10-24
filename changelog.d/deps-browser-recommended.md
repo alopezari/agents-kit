@@ -1,0 +1,1 @@
+- agent-browser and ffmpeg are recommended dependencies now, so `install.sh` offers to install them with the rest (and `--yes` installs them), and downloads agent-browser's Chrome after installing it. Before, both were optional and only reported.

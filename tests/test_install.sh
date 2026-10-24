@@ -13,7 +13,7 @@ for dir in "$HOME"/.agents/tools/*/ "$HOME"/.agents/site/; do
   rel=${dir#"$HOME"/.agents/}
   [ -d "$dir/node_modules" ] && ln -s "$dir/node_modules" "$home/.agents/${rel}node_modules"
 done
-# The machine lacks gh, semgrep and gitleaks, and a fake brew "installs" them as stubs: install.sh must
+# The machine lacks gh, semgrep, gitleaks, agent-browser and ffmpeg, and a fake brew "installs" them as stubs: install.sh must
 # install missing required and recommended programs, and only report optional ones.
 # Real programs are reached through scripts, not symlinks: a test writing a fake over one must replace the script,
 # never the real binary (a symlink once let a fake claude overwrite the installed Claude Code).
@@ -44,10 +44,13 @@ fi
 if echo "$out" | grep -qiE "unbound|error|No such file"; then
   echo "FAIL install.sh printed errors:"; echo "$out" | grep -iE "unbound|error|No such file"; fail=1
 fi
-for program in gh semgrep gitleaks docker; do
+for program in gh semgrep gitleaks docker agent-browser ffmpeg; do
   if echo "$out" | grep -qF "fix   $program installed (brew install $program)"; then echo "ok   install.sh installs a missing $program"
   else echo "FAIL install.sh did not install the missing $program"; fail=1; fi
 done
+if echo "$out" | grep -qF "fix   agent-browser's Chrome installed (agent-browser install)"; then
+  echo "ok   install.sh downloads the Chrome a newly installed agent-browser drives"
+else echo "FAIL install.sh installed agent-browser without its Chrome: $(echo "$out" | grep "agent-browser")"; fail=1; fi
 if echo "$out" | grep -q "  info  playwright-cli not installed" && [ ! -e "$bin/playwright-cli" ]; then
   echo "ok   install.sh reports a missing optional program without installing it"
 else echo "FAIL optional playwright-cli: $(echo "$out" | grep playwright-cli)"; fail=1; fi
