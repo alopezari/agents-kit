@@ -18,7 +18,7 @@ A profile's rules that don't load, or an error while judging a call, block every
 the error: Claude Code and Codex let a call through when its hook crashes.
 
 Browser MCP calls (Playwright, Chrome DevTools, Claude in Chrome) are logged and never blocked, so the
-monthly job can tell validation runs that went around the browser A/B (bin/browse) from runs with no UI.
+monthly job can count sessions that drove a browser through an MCP instead of agent-browser.
 
 Profiles add their own rules in profiles/<name>/mcp-writes.json:
   {"direct": {"<server>": "<operation regex>"},

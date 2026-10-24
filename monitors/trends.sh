@@ -32,7 +32,7 @@ Search the web (official changelogs, release notes and docs first; then engineer
 1. Claude Code and Codex CLI releases: hook events or payload changes, new settings, skills/plugins changes,
    subagent or review features, anything that breaks or duplicates what hooks/ or install.sh does.
 2. Model releases and deprecations from Anthropic and OpenAI relevant to coding agents; changes to effort or advisor behavior.
-3. Tool releases: semgrep, gitleaks, Playwright CLI, agent-browser, PHPStan, phpcs/WPCS, axe-core.
+3. Tool releases: semgrep, gitleaks, agent-browser, playwright-cli (its fallback), PHPStan, phpcs/WPCS, axe-core.
 4. Practice: new, evidenced techniques for agentic coding quality (review, testing, verification, context management).
    Prefer sources with data over opinion.
 
