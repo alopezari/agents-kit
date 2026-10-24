@@ -151,7 +151,8 @@ for f in "${settings_files[@]}"; do rm -f "$f"; [ -e "$f.saved" ] && mv "$f.save
 [ $made_codex_dir = 1 ] && rm -r "$home/.codex"
 [ $made_claude_dir = 1 ] && rm -r "$home/.claude"
 
-# A program whose --version never answers, even one leaving a child that holds its output, costs 10 s, not the run.
+# A program whose --version never answers costs 10 s, not the run; one that answers and leaves a child holding its
+# output is read when it exits.
 mkdir -p "$home/fakes/hung"
 printf '#!/bin/sh\nsleep 600\n' > "$home/fakes/hung/hungdep"
 printf '#!/bin/sh\necho "fastdep 3.4.5"\n' > "$home/fakes/hung/fastdep"
@@ -163,7 +164,7 @@ chmod +x "$home/fakes/hung/"*
 made_codex_dir=0; [ -d "$home/.codex" ] || { mkdir "$home/.codex"; made_codex_dir=1; }
 cp "$home/.agents/profiles/work/deps.txt" "$home/deps.saved"
 printf '%s\n' "required hungdep brew:hungdep a test" "required fastdep>=3.0 brew:fastdep a test" >> "$home/.agents/profiles/work/deps.txt"
-hung_calls=4  # hungdep, claude in the requirements and for the kit plugin, codex
+hung_calls=2  # hungdep, codex
 for mode in --yes --doctor; do  # --yes first: on a machine without Codex the .codex made above has no hooks for the doctor
 started=$SECONDS
 # A hard cap past the bound, so a run that hangs fails here instead of hanging the suite.
@@ -183,8 +184,7 @@ elapsed=$((SECONDS - started)); out=$(cat "$home/hung.out")
 check "install.sh $mode: a --version that never answers gives up after 10 s each ($elapsed s for $hung_calls), says so and the run goes on" \
   '[ $status = 0 ] && [ $elapsed -lt $((hung_calls * 10 + 20)) ] \
    && grep -q "  warn  hungdep didn.t answer .hungdep --version. within 10s" <<<"$out" \
-   && grep -q "  info  claude didn.t answer .claude --version. within 10s" <<<"$out" \
-   && grep -q "  warn  kit plugin: claude didn.t answer .claude --version. within 10s" <<<"$out" \
+   && grep -q "  ok    claude 2.9.0" <<<"$out" && ! grep -q "claude didn.t answer" <<<"$out" \
    && grep -q "  warn  codex didn.t answer .codex --version. within 10s" <<<"$out" \
    && grep -q "  ok    fastdep 3.4.5" <<<"$out" && grep -q "  ok    semgrep 1.176.0" <<<"$out" && grep -qx "Done." <<<"$out"'
 [ $status = 0 ] || echo "     exit $status: $(tail -3 <<<"$out" | tr '\n' ' ')"

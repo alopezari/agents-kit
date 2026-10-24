@@ -90,8 +90,9 @@ baseline() {
   while read -r line; do if [ $DOCTOR = 1 ]; then warn "$(basename "$1") $line"; else fix "$(basename "$1") $line"; fi; done <<<"$out"
 }
 
-# bounded <program> [args...]: run it on no input for at most VERSION_TIMEOUT seconds, then exit 124. The whole process
-# group goes: a child left holding its output would keep $(...) waiting after the program itself exits. macOS has no timeout.
+# bounded <program> [args...]: run it on no input for at most VERSION_TIMEOUT seconds, then exit 124. It waits for the
+# program, not for its output to close: a child left holding the output would keep a reader waiting after the program
+# itself exits. Then the whole process group goes. macOS has no timeout.
 VERSION_TIMEOUT=10
 bounded() {
   python3 - "$VERSION_TIMEOUT" "$@" <<'PY'
@@ -103,9 +104,16 @@ except OSError as error:
     print(f"{sys.argv[2]}: {error.strerror}", file=sys.stderr)
     sys.exit(127)
 try:
-    out, err = run.communicate(timeout=float(sys.argv[1]))
+    run.wait(timeout=float(sys.argv[1]))
+    timed_out = False
 except subprocess.TimeoutExpired:
+    timed_out = True
+try:
     os.killpg(run.pid, signal.SIGKILL)
+except ProcessLookupError:  # nothing left behind
+    pass
+out, err = run.communicate()
+if timed_out:
     sys.exit(124)
 sys.stdout.buffer.write(out)
 sys.stderr.buffer.write(err)
