@@ -23,7 +23,7 @@ Keep the repository private when it holds anything about your employer or client
 | `deps.txt` | Programs this work needs, in the core's format | `install.sh` installs or reports them |
 | `review-mining/repos.txt`, `hosts.txt` | Repositories whose review comments the monthly job learns from, and extra GitHub hosts | read by `review-mining/` |
 | `PROFILE.md` | Context for the monthly trends scan | read by `monitors/trends.sh` |
-| `statusline` | An executable that adds a segment to the Claude Code status line | run by the kit's status line with the same JSON on stdin |
+| `statusline` | An executable that adds a segment to the Claude Code status line | run by the kit's status line with the same JSON on stdin; the kit's status line run from it prints nothing |
 | `launchd/sample-weekly.plist`, `weekly.sh` | A scheduled job: every Monday at 9:00 it prints how many turns the after-turn counted | rendered into `~/Library/LaunchAgents/` and loaded by `install.sh`, like the kit's jobs, with `__PROFILE__` for this profile's directory; `uninstall.sh` removes it |
 | `after-turn` | An executable that runs after every agent turn; this one counts turns in the overlay's repository | started in the background by the Stop hook with its JSON on stdin; nothing waits for it, and sessions it starts don't start it again |
 

@@ -316,7 +316,7 @@ quality-log test <type> --issues N [--secs S] [--notes "..."]
 quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 ```
 
-**`bin/repo-name`**: Print the repository's name as the kit knows it: the main checkout's directory name, the same from any worktree (Xirp, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.
+**`bin/repo-name`**: Print the repository's name as the kit knows it: the main checkout's directory name, the same from any worktree (Xirp, Orca, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.
 
 **`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). A branch with only a guide saved under its older name, staging-guide, reads it as its checks-guide.
 
@@ -380,7 +380,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `launchd/*.plist` | scheduled jobs `install.sh` renders and loads like the kit's, with `__PROFILE__` for the profile's directory; a job named like one of the kit's, or an earlier profile's, is skipped, as is one whose path has a space or one of `& # \ < >`. `uninstall.sh` removes a job that runs something under `__PROFILE__`, like the kit's that run something in the kit |
 | `deps.txt` | more programs to install and check, in the core's format; a program in both takes the stricter tier |
 | `private-terms.txt` | case-insensitive regexes, one per line, that must never reach the public kit: its commits and pull requests are refused when they match |
-| `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin) |
+| `statusline` | an executable that adds a segment to the Claude Code status line (same JSON on stdin; the kit's status line run from it prints nothing) |
 | `after-turn` | an executable the Stop hook starts in the background after every turn, with its JSON on stdin (with `transcript_path`); it doesn't wait for it or read its output, so the script handles its own overlap, rate limits and logging. Its environment has `AGENTS_AFTER_TURN=1`, and the stops of a session it starts (`codex exec`, `claude -p`) start no after-turn. A script that can't start is logged as `profile-after-turn-failed` |
 
 ## What the agents are told

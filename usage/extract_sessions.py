@@ -41,8 +41,11 @@ HEREDOC_BODY = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?^\s*\2\s*$", re.S |
 BRANCH_NAME = re.compile(r"[\w][\w./+-]*$")
 # Files no repo holds: an edit there is neither the spec nor code.
 SCRATCH_PATH = re.compile(r"^(/private)?/tmp/|^/var/folders/|^" + re.escape(HOME + "/.claude/"))
-# Xirp names a session's worktree <main checkout>-worktree-<session>; once it is removed, the main checkout says
-# which repo it was.
+# A session's repo comes from git while its directory exists, whatever tool made the worktree. Once a worktree is
+# removed: Xirp's, <main checkout>-worktree-<session>, takes its main checkout's repo; Orca's nested one,
+# <dir>/<repo>/<worktree> (~/orca/workspaces or a custom dir), takes the repo of the one main checkout named <repo>
+# among every scanned session's existing directory, and none when there is no such checkout or two with different
+# remotes. Orca's flat <dir>/<worktree> keeps no repo name, so it stays without one.
 REMOVED_WORKTREE = re.compile(r"(.*)-worktree-[^/]+")
 REMOTE_REPO = re.compile(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$")
 # USD per million tokens (input, 5-minute cache write, 1-hour cache write, cache read, output), from
@@ -159,8 +162,11 @@ def branch_changes(command):
 @functools.lru_cache(maxsize=None)
 def checkout(cwd):
     """(GitHub owner/name, the kit's repo name: the main checkout's directory) for a session directory, from its
-    main checkout once the worktree is gone; None outside a repo with an origin remote."""
+    main checkout once the worktree is gone (REMOVED_WORKTREE); None outside a repo with an origin remote."""
     removed = REMOVED_WORKTREE.match(cwd)
+    if not removed and not os.path.isdir(cwd):
+        repos = checkouts_by_name().get(os.path.basename(os.path.dirname(cwd)), set())
+        return next(iter(repos)) if len(repos) == 1 else None
     for directory in dict.fromkeys([cwd, removed.group(1) if removed else cwd]):
         if not os.path.isdir(directory):
             continue
@@ -175,6 +181,30 @@ def checkout(cwd):
             name = os.path.basename(os.path.dirname(common)) if os.path.basename(common) == ".git" else os.path.basename(common).removesuffix(".git")
             return remote.group(1), name
     return None
+
+
+@functools.lru_cache(maxsize=None)
+def checkouts_by_name():
+    """The kit's repo name -> the (remote, name) pairs of every existing directory a scanned session started in. It
+    reads every transcript before answering, so no lookup depends on the order sessions are read in."""
+    def first(f, directory_of):
+        for line in open(f, errors="ignore"):
+            try:
+                directory = directory_of(json.loads(line))
+            except (ValueError, AttributeError):
+                continue
+            if directory:
+                return directory
+        return ""
+
+    directories = {first(f, lambda e: e.get("cwd")) for f in glob.glob(f"{HOME}/.claude/projects/*/*.jsonl")}
+    directories |= {first(f, lambda e: e.get("type") == "session_meta" and (e.get("payload") or {}).get("cwd"))
+                    for f in codex_rollouts()}
+    found = {}
+    for directory in directories:
+        if os.path.isdir(directory) and not directory.startswith(EXCLUDE_CWD) and (repo := checkout(directory)):
+            found.setdefault(repo[1], set()).add(repo)
+    return found
 
 
 def branch_renames():
@@ -459,7 +489,9 @@ def claude_sessions():
                        builds=builds_of(f, (checkout(cwd) or (None, None))[1] if cwd else None))
 
 
-def codex_sessions():
+@functools.lru_cache(maxsize=None)
+def codex_threads():
+    """(rollout path, model, effort, tokens used) of each interactive Codex thread of the last 90 days."""
     import shutil
     import sqlite3
     import tempfile
@@ -473,9 +505,16 @@ def codex_sessions():
                       "where source in ('vscode','cli') and created_at > strftime('%s','now','-90 days')").fetchall()
     db.close()
     shutil.rmtree(snap)
-    for f, model, effort, tokens_used in rows:
-        if not f or not os.path.exists(f):
-            continue
+    return [row for row in rows if row[0] and os.path.exists(row[0])]
+
+
+def codex_rollouts():
+    """The rollout files codex_sessions reads; none on a machine without Codex."""
+    return [row[0] for row in codex_threads()] if os.path.exists(f"{HOME}/.codex/state_5.sqlite") else []
+
+
+def codex_sessions():
+    for f, model, effort, tokens_used in codex_threads():
         for s in _codex_rollout(f):
             if model:
                 s["models"] = {model: max(1, sum(s["models"].values()))}

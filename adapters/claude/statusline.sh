@@ -2,6 +2,10 @@
 # Claude Code status line: model, effort, context and plan usage, the branch's phase in the kit's flow (bin/phase),
 # then a segment from each profile that provides an executable profiles/<name>/statusline (same JSON on stdin).
 input=$(cat)
+# A segment can run a wrapper that calls this script back, as Xirp's does when this script holds the slot itself:
+# that call prints nothing, so the kit's line shows once. Not CHIRP_STATUSLINE_NESTED: the wrapper sets that when it
+# holds the slot, and still needs this script's whole line.
+[ -n "${AGENTS_STATUSLINE_NESTED:-}" ] && exit 0
 # Plan limits are per account, but Claude Code sends them only after a session's first response: keep the last
 # ones seen, and show them marked "~" in a new session until its own arrive.
 limits_cache="$HOME/.agents/monitors/state/rate-limits.json"
@@ -37,7 +41,7 @@ if [ -n "$phase" ]; then
 fi
 for extra in "$HOME"/.agents/profiles/*/statusline; do
   [ -x "$extra" ] || continue
-  segment=$(printf '%s' "$input" | "$extra" 2>/dev/null)
+  segment=$(printf '%s' "$input" | AGENTS_STATUSLINE_NESTED=1 "$extra" 2>/dev/null)
   [ -n "$segment" ] && ours="${ours:+$ours · }$segment"
 done
 echo "$ours"

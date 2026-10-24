@@ -372,6 +372,18 @@ kit_plugin() {
   esac
 }
 
+# status_line_runner <settings.json>: who runs its status line: kit, kit-wrapper, other or none. Tools that add their
+# own line may point statusLine at a wrapper script that runs ours; that keeps our line, so it counts as the kit's.
+status_line_runner() {
+  local line="$KIT/adapters/claude/statusline.sh" current
+  [ -f "$1" ] || { echo none; return; }
+  current=$(jq -r '.statusLine.command // ""' "$1" 2>/dev/null) || { echo unreadable; return; }
+  if [ -z "$current" ]; then echo none
+  elif [ "$current" = "$line" ]; then echo kit
+  elif grep -qF "$line" "$current" 2>/dev/null; then echo kit-wrapper
+  else echo other; fi
+}
+
 if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
   echo "Claude Code"
   link "$KIT/AGENTS.md" "$HOME/.claude/CLAUDE.md"
@@ -386,11 +398,8 @@ if command -v claude >/dev/null || [ -d "$HOME/.claude" ]; then
     hook "$S" PostToolUse "Edit|Write|MultiEdit|NotebookEdit" post_edit.py 30
     hook "$S" PostToolUse "mcp__.*" guard_mcp.py 10
     hook "$S" Stop        "" stop_checks.py 660
-    # Tools that add their own status line may point statusLine at a wrapper script that runs ours;
-    # that keeps our line, so it counts as installed. Anything else loses it.
     line="$KIT/adapters/claude/statusline.sh"
-    current=$(jq -r '.statusLine.command // ""' "$S" 2>/dev/null)
-    if [ "$current" = "$line" ] || grep -qF "$line" "$current" 2>/dev/null; then ok "status line"
+    if [[ $(status_line_runner "$S") = kit* ]]; then ok "status line"
     elif [ $DOCTOR = 1 ]; then warn "status line neither is nor wraps $line"
     else backup "$S"; tmp=$(mktemp); jq --arg c "$line" '.statusLine = {type: "command", command: $c}' "$S" > "$tmp" && mv "$tmp" "$S"; fix "status line"; fi
     kit_plugin
@@ -440,6 +449,53 @@ if command -v codex >/dev/null || [ -d "$HOME/.codex" ]; then
   real=$(readlink "$(command -v codex)" 2>/dev/null || true)
   if [ -n "$real" ] && [ -x "$(dirname "$real")/codex-code-mode-host" ]; then
     link "$(dirname "$real")/codex-code-mode-host" "$(dirname "$(command -v codex)")/codex-code-mode-host"
+  fi
+fi
+
+# Xirp and Orca start Claude Code and Codex sessions with hooks of their own, and Xirp's wrapper may hold the status
+# line slot. Read from files only: neither app's daemon is asked. Silent when neither app nor its hooks are there.
+APPLICATIONS=${AGENTS_APPLICATIONS_DIR:-/Applications}
+# hooks_in <settings file> <part of a hook command>: the events with a hook running it, sorted; "unreadable" when jq
+# can't read the file, whose own section already named it.
+hooks_in() {
+  [ -f "$1" ] || return 0
+  jq -r --arg part "$2" '[.hooks // {} | to_entries[] | select(any(.value[]?.hooks[]?; .command // "" | contains($part)))
+    | .key] | sort | join(", ")' "$1" 2>/dev/null || echo unreadable
+}
+# harness <app> <hooks found, as "<file> <events>" lines>: one line on the app and where its hooks are.
+harness() {
+  local app=$1 where="" file events
+  while read -r file events; do
+    case $events in
+      "") ;;
+      unreadable) where+="${where:+ and }$file (can't be read)" ;;
+      *) where+="${where:+ and }$file ($events)" ;;
+    esac
+  done <<<"$2"
+  if [ -d "$APPLICATIONS/$app.app" ]; then info "$app: app installed; ${where:+hooks in }${where:-no hooks}"
+  elif [ -n "$where" ]; then warn "$app isn't in $APPLICATIONS, yet its hooks are in $where: remove them if $app is gone for good"
+  else info "$app: app not installed; no hooks"; fi
+}
+xirp_claude=$(hooks_in "$HOME/.claude/settings.json" xirp-external/hook-scripts/)
+orca_claude=$(hooks_in "$HOME/.claude/settings.json" agent-hooks/claude-hook.sh)
+orca_codex=$(hooks_in "$HOME/.codex/hooks.json" agent-hooks/codex-hook.sh)
+found() { [ -n "$1" ] && [ "$1" != unreadable ]; }
+if [ -d "$APPLICATIONS/Xirp.app" ] || [ -d "$APPLICATIONS/Orca.app" ] \
+   || found "$xirp_claude" || found "$orca_claude" || found "$orca_codex"; then
+  echo "Harnesses"
+  harness Xirp "~/.claude/settings.json $xirp_claude"
+  harness Orca "~/.claude/settings.json $orca_claude
+~/.codex/hooks.json $orca_codex"
+  runner_command=$(jq -r '.statusLine.command // ""' "$HOME/.claude/settings.json" 2>/dev/null) || true
+  case $(status_line_runner "$HOME/.claude/settings.json") in
+    kit) info "status line: run by the kit" ;;
+    kit-wrapper) info "status line: run by a wrapper that runs the kit's, $runner_command" ;;
+    other) info "status line: run by something else, $runner_command" ;;
+    none) info "status line: none" ;;
+    unreadable) info "status line: ~/.claude/settings.json can't be read" ;;
+  esac
+  if [ -d "$APPLICATIONS/Orca.app" ] && [[ ", $xirp_claude," = *", PermissionRequest,"* ]]; then
+    warn "Xirp's PermissionRequest hook also runs in Orca's sessions: a permission prompt there can wait up to 30 s for Xirp"
   fi
 fi
 

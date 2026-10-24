@@ -359,6 +359,68 @@ def advisor_calls_and_what_the_table_cannot_price(home):
     assert low["repo"] == "repo", "a build whose worktree is gone takes the session's repo"
 
 
+def clone(path, remote):
+    os.makedirs(path)
+    subprocess.run(["git", "init", "-q", path], check=True)
+    subprocess.run(["git", "-C", path, "remote", "add", "origin", remote], check=True)
+
+
+def repos_of_sessions(home, directories):
+    """The repos the extractor gives one session started in each of `directories`, in transcripts named in that
+    order; keyed by directory."""
+    os.makedirs(os.path.join(home, ".claude", "projects", "p"), exist_ok=True)
+    for i, directory in enumerate(directories):
+        rows = [user(0, "go", "main"), *assistant(1, "m0", "main", [TEXT])]
+        with open(os.path.join(home, ".claude", "projects", "p", f"s{i}.jsonl"), "w") as fh:
+            fh.writelines(json.dumps({**r, "cwd": directory}) + "\n" for r in rows)
+    os.environ["HOME"] = home
+    spec = importlib.util.spec_from_file_location("extract_sessions", os.path.join(KIT, "usage", "extract_sessions.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    found = {s["cwd"]: s["repos"] for s in module.claude_sessions()}
+    shutil.rmtree(os.path.join(home, ".claude"))
+    return found
+
+
+def an_orca_worktree_takes_its_repo_from_git(home):
+    main = os.path.join(home, "src", "shop")
+    clone(main, "git@github.com:o/shop.git")
+    subprocess.run(["git", "-C", main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"], check=True)
+    nested, flat = os.path.join(home, "orca", "workspaces", "shop", "cart"), os.path.join(home, "mine", "cart-2")
+    for path in (nested, flat):
+        subprocess.run(["git", "-C", main, "worktree", "add", "-q", "--detach", path], check=True)
+    found = repos_of_sessions(home, [nested, flat])
+    assert found == {nested: {"o/shop": ["shop"]}, flat: {"o/shop": ["shop"]}}, found
+
+
+def a_removed_orca_worktree_takes_its_repo_from_the_main_checkout(home):
+    main = os.path.join(home, "src", "shop")
+    clone(main, "git@github.com:o/shop.git")
+    removed = [os.path.join(home, "orca", "workspaces", "shop", "cart"), os.path.join(home, "custom", "shop", "cart")]
+    for order in ([main, *removed], [*removed, main]):  # the checkout's transcript read before the worktree's, then after
+        found = repos_of_sessions(home, order)
+        assert found == {path: {"o/shop": ["shop"]} for path in order}, f"read in the order {order}: {found}"
+    # A flat layout keeps no repo name; a Xirp-shaped worktree whose main checkout is gone keeps Xirp's rule.
+    flat, xirp = os.path.join(home, "orca", "workspaces", "shop-cart"), os.path.join(home, "x", "shop", "kit-worktree-gone")
+    found = repos_of_sessions(home, [main, flat, xirp])
+    assert found[flat] == {} and found[xirp] == {}, found
+
+
+def a_removed_orca_worktree_without_one_main_checkout_stays_unattributed(home):
+    clone(os.path.join(home, "a", "shop"), "git@github.com:o/shop.git")
+    clone(os.path.join(home, "b", "shop"), "git@github.com:p/shop.git")
+    clone(os.path.join(home, "c", "shop"), "git@github.com:o/shop.git")
+    clone(os.path.join(home, "src", "cafe"), "git@github.com:o/cafe.git")  # no session started there
+    removed = os.path.join(home, "orca", "workspaces", "shop", "cart")
+    found = repos_of_sessions(home, [os.path.join(home, "a", "shop"), os.path.join(home, "b", "shop"), removed])
+    assert found[removed] == {}, f"two checkouts named shop with different remotes: {found}"
+    found = repos_of_sessions(home, [os.path.join(home, "a", "shop"), os.path.join(home, "c", "shop"), removed])
+    assert found[removed] == {"o/shop": ["shop"]}, f"two clones of one remote are one repo: {found}"
+    elsewhere = os.path.join(home, "orca", "workspaces", "cafe", "menu")
+    found = repos_of_sessions(home, [os.path.join(home, "a", "shop"), elsewhere])
+    assert found[elsewhere] == {}, f"no session ran in a checkout named cafe: {found}"
+
+
 def a_session_without_builds_lists_none(home):
     found = session(home, [user(0, "hi", "a"), *assistant(1, "m0", "a", [TEXT])])
     assert found["builds"] == [], found["builds"]
@@ -369,7 +431,9 @@ for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_
              the_users_attention_per_branch, what_the_user_did_not_type, another_agents_run_is_not_the_user,
              a_session_of_typed_commands, the_kit_names_count_as_their_former_phases,
              builds_come_from_their_transcripts, opus_prices_and_usage_without_the_cache_split,
-             advisor_calls_and_what_the_table_cannot_price, a_session_without_builds_lists_none):
+             advisor_calls_and_what_the_table_cannot_price, a_session_without_builds_lists_none,
+             an_orca_worktree_takes_its_repo_from_git, a_removed_orca_worktree_takes_its_repo_from_the_main_checkout,
+             a_removed_orca_worktree_without_one_main_checkout_stays_unattributed):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:

@@ -27,6 +27,8 @@ printf '#!/bin/bash\n[ "$1" = install ] || exit 1\nrm -f "%s/${!#}"; printf "#!/
 chmod +x "$bin/brew"
 real_path=$PATH q="'"
 export PATH="$bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# The harnesses report looks for apps here, so this machine's own apps don't show in the test's runs.
+export AGENTS_APPLICATIONS_DIR="$home/fakes/apps"
 # A profile needs docker, which the core lists as optional: the stricter tier wins, so it gets installed.
 mkdir -p "$home/.agents/profiles/work"
 echo "required docker brew:docker the profile's containerized verify" > "$home/.agents/profiles/work/deps.txt"
@@ -195,6 +197,76 @@ done
 mv "$home/deps.saved" "$home/.agents/profiles/work/deps.txt"
 rm -r "$home/fakes/hung" "$home/hung.out"
 [ $made_codex_dir = 1 ] && rm -r "$home/.codex"
+
+# Xirp and Orca start Claude Code and Codex sessions with hooks of their own, and Xirp's wrapper can hold the status
+# line slot: install.sh leaves them all in place, and the doctor reports them.
+made_claude_dir=0; [ -d "$home/.claude" ] || { mkdir "$home/.claude"; made_claude_dir=1; }
+made_codex_dir=0; [ -d "$home/.codex" ] || { mkdir "$home/.codex"; made_codex_dir=1; }
+S="$home/.claude/settings.json" H="$home/.codex/hooks.json"
+HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --yes >/dev/null 2>&1
+for f in "$S" "$H"; do cp "$f" "$f.saved"; done
+apps="$AGENTS_APPLICATIONS_DIR"; mkdir -p "$apps"
+kit_line="$home/.agents/adapters/claude/statusline.sh"
+xirp_hook() { printf '"%s/Library/Application Support/Xirp/xirp-external/hook-scripts/%s.sh"' "$home" "$1"; }
+orca_claude='if [ -x "${HOME-}/.orca/agent-hooks/claude-hook.sh" ]; then "${HOME-}/.orca/agent-hooks/claude-hook.sh"; fi'
+orca_codex=': orca-agent-hook-form=1; "${ORCA_AGENT_HOOK_ROOT-}/agent-hooks/codex-hook.sh"'
+add_hook() { jq --arg e "$2" --arg c "$3" '.hooks[$e] += [{matcher: "", hooks: [{type: "command", command: $c}]}]' "$1" > "$1.tmp" && mv "$1.tmp" "$1"; }
+xirp_hooks() { for e in PermissionRequest PreToolUse SessionStart Stop; do add_hook "$S" $e "$(xirp_hook $e)"; add_hook "$H" $e "$(xirp_hook $e)"; done; }
+orca_hooks() { for e in PermissionRequest Stop UserPromptSubmit; do add_hook "$S" $e "$orca_claude"; add_hook "$H" $e "$orca_codex"; done; }
+wrapper="$home/.claude/xirp-statusline-wrapper.sh"
+printf '#!/bin/bash\n# xirp-original-command: %s\nexport CHIRP_STATUSLINE_NESTED=1\nexec "%s"\n' "$kit_line" "$kit_line" > "$wrapper"
+chmod +x "$wrapper"
+slot() { jq --arg c "$1" 'if $c == "" then del(.statusLine) else .statusLine = {type: "command", command: $c} end' "$S" > "$S.tmp" && mv "$S.tmp" "$S"; }
+theirs() { jq -c '[.statusLine, (.hooks // {} | to_entries[] | .key as $e | .value[] | .hooks[]
+  | select(.command | test("xirp-external|agent-hooks")) | [$e, .command])]' "$1"; }
+fresh() { for f in "$S" "$H"; do cp "$f.saved" "$f"; done; rm -rf "$apps"/*.app; }
+doctor() {
+  full=$(HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --doctor 2>&1)
+  report=$(sed -n '/^Harnesses$/,/^[^ ]/{/^  /p;}' <<<"$full")
+}
+report_is() {
+  local title=$1 expected; shift; expected=$(printf '%s\n' "$@")
+  if [ "$report" = "$expected" ]; then echo "ok   $title"
+  else echo "FAIL $title"; diff <(echo "$expected") <(echo "$report") | sed 's/^/     /'; fail=1; fi
+}
+xirp_hooks; orca_hooks; slot "$wrapper"
+before_claude=$(theirs "$S") before_codex=$(theirs "$H")
+HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" --yes >/dev/null 2>&1
+check "re-running install.sh leaves Xirp's status line wrapper and every Xirp and Orca hook in place" \
+  '[ "$(theirs "$S")" = "$before_claude" ] && [ "$(theirs "$H")" = "$before_codex" ] \
+   && [ "$(jq length <<<"$before_claude")" = 8 ] && [ "$(jq length <<<"$before_codex")" = 8 ] \
+   && [ "$(jq -r ".[0].command" <<<"$before_claude")" = "$wrapper" ]'
+xirp_events="PermissionRequest, PreToolUse, SessionStart, Stop" orca_events="PermissionRequest, Stop, UserPromptSubmit"
+xirp_where="~/.claude/settings.json ($xirp_events)"
+orca_where="~/.claude/settings.json ($orca_events) and ~/.codex/hooks.json ($orca_events)"
+fresh; doctor
+check "with neither Xirp nor Orca installed or configured, the doctor prints nothing about them" \
+  '[ -z "$report" ] && ! grep -qiE "xirp|orca|harness" <<<"$full"'
+fresh; mkdir "$apps/Xirp.app"; xirp_hooks; slot "$wrapper"; doctor
+report_is "the doctor reports Xirp alone, and its wrapper running the status line" \
+  "  info  Xirp: app installed; hooks in $xirp_where" \
+  "  info  Orca: app not installed; no hooks" \
+  "  info  status line: run by a wrapper that runs the kit's, $wrapper"
+fresh; mkdir "$apps/Orca.app"; orca_hooks; slot "$home/other-statusline.sh"; doctor
+report_is "the doctor reports Orca alone, and a status line that isn't the kit's" \
+  "  info  Xirp: app not installed; no hooks" \
+  "  info  Orca: app installed; hooks in $orca_where" \
+  "  info  status line: run by something else, $home/other-statusline.sh"
+fresh; mkdir "$apps/Xirp.app" "$apps/Orca.app"; xirp_hooks; orca_hooks; slot ""; doctor
+report_is "with both, the doctor warns that Xirp's PermissionRequest hook can hold up Orca's permission prompt" \
+  "  info  Xirp: app installed; hooks in $xirp_where" \
+  "  info  Orca: app installed; hooks in $orca_where" \
+  "  info  status line: none" \
+  "  warn  Xirp's PermissionRequest hook also runs in Orca's sessions: a permission prompt there can wait up to 30 s for Xirp"
+fresh; xirp_hooks; orca_hooks; doctor
+report_is "the doctor warns about Xirp and Orca hooks left without their app, beside the kit's status line" \
+  "  warn  Xirp isn't in $apps, yet its hooks are in $xirp_where: remove them if Xirp is gone for good" \
+  "  warn  Orca isn't in $apps, yet its hooks are in $orca_where: remove them if Orca is gone for good" \
+  "  info  status line: run by the kit"
+for f in "$S" "$H"; do mv "$f.saved" "$f"; done
+rm -rf "$apps" "$wrapper"
+[ $made_codex_dir = 1 ] && rm -r "$home/.codex"
+[ $made_claude_dir = 1 ] && rm -r "$home/.claude"
 
 # The sample profile, installed as a user would: each extension point must do what its README says.
 semgrep_dir=$(dirname "$(PATH="$real_path" command -v semgrep 2>/dev/null || echo /nonexistent/semgrep)")
