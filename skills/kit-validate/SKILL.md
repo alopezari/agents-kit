@@ -78,6 +78,21 @@ Make every check repeatable in one command, because a fix sends you back to re-r
   - For an SVG or content revealed on scroll, `scrollintoview <selector>` and then take a viewport screenshot (`screenshot <path>`): an element screenshot of it comes out blank.
   - When a reload must see an edit, `open` the URL with a new query string (`?v=2`): `reload` can serve the cached page.
 
+  Record every UI check, so the report shows what happened instead of stating it. Once the page the check starts from is open:
+  1. Start the recording and put the check's id and case on the page, where the video and the screenshots show it:
+     ```bash
+     agent-browser --session <name> record start "$EV/<id>.webm" --cursor --contact-sheet-threshold 0.01
+     agent-browser --session <name> eval --stdin <<'JS'
+     (t => { const c = document.getElementById('kit-caption') || document.documentElement.appendChild(Object.assign(document.createElement('div'), { id: 'kit-caption' })); c.setAttribute('aria-hidden', 'true'); c.style.cssText = 'position:fixed;left:16px;bottom:16px;z-index:2147483647;pointer-events:none;background:rgba(17,24,39,.88);color:#fff;font:600 16px/1.3 system-ui,sans-serif;padding:8px 14px;border-radius:6px'; c.textContent = t })('C2 · Pay without a card (−)')
+     JS
+     ```
+     A navigation clears the caption: run the `eval` again after it. `--contact-sheet-threshold 0.01` matters: the default, 0.05, skips a filled-in field.
+  2. Run the check's actions, assertions and screenshots.
+  3. Stop the recording with `agent-browser --session <name> record stop` before the next check starts and before `close`. A browser that closes first leaves a 0-byte video, and the validate stamp refuses one. The stop also saves `$EV/<id>.contact-sheet.png`: the frames that changed, with the changes boxed and timed.
+  4. Record a failed check again once its cause is known, as `$EV/<id>-paced.webm`, with `--input-mode human` on each action and `wait 400` after it: the default pace makes a video of a second or two, too fast to follow, and this is the one someone will watch. A fix makes it stale: the passing re-run is the evidence then.
+
+  Recording needs ffmpeg (`brew install ffmpeg`). Without it `record start` fails: run the checks anyway, and say in the report that they have no video.
+
   With agent-browser missing, the UI checks are NOT RUN, with `npm install -g agent-browser && agent-browser install` as the step to run them. Use playwright-cli only for a check agent-browser can't do, with `PLAYWRIGHT_MCP_OUTPUT_DIR="$EV/playwright-cli"` set (it writes `.playwright-cli/` into the current directory otherwise), and name that check and why in the report. Don't drive a browser through an MCP or add an AI layer on top (`agent-browser chat`, Stagehand and the like): you choose the selectors and judge the results, and a check has to be a reproducible script whose evidence lands in `$EV`.
 
 **Advanced tests, only when triage selects them:**
@@ -110,7 +125,7 @@ Make every check repeatable in one command, because a fix sends you back to re-r
 
 ## 5. Report and clean up
 
-Report a table per block, `# | Check | Case (+/−) | Result | Evidence`. Result is PASS, FAIL or NOT RUN. Evidence is what you observed, in a few words (the status code, the output line, the query count), plus a link to its file by its absolute path, `$EV` written out: `[output](/Users/me/repo/.git/agents/evidence-repo-feat~x/A1.txt)`, and `![login page](/Users/me/repo/.git/agents/evidence-repo-feat~x/C2-login.png)` for a screenshot, so it shows in the report. Absolute, so the link opens with a click from the terminal as well as from the report. "Works" is not evidence, and a check without evidence counts as NOT RUN: the validate stamp refuses a PASS or FAIL row whose Evidence cell names no saved file. Then list:
+Report a table per block, `# | Check | Case (+/−) | Result | Evidence`. Result is PASS, FAIL or NOT RUN. Evidence is what you observed, in a few words (the status code, the output line, the query count), plus a link to its file by its absolute path, `$EV` written out: `[output](/Users/me/repo/.git/agents/evidence-repo-feat~x/A1.txt)`, and `![login page](/Users/me/repo/.git/agents/evidence-repo-feat~x/C2-login.png)` for a screenshot, so it shows in the report. A UI check also shows its contact sheet the same way and links its video: `![C2 frames](/Users/me/repo/.git/agents/evidence-repo-feat~x/C2.contact-sheet.png) [video](/Users/me/repo/.git/agents/evidence-repo-feat~x/C2.webm)`, plus the paced video when it failed. Absolute, so the link opens with a click from the terminal as well as from the report. "Works" is not evidence, and a check without evidence counts as NOT RUN: the validate stamp refuses a PASS or FAIL row whose Evidence cell names no saved file, and an empty video in `$EV`. Then list:
 - what was only unit-tested;
 - what failed and was fixed in the same change;
 - what couldn't run locally, and why.
