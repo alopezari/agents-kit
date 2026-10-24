@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 
 SCRIPT = os.path.expanduser("~/.agents/repos/_shared/verify_auto.py")
@@ -500,9 +501,13 @@ def pytest_red_check_without_a_conclusive_case_is_skipped(base):
 def pytest_red_check_hanging_runner_is_skipped(base):
     repo = py_change(base)
     write(repo, ".venv/bin/pytest", open(os.path.join(repo, ".venv/bin/pytest")).read().replace(
-        "if grep -q fixed", "pwd -P > \"$bin/red\"; exec sleep 30\nif grep -q fixed"), executable=True)
+        "if grep -q fixed", "pwd -P > \"$bin/red\"; sleep 30 & wait\nif grep -q fixed"),
+        executable=True)
+    start = time.time()
     code, out = verify(repo, MINIMAL_PATH, red_check_timeout=1)
     assert code == 0 and [l for l in lines(out, "skipped: red check (") if "timed out after 1s" in l], out
+    # Killing only the runner leaves its child holding the output pipe, so verify would wait the full 30 s for it.
+    assert time.time() - start < 15, f"the runner's child outlived the timeout ({time.time() - start:.0f}s)"
     copy = red_run(repo)[0]
     assert "agents-red-" in copy and not os.path.exists(copy), "the pristine copy was left behind after the timeout"
 
