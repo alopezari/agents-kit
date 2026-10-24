@@ -1733,7 +1733,8 @@ def validate_stamp_checks_criteria_coverage(base):
     for empty in ("", "-", "\u2014", "**\u2014**", "`-`"):
         refused(one + validation_row("A3", "AC2", "+", "NOT RUN", empty), "AC2", criteria=manual)
     refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: tests/test_x.py, then a manual look"))
-    for verify in ("by hand on staging", "manually, in the app", "manual: staging", "this can't be automated", "It Cannot Be Automated", "not automatable"):
+    for verify in ("by hand on staging", "manually, in the app", "manual: staging", "this can't be automated", "It Cannot Be Automated", "not automatable",
+                   "staging only, the runbook says `cannot be automated`"):
         done = attempt(covered, criteria=("1. One. \u2014 verify: tests/a.py", f"2. Two. \u2014 verify: {verify}"))
         assert done.returncode == 0, f"{verify!r} is not automatable: {done.stderr}"
     assert attempt(one + two_plus + two_minus_ran, criteria=manual).returncode == 0, "a manual criterion with PASS and \u2212 rows is covered too"
