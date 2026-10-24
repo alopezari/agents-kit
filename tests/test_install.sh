@@ -151,7 +151,7 @@ for f in "${settings_files[@]}"; do rm -f "$f"; [ -e "$f.saved" ] && mv "$f.save
 [ $made_codex_dir = 1 ] && rm -r "$home/.codex"
 [ $made_claude_dir = 1 ] && rm -r "$home/.claude"
 
-# A program whose --version never answers, even one leaving a child that holds its output, costs the time-out, not the run.
+# A program whose --version never answers, even one leaving a child that holds its output, costs 10 s, not the run.
 mkdir -p "$home/fakes/hung"
 printf '#!/bin/sh\nsleep 600\n' > "$home/fakes/hung/hungdep"
 printf '#!/bin/sh\necho "fastdep 3.4.5"\n' > "$home/fakes/hung/fastdep"
@@ -178,7 +178,7 @@ try:
 except ProcessLookupError:
     pass
 sys.exit(code)' "$home/hung.out" $((hung_calls * 10 + 60)) \
-  env PATH="$home/fakes/hung:$PATH" HOME="$home" AGENTS_SKIP_LAUNCHD=1 AGENTS_VERSION_TIMEOUT=10 "$home/.agents/install.sh" $mode; status=$?
+  env PATH="$home/fakes/hung:$PATH" HOME="$home" AGENTS_SKIP_LAUNCHD=1 "$home/.agents/install.sh" $mode; status=$?
 elapsed=$((SECONDS - started)); out=$(cat "$home/hung.out")
 check "install.sh $mode: a --version that never answers gives up after 10 s each ($elapsed s for $hung_calls), says so and the run goes on" \
   '[ $status = 0 ] && [ $elapsed -lt $((hung_calls * 10 + 20)) ] \

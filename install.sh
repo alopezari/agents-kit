@@ -92,8 +92,7 @@ baseline() {
 
 # bounded <program> [args...]: run it on no input for at most VERSION_TIMEOUT seconds, then exit 124. The whole process
 # group goes: a child left holding its output would keep $(...) waiting after the program itself exits. macOS has no timeout.
-# A working program can take over 10 s on a busy machine (semgrep on a CI runner did); the tests shorten it.
-VERSION_TIMEOUT=${AGENTS_VERSION_TIMEOUT:-30}
+VERSION_TIMEOUT=10
 bounded() {
   python3 - "$VERSION_TIMEOUT" "$@" <<'PY'
 import os, signal, subprocess, sys
