@@ -571,8 +571,8 @@ def test_type_problems(text, evidence):
             kind, ran, cell = (cells[i] for i in columns)
             ran = re.sub(r"[\s*_`]", "", ran).lower()
             why = (None if (ran == "yes" and names_a_file(cell, files)) or (ran == "no" and has_reason(cell))
-                   else "Ran yes, but its Evidence names no saved file" if ran == "yes"
-                   else "Ran no, but its Evidence gives no reason" if ran == "no" else "its Ran is neither yes nor no")
+                   else "Ran yes but an Evidence naming no saved file" if ran == "yes"
+                   else "Ran no but no reason in Evidence" if ran == "no" else "a Ran that is neither yes nor no")
             rows.append((re.findall(r"[a-z0-9]+", kind.lower()), kind, why))
     if not table:
         return [f"The report has no `## Test types` table (`| Type | Ran | Evidence |`): bin/triage selects {'; '.join(selected)} "
