@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 
@@ -366,8 +367,8 @@ def clone(path, remote):
 
 
 def repos_of_sessions(home, directories):
-    """The repos the extractor gives one session started in each of `directories`, in transcripts named in that
-    order; keyed by directory."""
+    """The repos the extractor gives one session started in each of `directories`, one transcript each; keyed by
+    directory."""
     os.makedirs(os.path.join(home, ".claude", "projects", "p"), exist_ok=True)
     for i, directory in enumerate(directories):
         rows = [user(0, "go", "main"), *assistant(1, "m0", "main", [TEXT])]
@@ -396,14 +397,43 @@ def an_orca_worktree_takes_its_repo_from_git(home):
 def a_removed_orca_worktree_takes_its_repo_from_the_main_checkout(home):
     main = os.path.join(home, "src", "shop")
     clone(main, "git@github.com:o/shop.git")
-    removed = [os.path.join(home, "orca", "workspaces", "shop", "cart"), os.path.join(home, "custom", "shop", "cart")]
-    for order in ([main, *removed], [*removed, main]):  # the checkout's transcript read before the worktree's, then after
+    removed = [os.path.join(home, "orca", "workspaces", "shop", "cart"),
+               os.path.join(home, "orca", "workspaces", "shop", "fix-worktree-cache")]  # Orca's rule, not Xirp's
+    for order in ([main, *removed], [*removed, main]):  # the checkout's transcript among the first read, then the last
         found = repos_of_sessions(home, order)
-        assert found == {path: {"o/shop": ["shop"]} for path in order}, f"read in the order {order}: {found}"
-    # A flat layout keeps no repo name; a Xirp-shaped worktree whose main checkout is gone keeps Xirp's rule.
-    flat, xirp = os.path.join(home, "orca", "workspaces", "shop-cart"), os.path.join(home, "x", "shop", "kit-worktree-gone")
-    found = repos_of_sessions(home, [main, flat, xirp])
-    assert found[flat] == {} and found[xirp] == {}, found
+        assert found == {path: {"o/shop": ["shop"]} for path in order}, f"sessions in {order}: {found}"
+    # Flat and custom layouts keep no repo name, even when a directory in the path is named like a repo; a Xirp-shaped
+    # worktree whose main checkout is gone keeps Xirp's rule.
+    clone(os.path.join(home, "src", "workspaces"), "git@github.com:o/workspaces.git")
+    flat, custom = os.path.join(home, "orca", "workspaces", "shop-cart"), os.path.join(home, "custom", "shop", "cart")
+    xirp = os.path.join(home, "x", "shop", "kit-worktree-gone")
+    found = repos_of_sessions(home, [main, os.path.join(home, "src", "workspaces"), flat, custom, xirp])
+    assert found[flat] == {} and found[custom] == {} and found[xirp] == {}, found
+
+
+def a_removed_orca_worktree_finds_its_checkout_anywhere_a_session_ran(home):
+    main = os.path.join(home, "src", "shop")
+    clone(main, "git@github.com:o/shop.git")
+    removed = os.path.join(home, "orca", "workspaces", "shop", "cart")
+    # The checkout appears only after a session's first directory: a later cwd of a Claude transcript ...
+    later = os.path.join(home, ".claude", "projects", "p", "later.jsonl")
+    os.makedirs(os.path.dirname(later), exist_ok=True)
+    with open(later, "w") as fh:
+        fh.writelines(json.dumps({"type": "progress", "cwd": d}) + "\n" for d in (os.path.join(home, "gone"), main))
+    found = repos_of_sessions(home, [removed])
+    assert found[removed] == {"o/shop": ["shop"]}, f"a checkout named in a transcript's later line: {found}"
+    # ... or only a Codex rollout.
+    rollout = os.path.join(home, ".codex", "sessions", "r.jsonl")
+    os.makedirs(os.path.dirname(rollout))
+    with open(rollout, "w") as fh:
+        fh.write(json.dumps({"type": "session_meta", "payload": {"cwd": main}}) + "\n")
+    db = sqlite3.connect(os.path.join(home, ".codex", "state_5.sqlite"))
+    db.execute("create table threads (rollout_path, model, reasoning_effort, tokens_used, source, created_at)")
+    db.execute("insert into threads values (?, 'm', 'high', 1, 'cli', strftime('%s','now'))", (rollout,))
+    db.commit()
+    db.close()
+    found = repos_of_sessions(home, [removed])
+    assert found[removed] == {"o/shop": ["shop"]}, f"a checkout only a Codex session ran in: {found}"
 
 
 def a_removed_orca_worktree_without_one_main_checkout_stays_unattributed(home):
@@ -433,6 +463,7 @@ for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_
              builds_come_from_their_transcripts, opus_prices_and_usage_without_the_cache_split,
              advisor_calls_and_what_the_table_cannot_price, a_session_without_builds_lists_none,
              an_orca_worktree_takes_its_repo_from_git, a_removed_orca_worktree_takes_its_repo_from_the_main_checkout,
+             a_removed_orca_worktree_finds_its_checkout_anywhere_a_session_ran,
              a_removed_orca_worktree_without_one_main_checkout_stays_unattributed):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]

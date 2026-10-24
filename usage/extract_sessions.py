@@ -42,11 +42,14 @@ BRANCH_NAME = re.compile(r"[\w][\w./+-]*$")
 # Files no repo holds: an edit there is neither the spec nor code.
 SCRATCH_PATH = re.compile(r"^(/private)?/tmp/|^/var/folders/|^" + re.escape(HOME + "/.claude/"))
 # A session's repo comes from git while its directory exists, whatever tool made the worktree. Once a worktree is
-# removed: Xirp's, <main checkout>-worktree-<session>, takes its main checkout's repo; Orca's nested one,
-# <dir>/<repo>/<worktree> (~/orca/workspaces or a custom dir), takes the repo of the one main checkout named <repo>
-# among every scanned session's existing directory, and none when there is no such checkout or two with different
-# remotes. Orca's flat <dir>/<worktree> keeps no repo name, so it stays without one.
+# removed: Xirp's, <main checkout>-worktree-<session>, takes its main checkout's repo; Orca's nested one under its
+# default dir, ~/orca/workspaces/<repo>/<worktree>, takes the repo of the one main checkout named <repo> among the
+# directories the scanned sessions ran in, and none when there is no such checkout or two with different remotes.
+# Orca's flat layout and custom dirs keep no path a repo can be told from, so their removed worktrees stay without one.
+ORCA_WORKSPACES = f"{HOME}/orca/workspaces/"
 REMOVED_WORKTREE = re.compile(r"(.*)-worktree-[^/]+")
+# Every "cwd" a Claude transcript or Codex rollout records, read without parsing each line.
+CWD_FIELD = re.compile(r'"cwd":\s*"((?:[^"\\]|\\.)*)"')
 REMOTE_REPO = re.compile(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$")
 # USD per million tokens (input, 5-minute cache write, 1-hour cache write, cache read, output), from
 # platform.claude.com/docs/en/about-claude/pricing on 2026-10-23, where the 1M context ("[1m]") costs the same. A model
@@ -162,11 +165,13 @@ def branch_changes(command):
 @functools.lru_cache(maxsize=None)
 def checkout(cwd):
     """(GitHub owner/name, the kit's repo name: the main checkout's directory) for a session directory, from its
-    main checkout once the worktree is gone (REMOVED_WORKTREE); None outside a repo with an origin remote."""
-    removed = REMOVED_WORKTREE.match(cwd)
-    if not removed and not os.path.isdir(cwd):
-        repos = checkouts_by_name().get(os.path.basename(os.path.dirname(cwd)), set())
+    main checkout once the worktree is gone (ORCA_WORKSPACES, REMOVED_WORKTREE); None outside a repo with an origin
+    remote."""
+    if cwd.startswith(ORCA_WORKSPACES) and not os.path.isdir(cwd):  # checked first: Orca's names can hold -worktree-
+        repo, _, worktree = cwd[len(ORCA_WORKSPACES):].partition("/")
+        repos = checkouts_by_name().get(repo, set()) if worktree else set()
         return next(iter(repos)) if len(repos) == 1 else None
+    removed = REMOVED_WORKTREE.match(cwd)
     for directory in dict.fromkeys([cwd, removed.group(1) if removed else cwd]):
         if not os.path.isdir(directory):
             continue
@@ -185,21 +190,15 @@ def checkout(cwd):
 
 @functools.lru_cache(maxsize=None)
 def checkouts_by_name():
-    """The kit's repo name -> the (remote, name) pairs of every existing directory a scanned session started in. It
+    """The kit's repo name -> the (remote, name) pairs of every existing directory a scanned session ran in. It
     reads every transcript before answering, so no lookup depends on the order sessions are read in."""
-    def first(f, directory_of):
-        for line in open(f, errors="ignore"):
+    directories = set()
+    for f in [*glob.glob(f"{HOME}/.claude/projects/*/*.jsonl"), *codex_rollouts()]:
+        for value in CWD_FIELD.findall(open(f, errors="ignore").read()):
             try:
-                directory = directory_of(json.loads(line))
-            except (ValueError, AttributeError):
+                directories.add(json.loads(f'"{value}"'))
+            except ValueError:
                 continue
-            if directory:
-                return directory
-        return ""
-
-    directories = {first(f, lambda e: e.get("cwd")) for f in glob.glob(f"{HOME}/.claude/projects/*/*.jsonl")}
-    directories |= {first(f, lambda e: e.get("type") == "session_meta" and (e.get("payload") or {}).get("cwd"))
-                    for f in codex_rollouts()}
     found = {}
     for directory in directories:
         if os.path.isdir(directory) and not directory.startswith(EXCLUDE_CWD) and (repo := checkout(directory)):

@@ -462,28 +462,33 @@ hooks_in() {
   jq -r --arg part "$2" '[.hooks // {} | to_entries[] | select(any(.value[]?.hooks[]?; .command // "" | contains($part)))
     | .key] | sort | join(", ")' "$1" 2>/dev/null || echo unreadable
 }
-# harness <app> <hooks found, as "<file> <events>" lines>: one line on the app and where its hooks are.
+app_installed() { [ -d "$APPLICATIONS/$1.app" ] || [ -d "$HOME/Applications/$1.app" ]; }
+# harness <app> <hooks found, as "<file> <events>" lines>: one line on the app and where its hooks are. A file that
+# can't be read is named as such: it says nothing about whether the app's hooks are there.
 harness() {
-  local app=$1 where="" file events
+  local app=$1 where="" unread="" file events
   while read -r file events; do
     case $events in
       "") ;;
-      unreadable) where+="${where:+ and }$file (can't be read)" ;;
+      unreadable) unread+="${unread:+ and }$file" ;;
       *) where+="${where:+ and }$file ($events)" ;;
     esac
   done <<<"$2"
-  if [ -d "$APPLICATIONS/$app.app" ]; then info "$app: app installed; ${where:+hooks in }${where:-no hooks}"
-  elif [ -n "$where" ]; then warn "$app isn't in $APPLICATIONS, yet its hooks are in $where: remove them if $app is gone for good"
-  else info "$app: app not installed; no hooks"; fi
+  [ -n "$unread" ] && unread="; $unread can't be read"
+  if app_installed "$app"; then info "$app: app installed; ${where:+hooks in }${where:-no hooks}$unread"
+  elif [ -n "$where" ]; then warn "$app isn't installed, yet its hooks are in $where: remove them if $app is gone for good$unread"
+  else info "$app: app not installed; no hooks$unread"; fi
 }
 xirp_claude=$(hooks_in "$HOME/.claude/settings.json" xirp-external/hook-scripts/)
+xirp_codex=$(hooks_in "$HOME/.codex/hooks.json" xirp-external/hook-scripts/)
 orca_claude=$(hooks_in "$HOME/.claude/settings.json" agent-hooks/claude-hook.sh)
 orca_codex=$(hooks_in "$HOME/.codex/hooks.json" agent-hooks/codex-hook.sh)
 found() { [ -n "$1" ] && [ "$1" != unreadable ]; }
-if [ -d "$APPLICATIONS/Xirp.app" ] || [ -d "$APPLICATIONS/Orca.app" ] \
-   || found "$xirp_claude" || found "$orca_claude" || found "$orca_codex"; then
+if app_installed Xirp || app_installed Orca \
+   || found "$xirp_claude" || found "$xirp_codex" || found "$orca_claude" || found "$orca_codex"; then
   echo "Harnesses"
-  harness Xirp "~/.claude/settings.json $xirp_claude"
+  harness Xirp "~/.claude/settings.json $xirp_claude
+~/.codex/hooks.json $xirp_codex"
   harness Orca "~/.claude/settings.json $orca_claude
 ~/.codex/hooks.json $orca_codex"
   runner_command=$(jq -r '.statusLine.command // ""' "$HOME/.claude/settings.json" 2>/dev/null) || true
@@ -494,7 +499,7 @@ if [ -d "$APPLICATIONS/Xirp.app" ] || [ -d "$APPLICATIONS/Orca.app" ] \
     none) info "status line: none" ;;
     unreadable) info "status line: ~/.claude/settings.json can't be read" ;;
   esac
-  if [ -d "$APPLICATIONS/Orca.app" ] && [[ ", $xirp_claude," = *", PermissionRequest,"* ]]; then
+  if app_installed Orca && [[ ", $xirp_claude, $xirp_codex," = *", PermissionRequest,"* ]]; then
     info "Xirp's PermissionRequest hook also runs in Orca's sessions: a permission prompt there can wait up to 30 s for Xirp"
   fi
 fi

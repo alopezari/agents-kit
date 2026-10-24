@@ -237,7 +237,7 @@ check "re-running install.sh leaves Xirp's status line wrapper and every Xirp an
    && [ "$(jq length <<<"$before_claude")" = 8 ] && [ "$(jq length <<<"$before_codex")" = 8 ] \
    && [ "$(jq -r ".[0].command" <<<"$before_claude")" = "$wrapper" ]'
 xirp_events="PermissionRequest, PreToolUse, SessionStart, Stop" orca_events="PermissionRequest, Stop, UserPromptSubmit"
-xirp_where="~/.claude/settings.json ($xirp_events)"
+xirp_where="~/.claude/settings.json ($xirp_events) and ~/.codex/hooks.json ($xirp_events)"
 orca_where="~/.claude/settings.json ($orca_events) and ~/.codex/hooks.json ($orca_events)"
 fresh; doctor
 check "with neither Xirp nor Orca installed or configured, the doctor prints nothing about them" \
@@ -253,16 +253,26 @@ report_is "the doctor reports Orca alone, and a status line that isn't the kit's
   "  info  Orca: app installed; hooks in $orca_where" \
   "  info  status line: run by something else, $home/other-statusline.sh"
 fresh; mkdir "$apps/Xirp.app" "$apps/Orca.app"; xirp_hooks; orca_hooks; slot ""; doctor
-report_is "with both, the doctor warns that Xirp's PermissionRequest hook can hold up Orca's permission prompt" \
+report_is "with both, the doctor notes that Xirp's PermissionRequest hook can hold up Orca's permission prompt" \
   "  info  Xirp: app installed; hooks in $xirp_where" \
   "  info  Orca: app installed; hooks in $orca_where" \
   "  info  status line: none" \
   "  info  Xirp's PermissionRequest hook also runs in Orca's sessions: a permission prompt there can wait up to 30 s for Xirp"
 fresh; xirp_hooks; orca_hooks; doctor
 report_is "the doctor warns about Xirp and Orca hooks left without their app, beside the kit's status line" \
-  "  warn  Xirp isn't in $apps, yet its hooks are in $xirp_where: remove them if Xirp is gone for good" \
-  "  warn  Orca isn't in $apps, yet its hooks are in $orca_where: remove them if Orca is gone for good" \
+  "  warn  Xirp isn't installed, yet its hooks are in $xirp_where: remove them if Xirp is gone for good" \
+  "  warn  Orca isn't installed, yet its hooks are in $orca_where: remove them if Orca is gone for good" \
   "  info  status line: run by the kit"
+fresh; mkdir "$apps/Orca.app"; add_hook "$S" Stop "$(xirp_hook Stop)"; add_hook "$H" Stop "$orca_codex"; doctor
+report_is "without Xirp's PermissionRequest hook there is no note, and each hook is reported in its own file" \
+  "  warn  Xirp isn't installed, yet its hooks are in ~/.claude/settings.json (Stop): remove them if Xirp is gone for good" \
+  "  info  Orca: app installed; hooks in ~/.codex/hooks.json (Stop)" \
+  "  info  status line: run by the kit"
+fresh; mkdir "$apps/Orca.app"; echo '{"permissions": {' > "$S"; doctor
+report_is "a settings file that can't be read is named, not taken for hooks left behind" \
+  "  info  Xirp: app not installed; no hooks; ~/.claude/settings.json can't be read" \
+  "  info  Orca: app installed; no hooks; ~/.claude/settings.json can't be read" \
+  "  info  status line: ~/.claude/settings.json can't be read"
 for f in "$S" "$H"; do mv "$f.saved" "$f"; done
 rm -rf "$apps" "$wrapper"
 [ $made_codex_dir = 1 ] && rm -r "$home/.codex"
