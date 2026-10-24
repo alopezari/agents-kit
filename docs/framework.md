@@ -151,14 +151,14 @@ Used when a repository has no hand-written verify. Only tests related to the cha
 
 | Files | What runs |
 |---|---|
-| `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` | ESLint on changed lines; Vitest or Jest on the tests related to the changed files; the red check through the package.json `test` script. |
+| `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` | ESLint on changed lines; Vitest or Jest on the tests related to the changed files; the red check through the package.json `test` script; diff coverage through c8. |
 | `.php` | php -l; PHPCS and PHPStan on changed lines when the project configures them; PHPUnit on related test classes. |
-| `.py` | Ruff on changed lines; pytest on the related test_<module>.py or <module>_test.py files, then the red check on the changed ones. |
+| `.py` | Ruff on changed lines; pytest on the related test_<module>.py or <module>_test.py files, then the red check on the changed ones; diff coverage through coverage.py. |
 | `.go` | gofmt -l on changed files; go vet and go test on the changed packages. |
 | `.rs` | cargo check on the crate. |
 | `.sh`, `.bash` | ShellCheck on changed lines. |
 
-ESLint, Ruff and pytest come from the project (`node_modules/.bin`, `.venv/bin`) when installed there, else from `PATH`. PHP tools and JavaScript test runners only run when the project installs them (`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped. When a change edits both tests and code, the red check runs the changed tests on a pristine copy of the merge-base, where at least one must fail, through pytest or `npm test` (npm from `PATH`); one it can't run is skipped.
+ESLint, Ruff and pytest come from the project (`node_modules/.bin`, `.venv/bin`) when installed there, else from `PATH`. PHP tools and JavaScript test runners only run when the project installs them (`vendor/bin`, `node_modules/.bin`); otherwise they are reported as skipped. When a change edits both tests and code, the red check runs the changed tests on a pristine copy of the merge-base, where at least one must fail, through pytest or `npm test` (npm from `PATH`); one it can't run is skipped. Diff coverage runs the related pytest run under coverage.py, when the Python behind pytest (its venv's, or the one its shebang names) imports it, and the Vitest or Jest run (without one, the red check's working-tree `npm test`) under `node_modules/.bin/c8`, collecting only the changed non-test files: `ran: diff coverage` says how many changed executable lines the tests ran and lists the uncovered ones and the changed files missing from the report. It is report-only, never fails the run, and is skipped with the reason when it can't measure.
 
 ### Hand-written, per repository
 

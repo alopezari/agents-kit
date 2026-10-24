@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """repos/_shared/verify_changed.py: linters configured for --cwd only judge files inside it, a linter whose
-config excludes every changed file isn't a failure, and the red check's copy keeps export-ignored test files.
+config excludes every changed file isn't a failure, the red check's copy keeps export-ignored test files, and the
+diff coverage summary counts only changed executable lines.
 
 Runs against throwaway repos with fake phpcs, phpstan and phpunit.
 """
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -131,9 +133,32 @@ def red_check_reports_tests_that_pass_without_the_change(base):
         proc.stdout
 
 
+def diff_coverage_counts_changed_executable_lines_and_caps_its_lists(base):
+    spec = importlib.util.spec_from_file_location("verify_changed", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    changes = {"pkg/mod.py": {2, 3, 4}, "pkg/new.py": None, "pkg/gone.py": {1}}
+    report = {"pkg/mod.py": ({1, 2}, {1, 2, 3}), "pkg/new.py": ({1}, {1, 2, 3}), "pkg/other.py": ({1}, {1})}
+    assert module.diff_coverage(changes, sorted(changes), report) == (
+        "2 of 5 changed lines covered by the related tests (40%); uncovered: pkg/mod.py:3, pkg/new.py:2-3; "
+        "not in the report: pkg/gone.py", None), "an untracked file counts every executable line as changed"
+    summary, _ = module.diff_coverage({"a.py": None}, ["a.py"], {"a.py": (set(range(1, 200)), set(range(1, 201)))})
+    assert summary.startswith("199 of 200 changed lines covered by the related tests (99%)"), summary
+    many = {"a.py": set(range(1, 40)), **{f"m{i}.py": None for i in range(7)}}
+    summary, _ = module.diff_coverage(many, sorted(many), {"a.py": (set(), set(range(1, 40, 3)))})
+    assert summary == ("0 of 13 changed lines covered by the related tests (0%); uncovered: "
+                       + ", ".join(f"a.py:{n}" for n in range(1, 30, 3)) + ", +3 more; not in the report: "
+                       + ", ".join(f"m{i}.py" for i in range(5)) + ", +2 more"), summary
+    assert module.diff_coverage({"a.py": {4}}, ["a.py"], {"a.py": ({1}, {1, 2})}) == (
+        None, "no changed line is executable code in the report")
+    assert module.diff_coverage({"a.py": {4}}, ["a.py"], {}) == (
+        None, "no changed line is executable code in the report; not in the report: a.py")
+
+
 RESULTS = []
 for test in (files_outside_cwd_are_not_linted, repo_root_cwd_lints_everything, phpstan_with_nothing_in_scope_is_not_a_failure,
-             red_check_keeps_export_ignored_tests, red_check_reports_tests_that_pass_without_the_change):
+             red_check_keeps_export_ignored_tests, red_check_reports_tests_that_pass_without_the_change,
+             diff_coverage_counts_changed_executable_lines_and_caps_its_lists):
     base = tempfile.mkdtemp(prefix="agents-test-verify-changed-")
     try:
         test(base)
