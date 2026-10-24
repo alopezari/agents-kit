@@ -268,6 +268,13 @@ report_is "without Xirp's PermissionRequest hook there is no note, and each hook
   "  warn  Xirp isn't installed, yet its hooks are in ~/.claude/settings.json (Stop): remove them if Xirp is gone for good" \
   "  info  Orca: app installed; hooks in ~/.codex/hooks.json (Stop)" \
   "  info  status line: run by the kit"
+fresh; mkdir -p "$home/Applications/Orca.app"; add_hook "$H" PermissionRequest "$(xirp_hook PermissionRequest)"; doctor
+report_is "Orca in ~/Applications counts as installed, and Xirp's PermissionRequest hook in Codex's file alone brings the note" \
+  "  warn  Xirp isn't installed, yet its hooks are in ~/.codex/hooks.json (PermissionRequest): remove them if Xirp is gone for good" \
+  "  info  Orca: app installed; no hooks" \
+  "  info  status line: run by the kit" \
+  "  info  Xirp's PermissionRequest hook also runs in Orca's sessions: a permission prompt there can wait up to 30 s for Xirp"
+rm -r "$home/Applications"
 fresh; mkdir "$apps/Orca.app"; echo '{"permissions": {' > "$S"; doctor
 report_is "a settings file that can't be read is named, not taken for hooks left behind" \
   "  info  Xirp: app not installed; no hooks; ~/.claude/settings.json can't be read" \
