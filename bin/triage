@@ -27,7 +27,7 @@ import sys
 TEST_OR_DOC = re.compile(r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$"
                          r"|(^|/)(CHANGELOG|README|LICENSE)", re.I)
 STYLE_FILE = re.compile(r"\.(css|scss|sass|less)$", re.I)
-PROSE_FILE = re.compile(r"\.(md|txt|rst)$|(^|/)(CHANGELOG|README|LICENSE)", re.I)
+PROSE_FILE = re.compile(r"\.(md|txt|rst)$|(^|/)(CHANGELOG|README|LICENSE)(\.[a-z]+)?$", re.I)
 # A log or a session's output left in the tree is no part of the change, though the review stamp still covers it.
 DATA_FILE = re.compile(r"\.(jsonl|ndjson|log|out|err)$", re.I)
 UI_FILE = re.compile(r"\.(jsx?|tsx?|vue|svelte|astro|css|scss|sass|less|html|twig|mustache)$|(^|/)(templates?|views?|blocks?|components?)/", re.I)
