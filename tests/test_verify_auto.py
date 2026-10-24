@@ -658,6 +658,14 @@ def pytest_diff_coverage_uses_the_python_its_shebang_names(base):
     assert [l for l in lines(out, "skipped: diff coverage (") if "#!/usr/bin/env bash" in l], \
         "a launcher like a pyenv shim leaves the Python unknown:\n" + out
     assert len(read_lines(os.path.join(base, "py/bin/python-calls"))) == 3, "the unknown Python was probed"
+    shutil.rmtree(repo)
+    repo = py_coverage_change(base)
+    write(repo, ".venv/bin/pytest", f"#!{repo}/.venv/bin/python -O\n" + FAKE_RELATED_PYTEST.format(body="exit 0"),
+          executable=True)
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and lines(out, "ran: diff coverage (coverage.py): 2 of 5 "), out
+    run = read_lines(os.path.join(repo, ".venv/bin/python-calls"))[1]
+    assert run.split()[:4] == ["-O", "-m", "coverage", "run"], "a venv launcher's shebang flags were dropped:\n" + run
     assert len(read_lines(os.path.join(base, "bin/args"))) == 2, "the shim's pytest ran once"
 
 
@@ -778,12 +786,23 @@ def c8_measures_the_red_checks_working_tree_run(base):
     assert len(calls) == 1, calls
     args = calls[0].split()
     assert args[0] == "report" and f"--temp-directory={dirs[0]}" in args, args
-    for flag in ("--check-coverage=false", "--100=false", "--skip-full=false", "--reporter=json"):
+    for flag in ("--check-coverage=false", "--100=false", "--skip-full=false", "--all=false", "--reporter=json"):
         assert flag in args, f"{flag} missing: {args}"
     assert [a for a in args if a.startswith("--include=")] == ["--include=src/sum.js"], args
     assert read_lines(os.path.join(repo, "node_modules/.bin/c8-raw")) == ["coverage-1.json"], "c8 read another dir"
     assert not os.path.exists(os.path.dirname(dirs[0])), "the coverage temp dir was left behind"
     assert not os.path.exists(os.path.join(repo, "coverage")), "c8 wrote coverage/ into the working tree"
+
+
+def c8_leaves_out_blank_and_line_comment_lines(base):
+    repo, path = js_change(base)
+    with_c8(base, repo)
+    write(repo, "src/sum.js", "fixed;\n\n  // why\nmore;\n")
+    statements = [(1, 1), (2, 0), (3, 0), (4, 0)]
+    write(base, "c8-report.json", json.dumps(istanbul(f"{os.path.realpath(repo)}/src/sum.js", statements)))
+    code, out = verify(repo, path)
+    assert lines(out, "ran: diff coverage") == [
+        "ran: diff coverage (c8): 1 of 2 changed lines covered by the related tests (50%); uncovered: src/sum.js:4"], out
 
 
 def c8_reports_a_failing_working_tree_run(base):
@@ -800,11 +819,16 @@ def c8_report_failures_are_skipped(base):
     cases = [
         ("no report", 'echo "c8: cannot read" >&2; exit 1', {}, ["wrote no JSON report (exit 1)", "cannot read"]),
         ("an unreadable report", 'echo "{not json" > "$dir/coverage-final.json"', {}, ["unreadable"]),
+        ("a line number past a float's range",
+         'sed "s/\\"line\\": 1,/\\"line\\": 1e309,/" "{report}" > "$dir/coverage-final.json"', {}, ["unreadable"]),
         ("a hanging report step", "sleep 30 & wait", {"LINT_TIMEOUT": 1}, ["timed out after 1s"]),
+        # The report runs after the merge-base run, so one as slow as the red check's budget leaves it its verdict.
+        ("a report step as slow as the red check", "sleep 30 & wait", {"LINT_TIMEOUT": 6, "RED_CHECK_TIMEOUT": 6},
+         ["timed out after 6s"]),
     ]
     for why, step, timeouts, reasons in cases:
         repo, path = js_change(base)
-        with_c8(base, repo, report_step=step)
+        with_c8(base, repo, report_step=step, on_base="sleep 2; " + MOCHA_FAILING)
         code, out = verify(repo, path, timeouts=timeouts)
         assert code == 0 and [l for l in lines(out, "ran: red check: ") if "npm test" in l], f"{why}:\n{out}"
         assert [l for l in lines(out, "skipped: diff coverage (") if all(r in l for r in reasons)], f"{why}:\n{out}"
@@ -852,7 +876,7 @@ for t in [no_changes_is_nothing_to_check, unsupported_files_only, eslint_reports
           pytest_diff_coverage_reports_changed_lines, pytest_diff_coverage_uses_the_python_its_shebang_names,
           diff_coverage_skips_say_why, diff_coverage_keeps_the_related_run_verdict,
           coverage_that_fails_before_the_tests_reruns_them_without_it, c8_measures_the_red_checks_working_tree_run,
-          c8_reports_a_failing_working_tree_run, c8_report_failures_are_skipped,
+          c8_leaves_out_blank_and_line_comment_lines, c8_reports_a_failing_working_tree_run, c8_report_failures_are_skipped,
           c8_skips_vitest_projects_and_tests_only_changes]:
     test(t)
 
