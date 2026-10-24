@@ -167,9 +167,9 @@ def checkout(cwd):
     """(GitHub owner/name, the kit's repo name: the main checkout's directory) for a session directory, from its
     main checkout once the worktree is gone (ORCA_WORKSPACES, REMOVED_WORKTREE); None outside a repo with an origin
     remote."""
-    if cwd.startswith(ORCA_WORKSPACES) and not os.path.isdir(cwd):  # checked first: Orca's names can hold -worktree-
-        repo, _, worktree = cwd[len(ORCA_WORKSPACES):].partition("/")
-        repos = checkouts_by_name().get(repo, set()) if worktree else set()
+    repo, _, worktree = cwd.removeprefix(ORCA_WORKSPACES).partition("/")
+    if cwd.startswith(ORCA_WORKSPACES) and worktree and not os.path.isdir(cwd):  # checked first: Orca's names can hold -worktree-
+        repos = checkouts_by_name().get(repo, set())
         return next(iter(repos)) if len(repos) == 1 else None
     removed = REMOVED_WORKTREE.match(cwd)
     for directory in dict.fromkeys([cwd, removed.group(1) if removed else cwd]):
@@ -193,8 +193,11 @@ def checkouts_by_name():
     """The kit's repo name -> the (remote, name) pairs of every existing directory a scanned session ran in. It
     reads every transcript before answering, so no lookup depends on the order sessions are read in."""
     directories = set()
-    for f in [*glob.glob(f"{HOME}/.claude/projects/*/*.jsonl"), *codex_rollouts()]:
-        for value in CWD_FIELD.findall(open(f, errors="ignore").read()):
+    transcripts = [*glob.glob(f"{HOME}/.claude/projects/*/*.jsonl"), *glob.glob(f"{HOME}/.claude/projects/*/*/subagents/*.jsonl")]
+    for f in [*transcripts, *codex_rollouts()]:
+        with open(f, errors="ignore") as fh:
+            values = {value for line in fh for value in CWD_FIELD.findall(line)}
+        for value in values:
             try:
                 directories.add(json.loads(f'"{value}"'))
             except ValueError:

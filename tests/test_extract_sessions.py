@@ -409,13 +409,26 @@ def a_removed_orca_worktree_takes_its_repo_from_the_main_checkout(home):
     xirp = os.path.join(home, "x", "shop", "kit-worktree-gone")
     found = repos_of_sessions(home, [main, os.path.join(home, "src", "workspaces"), flat, custom, xirp])
     assert found[flat] == {} and found[custom] == {} and found[xirp] == {}, found
+    # A Xirp worktree beside a main checkout that lives in Orca's dir keeps Xirp's rule.
+    inside = os.path.join(home, "orca", "workspaces", "cafe")
+    clone(inside, "git@github.com:o/cafe.git")
+    sibling = inside + "-worktree-falcon"
+    found = repos_of_sessions(home, [sibling])
+    assert found[sibling] == {"o/cafe": ["cafe"]}, f"a removed Xirp worktree in Orca's dir: {found}"
 
 
 def a_removed_orca_worktree_finds_its_checkout_anywhere_a_session_ran(home):
     main = os.path.join(home, "src", "shop")
     clone(main, "git@github.com:o/shop.git")
     removed = os.path.join(home, "orca", "workspaces", "shop", "cart")
-    # The checkout appears only after a session's first directory: a later cwd of a Claude transcript ...
+    # The checkout appears only in a subagent's transcript ...
+    build = os.path.join(home, ".claude", "projects", "p", "s9", "subagents", "agent-b.jsonl")
+    os.makedirs(os.path.dirname(build))
+    with open(build, "w") as fh:
+        fh.write(json.dumps({"type": "assistant", "cwd": main}) + "\n")
+    found = repos_of_sessions(home, [removed])
+    assert found[removed] == {"o/shop": ["shop"]}, f"a checkout only a subagent ran in: {found}"
+    # ... after a session's first directory: a later cwd of a Claude transcript ...
     later = os.path.join(home, ".claude", "projects", "p", "later.jsonl")
     os.makedirs(os.path.dirname(later), exist_ok=True)
     with open(later, "w") as fh:
