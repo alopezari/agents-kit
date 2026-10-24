@@ -312,7 +312,7 @@ prune-merged [--dry-run]
 
 ```
 quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--shared N] [--criteria N] [--map-items N] [--outcomes fixed=N,wrong=N,...]
-quality-log test <type> --issues N [--secs S] [--notes "..."]
+quality-log test <type> --issues N [--flake] [--secs S] [--notes "..."]
 quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 ```
 

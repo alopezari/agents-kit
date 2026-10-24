@@ -246,10 +246,45 @@ def a_lens_with_no_findings_logs_without_outcomes(base):
     assert "outcomes" not in without and set(zeros["outcomes"].values()) == {0}, (without, zeros)
 
 
+TEST_TYPES = ("unit", "e2e", "integration", "browser", "query-budget", "accessibility", "property-based", "mutation",
+              "migration-round-trip", "visual", "design", "regex-worst-case")
+
+
+def accepts_each_canonical_test_type(base):
+    home = setup(base)
+    for name in TEST_TYPES:
+        out = log(home, "test", name, "--issues", "0")
+        assert out.returncode == 0, (name, out.stderr)
+    assert [row["name"] for row in entries(home)] == list(TEST_TYPES), entries(home)
+
+
+def refuses_other_test_type_spellings(base):
+    """The monthly job saw regex, regex-timing and regex-worst-case as three types: one name per family now."""
+    home = setup(base)
+    for name in ("regex", "regex-timing", "property", "typecheck", "Unit"):
+        out = log(home, "test", name, "--issues", "0")
+        assert out.returncode == 2, (name, out)
+        missing = [valid for valid in TEST_TYPES if valid not in out.stderr]
+        assert not missing, (name, missing, out.stderr)
+    assert entries(home) == [], "nothing was written"
+
+
+def marks_a_flaky_run(base):
+    home = setup(base)
+    for args in (["--issues", "0", "--flake"], ["--issues", "2", "--flake", "--secs", "40"], ["--issues", "1"]):
+        out = log(home, "test", "unit", *args)
+        assert out.returncode == 0, (args, out.stderr)
+    flake_only, flake_and_issue, plain = entries(home)
+    assert flake_only["flake"] is True and flake_only["issues"] == 0, flake_only
+    assert (flake_and_issue["flake"], flake_and_issue["issues"]) == (True, 2), flake_and_issue
+    assert "flake" not in plain, "no --flake writes no field, as the rows before it"
+
+
 for test in (writes_well_formed_entries, records_the_findings_the_other_model_shared, keeps_lens_names_to_the_lenses_there_are,
              refuses_malformed_entries, a_session_on_a_worktree_logs_to_the_main_checkout,
              other_kit_layouts_keep_their_rows_in_the_kit, records_each_findings_outcome,
-             refuses_malformed_outcomes, a_lens_with_no_findings_logs_without_outcomes, records_the_spec_and_diff_tiers):
+             refuses_malformed_outcomes, a_lens_with_no_findings_logs_without_outcomes, records_the_spec_and_diff_tiers,
+             accepts_each_canonical_test_type, refuses_other_test_type_spellings, marks_a_flaky_run):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)

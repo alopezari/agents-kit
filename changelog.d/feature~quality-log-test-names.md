@@ -1,0 +1,2 @@
+- `bin/quality-log test` takes one name per test family (`regex-worst-case` and `property-based`, not `regex`, `regex-timing` or `property`) and refuses any other, listing the valid names. `--flake` marks a run that hit a flake, which no longer counts as an issue.
+- The monthly review mining counts test runs per type from a summary that folds the older spellings into those names and reports flaky runs apart from runs that found an issue; it never rewrites the log.

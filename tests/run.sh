@@ -43,7 +43,7 @@ PY
 
 # Each section is a function section_<name> (dashes as underscores) that returns non-zero on any failure.
 sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wrapper" "baselines|harness baselines"
-  "semgrep|semgrep rules" "phase|flow phase" "quality-log|quality log input"
+  "semgrep|semgrep rules" "phase|flow phase" "quality-log|quality log input" "test-types|test type summary"
   "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree" "prune-merged|remove merged worktrees and branches"
   "pr-validation|pull request validation section" "approve|approvals from a dialog" "spec|spec lint and second reading" "build-ab|build-model A/B"
   "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes" "review-eval|review evals"
@@ -65,6 +65,7 @@ section_semgrep() {
 }
 section_phase() { python3 test_phase.py; }
 section_quality_log() { python3 test_quality_log.py; }
+section_test_types() { python3 test_test_types.py; }
 section_pr_comments() { python3 test_pr_comments.py; }
 section_free_branch() { python3 test_free_branch.py; }
 section_prune_merged() { python3 test_prune_merged.py; }
