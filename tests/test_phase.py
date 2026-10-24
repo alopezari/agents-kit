@@ -25,6 +25,7 @@ QUALITY_LOG = os.path.expanduser("~/.agents/logs/quality.jsonl")
 PHASE = os.path.expanduser("~/.agents/bin/phase")
 STAMP = os.path.expanduser("~/.agents/hooks/review_stamp.py")
 SPEC_PATH = os.path.expanduser("~/.agents/skills/kit-spec/path.sh")
+SPEC = "# Spec\n\n## Acceptance criteria\n1. The app runs. \u2014 verify: python3 app.py\n"  # stamp() covers AC1
 
 
 def sh(cwd, *cmd, env=None):
@@ -33,14 +34,17 @@ def sh(cwd, *cmd, env=None):
 
 def stamp(repo, kind):
     """Write a stamp as the kit does: verify kinds only come from the verify runner, which records them in-process,
-    and validate needs a report with evidence."""
+    and validate needs a report with evidence that covers SPEC's criterion and the test types triage selects."""
     if kind.startswith("verify"):
         code = f"import sys; sys.path.insert(0, {os.path.dirname(STAMP)!r}); import review_stamp as r; r.record_verify({kind!r}, r.fingerprint())"
         return sh(repo, "python3", "-c", code)
     if kind == "validate":  # the writer needs a report whose checks name their evidence
         reports = os.path.expanduser("~/.agents/bin/reports")
+        types = json.loads(sh(repo, os.path.expanduser("~/.agents/bin/triage"), "--json"))["tests"]
         with open(sh(repo, reports, "path", "validation"), "w") as fh:
-            fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | app runs | + | PASS | a1.txt |\n")
+            fh.write("| # | AC | Check | Case | Result | Evidence |\n|---|---|---|---|---|---|\n"
+                     "| A1 | AC1 | app runs | + | PASS | a1.txt |\n| A2 | AC1 | bad input refused | \u2212 | PASS | a1.txt |\n"
+                     "\n## Test types\n\n| Type | Ran | Evidence |\n|---|---|---|\n" + "".join(f"| {t} | yes | a1.txt |\n" for t in types))
         evidence = sh(repo, reports, "path", "evidence")
         assert os.path.isdir(evidence), f"no evidence directory from {reports}: {evidence!r}"
         with open(os.path.join(evidence, "a1.txt"), "w") as fh:
@@ -91,7 +95,7 @@ def walks_the_flow(base):
     sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
     assert phase(repo) == "spec"
     spec = sh(repo, SPEC_PATH)
-    open(spec, "w").write("# Spec\n")
+    open(spec, "w").write(SPEC)
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     assert phase(repo) == "build"
     stamp(repo, "verify-empty")
@@ -141,7 +145,7 @@ def pr_opened_without_follow_pr(base):
     repo = new_repo(base)
     sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
     spec = sh(repo, SPEC_PATH)
-    open(spec, "w").write("# Spec\n")
+    open(spec, "w").write(SPEC)
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     for kind in ("verify", "review", "validate"):
         stamp(repo, kind)
@@ -198,7 +202,7 @@ def no_spec_is_flagged_not_a_gate(base):
 def red_verify_after_self_review_stays_at_the_furthest_step(base):
     repo = new_repo(base)
     sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
-    open(sh(repo, SPEC_PATH), "w").write("# Spec\n")
+    open(sh(repo, SPEC_PATH), "w").write(SPEC)
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     stamp(repo, "review")
     assert phase(repo) == "validate · redo verify", "review is done; a red verify doesn't send it back to build"

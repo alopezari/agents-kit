@@ -1724,7 +1724,7 @@ def validate_stamp_checks_criteria_coverage(base):
     manual = ("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: manual check on staging")
     covered = one + validation_row("A3", "AC2", "+", "NOT RUN", "needs staging")
     assert attempt(covered, criteria=manual).returncode == 0, "a manual criterion is covered by a NOT RUN row with a reason"
-    for empty in ("", "-", "\u2014"):
+    for empty in ("", "-", "\u2014", "**\u2014**", "`-`"):
         refused(one + validation_row("A3", "AC2", "+", "NOT RUN", empty), "AC2", criteria=manual)
     refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: tests/test_x.py, then a manual look"))
     for verify in ("by hand on staging", "manually, in the app", "manual: staging", "this can't be automated", "It Cannot Be Automated", "not automatable"):
@@ -1732,6 +1732,9 @@ def validate_stamp_checks_criteria_coverage(base):
         assert done.returncode == 0, f"{verify!r} is not automatable: {done.stderr}"
     assert attempt(one + two_plus + two_minus_ran, criteria=manual).returncode == 0, "a manual criterion with PASS and \u2212 rows is covered too"
     refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. A `verify:` is manual here \u2014 verify: tests/b.py"))
+    refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. Its verify: manual once \u2014 verify: tests/b.py"))
+    for path in ("./manual.py", "/manual/check.py", "manual.sh"):  # a script named manual is a check that runs
+        refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", f"2. Two. \u2014 verify: {path}"))
 
 
 def validate_stamp_needs_a_readable_spec(base):
@@ -1752,7 +1755,8 @@ def validate_stamp_needs_a_readable_spec(base):
     assert done.returncode == 2 and "UTF-8" in done.stderr, done.stderr
     os.remove(spec)
     done = attempt(rows, criteria=None, types="")
-    assert done.returncode == 2 and "Test types" in done.stderr, "the test types check runs without a spec: " + done.stderr
+    assert done.returncode == 2 and "no `## Test types` table" in done.stderr, "the test types check runs without a spec: " + done.stderr
+    assert "No spec at" not in done.stdout, "the skip line goes with a written stamp: " + done.stdout
 
 
 def validate_stamp_checks_test_types(base):
@@ -1772,9 +1776,10 @@ def validate_stamp_checks_test_types(base):
     done = with_regex()
     assert done.returncode == 2 and "regex worst-case timing" in done.stderr and "Test types" in done.stderr, done.stderr
     assert with_regex(("regex", "no", "timed in A3's unit test")).returncode == 0, "a prefix of the label, run `no` with a reason"
-    for ran, cell in (("yes", "rc=0"), ("no", ""), ("no", "-"), ("maybe", "a1.txt")):
+    for ran, cell, why in (("yes", "rc=0", "no saved file"), ("no", "", "no reason"), ("no", "-", "no reason"),
+                           ("no", "**\u2014**", "no reason"), ("maybe", "a1.txt", "neither yes nor no")):
         done = with_regex(("regex", ran, cell))
-        assert done.returncode == 2 and "regex worst-case timing" in done.stderr, (ran, cell, done.stderr)
+        assert done.returncode == 2 and "regex worst-case timing" in done.stderr and why in done.stderr, (ran, cell, done.stderr)
     done = with_regex(("regex", "yes", "[out](A3.txt)"))
     assert done.returncode == 2, "A3.txt isn't saved yet: " + done.stderr
     with open(os.path.join(evidence, "A3.txt"), "w") as fh:

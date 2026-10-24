@@ -43,8 +43,8 @@ NOT_BEHAVIOR = re.compile(
 SPEC_LOOKUP_SECS = 10
 TRIAGE_SECS = 60
 NEGATIVE_CASE = re.compile(r"[\u2212\u00b1]|(?<![\w-])-(?![\w-])")  # −, ± or a lone hyphen; `regression` and `+` aren't
-# A criterion no test can check: its `verify:` starts with manual/by hand, or says it can't be automated.
-MANUAL_VERIFY = re.compile(r"\W*(manual(ly)?|by hand)\b|.*\b(can[\u2019']t be automated|cannot be automated|not automatable)", re.I)
+# A criterion no test can check: its `verify:` starts with manual/by hand (not a path: ./manual.py), or says it can't be automated.
+MANUAL_VERIFY = re.compile(r"[\s*_]*(manual(ly)?|by hand)(?!\.?[\w/-])|.*\b(can[\u2019']t be automated|cannot be automated|not automatable)", re.I)
 # CI checks the changelog entry, and it is often written last: adding it re-runs nothing.
 NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?\Z|(^|/)changelog\.d/[^/]+\.md\Z", re.I)
 VERIFY_KINDS = ("verify", "verify-empty")
@@ -403,7 +403,7 @@ def names_a_file(cell, files):
 
 
 def has_reason(cell):
-    return bool(cell.strip(" \t-\u2013\u2014"))
+    return bool(cell.strip(" \t-\u2013\u2014*_`"))
 
 
 def result_rows(lines, evidence):
@@ -518,10 +518,11 @@ def criteria_problems(items, rows):
                 for row in rows for n in row[4] or [] if n not in numbers]
     for number, item in zip(numbers, items):
         mine = [row for row in rows if number in (row[4] or [])]
-        verify = re.search(r"(?<![`\w])verify:\s*(.*)$", item, re.I)  # not a `verify:` quoted in the criterion's own words
-        if verify and MANUAL_VERIFY.match(verify.group(1)) and any(r[1] == "NOT RUN" and has_reason(r[2]) for r in mine):
+        # The last `verify:`, as kit-spec ends a criterion with it, and not one quoted in the criterion's own words.
+        verify = re.split(r"(?<![`\w])verify:\s*", item, flags=re.I)[1:][-1:]
+        if verify and MANUAL_VERIFY.match(verify[0]) and any(r[1] == "NOT RUN" and has_reason(r[2]) for r in mine):
             continue
-        manual = " (or, as its check is manual, a NOT RUN row naming it with the reason in Evidence)" if verify and MANUAL_VERIFY.match(verify.group(1)) else ""
+        manual = " (or, as its check is manual, a NOT RUN row naming it with the reason in Evidence)" if verify and MANUAL_VERIFY.match(verify[0]) else ""
         if not any(r[1] == "PASS" for r in mine):
             problems.append(f"AC{number} has no PASS row: add a row with AC{number} in its AC cell and Result PASS{manual}.")
         if not any(r[1] in ("PASS", "FAIL") and NEGATIVE_CASE.search(r[5]) for r in mine):
@@ -559,22 +560,32 @@ def test_type_problems(text, evidence):
     if why:
         return [why]
     section = re.search(r"^## Test types[ \t]*$(.*?)(?=^## |\Z)", text, re.M | re.S | re.I)
-    files, rows, columns = evidence_files(evidence), [], None
+    files, rows, columns, table = evidence_files(evidence), [], None, False
     for line in (section.group(1) if section else "").splitlines():
         cells = table_cells(line)
         if not cells:
             columns = None
         elif {"Type", "Ran", "Evidence"} <= {c.strip("*_") for c in cells}:
-            columns = [[c.strip("*_") for c in cells].index(name) for name in ("Type", "Ran", "Evidence")]
+            columns, table = [[c.strip("*_") for c in cells].index(name) for name in ("Type", "Ran", "Evidence")], True
         elif columns and len(cells) > max(columns):
             kind, ran, cell = (cells[i] for i in columns)
             ran = re.sub(r"[\s*_`]", "", ran).lower()
-            if (ran == "yes" and names_a_file(cell, files)) or (ran == "no" and has_reason(cell)):
-                rows.append(re.findall(r"[a-z0-9]+", kind.lower()))
-    missing = [label for label in selected
-               if not any(words and re.findall(r"[a-z0-9]+", label.lower())[:len(words)] == words for words in rows)]
-    return [f"The report's `## Test types` table doesn't account for: {'; '.join(missing)}. bin/triage selects them for this change; "
-            "add a row `| <type> | yes | <link to a saved file> |` or `| <type> | no | <why not> |` for each."] if missing else []
+            why = (None if (ran == "yes" and names_a_file(cell, files)) or (ran == "no" and has_reason(cell))
+                   else "Ran yes, but its Evidence names no saved file" if ran == "yes"
+                   else "Ran no, but its Evidence gives no reason" if ran == "no" else "its Ran is neither yes nor no")
+            rows.append((re.findall(r"[a-z0-9]+", kind.lower()), kind, why))
+    if not table:
+        return [f"The report has no `## Test types` table (`| Type | Ran | Evidence |`): bin/triage selects {'; '.join(selected)} "
+                "for this change; add a row `| <type> | yes | <link to a saved file> |` or `| <type> | no | <why not> |` for each."
+                ] if selected else []
+    problems = []
+    for label in selected:
+        mine = [(kind, why) for words, kind, why in rows if words and re.findall(r"[a-z0-9]+", label.lower())[:len(words)] == words]
+        if not any(why is None for _, why in mine):
+            problems.append(f"The `## Test types` table doesn't account for {label}, which bin/triage selects for this change: "
+                            + ("; ".join(f"its row `{kind}` has {why}" for kind, why in mine) if mine else
+                               "add a row `| <type> | yes | <link to a saved file> |` or `| <type> | no | <why not> |`") + ".")
+    return problems
 
 
 def validation_report_problems():
@@ -601,11 +612,12 @@ def validation_report_problems():
     path, items, why = spec_criteria()
     if why:
         problems.append(why)
-    elif items is None:
-        print(f"No spec at {path}: the per-criterion check was skipped.")
-    else:
+    elif items is not None:
         problems += criteria_problems(items, result_rows(lines, evidence))
-    return problems + test_type_problems(text, evidence)
+    problems += test_type_problems(text, evidence)
+    if items is None and not why and not problems:
+        print(f"No spec at {path}: the per-criterion check was skipped.")
+    return problems
 
 
 def record_verify(kind, checked_fingerprint):
@@ -686,9 +698,9 @@ def main():
         return 0
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
-    unbacked = validation_report_problems() if command == "write" and kind == "validate" else []
-    if unbacked:
-        print("\n".join(unbacked), file=sys.stderr)
+    problems = validation_report_problems() if command == "write" and kind == "validate" else []
+    if problems:
+        print("\n".join(problems), file=sys.stderr)
         return 2
     if command == "write":
         os.makedirs(os.path.dirname(stamp_path(kind)), exist_ok=True)
