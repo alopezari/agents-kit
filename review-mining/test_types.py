@@ -5,7 +5,8 @@ bin/quality-log took only canonical names into those names. Unknown names pass t
   test_types.py <summary.json> [--log <quality.jsonl>]
 
 Per type: runs, runs_with_issue (issues > 0; a flake is never an issue), flaky_runs, issues, and secs over the
-timed_runs that logged any. Reads the log and never writes it. A malformed line fails naming its line number, and no summary is written; a missing log is no runs.
+timed_runs that logged any. Reads the log and never writes it. A malformed line fails naming its line number, and no
+summary is written; a missing log is no runs.
 """
 import argparse
 import importlib.machinery
