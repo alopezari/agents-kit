@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 
 _spec = importlib.util.spec_from_file_location(
@@ -32,7 +33,7 @@ changed_lines, on_changed_line, execute, TEST_FILE = (
 MAX_PER_CHECK = 30
 LINT_TIMEOUT = 120
 TEST_TIMEOUT = 300
-RED_CHECK_TIMEOUT = 120  # per run: up to two (npm test in the working tree, then in the copy) per stack
+RED_CHECK_TIMEOUT = 120  # per stack: npm test's two runs (working tree, then the copy) share it
 NOT_STARTED = (124, 127)  # execute(): timed out, binary missing
 JS_EXT = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
 PHPCS_CONFIGS = ("phpcs.xml", "phpcs.xml.dist", ".phpcs.xml", ".phpcs.xml.dist")
@@ -208,7 +209,9 @@ def npm_test_red_check(root, changes, files, pkg, report):
         report.skip("red check", f"npm test: node_modules/{link} links into the repo, so the merge-base copy would "
                                  "run the change through it")
         return
-    proc = execute([npm, "test", "--", *tests], root, RED_CHECK_TIMEOUT)
+    # CI=true: Jest writes no new snapshots into the working tree, and watch-mode scripts exit instead of waiting.
+    env, deadline = {**os.environ, "CI": "true"}, time.monotonic() + RED_CHECK_TIMEOUT
+    proc = execute([npm, "test", "--", *tests], root, RED_CHECK_TIMEOUT, env)
     if proc.returncode:
         reason = tail(proc, 300) if proc.returncode in NOT_STARTED else \
             f"the changed tests fail in the working tree (exit {proc.returncode})"
@@ -216,7 +219,7 @@ def npm_test_red_check(root, changes, files, pkg, report):
         return
     try:
         with verify_changed.pristine_copy(root, copied) as copy:
-            proc = execute([npm, "test", "--", *tests], copy, RED_CHECK_TIMEOUT)
+            proc = execute([npm, "test", "--", *tests], copy, max(1, round(deadline - time.monotonic())), env)
     except (OSError, subprocess.SubprocessError) as err:
         report.skip("red check", f"npm test: could not build or run in the pristine copy: {err}")
         return

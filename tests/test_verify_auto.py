@@ -240,7 +240,7 @@ def shell_and_go_without_tools_are_skipped(base):
 # --- red check: the changed tests run on a pristine merge-base copy, where at least one must fail ----------------
 # The fakes tell the base from the change by reading the source file in their cwd: only the change says "fixed".
 FAKE_NPM = """#!/bin/sh
-echo "$(pwd -P) $*" >> "$(dirname "$0")/calls"
+echo "$(pwd -P) $* CI=$CI" >> "$(dirname "$0")/calls"
 if grep -q fixed src/sum.js; then echo "  1 passing"; exit 0; fi
 {base}
 """
@@ -271,9 +271,9 @@ def npm_test_red_check_runs_changed_tests_on_the_base(base):
     assert [l for l in lines(out, "ran: red check: ") if "npm test" in l and "src/sum.test.js" in l], out
     calls = npm_calls(base)
     assert len(calls) == 2, calls
-    assert calls[0] == f"{os.path.realpath(repo)} test -- src/sum.test.js", calls
+    assert calls[0] == f"{os.path.realpath(repo)} test -- src/sum.test.js CI=true", calls
     copy = calls[1].split()[0]
-    assert "agents-red-" in copy and calls[1].endswith(" test -- src/sum.test.js"), calls
+    assert "agents-red-" in copy and calls[1].endswith(" test -- src/sum.test.js CI=true"), calls
     assert not os.path.exists(copy), "the pristine copy was left behind"
 
 
