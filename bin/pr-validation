@@ -21,7 +21,7 @@ RESULTS = ("PASS", "FAIL", "NOT RUN")
 
 def public(text):
     # Inline links, whose target may hold balanced parentheses, and reference links.
-    text = re.sub(r"\[([^\]]*)\](?:\((?:[^()]|\([^()]*\))*\)|\[[^\]]*\])", r"\1", text).replace("\\|", "|")
+    text = re.sub(r"\[([^\]]*)\](?:\((?:[^()]|\([^()]*\))*\)|\[[^\]]*\])", r"\1", text).replace("\\|", "|").replace("\t", " ")
     return re.sub(re.escape(os.path.expanduser("~")) + r"(?=/)", "~", text)
 
 
@@ -107,44 +107,25 @@ def validation_lines(text):
     return [public(line) for line in lines]
 
 
-STEP = r"([MSP]\d+)[a-z]*\b"  # S: a step before the merge in a guide from before checks-guide; M3a: a sub-step of M3
-
-
-def checks_lines(text, evidence):
+def checks_lines(text):
     """One line per step of the checks guide: its latest PASS or FAIL with that table's date, else who runs it."""
-    steps = {}
-    # A step ends at the next heading of any level; a results table only at the next `## `, past its own lines.
-    for step, name, body in re.findall(rf"^### {STEP}\.?[ \t]*([^\n]*)\n?(.*?)(?=^##|\Z)", text, re.M | re.S):
-        where = re.search(r"^[-*\s]*(?:\*\*)?Where:?(?:\*\*)?:?\s*the agent\b", body, re.M)
-        steps[step] = {"name": name.strip(), "owner": "agent" if where else "you"}
-    # Every results table counts, ship's `## Results after the deploy` too; a later NOT RUN asks for the step again.
-    rows, dates = {}, {}  # the latest result of each row (P2 or its sub-step P2b), and each step's latest table
-    for heading, table in re.findall(r"^## Results([^\n]*)\n?(.*?)(?=^## |\Z)", text, re.M | re.S):
-        when = re.search(r"\(([^)]*)\)", heading)
-        for first, result, _, _ in review_stamp.result_rows(table.splitlines(), evidence):
-            step = re.match(r"[*_]*(" + STEP + ")", first)
-            if step:
-                rows.setdefault(step.group(2), {})[step.group(1)] = result
-                dates[step.group(2)] = f" ({when.group(1)})" if when else ""
-    for step, found in rows.items():  # a step's sub-steps add up: any FAIL fails it, any NOT RUN leaves it to run
-        result = next(r for r in ("FAIL", "NOT RUN", "PASS") if r in found.values())
-        steps.setdefault(step, {"name": "", "owner": "you"})["result"] = None if result == "NOT RUN" else result + dates[step]
+    steps = review_stamp.guide_steps(text)
     if not steps:
         return ["- Checks guide: no steps."]
     lines = []
     for step, info in sorted(steps.items(), key=lambda item: item[0].startswith("P")):
         after = step.startswith("P")
         named = f"{step} {info['name']}".strip()
-        if info.get("result"):
-            lines.append(f"- {'After the merge' if after else 'Before the merge (optional)'}: {named}: {info['result']}.")
+        if info["result"]:
+            lines.append(f"- {'After the merge' if after else 'Before the merge (optional)'}: {named}: "
+                         f"{info['result']}{info['date']}.")
         else:
             lines.append(f"- {'After the merge' if after else 'Not run before the merge (optional)'}: {named} ({info['owner']}).")
     return [public(line) for line in lines]
 
 
 def main():
-    verify, review, validation, guide, evidence = review_stamp.report_paths(
-        "verify", "review", "validation", "checks-guide", "evidence")
+    verify, review, validation, guide = review_stamp.report_paths("verify", "review", "validation", "checks-guide")
     texts = {path: read(path) for path in (verify, review, validation)}
     off, unreadable = phase_switches.phases_off_or_error(os.getcwd())
     missing = [path for path, phase in ((verify, "verify"), (review, "review")) if texts[path] is None and phase not in off]
@@ -164,7 +145,7 @@ def main():
     except (OSError, UnicodeDecodeError) as error:  # shown, not fatal: the guide only informs the user's decision
         lines.append(public(f"- Checks guide unreadable: {error}."))
     else:
-        lines += checks_lines(checks, evidence) if checks is not None else []
+        lines += checks_lines(checks) if checks is not None else []
     # A reviewer's own switch skips nothing when the other reviewer runs: the review's Not run line says when it did.
     lines += [f"- {phase.capitalize()}: skipped by the user ({off[phase]})."
               for phase in phase_switches.PHASES if phase in off and phase not in ("claude-review", "codex-review")]

@@ -1769,6 +1769,44 @@ def reports_brief_gives_one_line_per_report(base):
     assert done.returncode == 0 and "no Status line yet" in done.stdout and "1 PASS, 1 FAIL, 1 NOT RUN" in done.stdout, done
 
 
+def evidence_needs_a_branch(base):
+    repo = new_repo(base, "shop")
+    reports, evidence = os.path.expanduser("~/.agents/bin/reports"), os.path.expanduser("~/.agents/bin/evidence")
+    stores = (os.path.join(repo, ".git", "agents"), os.path.join(os.environ.get("TMPDIR") or "/tmp", "agents-specs"))
+
+    def evidence_dirs():
+        return [name for where in stores if os.path.isdir(where) for name in os.listdir(where)
+                if name.startswith("evidence-shop-")]
+    git(repo, "switch", "-q", "--detach")
+    detached = subprocess.run([reports, "path", "evidence"], cwd=repo, capture_output=True, text=True)
+    assert detached.returncode == 2 and "needs a branch" in detached.stderr and not detached.stdout, \
+        f"every detached checkout would share one evidence directory: {detached}"
+    assert evidence_dirs() == [], evidence_dirs()
+    ran = subprocess.run([evidence, "A1", "echo", "seen"], cwd=repo, capture_output=True, text=True)
+    assert ran.returncode == 74 and "needs a branch" in ran.stderr and "EVIDENCE_DIR" in ran.stderr \
+        and "seen" not in ran.stdout, ran
+    assert evidence_dirs() == [], evidence_dirs()
+    report = subprocess.run([reports, "path", "validation"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    with open(report, "w") as fh:
+        fh.write("| # | Check | Result | Evidence |\n|---|---|---|---|\n| A1 | seen | PASS | [output](A1.txt) |\n")
+    stamp = subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo,
+                           capture_output=True, text=True)
+    assert stamp.returncode == 2 and "detached HEAD" in stamp.stderr, f"the stamp says why it has no evidence: {stamp}"
+    assert evidence_dirs() == [], evidence_dirs()
+    elsewhere = os.path.join(base, "guide-evidence")
+    os.makedirs(elsewhere)
+    ran = subprocess.run([evidence, "A1", "echo", "seen"], cwd=repo, capture_output=True, text=True,
+                         env={**os.environ, "EVIDENCE_DIR": elsewhere})
+    assert ran.returncode == 0 and ran.stdout == "seen\n", ran
+    assert open(os.path.join(elsewhere, "A1.txt")).read().endswith("\n\nseen\n"), "the output, after the header"
+    named = subprocess.run([reports, "--branch", "trunk", "path", "evidence"], cwd=repo, capture_output=True, text=True)
+    assert named.returncode == 0 and os.path.isdir(named.stdout.strip()), named
+    assert named.stdout.strip().endswith("evidence-shop-trunk"), named.stdout
+    git(repo, "switch", "-q", "trunk")
+    on_branch = subprocess.run([reports, "path", "evidence"], cwd=repo, capture_output=True, text=True)
+    assert on_branch.returncode == 0 and on_branch.stdout.strip() == named.stdout.strip(), on_branch
+
+
 def reports_reads_another_branch(base):
     main = new_repo(base, "main")
     reports = os.path.expanduser("~/.agents/bin/reports")
@@ -3891,7 +3929,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

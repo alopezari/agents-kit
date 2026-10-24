@@ -9,12 +9,16 @@ and removing it loses nothing: no changes, no ignored files other than regenerat
 submodules, not locked, not where this runs, and no running process has its working directory inside it (another
 session may still work there). A worktree it can't inspect is kept. Then each local branch merged into
 origin/<default> and checked out nowhere is deleted, if it hasn't moved since, with the phases the user switched for it
-(`phase off … branch`): a new branch of that name starts with every phase on. Prints one line per linked worktree and
-deleted branch: what it removed, or why it kept it. --dry-run prints what it would do and changes nothing else.
+(`phase off … branch`) and the kit's files for it: its stamps, spec, reports and evidence, in .git/agents and
+$TMPDIR/agents-specs, also under the earlier names it was renamed from. A new branch of that name starts with every phase
+on and no reports. A branch whose checks guide has a step after the merge that hasn't passed, or can't be read, is kept
+with its files, as is one whose rename history can't be read. Prints one line per linked worktree and merged branch: what it removed, or why it kept it, exiting 1
+when something it should have removed stays. --dry-run prints what it would do and changes nothing else.
 """
 import importlib.machinery
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -28,6 +32,7 @@ _loader.exec_module(free_branch)
 REGENERATED, git, GitFailed = free_branch.REGENERATED, free_branch.git, free_branch.GitFailed
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
 import phase_switches  # noqa: E402
+import review_stamp  # noqa: E402
 
 
 def worktrees(root):
@@ -82,6 +87,69 @@ def keep_reason(path, locked, default, here, cwds):
     return None
 
 
+def branch_keys(root, branch, deadline):
+    """The keys the kit's files for this branch sit under: its own, and those of its earlier names (to a `git branch -c`
+    copy) and its dashed key from before `~`, each only while no branch holds that name. Raises OSError or
+    subprocess.SubprocessError when its rename history can't be read."""
+    live = {ref.removeprefix("refs/heads/") for ref in git(root, "for-each-ref", "--format=%(refname)", "refs/heads").split()}
+    earlier = [name for name in dict.fromkeys(phase_switches.earlier_names(root, branch, deadline)) if name not in live]
+    keys = [review_stamp.branch_key(name) for name in [branch] + earlier]
+    keys += [name.replace("/", "-") for name in [branch] + earlier if "/" in name and name.replace("/", "-") not in live]
+    return list(dict.fromkeys(keys))
+
+
+def kit_files(root, repo, keys):
+    """The spec, reports, evidence and stamps kept under these keys, in the shared git dir and in $TMPDIR."""
+    found = [os.path.join(root, "agents", "stamps", key) for key in keys]
+    for where in (os.path.join(root, "agents"), review_stamp.TMP_SPECS):
+        found += [os.path.join(where, name) for key in keys for name in review_stamp.branch_file_names(repo, key)]
+    return [path for path in found if os.path.lexists(path)]
+
+
+def unfinished_guide(root, repo, keys):
+    """Why the branch's checks guide asks to keep it: a step after the merge whose latest result isn't PASS, or the guide
+    can't be read. None when no guide does."""
+    for where in (os.path.join(root, "agents"), review_stamp.TMP_SPECS):
+        for key in keys:
+            # Guides written before checks-guide were named staging-guide: reports reads that one only without the other.
+            for guide in [os.path.join(where, f"{kind}-{repo}-{key}.md") for kind in ("checks-guide", "staging-guide")]:
+                try:
+                    with open(guide) as fh:
+                        steps = review_stamp.guide_steps(fh.read())
+                    break
+                except FileNotFoundError as error:
+                    if os.path.lexists(guide):  # a link to a guide that's gone: unknown, as an unreadable one
+                        return f"couldn't read its checks guide {guide}: {error}"
+                    continue
+                except (OSError, UnicodeDecodeError) as error:  # unknown is never safe, a directory it can't search too
+                    return f"couldn't read its checks guide {guide}: {error}"
+            else:
+                continue
+            pending = [step for step, info in steps.items() if step.startswith("P") and info["result"] != "PASS"]
+            if pending:
+                return f"its checks guide {guide} has steps after the merge that haven't passed: {', '.join(pending)}"
+    return None
+
+
+def delete(paths):
+    """Remove each path; the "couldn't delete" line of each that stays."""
+    problems = []
+    for path in paths:
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError as error:
+            problems.append(f"couldn't delete {path}: {error}")
+    return problems
+
+
+def branch_line(done, branch, switches, files, problems):
+    return (f"{done} branch {branch}{' and its phase switches' if switches else ''}"
+            f"{', and its files ' + ', '.join(files) if files else ''}{', but ' + '; '.join(problems) if problems else ''}")
+
+
 def main():
     args = sys.argv[1:]
     if args not in ([], ["--dry-run"]):
@@ -98,6 +166,7 @@ def main():
         except GitFailed as error:
             print(f"prune-merged: couldn't fetch {default}, so nothing was removed: {error}", file=sys.stderr)
             return 1
+        repo = review_stamp.repo_name_of(root)
         try:
             common, unnamed = phase_switches.checkout(os.getcwd())[2], None
         except (OSError, subprocess.SubprocessError, ValueError) as error:
@@ -133,19 +202,34 @@ def main():
             checked_out = {b for p, b, _ in worktrees(root) if b and p not in gone}
             if symref or branch == local_default or branch in checked_out:
                 continue
+            try:  # while the reflog that names its earlier names still exists: deleting the branch removes it
+                keys = branch_keys(root, branch, time.monotonic() + 5)
+            except (OSError, subprocess.SubprocessError, GitFailed) as error:  # its earlier names' guides went unread
+                print(f"kept branch {branch}: couldn't read its rename history to find its files: {error}")
+                failed = True
+                continue
+            unfinished = unfinished_guide(root, repo, keys)
+            if unfinished:
+                print(f"kept branch {branch}: {unfinished}")
+                continue
+            files = kit_files(root, repo, keys)
+            deadline = time.monotonic() + 5
             if dry:
+                problems = []
                 try:
-                    switches = (f", but {unnamed}" if unnamed else
-                                " and its phase switches" if phase_switches.branch_switches(common, branch) or
-                                phase_switches.earlier_switches(common, branch, time.monotonic() + 5) else "")
+                    if unnamed:
+                        problems.insert(0, unnamed)
+                    switched = not unnamed and bool(phase_switches.branch_switches(common, branch) or
+                                                    phase_switches.earlier_switches(common, branch, deadline))
                 except (OSError, subprocess.SubprocessError) as error:
-                    switches = f", but couldn't check its phase switches: {error}"
-                print(f"would delete branch {branch}{switches}")
+                    switched = False
+                    problems.insert(0, f"couldn't check its phase switches: {error}")
+                print(branch_line("would delete", branch, switched, files, problems))
                 continue
             unfollowed = None
             if not unnamed:
-                try:  # while the reflog that names its earlier names still exists: deleting the branch removes it
-                    phase_switches.follow_rename(common, branch, time.monotonic() + 5)
+                try:
+                    phase_switches.follow_rename(common, branch, deadline)
                 except (OSError, subprocess.SubprocessError) as error:
                     unfollowed = f"couldn't follow its rename: {error}"
             try:
@@ -155,20 +239,19 @@ def main():
                 print(f"kept branch {branch}: {error}")
                 failed = True
                 continue
+            problems = delete(files)
+            forgot = False
             if unnamed:
-                print(f"deleted branch {branch}, but kept its phase switches: {unnamed}")
-                failed = True
-                continue
-            try:
-                forgot = phase_switches.forget_branch(common, branch)
-                if unfollowed:  # its own file and label are gone; only its earlier name's file stays
-                    print(f"deleted branch {branch}, but kept the phase switches of its earlier name: {unfollowed}")
-                    failed = True
-                    continue
-                print(f"deleted branch {branch}{' and its phase switches' if forgot else ''}")
-            except OSError as error:
-                print(f"deleted branch {branch}, but kept its phase switches: {error}")
-                failed = True
+                problems.insert(0, f"kept its phase switches: {unnamed}")
+            else:
+                try:
+                    forgot = phase_switches.forget_branch(common, branch) and not unfollowed
+                    if unfollowed:  # its own file and label are gone; only its earlier name's file stays
+                        problems.insert(0, f"kept the phase switches of its earlier name: {unfollowed}")
+                except OSError as error:
+                    problems.insert(0, f"kept its phase switches: {error}")
+            print(branch_line("deleted", branch, forgot, [path for path in files if not os.path.lexists(path)], problems))
+            failed = failed or bool(problems)
     except GitFailed as error:
         print(f"prune-merged: {error}", file=sys.stderr)
         return 1

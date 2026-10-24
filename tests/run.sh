@@ -3,7 +3,7 @@
 #   ~/.agents/tests/run.sh                        every section
 #   ~/.agents/tests/run.sh hooks install          only those sections
 #   ~/.agents/tests/run.sh --skip hooks install   all but those (CI's third job, so a new section lands there)
-# Sections run concurrently; each prints as one block, in this order, once it and every section above it have finished.
+# Sections run concurrently, after the doctor on its own; each prints as one block, in this order, once it and every section above it have finished.
 cd "$(dirname "$0")" || exit 2
 # The tests reach the kit through ~/.agents. Run from another checkout, re-run under a HOME holding only .agents,
 # linked to it, as the verify overlay does. Its tests see no install outside .agents, so the doctor is skipped.
@@ -116,6 +116,7 @@ node_deps() {
 section_docs() {
   local f=0
   python3 test_skill_names.py || f=1
+  python3 test_docs.py || f=1
   node_deps tools/mermaid || return 1
   ~/.agents/bin/docs --check || f=1
   node ~/.agents/tools/mermaid/check.mjs ~/.agents/docs/framework.md || f=1
@@ -192,15 +193,23 @@ interrupted() { for pid in "${pids[@]}"; do end_tree "$pid"; done; wait; exit "$
 trap 'interrupted 129' HUP
 trap 'interrupted 130' INT
 trap 'interrupted 143' TERM
-pids=()
-for i in "${picked[@]}"; do
+# The doctor runs first, on its own: it bounds each tool's --version, and with every other section running a working
+# semgrep took 13-27 s to answer on a CI runner, against 1.5 s alone.
+pids=() alone=()
+for n in "${!picked[@]}"; do
+  i=${picked[$n]}
+  if [ "${names[$i]}" = doctor ]; then section_doctor >"$out/$i" 2>&1; alone[$n]=$?; fi
+done
+for n in "${!picked[@]}"; do
+  i=${picked[$n]}
+  [ -n "${alone[$n]:-}" ] && continue
   "section_${names[$i]//-/_}" >"$out/$i" 2>&1 &
-  pids+=($!)
+  pids[$n]=$!
 done
 fail=0
 for n in "${!picked[@]}"; do
   i=${picked[$n]}
-  wait "${pids[$n]}" || fail=1
+  if [ -n "${alone[$n]:-}" ]; then [ "${alone[$n]}" = 0 ] || fail=1; else wait "${pids[$n]}" || fail=1; fi
   unset "pids[$n]"  # reaped: an interrupt must not signal a pid the system may have reused
   printf '\n== %s\n' "${sections[$i]#*|}"
   cat "$out/$i"

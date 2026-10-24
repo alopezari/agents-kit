@@ -56,7 +56,7 @@ Where `verify` already runs the whole unit suite (the repo notes say so), the ve
 
 ## 4. Run the local checks with temporary scripts
 
-Every check leaves evidence the user can open instead of re-running it, in the branch's evidence directory: `EV="$(~/.agents/bin/reports path evidence)"`. Run each check through `~/.agents/bin/evidence <id> <command> [args...]`: it prints the output and keeps the exit code, and saves `$EV/<id>.txt` with the command, directory, time, exit code and full output. It takes argv, so a pipe or a script piped to a container goes in `bash -c '...'`. For a UI state, save a screenshot as `$EV/<id>-<state>.png`. A unit-test run behind a PASS is evidence too: run it through `bin/evidence`.
+Every check leaves evidence the user can open instead of re-running it, in the branch's evidence directory: `EV="$(~/.agents/bin/reports path evidence)"`, which needs the branch checked out (on a detached HEAD it prints nothing and exits 2). Run each check through `~/.agents/bin/evidence <id> <command> [args...]`: it prints the output and keeps the exit code, and saves `$EV/<id>.txt` with the command, directory, time, exit code and full output. It takes argv, so a pipe or a script piped to a container goes in `bash -c '...'`. For a UI state, save a screenshot as `$EV/<id>-<state>.png`. A unit-test run behind a PASS is evidence too: run it through `bin/evidence`.
 
 In Claude Code with the kit plugin, these runs go to `kit:validate-runner`, as the top of this skill says.
 
