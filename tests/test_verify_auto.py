@@ -813,6 +813,11 @@ def c8_reports_a_failing_working_tree_run(base):
     assert code == 0 and [l for l in lines(out, "skipped: red check (") if "fail in the working tree" in l], out
     assert lines(out, "ran: diff coverage (c8): 1 of 2 changed lines"), out
     assert len(npm_calls(base)) == 1, npm_calls(base)
+    write(base, "bin/npm", "#!/bin/sh\n" + NPM_V8 + 'echo "sh: mocha: command not found" >&2; exit 127\n',
+          executable=True)
+    code, out = verify(repo, path)
+    assert [l for l in lines(out, "skipped: diff coverage (") if "npm test gave no verdict" in l], out
+    assert not lines(out, "ran: diff coverage"), "a run with no verdict was reported:\n" + out
 
 
 def c8_report_failures_are_skipped(base):
