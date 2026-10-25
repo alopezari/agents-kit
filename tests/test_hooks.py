@@ -66,6 +66,23 @@ def new_repo(base, name="repo", branch="trunk"):
     return path
 
 
+def selected_test_types(cwd):
+    """The test types bin/triage selects in cwd, by label."""
+    triage = subprocess.run([KIT + "/bin/triage", "--json"], cwd=cwd, capture_output=True, text=True)
+    assert triage.returncode == 0, triage.stderr
+    return list(json.loads(triage.stdout)["tests"])
+
+
+def test_types_table(rows):
+    """A report's `## Test types` section holding (type, ran, evidence) rows."""
+    return "\n## Test types\n\n| Type | Ran | Evidence |\n|---|---|---|\n" + "".join(f"| {t} | {r} | {e} |\n" for t, r, e in rows)
+
+
+def test_types_section(cwd, evidence="a1.txt"):
+    """The section accounting for every type triage selects in cwd as run, with a saved file as its evidence."""
+    return test_types_table((name, "yes", evidence) for name in selected_test_types(cwd))
+
+
 def write_stamp(cwd, kind, equals=False):
     """Write a stamp as the skills do: validate first saves a report whose check names its evidence."""
     if kind == "validate":
@@ -74,7 +91,7 @@ def write_stamp(cwd, kind, equals=False):
         evidence = subprocess.run([reports, "path", "evidence"], cwd=cwd, capture_output=True, text=True).stdout.strip()
         assert os.path.isdir(evidence), f"no evidence directory from {reports}: {evidence!r}"
         with open(path, "w") as fh:
-            fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | app runs | + | PASS | a1.txt |\n")
+            fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | app runs | + | PASS | a1.txt |\n" + test_types_section(cwd))
         with open(os.path.join(evidence, "a1.txt"), "w") as fh:
             fh.write("$ python3 app.py\nexit 0\n")
     flags = [f"--kind={kind}"] if equals else ["--kind", kind]
@@ -1601,7 +1618,8 @@ def validate_stamp_needs_evidence(base):
         fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
                  "| A1 | exits 3 | − | PASS | `A1.txt` |\n| A3 | staging only | + | NOT RUN | needs staging |\n"
                  "| B1 | page | + | FAIL | ![page](evidence-x/b1.png) |\n"
-                 f"| B2 | linked by absolute path, as validate writes it | + | PASS | [output]({evidence}/A1.txt) |\n")
+                 f"| B2 | linked by absolute path, as validate writes it | + | PASS | [output]({evidence}/A1.txt) |\n"
+                 + test_types_section(repo, "A1.txt"))
     done = write_validate()
     assert done.returncode == 0 and stamped(), done.stderr
     listed = subprocess.run([reports], cwd=repo, capture_output=True, text=True).stdout
@@ -1620,7 +1638,8 @@ def validate_stamp_refuses_empty_recordings(base):
             fh.write(content)
     with open(report, "w") as fh:
         fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
-                 "| C1 | pays | + | PASS | ![done](C1-done.png) ![frames](C1.contact-sheet.png) [video](C1.webm) |\n")
+                 "| C1 | pays | + | PASS | ![done](C1-done.png) ![frames](C1.contact-sheet.png) [video](C1.webm) |\n"
+                 + test_types_section(repo, "C1-done.png"))
 
     def write_validate():
         return subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo,
@@ -1633,6 +1652,201 @@ def validate_stamp_refuses_empty_recordings(base):
         fh.write(b"\x1aE\xdf\xa3")
     done = write_validate()
     assert done.returncode == 0, done.stderr
+
+
+def validation_fixture(base, branch):
+    """(repo, attempt): attempt(rows, criteria, types, head) saves a spec whose Acceptance criteria are the lines of
+    criteria (none when criteria is None) and a report of rows with the Test types table, then runs the validate stamp
+    write. The evidence directory holds a1.txt."""
+    repo = new_repo(base)
+    git(repo, "switch", "-q", "-c", branch)
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    reports = os.path.expanduser("~/.agents/bin/reports")
+    report, evidence = (subprocess.run([reports, "path", kind], cwd=repo, capture_output=True, text=True).stdout.strip()
+                        for kind in ("validation", "evidence"))
+    spec = subprocess.run([KIT + "/skills/kit-spec/path.sh"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    with open(os.path.join(evidence, "a1.txt"), "w") as fh:
+        fh.write("$ python3 app.py\nexit 0\n")
+
+    def attempt(rows, criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: tests/b.py"), types=None,
+                head="| # | AC | Check | Case (+/\u2212) | Result | Evidence |\n|---|---|---|---|---|---|\n"):
+        if criteria is not None:
+            with open(spec, "w") as fh:
+                fh.write("# T\n\nRisk: standard \u2014 local\n\n## Acceptance criteria\n" + "\n".join(criteria) + "\n\n## Out of scope\n- x\n")
+        with open(report, "w") as fh:
+            fh.write(head + rows + (types if types is not None else test_types_section(repo)))
+        return subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo,
+                              capture_output=True, text=True)
+
+    return repo, attempt
+
+
+def validation_row(number, acs, case, result, evidence="a1.txt"):
+    return f"| {number} | {acs} | check | {case} | {result} | {evidence} |\n"
+
+
+def validate_stamp_checks_criteria_coverage(base):
+    repo, attempt = validation_fixture(base, "feat/coverage")
+    one = validation_row("A1", "AC1", "+", "PASS") + validation_row("A2", "AC1", "\u2212", "PASS")
+    two_plus = validation_row("A3", "AC2", "+", "PASS")
+    two_minus_ran = validation_row("A4", "AC2", "\u2212", "FAIL")
+
+    def refused(rows, *named, **kwargs):
+        done = attempt(rows, **kwargs)
+        assert done.returncode == 2 and "validate stamp written" not in done.stdout, (rows, done.stdout, done.stderr)
+        for text in named:
+            assert text in done.stderr, f"{text!r} missing: {done.stderr}"
+        return done.stderr
+
+    said = refused(one + two_plus, "AC2 has no negative (\u2212) row that ran")
+    assert "AC1 has" not in said, "only the criterion that lacks something is named: " + said
+    assert "AC2 has no PASS row" in refused(one + two_minus_ran), "a \u2212 FAIL alone doesn't pass the criterion"
+    refused(one + validation_row("A3", "AC2", "+", "NOT RUN", "needs staging") + validation_row("A4", "AC2", "\u2212", "NOT RUN", "needs staging"),
+            "AC2 has no PASS row", "AC2 has no negative")
+    refused(validation_row("A1", "AC1", "+", "PASS") + validation_row("A2", "AC1", "regression", "PASS") + two_plus + two_minus_ran,
+            "AC1 has no negative")  # regression alone isn't a negative case
+    refused(validation_row("A1", "AC1", "+", "PASS") + validation_row("A3", "AC2", "+ / \u2212", "PASS"), "AC1 has no negative")
+    stamp = subprocess.run(["python3", H + "review_stamp.py", "check", "--kind", "validate"], cwd=repo).returncode
+    assert stamp != 0, "none of the refusals left a stamp"
+    done = attempt(one + two_plus + two_minus_ran)
+    assert done.returncode == 0 and "validate stamp written" in done.stdout, done.stderr
+    both = validation_row("A1", "AC1, AC2", "+ / \u2212", "PASS") + validation_row("A2", "AC1", "\u2212 then +", "PASS")
+    done = attempt(both)
+    assert done.returncode == 0, "one row may name several criteria, and `+ / \u2212` is a negative case: " + done.stderr
+    for case in ("-", "\u00b1"):  # AC1's only negative row
+        done = attempt(validation_row("A1", "AC1", "+", "PASS") + validation_row("A2", "AC1", case, "FAIL") + two_plus + two_minus_ran)
+        assert done.returncode == 0, f"{case!r} is a negative case: {done.stderr}"
+    for case in ("re-run", "worst-case"):
+        refused(validation_row("A1", "AC1", "+", "PASS") + validation_row("A2", "AC1", case, "PASS") + two_plus + two_minus_ran, "AC1 has no negative")
+    done = attempt(one + two_plus + two_minus_ran, head="| # | AC | Check | Case | Result | Evidence |\n|---|---|---|---|---|---|\n")
+    assert done.returncode == 0, "a plain `Case` header is the Case column too: " + done.stderr
+    assert attempt(both + validation_row("R1", "", "regression", "PASS")).returncode == 0, "a row naming no criterion is allowed"
+
+    assert "AC3" in refused(both + validation_row("A5", "AC3", "+", "PASS"), "no criterion of the spec")
+    refused(both, "more than once", criteria=("1. One. \u2014 verify: tests/a.py", "1. Again. \u2014 verify: tests/b.py"))
+    refused(both, "no numbered", criteria=())
+    refused("| A1 | check | + / \u2212 | PASS | a1.txt |\n", "AC column", head="| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n")
+
+    manual = ("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: manual check on staging")
+    covered = one + validation_row("A3", "AC2", "+", "NOT RUN", "needs staging")
+    assert attempt(covered, criteria=manual).returncode == 0, "a manual criterion is covered by a NOT RUN row with a reason"
+    for empty in ("", "-", "\u2014", "**\u2014**", "`-`"):
+        refused(one + validation_row("A3", "AC2", "+", "NOT RUN", empty), "AC2", criteria=manual)
+    refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: tests/test_x.py, then a manual look"))
+    for verify in ("by hand on staging", "manually, in the app", "manual: staging", "this can't be automated", "It Cannot Be Automated", "not automatable",
+                   "staging only, the runbook says `cannot be automated`"):
+        done = attempt(covered, criteria=("1. One. \u2014 verify: tests/a.py", f"2. Two. \u2014 verify: {verify}"))
+        assert done.returncode == 0, f"{verify!r} is not automatable: {done.stderr}"
+    assert attempt(one + two_plus + two_minus_ran, criteria=manual).returncode == 0, "a manual criterion with PASS and \u2212 rows is covered too"
+    refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. A `verify:` is manual here \u2014 verify: tests/b.py"))
+    refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. Its verify: manual once \u2014 verify: tests/b.py"))
+    done = attempt(covered, criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: manual on staging; see the spec's `verify:` rule"))
+    assert done.returncode == 0, "a quoted `verify:` after the check isn't the check: " + done.stderr
+    done = attempt(covered, criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: manual on staging; inspect `report verify: output`"))
+    assert done.returncode == 0, "a `verify:` inside a longer code span isn't the check either: " + done.stderr
+    refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: tests/b.py checks `input verify: manual handling`"))
+    refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: `pytest tests/test_x.py` by hand on staging"))
+    for path in ("./manual.py", "/manual/check.py", "manual.sh"):  # a script named manual is a check that runs
+        refused(covered, "AC2", criteria=("1. One. \u2014 verify: tests/a.py", f"2. Two. \u2014 verify: {path}"))
+
+
+def validate_stamp_needs_a_readable_spec(base):
+    repo, attempt = validation_fixture(base, "feat/spec")
+    rows = validation_row("A1", "AC1", "+ / \u2212", "PASS")
+    spec = subprocess.run([KIT + "/skills/kit-spec/path.sh"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    done = attempt(rows, criteria=None)
+    assert done.returncode == 0 and "No spec at" in done.stdout and "skipped" in done.stdout, \
+        "without a spec the stamp says it skipped the per-criterion check: " + done.stdout + done.stderr
+    os.mkdir(spec)
+    done = attempt(rows, criteria=None)
+    assert done.returncode == 2 and "spec" in done.stderr and "validate stamp written" not in done.stdout, \
+        "a spec that can't be read isn't no spec: " + done.stdout + done.stderr
+    os.rmdir(spec)
+    with open(spec, "wb") as fh:
+        fh.write(b"## Acceptance criteria\n1. \xff\xfe verify: x\n")
+    done = attempt(rows, criteria=None)
+    assert done.returncode == 2 and "UTF-8" in done.stderr, done.stderr
+    os.remove(spec)
+    done = attempt(rows, criteria=None, types="")
+    assert done.returncode == 2 and "no `## Test types` table" in done.stderr, "the test types check runs without a spec: " + done.stderr
+    assert "No spec at" not in done.stdout, "the skip line goes with a written stamp: " + done.stdout
+
+
+def validate_stamp_checks_test_types(base):
+    repo, attempt = validation_fixture(base, "feat/types")
+    nested = "(a" + "+)" + "+"  # built in pieces: this file is part of a change triage reads
+    open(os.path.join(repo, "app.py"), "a").write("import re\nCHECK = re." + "compile(r\"" + nested + "$\")\n")
+    selected = selected_test_types(repo)
+    assert "regex worst-case timing" in selected, selected
+    rows = validation_row("A1", "AC1", "+ / \u2212", "PASS")
+    others = [(name, "yes", "a1.txt") for name in selected if name != "regex worst-case timing"]
+    evidence = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "evidence"], cwd=repo,
+                              capture_output=True, text=True).stdout.strip()
+
+    def with_regex(*regex_rows):
+        return attempt(rows, criteria=None, types=test_types_table(others + list(regex_rows)))
+
+    done = with_regex()
+    assert done.returncode == 2 and "regex worst-case timing" in done.stderr and "Test types" in done.stderr, done.stderr
+    assert with_regex(("regex", "no", "timed in A3's unit test")).returncode == 0, "a prefix of the label, run `no` with a reason"
+    for ran, cell, why in (("yes", "rc=0", "no saved file"), ("no", "", "no reason"), ("no", "-", "no reason"),
+                           ("no", "**\u2014**", "no reason"), ("maybe", "a1.txt", "neither yes nor no")):
+        done = with_regex(("regex", ran, cell))
+        assert done.returncode == 2 and "regex worst-case timing" in done.stderr and why in done.stderr, (ran, cell, done.stderr)
+    done = with_regex(("regex", "yes", "[out](A3.txt)"))
+    assert done.returncode == 2, "A3.txt isn't saved yet: " + done.stderr
+    with open(os.path.join(evidence, "A3.txt"), "w") as fh:
+        fh.write("timed\n")
+    assert with_regex(("regex", "yes", "[out](A3.txt)")).returncode == 0
+    assert with_regex(("Regex Worst-Case", "yes", "A3.txt")).returncode == 0, "case and `-` against space don't matter"
+    assert with_regex(("regex worst case timing (tool)", "yes", "A3.txt")).returncode == 2, "a row longer than the label is no match"
+    assert with_regex(("worst-case", "yes", "A3.txt")).returncode == 2, "the first words, not any words"
+    assert with_regex(("-", "yes", "A3.txt")).returncode == 2, "a row with no words matches nothing"
+    unit = attempt(rows, criteria=None, types=test_types_table(others[1:] + [("regex", "no", "timed")]))
+    assert unit.returncode == 2 and others[0][0] in unit.stderr, "every selected type needs a row: " + unit.stderr
+
+    assert with_regex(("regex", "no", "timed")).returncode == 0
+    packs = os.path.expanduser("~/.agents/repos/repo/packs")
+    os.makedirs(os.path.dirname(packs), exist_ok=True)
+    with open(packs, "w") as fh:
+        fh.write("laravel\n")
+    try:
+        stamped = subprocess.run(["python3", H + "review_stamp.py", "check", "--kind", "validate"], cwd=repo).returncode
+        assert stamped == 0, "check never runs triage"
+        done = subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo, capture_output=True, text=True)
+        assert done.returncode == 2 and "unknown pack" in done.stderr and "triage" in done.stderr, done.stderr
+    finally:
+        os.remove(packs)
+
+
+def validate_stamp_refuses_failed_lookups(base):
+    # A copy of the hook whose path.sh and triage misbehave: a lookup that failed is not "no spec" or "no test types".
+    kit = os.path.join(base, "kit")
+    shutil.copytree(H, os.path.join(kit, "hooks"))
+    os.makedirs(os.path.join(kit, "skills", "kit-spec"))
+    shutil.copy(KIT + "/skills/kit-spec/lint.py", os.path.join(kit, "skills", "kit-spec"))
+    os.makedirs(os.path.join(kit, "bin"))
+    os.symlink(KIT + "/bin/reports", os.path.join(kit, "bin", "reports"))
+    repo, attempt = validation_fixture(base, "feat/lookups")
+    rows = validation_row("A1", "AC1", "+ / \u2212", "PASS")
+    attempt(rows, criteria=None)
+
+    def fake(name, body):
+        path = os.path.join(kit, name)
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\n" + body)
+        os.chmod(path, 0o755)
+        return subprocess.run(["python3", os.path.join(kit, "hooks", "review_stamp.py"), "write", "--kind", "validate"],
+                              cwd=repo, capture_output=True, text=True)
+
+    os.symlink(KIT + "/bin/triage", os.path.join(kit, "bin", "triage"))
+    for body, said in (("echo 'no branch here' >&2; exit 1\n", "no branch here"), ("exit 0\n", "no path printed")):
+        done = fake("skills/kit-spec/path.sh", body)
+        assert done.returncode == 2 and "spec lookup" in done.stderr and said in done.stderr, done.stdout + done.stderr
+    fake("skills/kit-spec/path.sh", f"echo {os.path.join(base, 'no-spec.md')}\n")
+    os.remove(os.path.join(kit, "bin", "triage"))
+    done = fake("bin/triage", "echo '{\"tier\": \"low\"}'\n")
+    assert done.returncode == 2 and "no `tests` object" in done.stderr, done.stdout + done.stderr
 
 
 def unrun_checks_never_hold_the_pr(base):
@@ -3955,7 +4169,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
-         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings,
+         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,

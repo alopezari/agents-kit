@@ -1,0 +1,1 @@
+- The validate stamp refuses a validation report that leaves a criterion of the spec without a PASS row and a negative (−) row that ran (rows name criteria in a new `AC` column; a manual criterion takes a NOT RUN row with a reason), or that doesn't account for each test type `bin/triage` selects in a `## Test types` table. kit-validate's step 5 describes both.
