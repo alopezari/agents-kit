@@ -27,7 +27,6 @@ import contextlib
 import hashlib
 import importlib.machinery
 import importlib.util
-import itertools
 import json
 import os
 import re
@@ -43,7 +42,6 @@ TEST_PATH = r"(^|/)(tests?|__tests__|spec)/|[._-](test|spec)\.[a-z]+$|Test\.php$
 TEST_FILE = re.compile(TEST_PATH, re.I)
 NOT_BEHAVIOR = re.compile(TEST_PATH + r"|(^|/)docs?/|\.(md|txt|rst)$|(^|/)(CHANGELOG|README)", re.I)
 SPEC_LOOKUP_SECS = 10
-EVIDENCE_HEADER_LINES = 1000  # the `# in` line follows the command, which a `bash -c` script spreads over many lines
 TRIAGE_SECS = 60
 NEGATIVE_CASE = re.compile(r"[\u2212\u00b1]|(?<![\w-])-(?![\w-])")  # −, ± or a lone hyphen; `regression` and `+` aren't
 # A criterion no test can check: its `verify:` starts with manual/by hand (not a path: ./manual.py), or says it can't be automated.
@@ -479,14 +477,11 @@ def guide_steps(text):
 
 
 def evidence_tree(path):
-    """The tree bin/evidence recorded the check's content as, from the `# in` line under its command; None when that
+    """The tree bin/evidence recorded the check's content as, from the `# in` line it writes first; None when that
     line has none: saved before it recorded trees, outside a repository, or after git failed."""
     with open(path, errors="replace") as fh:
-        for line in itertools.islice(fh, EVIDENCE_HEADER_LINES):
-            if re.match(r"# in .*, exit -?\d+", line):
-                found = re.search(r", tree ([0-9a-f]{40,64})$", line.rstrip("\n"))
-                return found and found.group(1)
-    return None
+        found = re.match(r"# in .*, exit \d+, commit .*, tree ([0-9a-f]{40,64})$", fh.readline().rstrip("\n"))
+    return found and found.group(1)
 
 
 def stale_evidence(lines, evidence):
@@ -507,7 +502,11 @@ def stale_evidence(lines, evidence):
         if tree == current:
             continue
         named = ", ".join(names)
-        if run_git(["cat-file", "-e", tree]).returncode != 0:
+        lookup = run_git(["cat-file", "-e", tree])
+        if lookup.returncode > 1:
+            problems.append(f"{named}: couldn't look up the content it ran on: {lookup.stderr.strip()}")
+            continue
+        if lookup.returncode == 1:
             warnings.append(f"{named} ran on a tree this repository doesn't have (a throwaway clone?), so it can't be "
                             "compared with the working tree; the stamp doesn't know whether it is out of date.")
             continue

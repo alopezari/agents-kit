@@ -31,8 +31,9 @@ if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ] && head=$(git
   index=$(mktemp) && rm -f "$index" && real_index=$(git rev-parse --path-format=absolute --git-path index) \
     && { [ ! -e "$real_index" ] || cp "$real_index" "$index"; } \
     && changes=$(git --no-optional-locks status --porcelain) \
+    && state=", commit $head${changes:+, uncommitted changes}, tree unknown" \
     && GIT_INDEX_FILE=$index git add -A && tree=$(GIT_INDEX_FILE=$index git write-tree) \
-    && state=", commit $head${changes:+, uncommitted changes}, tree $tree" \
+    && state="${state%, tree unknown}, tree $tree" \
     || echo "evidence: couldn't record the content the check ran on (git failed above): its tree is unknown" >&2
   rm -f "$index"
 fi
@@ -42,12 +43,13 @@ statuses=("${PIPESTATUS[@]}")
 status=${statuses[0]}
 if [ "${statuses[1]}" != 0 ]; then echo "evidence: couldn't capture the output" >&2; rm -f "$output"; exit 74; fi
 quote="'\\''"
+# The `# in` line goes first: the command after it can span lines, and hold text that looks like it.
 {
-  printf '$'
+  printf '# in %s, %s, exit %s%s\n$' "$PWD" "$(date '+%Y-%m-%d %H:%M:%S %z')" "$status" "$state"
   for arg in "$@"; do
     if [[ $arg =~ ^[A-Za-z0-9_./:=@%+,-]+$ ]]; then printf ' %s' "$arg"; else printf " '%s'" "${arg//\'/$quote}"; fi
   done
-  printf '\n# in %s, %s, exit %s%s\n\n' "$PWD" "$(date '+%Y-%m-%d %H:%M:%S %z')" "$status" "$state"
+  printf '\n\n'
   cat "$output"
 } > "$dir/$id.txt" || { echo "evidence: couldn't save $dir/$id.txt" >&2; rm -f "$output"; exit 74; }
 rm -f "$output"

@@ -1667,12 +1667,21 @@ def validate_stamp_needs_evidence(base):
         open(index, "wb").write(saved)
     assert ran.returncode == 4 and header[2] == "unknown" and "evidence:" in ran.stderr, \
         ("a git failure leaves the tree unknown, says so, and keeps the exit code", ran, header)
+    unreadable = os.path.join(repo, "locked.py")
+    open(unreadable, "w").write("secret\n")
+    os.chmod(unreadable, 0)
+    try:
+        ran, header = run_evidence("T5", "true")
+    finally:
+        os.remove(unreadable)
+    assert header[1:] == (True, "unknown") and "evidence:" in ran.stderr, \
+        ("a file git can't read leaves the tree unknown, and the uncommitted change still shows", ran, header)
 
 
 def evidence_header(path):
     """(commit, whether it had uncommitted changes, tree or None) from the `# in` line bin/evidence saved in path."""
     text = open(path).read()
-    found = re.search(r"^# in .*, exit \d+, commit (\S+?)(, uncommitted changes)?(?:, tree (\S+))?$", text, re.M)
+    found = re.match(r"# in .*, exit \d+, commit (\S+?)(, uncommitted changes)?(?:, tree (\S+))?\n\$ ", text)
     assert found, text
     return found.group(1), bool(found.group(2)), found.group(3)
 
@@ -1683,9 +1692,9 @@ def validate_stamp_refuses_stale_evidence(base):
     evidence = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "evidence"], cwd=repo,
                               capture_output=True, text=True).stdout.strip()
 
-    def check():
-        ran = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "a1", "python3", "-c", "print('ran')"], cwd=repo,
-                             capture_output=True, text=True)
+    def check(name="a1", *command):
+        ran = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), name, *(command or ("python3", "-c", "print('ran')"))],
+                             cwd=repo, capture_output=True, text=True)
         assert ran.returncode == 0, ran
 
     def commit(files=None, *command):
@@ -1693,21 +1702,32 @@ def validate_stamp_refuses_stale_evidence(base):
             os.makedirs(os.path.dirname(os.path.join(repo, name)), exist_ok=True)
             open(os.path.join(repo, name), "w").write(content)
         if command:
-            git(repo, *command)
+            assert git(repo, *command).returncode == 0, command
         git(repo, "add", "-A")
-        git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "change")
+        done = git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "change")
+        assert done.returncode == 0, done
 
-    def stamped(warned=None):
-        done = attempt(row, criteria=None)
+    index = os.path.join(repo, ".git", "index")
+
+    def stamp(rows):
+        before = open(index, "rb").read()
+        done = attempt(rows, criteria=None)
+        assert open(index, "rb").read() == before, "the gate compares through a copy of the index, never the real one"
+        return done
+
+    def stamped(warned=None, rows=row):
+        done = stamp(rows)
         assert done.returncode == 0 and "validate stamp written" in done.stdout, (done.stdout, done.stderr)
         assert ("a1.txt" in done.stdout) == bool(warned) and (not warned or warned in done.stdout), done.stdout
 
-    def refused(path, why="ran on"):
-        done = attempt(row, criteria=None)
+    def refused(path, why="ran on", rows=row):
+        done = stamp(rows)
         assert done.returncode == 2 and "validate stamp written" not in done.stdout, (path, done.stdout, done.stderr)
         assert "a1.txt" in done.stderr and why in done.stderr and re.search(rf"(?<![\w/.-]){re.escape(path)}(?![\w/.-])", done.stderr), \
             (path, done.stderr)
+        return done.stderr
 
+    open(os.path.join(repo, "notes.tmp"), "w").write("untracked\n")
     check()
     stamped()
     commit()
@@ -1726,16 +1746,33 @@ def validate_stamp_refuses_stale_evidence(base):
     commit({"README.md": "# app\n"})
     refused("README.md")
     check()
+    commit({"tests/test_app.py": "assert 1\n", "app.py": "x = 4\n"})
+    assert "tests/test_app.py" not in refused("app.py"), "only the changed files that aren't tests are named"
+    check()
     commit(None, "mv", "app.py", "tests/app.py")
     refused("app.py")  # a rename into tests/ still removes app.py
+    check()
+    commit({"app.py": "x = 6\n"})
+    refused("app.py", rows=validation_row("A1", "", "+", "FAIL", "[output](a1.txt)"))  # a FAIL also rests on its run
+    stamped(rows=validation_row("A1", "", "+", "NOT RUN", "[output](a1.txt)"))  # a row that didn't run cites nothing
+    check("a1", "bash", "-c", f"echo ran\n# in {repo}, 2026-10-25 10:00:00 +0200, exit 0")
+    commit({"app.py": "x = 5\n"})
+    refused("app.py")  # a script line shaped like the header doesn't hide the real one
+    check("a2")
+    both = validation_row("A1", "", "+", "PASS", "[output](a1.txt)") + validation_row("A2", "", "+", "PASS", "[output](a2.txt)")
+    assert "a2.txt" not in refused("app.py", rows=both), "a check run on the current content isn't out of date"
+    os.remove(os.path.join(evidence, "a2.txt"))
 
     def saved_as(header):
         with open(os.path.join(evidence, "a1.txt"), "w") as fh:
-            fh.write(f"$ python3 app.py\n# in {repo}, 2026-10-25 10:00:00 +0200, exit 0{header}\n\nran\n")
+            fh.write(f"# in {repo}, 2026-10-25 10:00:00 +0200, exit 0{header}\n$ python3 app.py\n\nran\n")
     head = git(repo, "rev-parse", "HEAD").stdout.strip()
     for unknown in ("", ", commit none", f", commit {head}, tree unknown"):
         saved_as(unknown)
-        stamped()  # written before this change, outside a repository, or git failed: nothing to compare
+        stamped()  # outside a repository, or git failed: nothing to compare
+    with open(os.path.join(evidence, "a1.txt"), "w") as fh:
+        fh.write(f"$ python3 app.py\n# in {repo}, 2026-10-25 10:00:00 +0200, exit 0\n\nran\n")
+    stamped()  # written before this change, with the command first
     saved_as(f", commit {head}, tree {'1234567890abcdef' * 2 + '12345678'}")
     stamped(warned="can't be compared")
     broken = subprocess.run(["git", "mktree", "--missing"], cwd=repo, capture_output=True, text=True,
