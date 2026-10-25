@@ -463,7 +463,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `mods/` | The kit's Claude Code plugin (`mods/kit/`): a mod that adds what only Claude Code can show, on top of the shared flow. |
 | `monitors/` | The weekly health check and the mid-month trends scan. |
 | `packs/` | Framework signal packs for `bin/triage` (`wordpress.json`), applied in the repos that use the framework. |
-| `repos/` | Per-repository overlays (`notes.md`, `ship.md`, `verify`, `review.md`, `packs`, `wp-cli`) and the shared verify scripts in `_shared/`. |
+| `repos/` | Per-repository overlays (`notes.md`, `ship.md`, `verify`, `review.md`, `packs`, `suite`, `wp-cli`) and the shared verify scripts in `_shared/`. |
 | `review-mining/` | The monthly job that learns from human code-review comments. |
 | `site/` | The public landing page and these docs as a website, built from README.md and this file (`site/build.mjs`). |
 | `skills.external` | Third-party skills install.sh fetches from their source, some pinned to a commit in `vendor/`. |

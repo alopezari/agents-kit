@@ -31,6 +31,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -44,7 +45,8 @@ NOT_BEHAVIOR = re.compile(
     re.I,
 )
 SPEC_LOOKUP_SECS = 10
-EVIDENCE_HEADER_BYTES = 64 * 1024  # bin/evidence's header lines, never the output after them: a suite's log can run to megabytes
+EVIDENCE_LINE_BYTES = 64 * 1024
+SHELL_OPERATORS = {"|", "||", "&", "&&", ";", ">", ">>", "<", "2>&1"}
 TRIAGE_SECS = 60
 NEGATIVE_CASE = re.compile(r"[\u2212\u00b1]|(?<![\w-])-(?![\w-])")  # −, ± or a lone hyphen; `regression` and `+` aren't
 # A criterion no test can check: its `verify:` starts with manual/by hand (not a path: ./manual.py), or says it can't be automated.
@@ -595,66 +597,83 @@ def test_type_problems(text, evidence):
 
 
 def suite_command(command):
-    """A full-suite command as the suite overlay and bin/evidence's `$ ` line compare: `./x`, `bash x` and `x` alike."""
-    command = " ".join(command.split())
-    command = command[len("bash "):] if command.startswith("bash ") else command
-    return command[len("./"):] if command.startswith("./") else command
+    """A full-suite command's arguments as the suite overlay and bin/evidence's `$ ` line compare: shell quoting aside,
+    `./x`, `bash x` and `x` alike. None for a line that isn't one plain command."""
+    try:
+        words = shlex.split(command)
+    except ValueError:  # an unclosed quote
+        return None
+    words = words[1:] if words[:1] == ["bash"] else words
+    if not words or "=" in words[0] or any(w in SHELL_OPERATORS for w in words):
+        return None
+    return (words[0][len("./"):] if words[0].startswith("./") else words[0], *words[1:])
 
 
 def evidence_header(path):
-    """(command, exit code, fingerprint or None) from the header bin/evidence saves, or None for any other file."""
+    """(command, directory, exit code, fingerprint or None) from the header bin/evidence saves, or None for any other file."""
     try:
         with open(path, "rb") as fh:
-            head = fh.read(EVIDENCE_HEADER_BYTES).decode(errors="replace").split("\n")
+            head = [fh.readline(EVIDENCE_LINE_BYTES).decode(errors="replace").rstrip("\n") for _ in range(3)]
     except OSError:
         return None
-    ran = re.fullmatch(r".*, exit (\d+)", head[1]) if len(head) > 2 and head[0].startswith("$ ") else None
-    if not ran:
+    ran = re.fullmatch(r"# in (.+), \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4}, exit (\d{1,3})", head[1])
+    if not head[0].startswith("$ ") or not ran:
         return None
     recorded = re.fullmatch(r"# fingerprint ([0-9a-f]{64})", head[2])
-    return head[0][2:], int(ran.group(1)), recorded.group(1) if recorded else None
+    return head[0][2:], ran.group(1), int(ran.group(2)), recorded.group(1) if recorded else None
 
 
 def suite_problems(evidence):
-    """Why no file of the evidence directory shows a green run of a command the repo's suite overlay lists on the code as
-    it is now (the fingerprint verify's stamp holds, which bin/evidence records before the run). Empty without an overlay.
-    Raises OSError when the evidence directory can't be listed."""
+    """Why no file of the evidence directory shows a green run, from a checkout's root, of a command the repo's suite
+    overlay lists on the code as it is now (the fingerprint verify's stamp holds, which bin/evidence records before the
+    run). Empty without an overlay."""
     shown = f"~/.agents/repos/{repo_name()}/suite"
+    overlay = os.path.expanduser(shown)
     try:
-        with open(os.path.expanduser(shown), encoding="utf-8") as fh:
+        with open(overlay, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
     except FileNotFoundError:
-        return []
+        if not os.path.islink(overlay):
+            return []
+        return [f"The suite overlay {shown} is a link to {os.readlink(overlay)}, which doesn't exist: restore it or remove "
+                "the link."]
     except (OSError, ValueError) as error:  # ValueError: not UTF-8
         return [f"Can't read the suite overlay {shown}: {getattr(error, 'strerror', None) or error}."]
     commands = [" ".join(line.split()) for line in lines if line.strip() and not line.lstrip().startswith("#")]
     if not commands:
         return [f"The suite overlay {shown} holds no command: list the repo's full-suite commands in it, one per line, "
                 "or remove it."]
+    unusable = [c for c in commands if suite_command(c) is None]
+    if unusable:
+        return [f"The suite overlay {shown} has lines that aren't one plain command (no pipes, `&&`, `;`, redirects or "
+                "`VAR=` prefixes; a script can hold those):"] + [f"  {c}" for c in unusable]
     names = sorted(os.listdir(evidence))
     try:
         current = fingerprint()
     except RuntimeError as error:
         return [f"Can't compute the code's fingerprint to match the suite runs against: {error}"]
-    wanted, reasons = {suite_command(c) for c in commands}, []
+    wanted, reasons = {suite_command(c): c for c in commands}, []
     for name in names:
         header = evidence_header(os.path.join(evidence, name))
         if not header:
             continue
-        ran, status, recorded = header
-        if suite_command(ran) not in wanted:
-            line = next((c for c in commands if suite_command(ran).startswith(suite_command(c) + " ")), None)
+        ran, where, status, recorded = header
+        words = suite_command(ran)
+        if words not in wanted:
+            line = next((c for w, c in wanted.items() if words and words[:len(w)] == w), None)
             if line:
-                reasons.append(f"{name} ran `{ran}`, which only starts like the suite line `{line}`: run the line as it is.")
+                reasons.append(f"{name} ran `{ran}`, which doesn't count as the suite line `{line}`: run the line as it is.")
             continue
         if status != 0:
             reasons.append(f"{name} ran `{ran}`, but it exited {status}: fix what failed and run it again.")
+        elif not os.path.exists(os.path.join(where, ".git")):
+            reasons.append(f"{name} ran `{ran}` in {where}, which isn't a checkout's root: run it from the repo root.")
         elif not recorded:
             reasons.append(f"{name} ran `{ran}` with no recorded fingerprint (a bin/evidence from before it recorded one, "
                            "or run outside a checkout): run it again.")
         elif recorded != current:
-            reasons.append(f"{name} ran `{ran}` on different code: a file changed during or after the run, or the branch "
-                           "moved onto a newer base. Run it again.")
+            reasons.append(f"{name} ran `{ran}` on different code: a file changed during or after the run (an untracked "
+                           "file the suite left counts), or the branch moved onto a newer base. Run it again.")
         else:
             return []
     return ([f"The suite overlay {shown} asks for a green run of the repo's full suite on the code as it is now, and "
@@ -676,10 +695,10 @@ def validation_report_problems():
     if not evidence:  # reports path evidence refuses on a detached HEAD
         return ["No evidence directory: a detached HEAD has none. Validate from the branch's checkout."]
     try:
-        problems = suite_problems(evidence)
-    except OSError as error:  # the checks below list the same directory
+        os.listdir(evidence)
+    except OSError as error:  # every check below lists it
         return [f"Can't list the evidence directory {evidence}: {error.strerror}."]
-    lines = text.splitlines()
+    lines, problems = text.splitlines(), []
     missing = unbacked_rows(lines, evidence)
     if missing:
         problems += [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for "
@@ -694,6 +713,8 @@ def validation_report_problems():
     elif items is not None:
         problems += criteria_problems(items, result_rows(lines, evidence))
     problems += test_type_problems(text, evidence)
+    # Last, after triage's run: the closer to the stamp's own fingerprint, the less an edit can slip between them.
+    problems += suite_problems(evidence)
     if items is None and not why and not problems:
         print(f"No spec at {path}: the per-criterion check was skipped.")
     return problems
