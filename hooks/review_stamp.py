@@ -46,7 +46,6 @@ NOT_BEHAVIOR = re.compile(
 )
 SPEC_LOOKUP_SECS = 10
 EVIDENCE_LINE_BYTES = 64 * 1024
-SHELL_OPERATORS = {"|", "||", "&", "&&", ";", ">", ">>", "<", "2>&1"}
 TRIAGE_SECS = 60
 NEGATIVE_CASE = re.compile(r"[\u2212\u00b1]|(?<![\w-])-(?![\w-])")  # −, ± or a lone hyphen; `regression` and `+` aren't
 # A criterion no test can check: its `verify:` starts with manual/by hand (not a path: ./manual.py), or says it can't be automated.
@@ -601,10 +600,12 @@ def suite_command(command):
     `./x`, `bash x` and `x` alike. None for a line that isn't one plain command."""
     try:
         words = shlex.split(command)
+        # Unquoted operators only: posix=False keeps a quoted `'|'` in its quotes, so it stays an argument.
+        raw = list(shlex.shlex(command, posix=False, punctuation_chars=";&|<>"))
     except ValueError:  # an unclosed quote
         return None
     words = words[1:] if words[:1] == ["bash"] else words
-    if not words or "=" in words[0] or any(w in SHELL_OPERATORS for w in words):
+    if not words or "=" in words[0] or any(set(token) <= set(";&|<>") for token in raw):
         return None
     return (words[0][len("./"):] if words[0].startswith("./") else words[0], *words[1:])
 
@@ -639,7 +640,7 @@ def suite_problems(evidence):
                 "the link."]
     except (OSError, ValueError) as error:  # ValueError: not UTF-8
         return [f"Can't read the suite overlay {shown}: {getattr(error, 'strerror', None) or error}."]
-    commands = [" ".join(line.split()) for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    commands = [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
     if not commands:
         return [f"The suite overlay {shown} holds no command: list the repo's full-suite commands in it, one per line, "
                 "or remove it."]

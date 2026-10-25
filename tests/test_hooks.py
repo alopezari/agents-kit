@@ -1958,8 +1958,8 @@ def remove_suite_overlay():
 def validate_stamp_needs_a_full_suite_run(base):
     repo, evidence, written, run, refused = suite_fixture(base, "feat/suite")
     try:
-        said = refused("~/.agents/repos/repo/suite", "tests/run.sh", "make check", "bin/evidence suite tests/run.sh")
-        assert "bin/evidence suite make check" in said, said
+        said = refused("~/.agents/repos/repo/suite", "tests/run.sh", "bin/evidence suite tests/run.sh")
+        assert "bin/evidence suite make  check" in said, said
         for command in (["tests/run.sh"], ["./tests/run.sh"], ["bash", "tests/run.sh"], ["bash", "./tests/run.sh"]):
             assert run("S1", *command).returncode == 0
             written()
@@ -2069,6 +2069,13 @@ def validate_stamp_suite_overlay_edge_cases(base):
         with open(SUITE_OVERLAY, "w") as fh:
             fh.write("tests/run.sh\nmake check && npm test\nCI=1 make\n")
         refused("aren't one plain command", "make check && npm test", "CI=1 make")
+        with open(SUITE_OVERLAY, "w") as fh:  # quoted, `|` and two spaces are the argument's own
+            fh.write("tests/run.sh --sep '|' -k 'a  b'\n")
+        assert run("S9", "tests/run.sh", "--sep", "|", "-k", "a b").returncode == 0
+        refused("suite tests/run.sh --sep")
+        assert run("S9", "tests/run.sh", "--sep", "|", "-k", "a  b").returncode == 0
+        written()
+        os.remove(os.path.join(evidence, "S9.txt"))
         with open(SUITE_OVERLAY, "wb") as fh:
             fh.write(b"tests/run.sh\xff\n")
         refused("Can't read the suite overlay")
