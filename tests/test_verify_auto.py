@@ -6,6 +6,7 @@ Run: python3 ~/.agents/tests/test_verify_auto.py   (exit 1 on any failure)
 """
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -48,14 +49,17 @@ def new_repo(base, files):
     return repo
 
 
-def verify(repo, path=None, red_check_timeout=None, **env):
+def verify(repo, path=None, red_check_timeout=None, timeouts=None, **env):
+    """`timeouts` lowers verify_auto's timeout constants by name, e.g. {"LINT_TIMEOUT": 1}."""
     env = {**os.environ, **({"PATH": path} if path else {}), **env}
     args = [sys.executable, SCRIPT]
-    if red_check_timeout:
+    timeouts = {**(timeouts or {}), **({"RED_CHECK_TIMEOUT": red_check_timeout} if red_check_timeout else {})}
+    if timeouts:
         lowered = ("import importlib.util, sys\n"
                    f"spec = importlib.util.spec_from_file_location('verify_auto', {SCRIPT!r})\n"
                    "module = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(module)\n"
-                   f"module.RED_CHECK_TIMEOUT = {red_check_timeout}\nsys.exit(module.main())")
+                   + "".join(f"module.{name} = {value}\n" for name, value in timeouts.items())
+                   + "sys.exit(module.main())")
         args = [sys.executable, "-c", lowered]
     proc = subprocess.run(args, cwd=repo, capture_output=True, text=True, env=env, timeout=120)
     return proc.returncode, proc.stdout + proc.stderr
@@ -185,6 +189,8 @@ exit 1
     assert code == 1 and "error: [pytest] FAILED tests/test_mod.py::test_a - assert 2 == 1" in out, out
     assert "skipped: ruff (ruff not installed in .venv/bin or venv/bin or PATH)" in out, out
     assert open(os.path.join(repo, ".venv/bin/args")).read().split() == ["-q", "tests/test_mod.py"]
+    assert [l for l in lines(out, "skipped: diff coverage (") if "#!/bin/sh" in l], \
+        "a shell launcher with no venv python beside it leaves the Python unknown:\n" + out
 
 
 def php_lint_catches_syntax_error(base):
@@ -550,6 +556,312 @@ def red_check_needs_tests_and_code_of_the_stack(base):
     assert red_run(repo) is None and npm_calls(base) == [], (red_run(repo), npm_calls(base))
 
 
+# --- diff coverage: the related run under coverage.py or c8, a summary of the changed lines it executed ----------
+# The fake interpreter runs the launcher with sh, so the related run's verdict is the fake pytest's own.
+FAKE_COVERAGE_PYTHON = """#!/bin/sh
+bin=$(dirname "$0")
+echo "$*" >> "$bin/python-calls"
+[ "$1" = -O ] && shift
+[ "$1" = -c ] && {{ {version}; exit; }}
+[ "$1 $2" = "-m coverage" ] || exit 9
+cmd=$3; shift 3
+case "$cmd" in
+run) cp "${{1#--rcfile=}}" "$bin/rcfile"; echo "$COVERAGE_FILE" > "$bin/coverage-file"; shift
+     {before_tests}
+     sh "$@"; status=$?
+     {after_tests}; exit $status;;
+json) while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out=$2; shift; done
+      {json};;
+esac
+"""
+PY_COVERAGE_BASE = {".gitignore": "node_modules/\nvendor/\n.venv/\n.coverage\n", "pkg/__init__.py": "",
+                    "pkg/mod.py": "a = 1\nb = 2\nc = 3\n", "pkg/gone.py": "g = 1\n", "tests/test_mod.py": "def test_a(): pass\n"}
+# pkg/mod.py: lines 2-4 changed, 4 a comment; pkg/new.py untracked, every line new; pkg/gone.py never loaded.
+PY_COVERAGE_REPORT = {"files": {"pkg/mod.py": {"executed_lines": [1, 2], "missing_lines": [3]},
+                                "pkg/new.py": {"executed_lines": [1], "missing_lines": [2, 3]},
+                                "pkg/__init__.py": {"executed_lines": [], "missing_lines": []}}}
+FAKE_RELATED_PYTEST = """#!/bin/sh
+echo "$@" >> "$(dirname "$0")/args"
+{body}
+"""
+
+
+def py_coverage_change(base, report=PY_COVERAGE_REPORT, pytest_body="exit 0", python_dir=".venv/bin", **fake):
+    """A change to pkg/mod.py, pkg/gone.py and a new pkg/new.py, with a fake pytest and coverage-capable python."""
+    repo = new_repo(base, PY_COVERAGE_BASE)
+    write(repo, "pkg/mod.py", "a = 1\nb = 20\nc = 30\n# why c is 30\n")
+    write(repo, "pkg/gone.py", "g = 2\n")
+    write(repo, "pkg/new.py", "x = 1\ny = 2\nz = 3\n")
+    write(repo, "conftest.py", "import pkg\n")
+    write(repo, ".venv/bin/pytest", FAKE_RELATED_PYTEST.format(body=pytest_body), executable=True)
+    write(base, "report.json", report if isinstance(report, str) else json.dumps(report))
+    defaults = {"version": ":", "before_tests": ":", "after_tests": 'echo data > "$COVERAGE_FILE"',
+                "json": f'cp "{base}/report.json" "$out"'}
+    write(repo if python_dir == ".venv/bin" else base, f"{python_dir}/python",
+          FAKE_COVERAGE_PYTHON.format(**{**defaults, **fake}), executable=True)
+    return repo
+
+
+def read_lines(path):
+    return open(path).read().splitlines() if os.path.exists(path) else []
+
+
+def pytest_diff_coverage_reports_changed_lines(base):
+    repo = py_coverage_change(base)
+    write(repo, ".coverage", "the project's own data\n")
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and not lines(out, "error: ") and not lines(out, "warning: "), out
+    assert lines(out, "ran: diff coverage") == [
+        "ran: diff coverage (coverage.py): 2 of 5 changed lines covered by the related tests (40%); "
+        "uncovered: pkg/mod.py:3, pkg/new.py:2-3; not in the report: pkg/gone.py"], out
+    assert "ran: pytest on 1 related files: exit 0" in out, out
+    bin_dir = os.path.join(repo, ".venv/bin")
+    probe, run, report = read_lines(os.path.join(bin_dir, "python-calls"))
+    assert probe.startswith("-c import coverage") and "pytest_cov" in probe, probe
+    rcfile = run.split()[3]
+    assert run.split()[:3] == ["-m", "coverage", "run"] and rcfile.startswith("--rcfile="), run
+    assert run.split()[4].endswith(".venv/bin/pytest") and run.split()[5:] == ["-q", "tests/test_mod.py"], \
+        "the launcher script runs under coverage, with the related run's own arguments:\n" + run
+    assert report.split()[:4] == ["-m", "coverage", "json", rcfile] and report.split()[4] == "-o", report
+    rc = read_lines(os.path.join(bin_dir, "rcfile"))
+    include = [l.strip() for l in rc[rc.index("include =") + 1:] if l.startswith("    ")]
+    real = os.path.realpath(repo)
+    assert [os.path.realpath(p) for p in include] == [os.path.join(real, f) for f in ("pkg/gone.py", "pkg/mod.py", "pkg/new.py")], \
+        "only the changed non-test files are collected:\n" + "\n".join(rc)
+    data = read_lines(os.path.join(bin_dir, "coverage-file"))[0]
+    tmp = os.path.dirname(rcfile[len("--rcfile="):])
+    assert os.path.dirname(data) == tmp, (data, tmp)
+    assert os.path.dirname(report.split()[5]) == tmp, report
+    assert not os.path.exists(tmp), "the coverage temp dir was left behind"
+    assert open(os.path.join(repo, ".coverage")).read() == "the project's own data\n", "the project's .coverage changed"
+    left = [p for p in os.listdir(repo) if p.startswith(".coverage") and p != ".coverage" or p == "coverage"]
+    assert not left, f"coverage wrote into the working tree: {left}"
+
+
+def pytest_diff_coverage_uses_the_python_its_shebang_names(base):
+    repo = py_coverage_change(base, python_dir="py/bin")
+    os.remove(os.path.join(repo, ".venv/bin/pytest"))
+    write(base, "bin/pytest", f"#!{base}/py/bin/python -O\n" + FAKE_RELATED_PYTEST.format(body="exit 0"), executable=True)
+    # A python beside a pytest found on PATH isn't a venv's: the shebang decides.
+    write(base, "bin/python", "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/python-calls\"\nexit 9\n", executable=True)
+    code, out = verify(repo, f"{base}/bin:{MINIMAL_PATH}")
+    assert code == 0 and lines(out, "ran: diff coverage (coverage.py): 2 of 5 "), out
+    probe, run = read_lines(os.path.join(base, "py/bin/python-calls"))[:2]
+    assert probe.startswith("-O -c ") and run.split()[:4] == ["-O", "-m", "coverage", "run"], \
+        "the shebang's flags reach the coverage run:\n" + run
+    assert run.split()[5] == os.path.join(base, "bin/pytest"), run
+    assert not os.path.exists(os.path.join(base, "bin/python-calls")), "the python beside a PATH pytest was used"
+    os.remove(os.path.join(base, "bin/python"))
+    write(base, "bin/pytest", "#!/usr/bin/env bash\n" + FAKE_RELATED_PYTEST.format(body="exit 0"), executable=True)
+    code, out = verify(repo, f"{base}/bin:{MINIMAL_PATH}")
+    assert code == 0 and "ran: pytest on 1 related files: exit 0" in out, out
+    assert [l for l in lines(out, "skipped: diff coverage (") if "#!/usr/bin/env bash" in l], \
+        "a launcher like a pyenv shim leaves the Python unknown:\n" + out
+    assert len(read_lines(os.path.join(base, "py/bin/python-calls"))) == 3, "the unknown Python was probed"
+    shutil.rmtree(repo)
+    repo = py_coverage_change(base)
+    write(repo, ".venv/bin/pytest", f"#!{repo}/.venv/bin/python -O\n" + FAKE_RELATED_PYTEST.format(body="exit 0"),
+          executable=True)
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and lines(out, "ran: diff coverage (coverage.py): 2 of 5 "), out
+    run = read_lines(os.path.join(repo, ".venv/bin/python-calls"))[1]
+    assert run.split()[:4] == ["-O", "-m", "coverage", "run"], "a venv launcher's shebang flags were dropped:\n" + run
+    assert len(read_lines(os.path.join(base, "bin/args"))) == 2, "the shim's pytest ran once"
+
+
+def diff_coverage_skips_say_why(base):
+    cases = [
+        ("coverage.py missing", {"version": 'echo "No module named coverage" >&2; exit 1'}, {}, ["No module named coverage"]),
+        ("pytest-cov installed", {"version": "exit 3"}, {}, ["pytest-cov is installed"]),
+        ("a passing run without a data file", {"after_tests": ":"}, {}, ["left no data file"]),
+        ("a run with no verdict", {"pytest_body": "exit 4"}, {}, ["gave no verdict (exit 4)"]),
+        ("more changed files than the cap", {}, {"MAX_COVERAGE_FILES": 2}, ["3 changed Python files to measure, more than 2"]),
+        ("no report", {"json": 'echo "Couldn\'t use data file" >&2; exit 1'}, {}, ["wrote no JSON report", "data file"]),
+        ("an unreadable report", {"json": 'echo "{not json" > "$out"'}, {}, ["unreadable"]),
+        # What coverage json prints, exit 1, when none of the collected files loaded.
+        ("every file absent", {"json": 'echo "No data to report."; exit 1'}, {},
+         ["no changed line is executable", "not in the report: pkg/gone.py, pkg/mod.py, pkg/new.py"]),
+        ("a hanging report step", {"json": "sleep 30 & wait"}, {"LINT_TIMEOUT": 1},
+         ["wrote no JSON report", "timed out after 1s"]),
+        ("a hanging related run", {"before_tests": "sleep 30 & wait"}, {"TEST_TIMEOUT": 1}, ["timed out after 1s"]),
+    ]
+    for why, fake, timeouts, reasons in cases:
+        repo = py_coverage_change(base, **fake)
+        code, out = verify(repo, MINIMAL_PATH, timeouts=timeouts)
+        assert [l for l in lines(out, "skipped: diff coverage (") if all(r in l for r in reasons)], f"{why}:\n{out}"
+        assert not lines(out, "ran: diff coverage") and not lines(out, "error: "), f"{why}:\n{out}"
+        assert code == 0, f"{why}:\n{out}"
+        runs = read_lines(os.path.join(repo, ".venv/bin/args"))
+        if "TEST_TIMEOUT" in timeouts:
+            assert [l for l in lines(out, "skipped: pytest (exit 124") if "timed out" in l], f"{why}:\n{out}"
+            assert runs == [], f"{why}: pytest ran again after the timeout"
+        else:
+            assert runs == ["-q tests/test_mod.py"], f"{why}: pytest ran {len(runs)} times"
+        if "MAX_COVERAGE_FILES" in timeouts:
+            assert not os.path.exists(os.path.join(repo, ".venv/bin/python-calls")), f"{why}: coverage.py was probed"
+        shutil.rmtree(repo)
+    repo = py_coverage_change(base, json='echo \'{"files": {"pkg/mod.py": {"executed_lines": [1, 2, 3], '
+                                         '"missing_lines": []}}}\' > "$out"')
+    git(repo, "checkout", "--", ".")
+    os.remove(os.path.join(repo, "pkg/new.py"))
+    write(repo, "pkg/mod.py", "a = 1\nb = 2\nc = 3\n# only a comment\n")
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and [l for l in lines(out, "skipped: diff coverage (") if "executable" in l], "comments only:\n" + out
+    git(repo, "checkout", "--", ".")
+    write(repo, "tests/test_mod.py", "def test_a(): assert True\n")
+    os.remove(os.path.join(repo, ".venv/bin/python-calls"))
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and [l for l in lines(out, "skipped: diff coverage (") if "non-test" in l], "tests only:\n" + out
+    assert not os.path.exists(os.path.join(repo, ".venv/bin/python-calls")), "a tests-only change was measured"
+    git(repo, "checkout", "--", ".")
+    write(repo, "pkg/gone.py", "g = 3\n")  # no test_gone.py: no related run
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and [l for l in lines(out, "skipped: diff coverage (") if "no related" in l], "no related run:\n" + out
+
+
+def diff_coverage_keeps_the_related_run_verdict(base):
+    failing = 'echo "FAILED tests/test_mod.py::test_a - assert 20 == 2"; exit 1'
+    repo = py_coverage_change(base, pytest_body=failing)
+    code, out = verify(repo, MINIMAL_PATH)
+    os.remove(os.path.join(repo, ".venv/bin/python"))
+    bare_code, bare_out = verify(repo, MINIMAL_PATH)
+    assert (code, lines(out, "error: ")) == (bare_code, lines(bare_out, "error: ")) == (
+        1, ["error: [pytest] FAILED tests/test_mod.py::test_a - assert 20 == 2"]), out + bare_out
+    assert lines(out, "ran: diff coverage (coverage.py): 2 of 5 "), "a failing run's coverage is reported too:\n" + out
+
+
+def coverage_that_fails_before_the_tests_reruns_them_without_it(base):
+    repo = py_coverage_change(base, before_tests='echo "coverage: cannot start" >&2; exit 1')
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and "ran: pytest on 1 related files: exit 0" in out, out
+    assert [l for l in lines(out, "skipped: diff coverage (") if "cannot start" in l], out
+    assert read_lines(os.path.join(repo, ".venv/bin/args")) == ["-q tests/test_mod.py"], "pytest ran once, without coverage"
+
+
+# c8 report turns the V8 coverage npm test left in --temp-directory into the Istanbul JSON report the test gives it.
+FAKE_C8 = """#!/bin/sh
+bin=$(dirname "$0")
+echo "$*" >> "$bin/c8-calls"
+[ "$1" = report ] || exit 9
+for a; do case "$a" in --reports-dir=*) dir=${{a#--reports-dir=}};; --temp-directory=*) raw=${{a#--temp-directory=}};; esac; done
+ls "$raw" >> "$bin/c8-raw"
+{report_step}
+"""
+# What the fake npm adds to collect V8 coverage: node writes a file into NODE_V8_COVERAGE.
+NPM_V8 = 'echo "${NODE_V8_COVERAGE:-none}" >> "$(dirname "$0")/v8-dirs"; [ -z "$NODE_V8_COVERAGE" ] || echo "{}" > "$NODE_V8_COVERAGE/coverage-1.json"\n'
+
+
+def istanbul(path, statements):
+    """An Istanbul file entry as c8 writes it, from (line, count) per statement."""
+    return {path: {"path": path, "s": {str(i): n for i, (_, n) in enumerate(statements)},
+                   "statementMap": {str(i): {"start": {"line": l, "column": 0}, "end": {"line": l, "column": 5}}
+                                    for i, (l, _) in enumerate(statements)}}}
+
+
+def with_c8(base, repo, report_step='cp "{report}" "$dir/coverage-final.json"', on_base=MOCHA_FAILING):
+    real = os.path.realpath(repo)
+    # Line 1 has two statements and only the second ran: still covered.
+    write(base, "c8-report.json", json.dumps(istanbul(f"{real}/src/sum.js", [(1, 0), (1, 1), (2, 0), (3, 2)])))
+    write(repo, "node_modules/.bin/c8", FAKE_C8.format(report_step=report_step.replace("{report}", f"{base}/c8-report.json")),
+          executable=True)
+    write(base, "bin/npm", FAKE_NPM.format(base=on_base).replace("\n", "\n" + NPM_V8, 1), executable=True)
+    write(repo, "src/sum.js", "fixed;\nmore;\n")
+
+
+def v8_dirs(base):
+    return read_lines(os.path.join(base, "bin/v8-dirs"))
+
+
+def c8_measures_the_red_checks_working_tree_run(base):
+    repo, path = js_change(base)
+    with_c8(base, repo)
+    code, out = verify(repo, path)
+    assert code == 0 and [l for l in lines(out, "ran: red check: ") if "npm test" in l], out
+    assert lines(out, "ran: diff coverage") == [
+        "ran: diff coverage (c8): 1 of 2 changed lines covered by the related tests (50%); uncovered: src/sum.js:2"], out
+    dirs = v8_dirs(base)
+    assert len(dirs) == 2 and dirs[1] == "none" and os.path.basename(dirs[0]) == "raw", \
+        "only the working-tree run collects V8 coverage:\n" + "\n".join(dirs)
+    calls = read_lines(os.path.join(repo, "node_modules/.bin/c8-calls"))
+    assert len(calls) == 1, calls
+    args = calls[0].split()
+    assert args[0] == "report" and f"--temp-directory={dirs[0]}" in args, args
+    for flag in ("--check-coverage=false", "--100=false", "--skip-full=false", "--all=false", "--reporter=json"):
+        assert flag in args, f"{flag} missing: {args}"
+    assert [a for a in args if a.startswith("--include=")] == ["--include=src/sum.js"], args
+    assert read_lines(os.path.join(repo, "node_modules/.bin/c8-raw")) == ["coverage-1.json"], "c8 read another dir"
+    assert not os.path.exists(os.path.dirname(dirs[0])), "the coverage temp dir was left behind"
+    assert not os.path.exists(os.path.join(repo, "coverage")), "c8 wrote coverage/ into the working tree"
+
+
+def c8_leaves_out_blank_and_line_comment_lines(base):
+    repo, path = js_change(base)
+    with_c8(base, repo)
+    write(repo, "src/sum.js", "fixed;\n\n  // why\nmore;\n")
+    statements = [(1, 1), (2, 0), (3, 0), (4, 0)]
+    write(base, "c8-report.json", json.dumps(istanbul(f"{os.path.realpath(repo)}/src/sum.js", statements)))
+    code, out = verify(repo, path)
+    assert lines(out, "ran: diff coverage") == [
+        "ran: diff coverage (c8): 1 of 2 changed lines covered by the related tests (50%); uncovered: src/sum.js:4"], out
+
+
+def c8_reports_a_failing_working_tree_run(base):
+    repo, path = js_change(base)
+    with_c8(base, repo)
+    write(repo, "src/sum.js", "broken;\nmore;\n")
+    code, out = verify(repo, path)
+    assert code == 0 and [l for l in lines(out, "skipped: red check (") if "fail in the working tree" in l], out
+    assert lines(out, "ran: diff coverage (c8): 1 of 2 changed lines"), out
+    assert len(npm_calls(base)) == 1, npm_calls(base)
+    write(base, "bin/npm", "#!/bin/sh\n" + NPM_V8 + 'echo "sh: mocha: command not found" >&2; exit 127\n',
+          executable=True)
+    code, out = verify(repo, path)
+    assert [l for l in lines(out, "skipped: diff coverage (") if "npm test gave no verdict" in l], out
+    assert not lines(out, "ran: diff coverage"), "a run with no verdict was reported:\n" + out
+
+
+def c8_report_failures_are_skipped(base):
+    cases = [
+        ("no report", 'echo "c8: cannot read" >&2; exit 1', {}, ["wrote no JSON report (exit 1)", "cannot read"]),
+        ("an unreadable report", 'echo "{not json" > "$dir/coverage-final.json"', {}, ["unreadable"]),
+        ("a line number past a float's range",
+         'sed "s/\\"line\\": 1,/\\"line\\": 1e309,/" "{report}" > "$dir/coverage-final.json"', {}, ["unreadable"]),
+        ("a hanging report step", "sleep 30 & wait", {"LINT_TIMEOUT": 1}, ["timed out after 1s"]),
+        # The report runs after the merge-base run, so one as slow as the red check's budget leaves it its verdict.
+        ("a report step as slow as the red check", "sleep 30 & wait", {"LINT_TIMEOUT": 6, "RED_CHECK_TIMEOUT": 6},
+         ["timed out after 6s"]),
+    ]
+    for why, step, timeouts, reasons in cases:
+        repo, path = js_change(base)
+        with_c8(base, repo, report_step=step, on_base="sleep 2; " + MOCHA_FAILING)
+        code, out = verify(repo, path, timeouts=timeouts)
+        assert code == 0 and [l for l in lines(out, "ran: red check: ") if "npm test" in l], f"{why}:\n{out}"
+        assert [l for l in lines(out, "skipped: diff coverage (") if all(r in l for r in reasons)], f"{why}:\n{out}"
+        assert not lines(out, "ran: diff coverage"), f"{why}:\n{out}"
+        shutil.rmtree(repo)
+        os.remove(os.path.join(base, "bin/calls"))
+
+
+def c8_skips_vitest_projects_and_tests_only_changes(base):
+    repo, path = js_change(base, {**JS_BASE, "package.json": '{"scripts": {"test": "mocha"}, '
+                                                              '"devDependencies": {"vitest": "^2"}}\n'})
+    write(repo, "node_modules/.bin/vitest", "#!/bin/sh\nexit 0\n", executable=True)
+    with_c8(base, repo)
+    code, out = verify(repo, path)
+    assert code == 0 and [l for l in lines(out, "skipped: diff coverage (") if "vitest is a dependency" in l], out
+    assert not lines(out, "ran: diff coverage") and "ran: vitest tests related to" in out, out
+    assert not os.path.exists(os.path.join(repo, "node_modules/.bin/c8-calls")), "c8 ran for a vitest project"
+    assert v8_dirs(base) == ["none", "none"], v8_dirs(base)
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "bin/v8-dirs"))
+    repo, path = js_change(base)
+    with_c8(base, repo)
+    git(repo, "checkout", "--", "src/sum.js")
+    code, out = verify(repo, path)
+    assert code == 0 and [l for l in lines(out, "skipped: diff coverage (") if "non-test JS/TS" in l], out
+    assert not os.path.exists(os.path.join(repo, "node_modules/.bin/c8-calls")) and \
+        all(d == "none" for d in v8_dirs(base)), "a tests-only change was measured"
+
 for t in [no_changes_is_nothing_to_check, unsupported_files_only, eslint_reports_only_changed_lines,
           eslint_missing_is_skipped, vitest_failure_is_error, vitest_dependency_not_installed_is_skipped,
           ruff_reports_only_changed_lines, committed_branch_work_is_checked, pytest_runs_related_tests, php_lint_catches_syntax_error,
@@ -565,7 +877,12 @@ for t in [no_changes_is_nothing_to_check, unsupported_files_only, eslint_reports
           pytest_red_check_without_a_conclusive_case_is_skipped, pytest_red_check_hanging_runner_is_skipped,
           pytest_red_check_on_committed_work_and_ignored_files, pytest_red_check_ignores_test_support_without_code,
           npm_test_red_check_without_npm_is_skipped, npm_test_red_check_follows_links_that_stay_in_node_modules,
-          js_failure_summary_matches_the_runners_failure_lines, red_check_needs_tests_and_code_of_the_stack]:
+          js_failure_summary_matches_the_runners_failure_lines, red_check_needs_tests_and_code_of_the_stack,
+          pytest_diff_coverage_reports_changed_lines, pytest_diff_coverage_uses_the_python_its_shebang_names,
+          diff_coverage_skips_say_why, diff_coverage_keeps_the_related_run_verdict,
+          coverage_that_fails_before_the_tests_reruns_them_without_it, c8_measures_the_red_checks_working_tree_run,
+          c8_leaves_out_blank_and_line_comment_lines, c8_reports_a_failing_working_tree_run, c8_report_failures_are_skipped,
+          c8_skips_vitest_projects_and_tests_only_changes]:
     test(t)
 
 failed = [(n, e) for n, e in RESULTS if e]

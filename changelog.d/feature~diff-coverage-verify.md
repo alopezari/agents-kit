@@ -1,0 +1,1 @@
+- The automatic verify reports diff coverage of the related tests it runs: how many changed lines they ran and which they didn't, through coverage.py for pytest and c8 for a project's `npm test` without Vitest or Jest. It never fails the run; when it can't measure, it says why.

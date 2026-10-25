@@ -11,6 +11,13 @@ check never fails the run.
 The red check: when a change edits both tests and code of a stack (pytest, or the
 package.json `test` script), the changed tests also run on a pristine copy of the
 merge-base, where at least one must fail.
+
+Diff coverage: the related pytest run goes through coverage.py when the Python behind pytest
+is known and imports it (and not pytest-cov), and, in a project without Vitest or Jest, the
+red check's working-tree `npm test` collects V8 coverage for node_modules/.bin/c8 to report,
+in both cases only for the changed non-test files. `ran: diff coverage` gives how many changed
+executable lines the tests ran and which they didn't (for c8, every line of a loaded file but blank
+and `//` lines); it is report-only, and what keeps it from measuring is a `skipped:` line.
 """
 import importlib.util
 import json
@@ -27,15 +34,17 @@ _spec = importlib.util.spec_from_file_location(
     "verify_changed", os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify_changed.py"))
 verify_changed = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(verify_changed)
-changed_lines, on_changed_line, execute, TEST_FILE, tests_pass_without_change = (
+changed_lines, on_changed_line, execute, TEST_FILE, tests_pass_without_change, diff_coverage = (
     verify_changed.changed_lines, verify_changed.on_changed_line, verify_changed.execute, verify_changed.TEST_FILE,
-    verify_changed.tests_pass_without_change)
+    verify_changed.tests_pass_without_change, verify_changed.diff_coverage)
 
 MAX_PER_CHECK = 30
 LINT_TIMEOUT = 120
 TEST_TIMEOUT = 300
 RED_CHECK_TIMEOUT = 120  # per stack: npm test's two runs (working tree, then the copy) share it
 NOT_STARTED = (124, 127)  # execute(): timed out, binary missing
+COVERAGE_PROBE_TIMEOUT = 20
+MAX_COVERAGE_FILES = 50  # an --include per file: bounds the argv and the tool's path matching
 JS_EXT = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
 PHPCS_CONFIGS = ("phpcs.xml", "phpcs.xml.dist", ".phpcs.xml", ".phpcs.xml.dist")
 PHPSTAN_CONFIGS = ("phpstan.neon", "phpstan.neon.dist")
@@ -47,6 +56,7 @@ NPM_PLACEHOLDER_TEST = "Error: no test specified"
 JS_FAILURE_SUMMARY = re.compile(
     r"^\s*(?:(?:Tests|Test Suites|Test Files):?\s+[1-9]\d* failed|[1-9]\d* failing|[#ℹ] fail [1-9]\d*)", re.M)
 ANSI_COLOR = re.compile(r"\x1b\[[0-9;]*m")
+SHEBANG_PYTHON = re.compile(r"python\d*(\.\d+)?")
 
 
 class Report:
@@ -110,12 +120,81 @@ def red_check_scope(root, changes, files, test_file):
     return tests, sorted(support | set(tests))
 
 
+# --- Diff coverage ----------------------------------------------------------------------------
+def coverage_candidates(files, test_file, stack, report):
+    """The changed files diff coverage measures, or None, skipped with the reason: tests and test support say nothing
+    about the change."""
+    candidates = [f for f in files if not test_file.search(f) and not TEST_SUPPORT.search(f)]
+    if not candidates:
+        report.skip("diff coverage", f"no changed non-test {stack} file to measure")
+    elif len(candidates) > MAX_COVERAGE_FILES:
+        report.skip("diff coverage", f"{len(candidates)} changed {stack} files to measure, "
+                                     f"more than {MAX_COVERAGE_FILES}")
+    else:
+        return candidates
+    return None
+
+
+def report_diff_coverage(changes, tool, candidates, lines_by_file, report):
+    summary, reason = diff_coverage(changes, candidates, lines_by_file)
+    if summary:
+        report.ran.append(f"diff coverage ({tool}): {summary}")
+    else:
+        report.skip("diff coverage", f"{tool}: {reason}")
+
+
+def remaining(deadline):
+    return max(1, round(deadline - time.monotonic()))
+
+
+def c8_report(root, changes, c8, candidates, raw, report):
+    """Diff coverage from the V8 coverage a test run left in `raw`, through `c8 report`. Flags override a project's
+    c8 config that would fail the step (check-coverage, 100), drop fully covered files (skip-full) or report files the
+    run never loaded (all)."""
+    reports_dir = os.path.dirname(raw)
+    try:
+        step = execute([c8, "report", f"--temp-directory={raw}", f"--reports-dir={reports_dir}", "--reporter=json",
+                        "--check-coverage=false", "--100=false", "--skip-full=false",
+                        "--all=false", *(f"--include={f}" for f in candidates)], root, LINT_TIMEOUT)
+    except OSError as err:  # execute() turns only a missing binary into 127
+        report.skip("diff coverage", f"c8 report did not start: {err}")
+        return
+    final = os.path.join(reports_dir, "coverage-final.json")
+    if not os.path.exists(final):
+        report.skip("diff coverage", f"c8 report wrote no JSON report (exit {step.returncode}): {tail(step, 300)}")
+        return
+    try:
+        with open(final) as fh:
+            lines_by_file = {}
+            for path, entry in json.load(fh).items():
+                statements = [(int(loc["start"]["line"]), entry["s"][sid])
+                              for sid, loc in entry["statementMap"].items()]
+                lines_by_file[repo_path(root, entry.get("path") or path)] = (
+                    {line for line, count in statements if count}, {line for line, _ in statements})
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError) as err:
+        report.skip("diff coverage", f"c8: the JSON report is unreadable: {err!r}")
+        return
+    for path in candidates:
+        if path not in lines_by_file:
+            continue
+        # v8-to-istanbul makes a statement of every line of a loaded file, blank and comment lines included.
+        try:
+            with open(os.path.join(root, path), errors="replace") as fh:
+                prose = {n for n, text in enumerate(fh, 1) if not text.strip() or text.lstrip().startswith("//")}
+        except OSError:
+            continue
+        for lines in lines_by_file[path]:
+            lines -= prose
+    report_diff_coverage(changes, "c8", candidates, lines_by_file, report)
+
+
 # --- JS / TS ----------------------------------------------------------------------------------
 def check_js(root, changes, files, report):
     """ESLint on changed lines; Vitest or Jest on the tests related to the changed files; the red check through
-    the package.json `test` script."""
+    the package.json `test` script; diff coverage of that script's run through c8."""
     if not os.path.isfile(os.path.join(root, "package.json")):
         report.skip("eslint", "no package.json at the repo root")
+        report.skip("diff coverage", "no related JS test run in the working tree")
         return
     eslint, why = find_tool(root, "eslint", ("node_modules/.bin",))
     if not eslint:
@@ -140,12 +219,25 @@ def check_js(root, changes, files, report):
         pkg = json.load(open(os.path.join(root, "package.json")))
     except (OSError, ValueError) as err:
         report.skip("JS related tests", f"package.json unreadable: {err}")
+        report.skip("diff coverage", "no related JS test run in the working tree")
         return
-    npm_test_red_check(root, changes, files, pkg, report)
     deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
     runners = [(name, args) for name, args in (
         ("vitest", ["related", "--run", "--passWithNoTests", *files]),
         ("jest", ["--findRelatedTests", *files, "--passWithNoTests", "--ci"])) if name in deps]
+    measure, c8 = None, os.path.join(root, "node_modules/.bin/c8")
+    if runners:
+        # Seen with vitest 4: its forks pool leaves the changed file out of the report, its threads pool counts
+        # every line as run.
+        report.skip("diff coverage", f"{runners[0][0]} is a dependency: c8 can't map its runs, whose workers load "
+                                     "the changed files through their own transform")
+    elif candidates := coverage_candidates(files, JS_TEST_FILE, "JS/TS", report):
+        if os.access(c8, os.X_OK):
+            measure = (c8, candidates)
+        else:
+            report.skip("diff coverage", "c8 not installed in node_modules/.bin")
+    if not npm_test_red_check(root, changes, files, pkg, measure, report) and measure:
+        report.skip("diff coverage", "no related JS test run in the working tree")
     if not runners:
         report.skip("JS related tests", "neither vitest nor jest is a dependency in package.json")
         return
@@ -192,32 +284,60 @@ def workspace_link(root):
     return None
 
 
-def npm_test_red_check(root, changes, files, pkg, report):
-    """`npm test -- <changed test files>` in the working tree, then on the merge-base, where it must fail."""
+def npm_test_red_check(root, changes, files, pkg, measure, report):
+    """`npm test -- <changed test files>` in the working tree, collecting V8 coverage for c8 when `measure` is (c8,
+    the files to report), then on the merge-base, where it must fail. Returns whether it ran the working tree's."""
     scope = red_check_scope(root, changes, files, JS_TEST_FILE)
     if not scope:
-        return
+        return False
     tests, copied = scope
     script = (pkg.get("scripts") or {}).get("test")
     if not script or NPM_PLACEHOLDER_TEST in script:
         report.skip("red check", "npm test: package.json has no test script")
-        return
+        return False
     npm = shutil.which("npm")
     if not npm:
         report.skip("red check", "npm not on PATH")
-        return
+        return False
     try:
         link = workspace_link(root)
     except RuntimeError as err:
         report.skip("red check", f"npm test: {err}")
-        return
+        return False
     if link:
         report.skip("red check", f"npm test: {link} links into the repo, so the merge-base copy would "
                                  "run the change through it")
-        return
+        return False
     # CI=true: Jest writes no new snapshots into the working tree, and watch-mode scripts exit instead of waiting.
     env, deadline = {**os.environ, "CI": "true"}, time.monotonic() + RED_CHECK_TIMEOUT
-    proc = execute([npm, "test", "--", *tests], root, RED_CHECK_TIMEOUT, env)
+    command = [npm, "test", "--", *tests]
+    tmp = None
+    if measure:
+        try:
+            tmp = tempfile.mkdtemp(prefix="agents-coverage-")
+            os.mkdir(os.path.join(tmp, "raw"))
+        except OSError as err:
+            report.skip("diff coverage", f"c8: cannot create a temp dir: {err}")
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
+            tmp = None
+    raw = tmp and os.path.join(tmp, "raw")
+    try:
+        proc = execute(command, root, RED_CHECK_TIMEOUT, {**env, "NODE_V8_COVERAGE": raw} if raw else env)
+        npm_red_check_on_base(root, command, tests, copied, proc, deadline, env, report)
+        # After the merge-base run, with a budget of its own: a slow report never eats the red check's.
+        if raw and proc.returncode in NOT_STARTED:
+            report.skip("diff coverage", f"c8: npm test gave no verdict: {tail(proc, 300)}")
+        elif raw:
+            c8_report(root, changes, *measure, raw, report)
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return True
+
+
+def npm_red_check_on_base(root, command, tests, copied, proc, deadline, env, report):
+    """The red check's verdict from the working tree's run `proc`, then the same command on the merge-base."""
     if proc.returncode:
         reason = tail(proc, 300) if proc.returncode in NOT_STARTED else \
             f"the changed tests fail in the working tree (exit {proc.returncode})"
@@ -225,7 +345,7 @@ def npm_test_red_check(root, changes, files, pkg, report):
         return
     try:
         with verify_changed.pristine_copy(root, copied) as copy:
-            proc = execute([npm, "test", "--", *tests], copy, max(1, round(deadline - time.monotonic())), env)
+            proc = execute(command, copy, remaining(deadline), env)
     except (OSError, subprocess.SubprocessError, RuntimeError) as err:
         report.skip("red check", f"npm test: could not build or run in the pristine copy: {err}")
         return
@@ -334,9 +454,112 @@ def related_python_tests(root, files):
     return sorted(tests)
 
 
+def pytest_python(pytest, in_venv):
+    """The Python that runs the pytest launcher, as an argv prefix: the python* its shebang names, with the shebang's
+    flags, else the venv's python beside a project-local one. Returns (argv, None) or (None, why it is unknown)."""
+    try:
+        with open(pytest, "rb") as fh:
+            first = fh.readline(256).decode(errors="replace").strip()
+    except OSError as err:
+        return None, f"coverage.py: cannot read {pytest}: {err}"
+    interpreter, *flags = (first[2:].split() or [""]) if first.startswith("#!") else [""]
+    if SHEBANG_PYTHON.fullmatch(os.path.basename(interpreter)) and os.access(interpreter, os.X_OK):
+        return [interpreter, *flags], None
+    beside = os.path.join(os.path.dirname(pytest), "python")
+    if in_venv and os.access(beside, os.X_OK):
+        return [beside], None
+    return None, (f"coverage.py: the Python behind {pytest} is unknown: no venv python beside it, "
+                  f"first line {first[:80]}")
+
+
+def run_pytest(root, changes, pytest, in_venv, args, candidates, report):
+    """pytest `args` in the working tree, under coverage.py when its Python is known and imports it, collecting the
+    changed `candidates` (None: not measured); returns the run whose verdict counts."""
+    if not candidates:
+        return execute([pytest, *args], root, TEST_TIMEOUT)
+    python, why = pytest_python(pytest, in_venv)
+    # Exit 3: pytest-cov would collect into our data file, and --no-cov changes the verdict of a project whose
+    # addopts set --cov-fail-under.
+    try:
+        probe = python and execute([*python, "-c", "import coverage, importlib.util, sys; "
+                                    "sys.exit(3 if importlib.util.find_spec('pytest_cov') else 0)"],
+                                   root, COVERAGE_PROBE_TIMEOUT)
+    except OSError as err:  # execute() turns only a missing binary into 127
+        python, why = None, f"coverage.py: {python[0]} did not start: {err}"
+    if not python:
+        report.skip("diff coverage", why)
+    elif probe.returncode == 3:
+        report.skip("diff coverage", f"coverage.py: pytest-cov is installed for {python[0]}")
+    elif probe.returncode:
+        report.skip("diff coverage", f"coverage.py is not importable by {python[0]}: {tail(probe, 300)}")
+    if not python or probe.returncode:
+        return execute([pytest, *args], root, TEST_TIMEOUT)
+    deadline = time.monotonic() + TEST_TIMEOUT
+    try:
+        tmp = tempfile.mkdtemp(prefix="agents-coverage-")
+    except OSError as err:
+        report.skip("diff coverage", f"coverage.py: cannot create a temp dir: {err}")
+        return execute([pytest, *args], root, TEST_TIMEOUT)
+    try:
+        return measured_pytest(root, changes, pytest, python, args, candidates, tmp, deadline, report)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def measured_pytest(root, changes, pytest, python, args, candidates, tmp, deadline, report):
+    # Our own rcfile: the project's coverage config (source, omit, plugins, fail_under) is not read.
+    rcfile, data, json_report = (os.path.join(tmp, name) for name in ("coveragerc", ".coverage", "coverage.json"))
+    include = "".join(f"\n    {os.path.join(root, f)}" for f in candidates)
+    try:
+        with open(rcfile, "w") as fh:
+            fh.write(f"[run]\ninclude ={include}\ndisable_warnings = no-data-collected\n")
+    except OSError as err:
+        report.skip("diff coverage", f"coverage.py: cannot write its config: {err}")
+        return execute([pytest, *args], root, TEST_TIMEOUT)
+    env = {**os.environ, "COVERAGE_FILE": data}
+    # The launcher script, not -m pytest, so sys.path is the one pytest has without coverage.
+    proc = execute([*python, "-m", "coverage", "run", f"--rcfile={rcfile}", pytest, *args], root, TEST_TIMEOUT, env)
+    if proc.returncode == 124:
+        report.skip("diff coverage", f"coverage.py: {tail(proc, 300)}")
+        return proc
+    # coverage.py saves its data file even when none of the collected files loaded: a failed run without one
+    # stopped before the tests.
+    if proc.returncode and not os.path.exists(data):
+        report.skip("diff coverage", f"coverage.py left no data file (exit {proc.returncode}), so the tests ran "
+                                     f"again without it: {tail(proc, 300)}")
+        return execute([pytest, *args], root, remaining(deadline))
+    if proc.returncode not in (0, 1, 2):
+        report.skip("diff coverage", f"coverage.py: pytest gave no verdict (exit {proc.returncode})")
+        return proc
+    if not os.path.exists(data):
+        report.skip("diff coverage", "coverage.py left no data file")
+        return proc
+    step = execute([*python, "-m", "coverage", "json", f"--rcfile={rcfile}", "-o", json_report], root,
+                   min(LINT_TIMEOUT, remaining(deadline)), env)
+    # coverage json writes no report, and exits 1, when none of the collected files loaded.
+    if not os.path.exists(json_report) and "No data to report." in step.stdout:
+        report_diff_coverage(changes, "coverage.py", candidates, {}, report)
+        return proc
+    if not os.path.exists(json_report):
+        report.skip("diff coverage", f"coverage.py wrote no JSON report (exit {step.returncode}): {tail(step, 300)}")
+        return proc
+    try:
+        with open(json_report) as fh:
+            lines_by_file = {}
+            for path, entry in json.load(fh)["files"].items():
+                executed = {int(line) for line in entry["executed_lines"]}
+                missing = {int(line) for line in entry["missing_lines"]}
+                lines_by_file[repo_path(root, path)] = (executed, executed | missing)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError) as err:
+        report.skip("diff coverage", f"coverage.py: the JSON report is unreadable: {err!r}")
+        return proc
+    report_diff_coverage(changes, "coverage.py", candidates, lines_by_file, report)
+    return proc
+
+
 def check_python(root, changes, files, report):
     """Ruff on changed lines; pytest on the related test_<module>.py or <module>_test.py files, then the red check
-    on the changed ones."""
+    on the changed ones; diff coverage through coverage.py."""
     ruff, why = find_tool(root, "ruff", VENV_DIRS)
     if not ruff:
         report.skip("ruff", why)
@@ -358,14 +581,17 @@ def check_python(root, changes, files, report):
     tests = related_python_tests(root, files)
     if not tests:
         report.skip("pytest", "no related test_<module>.py or <module>_test.py")
+        report.skip("diff coverage", "no related pytest run in the working tree")
         return
     pytest, why = find_tool(root, "pytest", VENV_DIRS)
     if not pytest:
         report.skip("pytest", why)
+        report.skip("diff coverage", "no related pytest run in the working tree")
         if scope:
             report.skip("red check", why)
         return
-    proc = execute([pytest, "-q", *tests], root, TEST_TIMEOUT)
+    proc = run_pytest(root, changes, pytest, why is None, ["-q", *tests],
+                      coverage_candidates(files, PY_TEST_FILE, "Python", report), report)
     if proc.returncode == 5:
         report.ran.append(f"pytest on {len(tests)} related files: no tests collected")
     elif proc.returncode in (0, 1, 2):  # 1: tests failed, 2: collection error or interrupted
