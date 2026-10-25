@@ -3,11 +3,14 @@
 only perspectives that pay off.
 
   quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--shared N] [--criteria N] [--map-items N] [--outcomes fixed=N,wrong=N,...]
-  quality-log test <type> --issues N [--secs S] [--notes "..."]
+  quality-log test <type> --issues N [--flake] [--secs S] [--notes "..."]
   quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
 
 A lens is named by its key or heading in bin/triage, `correctness-recheck` or `spec`; --shared counts the confirmed findings the other model
 family's run of the same lens also reported, and leaving it out means the overlap is unknown.
+
+A test type is one of TEST_TYPES below (the error lists them). --issues counts the real issues a test run found, never a flake;
+--flake marks a run that hit one: a test that failed, then passed on a rerun without a code change (any type, mostly unit).
 
 Refuses malformed input (exit 2) without writing: a flag left without its value once took the next flag as one.
 Appends to logs/quality.jsonl in the kit's main checkout with the repo, branch and the triage tier. hooks/review_stamp.py appends
@@ -28,6 +31,9 @@ TAXONOMY = os.path.join(KIT, "review-mining", "taxonomy.md")
 # What became of each finding a lens raised: the kit-review skill, step 4, defines each one.
 OUTCOMES = ("fixed", "wrong", "intentional", "minor", "pre-existing", "open", "uncertain")
 CONFIRMED_OUTCOMES = ("fixed", "minor", "pre-existing", "open")
+# One name per test family: review-mining/test_types.py folds the older spellings (regex, property, ...) into these.
+TEST_TYPES = ("unit", "e2e", "integration", "browser", "query-budget", "accessibility", "property-based", "mutation",
+              "migration-round-trip", "visual", "design", "regex-worst-case")
 sys.path.insert(0, os.path.join(KIT, "hooks"))
 from hooklog import session_harness  # noqa: E402
 from review_stamp import quality_log  # noqa: E402
@@ -49,13 +55,6 @@ def git(*args):
 def parse(argv):
     parser = argparse.ArgumentParser(prog="quality-log", allow_abbrev=False, description=__doc__.split("\n\n")[0])
     kinds = parser.add_subparsers(dest="kind", required=True)
-    word = r"[a-z][a-z0-9-]*"
-
-    def name(value):
-        if not re.fullmatch(word, value):
-            raise argparse.ArgumentTypeError(f"{value!r} isn't one lowercase word (letters, digits, -)")
-        return value
-
     lenses = lens_keys()
 
     def lens_name(value):  # the skills name lenses by their headings too: "Tests", "Performance and scale"
@@ -99,8 +98,10 @@ def parse(argv):
     lens.add_argument("--map-items", type=count)
     lens.add_argument("--outcomes", type=outcomes)
     test = kinds.add_parser("test", allow_abbrev=False)
-    test.add_argument("name", type=name)
-    test.add_argument("--issues", type=count, required=True)
+    test.add_argument("name", choices=TEST_TYPES)
+    test.add_argument("--issues", type=count, required=True, help="real issues the run found, never a flake")
+    test.add_argument("--flake", action="store_true", default=None,  # None when absent: rows without a flake keep no field
+                      help="the run hit a test that failed, then passed on a rerun without a code change")
     test.add_argument("--secs", type=count)
     test.add_argument("--notes")
     escape = kinds.add_parser("escape", allow_abbrev=False)

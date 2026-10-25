@@ -134,10 +134,10 @@ Add a `## Test types` section with a table `| Type | Ran | Evidence |` and one r
 
 Save the report to `$(~/.agents/bin/reports path validation)`.
 
-Log every test type that ran, so the monthly job can drop the ones that never find anything. `<type>` is one lowercase word: `unit`, `e2e`, `integration`, `browser`, `query-budget`, `accessibility`, `property-based`, `mutation`, `migration-round-trip`, `visual` or `design`, not triage's longer label:
+Log every test type that ran, so the monthly job can drop the ones that never find anything. `<type>` is one of `unit`, `e2e`, `integration`, `browser`, `query-budget`, `accessibility`, `property-based`, `mutation`, `migration-round-trip`, `visual`, `design` or `regex-worst-case`, not triage's longer label; any other name is refused. `--issues` counts real issues only: when a test failed, then passed on a rerun without a code change (a flake, of any type, mostly unit), add `--flake` and leave the flake out of `--issues`:
 
 ```bash
-~/.agents/bin/quality-log test <type> --issues <N> --secs <S> --notes "<what it found>"
+~/.agents/bin/quality-log test <type> --issues <N> [--flake] --secs <S> --notes "<what it found>"
 ```
 
 Record the validation. Opening a PR is blocked for behavior changes until this stamp matches the current change. If validating led to code changes, run the kit-review skill's same-model re-check (its step 4, item 1) again first, with no new cross-model round, so both stamps cover the final code:
