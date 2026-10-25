@@ -17,7 +17,7 @@ NOT_DEPENDENCIES = {
     "grep", "tar", "lsof", "brew",  # macOS ships them; brew is how install.sh installs the rest
     "codex",  # harnesses: install.sh wires the ones it finds
     # verify_auto.py runs the project's own tools and reports them as skipped when the project has none
-    "cargo", "eslint", "go", "gofmt", "pytest", "ruff", "shellcheck",
+    "cargo", "eslint", "go", "gofmt", "npm", "pytest", "ruff", "shellcheck",
 }
 
 

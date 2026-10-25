@@ -108,9 +108,32 @@ def red_check_keeps_export_ignored_tests(base):
     assert "ran: red check: 1 changed test files fail before the change" in proc.stdout, proc.stdout
 
 
+def red_check_reports_tests_that_pass_without_the_change(base):
+    repo = os.path.join(base, "repo")
+    os.makedirs(os.path.join(repo, "src"))
+    os.makedirs(os.path.join(repo, "tests"))
+    open(os.path.join(repo, "src", "Price.php"), "w").write("<?php\n")
+    open(os.path.join(repo, "tests", "Helper.php"), "w").write("<?php\n")
+    git(repo, "init", "-q", "-b", "trunk")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "init")
+    git(repo, "checkout", "-q", "-b", "feature")
+    open(os.path.join(repo, "src", "Price.php"), "w").write("<?php // fixed\n")
+    open(os.path.join(repo, "tests", "PriceTest.php"), "w").write("<?php\n")
+    phpunit = executable(os.path.join(base, "phpunit"), FAKE_PHPUNIT.replace('"fixed" in', '"" in'))
+    proc = subprocess.run(["python3", SCRIPT, "--phpunit", phpunit, "--red-check"], cwd=repo, capture_output=True, text=True)
+    assert proc.returncode == 1 and "[red check] The changed tests (PriceTest) all pass without your change" in proc.stdout, \
+        proc.stdout
+    executable(phpunit, FAKE_PHPUNIT.replace("import os, sys\n", "import os, sys\n"
+               "if 'agents-red-' in os.getcwd(): sys.exit('Could not connect to the database')\n"))
+    proc = subprocess.run(["python3", SCRIPT, "--phpunit", phpunit, "--red-check"], cwd=repo, capture_output=True, text=True)
+    assert "red check did not run (PHPUnit failed to start" in proc.stdout and "[red check]" not in proc.stdout, \
+        proc.stdout
+
+
 RESULTS = []
 for test in (files_outside_cwd_are_not_linted, repo_root_cwd_lints_everything, phpstan_with_nothing_in_scope_is_not_a_failure,
-             red_check_keeps_export_ignored_tests):
+             red_check_keeps_export_ignored_tests, red_check_reports_tests_that_pass_without_the_change):
     base = tempfile.mkdtemp(prefix="agents-test-verify-changed-")
     try:
         test(base)

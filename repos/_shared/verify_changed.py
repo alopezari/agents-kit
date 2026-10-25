@@ -14,6 +14,7 @@ and fails only on tests that aren't already failing in the baseline, so pre-exis
 failures never block. --red-check proves changed tests fail without the change.
 """
 import argparse
+import contextlib
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
@@ -21,6 +22,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 
@@ -55,14 +57,24 @@ def on_changed_line(changes, path, line):
     return lines is None or line in lines
 
 
-def execute(args, cwd=None, timeout=600):
+def execute(args, cwd=None, timeout=600, env=None):
     """Run a tool; a missing binary or a timeout comes back as a failed run, so callers report it as NOT RUN."""
     try:
-        return subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        # Own process group: on a timeout the runner's children (npm -> jest -> workers) die with it.
+        proc = subprocess.Popen(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, errors="replace", start_new_session=True)
     except FileNotFoundError as e:
         return subprocess.CompletedProcess(args, 127, "", f"{e.filename or args[0]}: not found")
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
         return subprocess.CompletedProcess(args, 124, "", f"{args[0]}: timed out after {timeout}s")
+    return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
 
 
 def run_json(cmd, cwd, not_run, nothing_in_scope=None):
@@ -140,12 +152,13 @@ def link_ignored_dirs(root, tmp):
                 os.symlink(os.path.join(src, entry), os.path.join(dst, entry))
 
 
-def red_check(root, cwd_rel, cmd, changed_tests, not_run):
-    """Run the changed tests against HEAD without the change: at least one must fail.
+@contextlib.contextmanager
+def pristine_copy(root, changed_files):
+    """A temp dir holding the merge-base without the change, plus `changed_files` copied in; removed on exit.
 
-    Builds a pristine copy of the merge-base with `git checkout-index`, symlinks untracked dependency dirs
-    (vendor/...) from the working tree, copies in the changed test files, and runs only those
-    test classes. Returns an error message when every test passes without the change.
+    Untracked dependency dirs (vendor/, node_modules/...) and other ignored files (.env, generated _version.py) are
+    symlinked from the working tree. Building it raises OSError, subprocess.SubprocessError or RuntimeError (no
+    merge-base).
     """
     tmp = tempfile.mkdtemp(prefix="agents-red-")
     try:
@@ -154,31 +167,51 @@ def red_check(root, cwd_rel, cmd, changed_tests, not_run):
         subprocess.run(["git", "read-tree", review_stamp.merge_base(root)], cwd=root, env=index, check=True)
         subprocess.run(["git", "checkout-index", "--all", f"--prefix={tmp}/"], cwd=root, env=index, check=True)
         link_ignored_dirs(root, tmp)
-        for test in changed_tests:
-            os.makedirs(os.path.dirname(os.path.join(tmp, test)), exist_ok=True)
-            shutil.copy2(os.path.join(root, test), os.path.join(tmp, test))
-        classes = sorted({os.path.splitext(os.path.basename(t))[0] for t in changed_tests})
-        junit = os.path.join(tmp, "agents-red-junit.xml")
-        args = shlex.split(cmd) + ["--filter", "/(" + "|".join(classes) + ")/", "--log-junit", junit]
-        proc = execute(args, os.path.join(tmp, cwd_rel))
-        try:
-            cases = list(ET.parse(junit).getroot().iter("testcase"))
-        except (ET.ParseError, OSError):
-            # No report means PHPUnit died before running tests: a setup problem, not evidence either way.
-            not_run.append(f"red check did not run (PHPUnit failed to start in the pristine copy):\n"
-                           f"{(proc.stdout + proc.stderr).strip()[:600]}")
-            return None
-        failed = [c for c in cases if c.find("failure") is not None or c.find("error") is not None]
-        if cases and not failed:
-            return (f"[red check] The changed tests ({', '.join(classes)}) all pass without your change (on the merge-base), "
-                    "so they don't test it. Make at least one of them fail without the change, or say why "
-                    "they intentionally pin existing behavior.")
-        return None
-    except (OSError, subprocess.SubprocessError) as err:
-        not_run.append(f"red check did not run: {err}")
-        return None
+        for rel in git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"], root).splitlines():
+            if not rel.endswith("/") and os.path.isfile(os.path.join(root, rel)) and not os.path.lexists(os.path.join(tmp, rel)):
+                os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
+                os.symlink(os.path.join(root, rel), os.path.join(tmp, rel))
+        for path in changed_files:
+            os.makedirs(os.path.dirname(os.path.join(tmp, path)), exist_ok=True)
+            shutil.copy2(os.path.join(root, path), os.path.join(tmp, path))
+        yield tmp
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def tests_pass_without_change(tests):
+    """The red check's finding when every changed test passes on the merge-base."""
+    return (f"[red check] The changed tests ({', '.join(tests)}) all pass without your change (on the merge-base), "
+            "so they don't test it. Make at least one of them fail without the change, or say why "
+            "they intentionally pin existing behavior.")
+
+
+def red_check(root, cwd_rel, cmd, changed_tests, not_run):
+    """Run the changed tests against HEAD without the change: at least one must fail.
+
+    Runs only the changed test classes in a pristine copy of the merge-base. Returns an error message when every
+    test passes without the change.
+    """
+    try:
+        with pristine_copy(root, changed_tests) as tmp:
+            classes = sorted({os.path.splitext(os.path.basename(t))[0] for t in changed_tests})
+            junit = os.path.join(tmp, "agents-red-junit.xml")
+            args = shlex.split(cmd) + ["--filter", "/(" + "|".join(classes) + ")/", "--log-junit", junit]
+            proc = execute(args, os.path.join(tmp, cwd_rel))
+            try:
+                cases = list(ET.parse(junit).getroot().iter("testcase"))
+            except (ET.ParseError, OSError):
+                # No report means PHPUnit died before running tests: a setup problem, not evidence either way.
+                not_run.append(f"red check did not run (PHPUnit failed to start in the pristine copy):\n"
+                               f"{(proc.stdout + proc.stderr).strip()[:600]}")
+                return None
+            failed = [c for c in cases if c.find("failure") is not None or c.find("error") is not None]
+            if cases and not failed:
+                return tests_pass_without_change(classes)
+            return None
+    except (OSError, subprocess.SubprocessError, RuntimeError) as err:
+        not_run.append(f"red check did not run: {err}")
+        return None
 
 
 def container_running(name):
