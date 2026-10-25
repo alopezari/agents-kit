@@ -351,8 +351,9 @@ const BUILDER_PROMPT = [
 const RUNNER_PROMPT = [
   "You run the local checks of the kit's validation that the spawn prompt lists, each with its id and command. Run",
   'each one through `~/.agents/bin/evidence <id> <command>`, so its output is saved; a check that needs setup is a',
-  'script that sets up, runs and cleans up, which you write in `$EV/checks/`, outside the working tree, and run from',
-  'there (EV is `~/.agents/bin/reports path evidence`): it stays with the evidence, so anyone can re-run the check.',
+  'script that sets up, runs and cleans up, which you write in `$EV/checks/`, outside the working tree, and run by',
+  'its path from the working tree (EV is `~/.agents/bin/reports path evidence`; inside `.git` the evidence records no',
+  'content): it stays with the evidence, so anyone can re-run the check. A check leaves no untracked files behind.',
   'Never edit the repository, and never print a secret. For each check, report its id, exit code, evidence file',
   'and the output line that bears on what it checks, never a PASS or FAIL verdict: the session judges each one',
   'against what it expected. A check that could not run is reported as such, with the error.',

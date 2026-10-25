@@ -507,8 +507,9 @@ def stale_evidence(lines, evidence):
             problems.append(f"{named}: couldn't look up the content it ran on: {lookup.stderr.strip()}")
             continue
         if lookup.returncode == 1:
-            warnings.append(f"{named} ran on a tree this repository doesn't have (a throwaway clone?), so it can't be "
-                            "compared with the working tree; the stamp doesn't know whether it is out of date.")
+            warnings.append(f"{named} ran on a tree this repository doesn't have (pruned by `git gc`, or a throwaway "
+                            "clone's), so it can't be compared with the working tree; the stamp doesn't know whether it "
+                            "is out of date.")
             continue
         try:
             changed = [p for p in git_paths("diff-tree", "-r", "--no-renames", "--name-only", tree, current)
