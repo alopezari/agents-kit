@@ -1775,6 +1775,9 @@ def validate_stamp_refuses_stale_evidence(base):
     stamped()  # written before this change, with the command first
     saved_as(f", commit {head}, tree {'1234567890abcdef' * 2 + '12345678'}")
     stamped(warned="can't be compared")
+    sha256_name = "ab" * 32  # not a valid object name in a SHA-1 repository: git fails, it doesn't say "missing"
+    saved_as(f", commit {head}, tree {sha256_name}")
+    refused(sha256_name, why="couldn't look up")
     broken = subprocess.run(["git", "mktree", "--missing"], cwd=repo, capture_output=True, text=True,
                             input=f"040000 tree {'abcdef1234567890' * 2 + 'abcdef12'}\tsub\n").stdout.strip()
     saved_as(f", commit {head}, tree {broken}")
