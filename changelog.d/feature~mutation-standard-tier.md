@@ -1,0 +1,1 @@
+- Triage now asks for a light mutation check on standard-risk changes that add code and touch a test file: `mutation, light (changed lines)`, a few hand-made mutants on the changed lines, at most 5 mutants and 5 minutes. High keeps the full check; low gets none. At either tier, a style-only change, or one whose only "test" path is a doc or changelog file, gets no mutation check.

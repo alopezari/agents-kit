@@ -27,6 +27,7 @@ import sys
 TEST_OR_DOC = re.compile(r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$"
                          r"|(^|/)(CHANGELOG|README|LICENSE)", re.I)
 STYLE_FILE = re.compile(r"\.(css|scss|sass|less)$", re.I)
+PROSE_FILE = re.compile(r"\.(md|txt|rst)$|(^|/)(CHANGELOG|README|LICENSE)(\.[a-z]+)?$", re.I)
 # A log or a session's output left in the tree is no part of the change, though the review stamp still covers it.
 DATA_FILE = re.compile(r"\.(jsonl|ndjson|log|out|err)$", re.I)
 UI_FILE = re.compile(r"\.(jsx?|tsx?|vue|svelte|astro|css|scss|sass|less|html|twig|mustache)$|(^|/)(templates?|views?|blocks?|components?)/", re.I)
@@ -635,8 +636,13 @@ def triage(rng=None):
     prop = [f"{p}: {m.group(0)}" for p, l in code_added for m in [PROPERTY_FN.search(l)] if m][:3]
     if prop:
         tests["property-based"] = prop
-    if tier == "high" and any(TEST_OR_DOC.search(p) and "test" in p.lower() for p in files) and code_added:
-        tests["mutation (changed lines)"] = ["high risk with tests in the diff"]
+    # Prose left out: a changelog entry named after a branch, like changelog.d/fix~test-runner.md, is no test.
+    tests_changed = any(TEST_OR_DOC.search(p) and "test" in p.lower() and not PROSE_FILE.search(p) for p in files)
+    if code_added and not style_only and tests_changed:
+        if tier == "high":
+            tests["mutation (changed lines)"] = ["high risk with tests in the diff"]
+        elif tier == "standard":
+            tests["mutation, light (changed lines)"] = ["standard risk with tests in the diff: at most 5 mutants, at most 5 minutes"]
 
     return {"tier": tier, "spec_tier": spec_tier, "diff_tier": diff_tier, "spec_reason": spec_reason, "spec_note": spec_note,
             "budget": BUDGET[tier], "changed_lines": changed_lines, "files": len(files),

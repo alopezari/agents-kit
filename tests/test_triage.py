@@ -593,6 +593,62 @@ ok = tiers(result) == ("low", None, "low")
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} spec risk: --range reads no spec, even with a high one on the branch: {tiers(result)}")
 
+LIGHT_MUTATION = "mutation, light (changed lines)"
+FULL_MUTATION = "mutation (changed lines)"
+AUTH_CODE = "if current_user_can('edit'):\n    x = 2\n"
+
+
+def add_test_file(home, repo, spec, env):
+    os.makedirs(os.path.join(repo, "tests"))
+    open(os.path.join(repo, "tests", "test_app.py"), "w").write("assert x == 2\n")
+
+
+# (case, result, tier, mutation tests that must be listed, mutation tests that must not)
+MUTATION_CASES = (
+    ("standard with tests and added code",
+     triage_change({"app.py": "x = 1\n"}, {"app.py": "x = 2\n", "tests/test_app.py": "assert x == 2\n"}),
+     "standard", [LIGHT_MUTATION], [FULL_MUTATION]),
+    ("high with tests and added code",
+     triage_change({"app.py": "x = 1\n"}, {"app.py": AUTH_CODE, "tests/test_app.py": "assert x == 2\n"}),
+     "high", [FULL_MUTATION], [LIGHT_MUTATION]),
+    ("a standard diff raised to high by the spec", triage_spec("Risk: high — schema", "code", setup=add_test_file),
+     "high", [FULL_MUTATION], [LIGHT_MUTATION]),
+    ("a standard diff and a standard spec", triage_spec("Risk: standard — totals", "code", setup=add_test_file),
+     "standard", [LIGHT_MUTATION], [FULL_MUTATION]),
+    ("low, a style-only change with a test path",
+     triage_change({"site.css": "a{color:red}\n"}, {"site.css": "a{color:blue}\n", "tests/test_site.py": "x\n"}),
+     "low", [], [LIGHT_MUTATION, FULL_MUTATION]),
+    ("standard, a style-only change with a test path",
+     triage_change({}, {"site.css": "".join(f"a{i}{{color:red}}\n" for i in range(60)), "tests/test_site.py": "x\n"}),
+     "standard", [], [LIGHT_MUTATION, FULL_MUTATION]),
+    ("standard with only a changelog entry naming test",
+     triage_change({"app.py": "x = 1\n"}, {"app.py": "x = 2\n", "changelog.d/fix~test-runner.md": "- Fix.\n"}),
+     "standard", [], [LIGHT_MUTATION, FULL_MUTATION]),
+    ("standard with only tests/LicenseTest.php, a test despite its name",
+     triage_change({"app.py": "x = 1\n"}, {"app.py": "x = 2\n", "tests/LicenseTest.php": "<?php\n"}),
+     "standard", [LIGHT_MUTATION], [FULL_MUTATION]),
+    ("standard without a test path", triage_change({"app.py": "x = 1\n"}, {"app.py": "x = 2\n"}),
+     "standard", [], [LIGHT_MUTATION, FULL_MUTATION]),
+    ("standard with a test path and no added code",
+     triage_change({"app.py": "x = 1\ny = 2\n", "tests/test_app.py": "assert x == 1\nassert y == 2\n"},
+                   {"app.py": "x = 1\n", "tests/test_app.py": "assert x == 1\n"}),
+     "standard", [], [LIGHT_MUTATION, FULL_MUTATION]),
+)
+for case, result, tier, listed, absent in MUTATION_CASES:
+    names = list(result["tests"])
+    ok = (result["tier"] == tier and all(n in names for n in listed) and not any(n in names for n in absent)
+          and sum(n.startswith("mutation") for n in names) == len(listed))
+    fail |= not ok
+    print(f"{'ok  ' if ok else 'FAIL'} mutation, {case}: tier {result['tier']}, tests {[n for n in names if n.startswith('mutation')]}, "
+          f"expected {listed} at {tier}")
+ok = MUTATION_CASES[2][1]["diff_tier"] == "standard"
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} mutation: the spec-raised case's diff alone is standard: {MUTATION_CASES[2][1]['diff_tier']}")
+reason = MUTATION_CASES[0][1]["tests"].get(LIGHT_MUTATION, [""])[0]
+ok = "5 mutants" in reason and "5 minutes" in reason
+fail |= not ok
+print(f"{'ok  ' if ok else 'FAIL'} mutation: the light check's reason names the cap: {reason!r}")
+
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected
     fail |= not ok
