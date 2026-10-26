@@ -1389,7 +1389,7 @@ li.sub{margin-left:1.25rem}
 .ship h4{margin-top:0}
 video{max-width:100%;height:auto;border:1px solid var(--line);display:block;background:var(--surface)}
 .more>summary,.earlier>summary,.runner>summary{cursor:pointer;color:var(--muted);margin:.5rem 0;font-size:.875rem}
-.sum .more>summary{font-family:var(--mono);margin:0 0 .25rem}
+.sum .more>summary{font-family:var(--mono);margin:0 0 .25rem;padding:.25rem 0}
 .more>summary,.earlier>summary,.runner>summary,.items .group>summary{padding:.75rem 0}
 .items a.go,.sum a.go{display:inline-block;padding:.75rem .5rem;margin:-.75rem -.25rem}
 .toc ol a{display:inline-block;padding:.75rem .25rem}
@@ -1449,7 +1449,7 @@ h2,.num{font-size:1.5rem}h3{font-size:1.125rem}figure pre{white-space:pre-wrap;o
 .criteria thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.criteria tr{display:block;border-bottom:1px solid var(--line);padding:.5rem 0}
 .criteria td,.criteria th,.criteria td:nth-child(2){display:block;border:0;min-width:0;width:auto;max-width:none;padding:.25rem .75rem}
 .criteria td[data-label]::before{content:attr(data-label) ": ";color:var(--dim);font-family:var(--mono)}.notes{padding:1rem 1rem .25rem}
-.sum{grid-template-columns:minmax(0,1fr);gap:.25rem}.sum dd{margin-bottom:.75rem}}
+.sum{grid-template-columns:minmax(0,1fr);gap:.25rem}.sum dd{margin-bottom:.75rem}.sum .more>summary{padding:.75rem 0}}
 """
 
 
