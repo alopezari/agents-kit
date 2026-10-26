@@ -5,6 +5,7 @@ import html.parser
 import json
 import os
 import re
+import resource
 import shutil
 import subprocess
 import tempfile
@@ -18,7 +19,7 @@ for entry in set(os.listdir(KIT)) - {"approvals", "logs"}:
     os.symlink(os.path.join(KIT, entry), os.path.expanduser(f"~/.agents/{entry}"))
 REPORTS = os.path.join(KIT, "bin", "reports")
 RESULTS = []
-CSP = ("default-src 'none'; img-src file: data:; media-src file: data:; style-src 'unsafe-inline'")
+CSP = ("default-src 'none'; img-src file: data:; media-src file: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
 HEADINGS = ["What the task must do", "What the change does", "What it changes for users", "What we tested",
             "How to test it yourself", "What you must decide"]
 PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
@@ -39,6 +40,9 @@ if args[:2] == ["pr", "view"]:
     print(json.dumps(state["pr"]))
     sys.exit(0)
 found = re.search(r"commits/([0-9a-f]+)/(check-runs|status)", args[-1])
+if args[:1] == ["api"] and state.get("api_error"):
+    print("HTTP 502: bad gateway", file=sys.stderr)
+    sys.exit(1)
 if args[:1] == ["api"] and found:
     key = "check_runs" if found.group(2) == "check-runs" else "statuses"
     for item in state.get("checks", {}).get(found.group(1), {}).get(key, []):
@@ -126,6 +130,8 @@ The task must stop a second discount for one coupon.
 
 ## What the change does
 The change adds a guard in `src/cart.py:2`.
+
+### Where it sits
 
 ```text
 cart
@@ -349,6 +355,11 @@ def bounds_what_it_embeds(base):
         names.append(f"img{n:02d}.png")
         put(os.path.join(evidence, names[-1]), PNG + bytes([n]) * (1900 * 1024))
     rows = "".join(f"| B{n} | AC1 | image {n} | + | an image | PASS | [img]({evidence}/{name}) |\n" for n, name in enumerate(names))
+    output(evidence, "under.txt", "make under", "UNDER FIRST\n" + "y" * (190 * 1024) + "\nUNDER LAST\n", repo, working_tree(repo))
+    rows += f"| B92 | AC1 | an output under the bound | + | all of it | PASS | [output]({evidence}/under.txt) |\n"
+    for n in range(93, 100):  # 195 KB each: the images leave about 1.5 MB, so the last ones are past the total
+        output(evidence, f"late{n}.txt", "make late", f"LATE TEXT {n}\n" + "z" * (195 * 1024), repo, working_tree(repo))
+        rows += f"| B{n} | AC1 | an output past the total | + | a link | PASS | [output]({evidence}/late{n}.txt) |\n"
     with open(path_of(repo, "validation"), "a") as fh:
         fh.write("\n## B. Bounds\n\n| # | AC | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
                  f"| B90 | AC1 | big output | + | all rows | PASS | [output]({evidence}/big.txt) |\n"
@@ -358,7 +369,12 @@ def bounds_what_it_embeds(base):
     assert "FIRST LINE" in block and "LAST LINE" in block, "the head or tail of an oversize output is gone"
     assert "middle 0010000" not in markup, "an oversize output was embedded whole"
     assert re.search(r"\bcut\b", text(block)), text(block)[:400]
-    assert f'href="file://{urllib.parse.quote(os.path.realpath(evidence))}/big.txt"' in block, "no link to the full output"
+    cut = re.search(r'<p class="cut">.*?</p>', block, re.S)
+    assert cut and f'href="file://{urllib.parse.quote(os.path.realpath(evidence))}/big.txt"' in cut.group(0), "no link to the full output"
+    under = check_block(markup, "B92")
+    assert "UNDER FIRST" in under and "UNDER LAST" in under and 'class="cut"' not in under, "an output under 200 KB was cut"
+    late = check_block(markup, "B99")
+    assert "LATE TEXT" not in late and "/late99.txt\"" in late and "past the 20 MB" in text(late), "a text file past the total was embedded"
     huge = check_block(markup, "B91")
     assert "data:image" not in huge and f"/huge.png\"" in huge, huge[:600]
     embedded = [n for n in range(11) if "data:image/png" in check_block(markup, f"B{n}")]
@@ -370,17 +386,50 @@ def bounds_what_it_embeds(base):
 def reads_nothing_outside_the_evidence_directory(base):
     repo, evidence = full_branch(base)
     outside = os.path.join(base, "secret.txt")
-    put(outside, "SECRET-TOKEN-1\n")
+    put(outside, f"# in {base}, 2026-10-26 10:00:00 +0000, exit 0, commit {'cd' * 20}, tree {'cd' * 20}\nSECRET-TOKEN-1\n")
     put(os.path.join(base, "secret2.txt"), "SECRET-TOKEN-2\n")
     os.symlink(outside, os.path.join(evidence, "link.txt"))
     with open(path_of(repo, "validation"), "a") as fh:
         fh.write("\n## C. Scope\n\n| # | AC | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
                  f"| C1 | AC1 | through a symlink | − | nothing read | PASS | [out]({evidence}/link.txt) |\n"
-                 f"| C2 | AC1 | an absolute path | − | nothing read | PASS | [out]({base}/secret2.txt) and {base}/secret2.txt |\n")
+                 f"| C2 | AC1 | an absolute path | − | nothing read | PASS | [out]({base}/secret2.txt) and {base}/secret2.txt |\n"
+                 f"| C4 | AC1 | a sibling directory | − | nothing read | PASS | [out]({evidence}2/secret4.txt) |\n")
+    put(evidence + "2/secret4.txt", "SECRET-TOKEN-4\n")
     _, markup = generate(repo, base)
     assert "SECRET-TOKEN" not in markup, "a file outside the evidence directory was read"
+    assert "link.txt ran on" not in text(markup), "the freshness check read the file a symlink points to outside"
+    os.makedirs(os.path.join(base, "elsewhere"))
+    put(os.path.join(base, "elsewhere", "C3.outside-script.sh"), "echo SECRET-TOKEN-3\n")
+    shutil.rmtree(os.path.join(evidence, "checks"))
+    os.symlink(os.path.join(base, "elsewhere"), os.path.join(evidence, "checks"))
+    with open(path_of(repo, "validation"), "a") as fh:
+        fh.write("| C3 | AC1 | a symlinked checks directory | − | nothing listed | PASS | none |\n")
+    _, markup = generate(repo, base)
+    assert "outside-script" not in markup, "a checks/ directory outside the evidence directory was listed"
     assert f"{base}/secret2.txt" in text(check_block(markup, "C2")), "the outside path isn't shown as text"
     assert "file://" + urllib.parse.quote(os.path.realpath(outside)) not in markup
+
+
+def a_long_last_line_keeps_its_tail(base):
+    repo, evidence = full_branch(base)
+    output(evidence, "long.txt", "make long", "FIRST LINE\n" + "x" * 300_000 + " LAST WORDS\n", repo, working_tree(repo))
+    with open(path_of(repo, "validation"), "a") as fh:
+        fh.write("\n## B. Long\n\n| # | AC | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
+                 f"| B1 | AC1 | one long line | + | its end | PASS | [output]({evidence}/long.txt) |\n")
+    _, markup = generate(repo, base)
+    block = check_block(markup, "B1")
+    assert "LAST WORDS" in block, "the tail of a file ending in one long line is gone"
+    assert re.search(r"\bcut\b", text(block)), "no cut notice"
+    assert len(block) < 250_000, len(block)
+
+
+def unmatched_brackets_take_linear_time(base):
+    repo, _ = full_branch(base)
+    write(repo, "decision-notes", NOTES.replace("A shopper sees one discount line.", "[" * 60_000 + "]"))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
+    generate(repo, base)
+    spent = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime - before
+    assert spent < 5, f"{spent:.1f} s of CPU for 60,000 unmatched brackets"
 
 
 def a_failed_generation_leaves_no_page(base):
@@ -416,9 +465,10 @@ def sections_come_in_order_with_the_notes(base):
         assert line in text(part), (number, text(part)[:300])
         assert "Written by the agent" in text(part), number
         assert path_of(repo, "decision-notes") in text(part), number
+    assert not re.search(r"<h[4-6]", section(markup, 2)), "a notes heading skips a level"
     assert re.search(r'<pre[^>]*>(?:<code[^>]*>)?(?:[^<]|<span class="ln">|</span>)*└── apply_coupon', section(markup, 2)), "the notes' figure isn't preformatted"
     one = section(markup, 1)
-    criteria = re.findall(r'<tr id="ac-(\d+)">(.*?)</tr>', one, re.S)
+    criteria = re.findall(r'<tr[^>]*id="ac-(\d+)">(.*?)</tr>', one, re.S)
     assert [n for n, _ in criteria] == ["1", "2", "3"], criteria
     first = text(criteria[0][1])
     assert "A1 PASS" in first and "A2 FAIL" in first and "A3" not in first, first
@@ -441,7 +491,7 @@ def a_branch_without_notes_or_pr_body_says_not_recorded(base):
     _, markup = generate(repo, base)
     for number in (1, 2, 3, 6):
         assert "not recorded" in text(section(markup, number)), number
-        assert "written by the agent" not in text(section(markup, number)), number
+        assert "Written by the agent" not in text(section(markup, number)), number
     assert "a shopper gets one discount per coupon" in text(section(markup, 1)), "no fallback to the spec's goal"
     two = text(section(markup, 2))
     assert "kit-ship" in two, "doesn't say what would write the missing PR body"
@@ -450,8 +500,10 @@ def a_branch_without_notes_or_pr_body_says_not_recorded(base):
 def falls_back_to_the_pr_body_first_paragraph(base):
     repo, _ = full_branch(base, notes=False)
     _, markup = generate(repo, base)
-    two = text(section(markup, 2))
-    assert "not recorded" in two and "The cart applies a coupon once." in two, two[:400]
+    fallback = re.search(r'<div class="fallback">.*?</div>', section(markup, 2), re.S)
+    assert fallback, "no fallback block in 02"
+    assert "The cart applies a coupon once." in text(fallback.group(0)), text(fallback.group(0))
+    assert "Second paragraph" not in fallback.group(0), "the fallback holds more than the first paragraph"
 
 
 # AC3
@@ -474,12 +526,29 @@ def decide_names_every_item(base):
         assert count in six, (count, six[:900])
     assert "Goal: a shopper gets one discount per coupon, even on refresh." in six
     assert "The cart applies a coupon once. A refresh no longer adds a second discount." in six
+    assert "Second paragraph with detail." not in six, "06 quotes more than the first paragraph"
     assert "review missing" in six and "validate missing" in six, six[:900]
     assert "PASS" in six and "tests/run.sh cart" in six
     links = re.findall(r'<ol class="decide">.*?</ol>', section(markup, 6), re.S)[0]
     for target in re.findall(r'href="#([^"]+)"', links):
         assert f'id="{target}"' in markup, target
     assert 'href="#check-A2"' in links and 'href="#s06"' in markup
+
+
+def decide_keeps_what_later_sources_drop(base):
+    repo, evidence = full_branch(base)
+    os.remove(os.path.join(evidence, "environment.txt"))
+    with open(path_of(repo, "follow-pr"), "a") as fh:
+        fh.write("\n## Run 2026-10-27 09:00\nCI:      suite: pass\n"
+                 "c456 https://github.com/o/shop/pull/7#c456 — reviewer — Confirmed — a typo — fix commit abc123\n"
+                 "Status:  waiting on reviewer\n")
+    os.chmod(path_of(repo, "checks-guide"), 0)
+    _, markup = generate(repo, base)
+    joined = "\n".join(decide_items(markup))
+    assert "c123" in joined, "a comment left pending by an earlier follow-pr run was dropped"
+    assert "c456" not in joined, "a comment fixed in a later run is still pending"
+    assert re.search(r"environment\.txt.*missing", joined), joined
+    assert re.search(r"[Cc]hecks guide.*unavailable", joined), joined
 
 
 def ci_is_read_for_the_pr_head_only(base):
@@ -522,6 +591,74 @@ def missing_or_malformed_reports_are_unavailable(base):
     assert "validation" in items.lower() and "unavailable" in items, items
 
 
+def ci_states_and_phases_off(base):
+    repo, _ = full_branch(base)
+    head = git(repo, "rev-parse", "HEAD")
+    pr = {"number": 7, "url": "https://github.com/o/shop/pull/7", "title": "Apply a coupon once", "headRefOid": head,
+          "state": "OPEN"}
+    run = lambda **fields: {"check_runs": [{"name": "suite", "details_url": "", **fields}]}
+    for checks, word in ((run(status="completed", conclusion="failure"), "FAIL"),
+                         (run(status="in_progress", conclusion=None), "pending")):
+        _, markup = generate(repo, base, {"pr": pr, "checks": {head: checks}})
+        assert footer_value(markup, "CI").startswith(word), footer_value(markup, "CI")
+        assert any("CI for the PR head" in item and word in item for item in decide_items(markup)), decide_items(markup)
+    _, markup = generate(repo, base, {"pr": pr, "api_error": True})
+    ci = footer_value(markup, "CI")
+    assert "unknown" in ci and "bad gateway" in ci, ci
+    for phase in ("ci", "verify", "review"):
+        out = sh(repo, "python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", phase)
+        assert out.returncode == 0, out
+    _, markup = generate(repo, base, {"pr": pr, "checks": {head: run(status="completed", conclusion="failure")}})
+    assert footer_value(markup, "CI").startswith("CI phase off"), footer_value(markup, "CI")
+    items = "\n".join(decide_items(markup))
+    assert "CI for the PR head" not in items and "Verify" not in items and "Open finding" not in items, items
+    assert "review stamp phase off" in text(markup) and "verify phase off" in text(markup)
+    assert re.search(r"Phases off:.*\bci\b", text(section(markup, 6))), text(section(markup, 6))[-600:]
+
+
+def stamps_verify_and_validation_states(base):
+    repo, evidence = full_branch(base)
+    stamp = os.path.join(KIT, "hooks", "review_stamp.py")
+    assert sh(repo, "python3", stamp, "write").returncode == 0
+    _, markup = generate(repo, base)
+    assert "review stamp current" in text(markup), text(markup)[:600]
+    assert not any("review stamp" in item for item in decide_items(markup))
+    put(os.path.join(repo, "src", "cart.py"), "a = 1\nc = 3\n")
+    write(repo, "verify", "# Verify: PASS, but nothing was checked\n\n2026-10-26 · verify in shop\n")
+    _, markup = generate(repo, base)
+    assert "review stamp stale" in text(markup), text(markup)[:600]
+    items = "\n".join(decide_items(markup))
+    assert "The review stamp: stale" in items and "checked nothing" in items, items
+    assert "verify checked nothing" in text(markup), text(markup)[:600]
+    git(repo, "checkout", "main", "--", "src/cart.py")
+    git(repo, "commit", "-qam", "docs only")
+    os.remove(path_of(repo, "validation"))
+    _, markup = generate(repo, base)
+    assert "validate stamp not needed" in text(markup), text(markup)[:600]
+    items = "\n".join(decide_items(markup))
+    assert "Validation report" not in items and "validate stamp" not in items, items
+
+
+def prose_names_no_file_it_lacks(base):
+    repo, evidence = full_branch(base)
+    with open(path_of(repo, "validation"), "a") as fh:
+        fh.write("\n## E. Prose\n\n| # | AC | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
+                 "| E1 | AC1 | prose evidence | + | a 200 | PASS | took ~3s, README.md updated, GET /api/cart 200; see A1.txt |\n")
+    _, markup = generate(repo, base)
+    block = text(check_block(markup, "E1"))
+    assert "missing" not in block and "not read" not in block, block
+    assert "A1.txt" in block and ("ok 12 rows" in block or "shown above" in block), "a file the prose names and the evidence directory has wasn't shown"
+    assert not any(item.startswith("E1") for item in decide_items(markup)), decide_items(markup)
+
+
+def a_template_heading_is_not_the_first_paragraph(base):
+    repo, _ = full_branch(base)
+    write(repo, "pr-body", "## Summary\n<!-- what it does -->\n\nThe cart applies a coupon once.\n\nSecond paragraph.\n")
+    _, markup = generate(repo, base)
+    six = text(section(markup, 6))
+    assert "first paragraph: The cart applies a coupon once." in six and "Summary" not in six.split("first paragraph:")[1][:40], six
+
+
 # AC4
 
 def each_check_row_carries_its_evidence(base):
@@ -539,6 +676,21 @@ def each_check_row_carries_its_evidence(base):
     assert "php 8.3" in text(section(markup, 4)), "environment.txt isn't shown"
     assert "missing" in text(check_block(markup, "A4")), text(check_block(markup, "A4"))
     assert "missing" not in text(block)
+
+
+def evidence_named_in_code_spans_and_old_headers(base):
+    repo, evidence = full_branch(base)
+    put(os.path.join(evidence, "D2.txt"), f"$ make old\n# in {repo}, 2026-10-01 10:00:00 +0000, exit 3\n\nold body\n")
+    with open(path_of(repo, "validation"), "a") as fh:
+        fh.write("\n## D. Forms\n\n| # | AC | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
+                 "| D1 | AC1 | a code span | + | shown | PASS | ran `A1.txt` and **`gone2.txt`** |\n"
+                 "| D2 | AC1 | an old header | + | shown | PASS | `D2.txt` |\n")
+    _, markup = generate(repo, base)
+    one = text(check_block(markup, "D1"))
+    assert "ok 12 rows" in one or "shown above" in one, one[:800]
+    assert "gone2.txt missing" in one, one[:800]
+    two = text(check_block(markup, "D2"))
+    assert "make old" in two and "Exit 3" in two and "$ make old" not in two, two[:800]
 
 
 def a_report_from_before_pr_a_says_not_recorded(base):
@@ -596,7 +748,19 @@ def hostile_text_renders_inert(base):
                  f"[x](javascript:alert(6)) [y](http://evil.test/z) [odd]({odd}) |\n")
     write(repo, "pr-body", "Hi [x](javascript:alert(7)) and <script>alert(8)</script> ![i](http://evil.test/i.png)\n")
     write(repo, "decision-notes", NOTES.replace("A shopper sees", "<img src=x onerror=alert(9)> A shopper sees"))
-    _, markup = generate(repo, base)
+    # What an attacker-controlled PR also reaches: its title, CI check names, file names, and text quoted in reports.
+    evil = '"><script>alert(10)</script><img src=x onerror=alert(11)>'
+    put(os.path.join(repo, "src", '<img src=x onerror=alert(12)>.py'), "x = 1\n")
+    put(os.path.join(evidence, 'shot"onerror=alert(13).png'), PNG)
+    with open(path_of(repo, "validation"), "a") as fh:
+        fh.write(f"| D2 | AC1 | image | + | an image | PASS | [shot]({evidence}/shot\"onerror=alert(13).png) |\n")
+    write(repo, "review", REVIEW.replace("decision for the human", evil))
+    write(repo, "checks-guide", GUIDE.replace("### M2. Refund in the sandbox", f"### M2. Refund {evil}"))
+    write(repo, "follow-pr", FOLLOW_PR.replace("asks about rounding", evil))
+    head = git(repo, "rev-parse", "HEAD")
+    pr = {"number": 7, "url": f"https://github.com/o/shop/pull/7{evil}", "title": evil, "headRefOid": head, "state": evil}
+    checks = {head: {"check_runs": [{"name": evil, "status": "completed", "conclusion": "failure", "details_url": evil}]}}
+    _, markup = generate(repo, base, {"pr": pr, "checks": checks})
     assert "<script" not in markup.lower(), "a script tag reached the page"
     for tag, attrs in tags(markup):
         assert tag not in ("script", "iframe", "object", "embed", "base", "form"), tag
@@ -632,12 +796,17 @@ def refuses_another_branch_and_a_detached_head(base):
 
 
 for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
-             reads_nothing_outside_the_evidence_directory, a_failed_generation_leaves_no_page,
+             reads_nothing_outside_the_evidence_directory, a_long_last_line_keeps_its_tail,
+             unmatched_brackets_take_linear_time, a_failed_generation_leaves_no_page,
              sections_come_in_order_with_the_notes, a_branch_without_notes_or_pr_body_says_not_recorded,
-             falls_back_to_the_pr_body_first_paragraph, decide_names_every_item, ci_is_read_for_the_pr_head_only,
+             falls_back_to_the_pr_body_first_paragraph, decide_names_every_item, decide_keeps_what_later_sources_drop,
+             ci_is_read_for_the_pr_head_only,
              no_pr_and_gh_failing_are_named, missing_or_malformed_reports_are_unavailable,
-             each_check_row_carries_its_evidence, a_report_from_before_pr_a_says_not_recorded,
+             each_check_row_carries_its_evidence, evidence_named_in_code_spans_and_old_headers,
+             a_report_from_before_pr_a_says_not_recorded,
              every_review_entry_and_guide_step_in_order, hostile_text_renders_inert,
+             ci_states_and_phases_off, stamps_verify_and_validation_states, prose_names_no_file_it_lacks,
+             a_template_heading_is_not_the_first_paragraph,
              the_skills_regenerate_and_link_the_page, refuses_another_branch_and_a_detached_head):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:

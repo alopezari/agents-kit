@@ -417,9 +417,13 @@ def table_cells(line):
 
 
 def evidence_files(evidence):
-    """The names of the non-empty files in the evidence directory."""
+    """The names of the non-empty files in the evidence directory; a symlink to a file outside it isn't one."""
+    if not evidence or not os.path.isdir(evidence):
+        return []
+    root = os.path.realpath(evidence)
     return [name for name in os.listdir(evidence) if os.path.isfile(os.path.join(evidence, name))
-            and os.path.getsize(os.path.join(evidence, name)) > 0] if evidence and os.path.isdir(evidence) else []
+            and os.path.dirname(os.path.realpath(os.path.join(evidence, name))) == root
+            and os.path.getsize(os.path.join(evidence, name)) > 0]
 
 
 def names_a_file(cell, files):
@@ -499,7 +503,7 @@ def evidence_tree(path):
     """The tree bin/evidence recorded the check's content as, from the `# in` line it writes first; None when that
     line has none: saved before it recorded trees, outside a repository, or after git failed."""
     with open(path, errors="replace") as fh:
-        found = re.match(r"# in .*, exit \d+, commit .*, tree ([0-9a-f]{40,64})$", fh.readline().rstrip("\n"))
+        found = re.match(r"# in .*, exit \d+, commit .*, tree ([0-9a-f]{40,64})$", fh.readline(EVIDENCE_LINE_BYTES).rstrip("\n"))
     return found and found.group(1)
 
 

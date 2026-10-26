@@ -4,8 +4,8 @@ the evidence and the pull request's CI, in six numbered sections and a footer of
 
   decision-report <page> <evidence dir>    run by `reports html`, which passes both paths; prints the page's path
 
-The page runs no script and loads nothing from the network. It reads only files inside the evidence directory, and
-embeds text up to 200 KB (head and tail kept), images up to 2 MB, 20 MB in all; the rest is linked by file:// path.
+The page runs no script and loads nothing from the network. Of the files the reports name, it reads only those inside
+the evidence directory, and embeds text up to 200 KB (head and tail kept), images up to 2 MB, 20 MB in all; the rest is linked by file:// path.
 It is written to a temporary file and renamed into place; when generation fails, the page is removed and the error
 printed (exit 1), so an older page is never taken for the current one.
 """
@@ -42,15 +42,19 @@ pr_validation = load("pr_validation", os.path.join(HERE, "pr-validation"))
 ci_wait = load("ci_wait", os.path.join(HERE, "ci-wait"))
 ci_wait.GH_TIMEOUT = GH_TIMEOUT = 20
 
-CSP = "default-src 'none'; img-src file: data:; media-src file: data:; style-src 'unsafe-inline'"
+CSP = "default-src 'none'; img-src file: data:; media-src file: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
 TEXT_LIMIT = 200 * 1024
 IMAGE_LIMIT = 2 * 1024 * 1024
 TOTAL_LIMIT = 20 * 1024 * 1024
+REPORT_LIMIT = 2 * 1024 * 1024
 IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 VIDEOS = (".webm", ".mp4", ".mov")
+ACTIVE = (".html", ".htm", ".xhtml", ".svg", ".xml")  # opened from a link, these run their own scripts, outside the CSP
 FILE_TOKEN = re.compile(r"(?<![\w./~-])[\w.-]+\.(?:txt|log|out|md|json|csv|png|jpe?g|gif|webp|webm|mp4|mov|sh|py|html)(?![\w.-])")
 PATH_TOKEN = re.compile(r"(?<![\w(\]])(?:~|/)[^\s|()\[\]`'\"<>]*[^\s|()\[\]`'\"<>.,;:]")
-INLINE = re.compile(r"`([^`\n]+)`|\*\*([^*\n]+)\*\*|!?\[([^\]\n]*)\]\(((?:[^()\n]|\([^()\n]*\))*)\)")
+# The label excludes `[`: a run of unmatched brackets would otherwise be scanned again from each one.
+INLINE = re.compile(r"`([^`\n]+)`|\*\*([^*\n]+)\*\*|!?\[([^\[\]\n]*)\]\(((?:[^()\n]|\([^()\n]*\))*)\)")
+TABLE_RULE = re.compile(r"[ \t]*(?:\|[ \t]*)?:?-{3,}")
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 NOTE_SECTIONS = {"what the task must do": 1, "what the change does": 2, "what it changes for users": 3,
                  "what you must decide": 6}
@@ -81,11 +85,27 @@ def result_tone(result):
     return {"PASS": "ok", "FAIL": "need"}.get(result, "dim")
 
 
+def heading(line, deepest=6):
+    """(level, text) of an ATX heading line, or None. Trailing `#`s are stripped in Python: the regex that does it
+    backtracks cubically on a long run of spaces."""
+    found = re.match(rf"(#{{1,{deepest}}})[ \t]+(.*)$", line)
+    if not found:
+        return None
+    text = found.group(2).rstrip()
+    closed = text.rstrip("#")
+    if closed != text and (not closed or closed[-1] in " \t"):
+        text = closed.rstrip()
+    return len(found.group(1)), text
+
+
 def read_report(path):
-    """(text, None), or (None, why) when the report is missing or can't be read."""
+    """(text, None), or (None, why) when the report is missing, can't be read or is over REPORT_LIMIT."""
     try:
         with open(path, encoding="utf-8") as fh:
-            return fh.read().replace("\r\n", "\n"), None
+            text = fh.read(REPORT_LIMIT + 1)
+        if len(text) > REPORT_LIMIT:
+            return None, f"{path} is over the {REPORT_LIMIT // 1024 // 1024} MB a report may have"
+        return text.replace("\r\n", "\n"), None
     except FileNotFoundError:
         return None, f"no report at {path}"
     except OSError as error:
@@ -103,6 +123,9 @@ class Page:
         self.embedded = 0
         self.shown = {}  # realpath of a file already embedded: the id of the block that shows it
         self.ids = set()
+        scripts = os.path.join(evidence, "checks")
+        inside = os.path.isdir(scripts) and os.path.realpath(scripts) == os.path.join(self.root, "checks")
+        self.scripts = sorted(os.listdir(scripts)) if inside else []  # the kept check scripts, listed once
 
     def new_id(self, wanted):
         base = re.sub(r"[^A-Za-z0-9_.-]+", "-", wanted).strip("-") or "x"
@@ -132,6 +155,8 @@ class Page:
         if not os.path.exists(real):
             return f'<div class="file">{label} {state("missing", "need")}</div>'
         link = f'<a href="{esc(file_href(real))}">{esc(os.path.basename(real))}</a>'
+        if real.lower().endswith(ACTIVE):
+            return f'<div class="file">{label} {state("not linked", "dim")} it would run its own scripts; open it yourself</div>'
         if not os.path.isfile(real):
             return f'<div class="file">{link} {state("not read", "dim")} not a regular file</div>'
         if real in self.shown:
@@ -146,7 +171,9 @@ class Page:
                 why = "over 2 MB" if size > IMAGE_LIMIT else "past the 20 MB embedded in total"
                 return f'<div class="file" id="{block_id}">{link} {state("linked", "dim")} {why}, {size} bytes</div>'
             with open(real, "rb") as fh:
-                data = fh.read()
+                data = fh.read(IMAGE_LIMIT + 1)
+            if len(data) > IMAGE_LIMIT:
+                return f'<div class="file" id="{block_id}">{link} {state("linked", "dim")} over 2 MB</div>'
             self.embedded += len(data)
             self.shown[real] = block_id
             return (f'<figure class="file" id="{block_id}"><img src="data:{IMAGES[ext]};base64,'
@@ -156,14 +183,14 @@ class Page:
 
     def text_block(self, real, size, link, block_id):
         with open(real, "rb") as fh:
-            if size <= TEXT_LIMIT:
-                head, tail = fh.read(), b""
-            else:  # the head and the tail, each cut at a line end
-                head = fh.read(TEXT_LIMIT // 2)
+            head, tail = fh.read(TEXT_LIMIT + 1), b""
+            if len(head) > TEXT_LIMIT:  # the head and the tail, each cut at a line end inside them
+                head = head[:TEXT_LIMIT // 2]
                 head = head[:head.rfind(b"\n") + 1] or head
-                fh.seek(size - TEXT_LIMIT // 2)
-                tail = fh.read()
-                tail = tail[tail.find(b"\n") + 1:]
+                fh.seek(max(size, TEXT_LIMIT + 1) - TEXT_LIMIT // 2)
+                tail = fh.read(TEXT_LIMIT // 2)
+                start = tail.find(b"\n")
+                tail = tail[start + 1:] if 0 <= start < len(tail) - 1 else tail
         if b"\0" in head[:8192]:
             return f'<div class="file" id="{block_id}">{link} {state("linked", "dim")} binary, {size} bytes</div>'
         if self.embedded + len(head) + len(tail) > TOTAL_LIMIT:
@@ -173,6 +200,8 @@ class Page:
         body = head.decode(errors="replace").replace("\r\n", "\n")
         fields = ""
         lines = body.split("\n")
+        if lines[0].startswith("$ ") and len(lines) > 1 and review_stamp.EVIDENCE_IN_LINE.fullmatch(lines[1]):
+            lines[0], lines[1] = lines[1], lines[0]  # before the commit and tree, bin/evidence wrote `$ ` first
         ran = review_stamp.EVIDENCE_IN_LINE.fullmatch(lines[0])
         if ran:  # bin/evidence's header: `# in`, maybe `# fingerprint`, `$ command`, a blank line
             rest = lines[1:]
@@ -199,7 +228,8 @@ class Page:
 
     # Markdown, a safe subset: headings, fenced blocks, tables, lists, paragraphs, code spans, bold and links
 
-    def inline(self, text):
+    def inline(self, text, links=True):
+        """Code spans, bold and links; with links off (inside a <summary>, which can't hold one) a link is its label."""
         out, at = [], 0
         text = text.replace("\\|", "|")
         for found in INLINE.finditer(text):
@@ -209,9 +239,11 @@ class Page:
             if code is not None:
                 out.append(f"<code>{esc(code)}</code>")
             elif bold is not None:
-                out.append(f"<strong>{self.inline(bold)}</strong>")
-            else:
+                out.append(f"<strong>{self.inline(bold, links)}</strong>")
+            elif links:
                 out.append(self.link(found.group(0), label, target.strip()))
+            else:
+                out.append(esc(label or target))
         out.append(esc(text[at:]))
         return "".join(out)
 
@@ -225,31 +257,41 @@ class Page:
         return f'<a href="{esc(file_href(real))}">{esc(label or os.path.basename(real))}</a>'
 
     def markdown(self, text, prefix, top=3, figure=False):
-        """Blocks of Markdown: a heading of level n becomes h(top + n - 1), capped at h6."""
+        """Blocks of Markdown: the shallowest heading becomes h(top), a deeper one one level further each, capped at h6."""
         out, para, items, lines, i = [], [], [], text.split("\n"), 0
-        list_indent = [0]  # the first item's indentation: a deeper item is shown nested under it
+        list_indent = 0  # the first item's indentation: a deeper item is nested under the item before it
 
         def flush():
             if para:
                 out.append(f"<p>{self.inline(chr(10).join(para))}</p>")
                 para.clear()
             if items:
+                html, nested = [], []
+                for ordered, deep, body in items + [(False, False, None)]:
+                    if not deep and nested:
+                        tag = "ol" if nested[0][0] else "ul"
+                        html[-1] = html[-1][:-len("</li>")] + f"<{tag}>" + "".join(
+                            f"<li>{self.inline(b)}</li>" for _, _, b in nested) + f"</{tag}></li>"
+                        nested.clear()
+                    if deep:
+                        nested.append((ordered, deep, body))
+                    elif body is not None:
+                        html.append(f"<li>{self.inline(body)}</li>")
                 tag = "ol" if items[0][0] else "ul"
-                out.append(f"<{tag}>" + "".join(f'<li{" class=sub" if deep else ""}>{self.inline(body)}</li>'
-                                                for _, deep, body in items) + f"</{tag}>")
+                out.append(f"<{tag}>" + "".join(html) + f"</{tag}>")
                 items.clear()
 
         fenced, depths = False, []
         for line in lines:  # a shell comment inside a fence is not a heading
             if re.match(r"\s*(```|~~~)", line):
                 fenced = not fenced
-            elif not fenced and re.match(r"#{1,6}\s", line):
-                depths.append(len(line) - len(line.lstrip("#")))
+            elif not fenced and heading(line):
+                depths.append(heading(line)[0])
         shallowest = min(depths, default=1)
         while i < len(lines):
             line = lines[i]
             fence = re.match(r"\s*(```+|~~~+)", line)
-            heading = re.match(r"(#{1,6})\s+(.*?)\s*#*\s*$", line)
+            title = heading(line)
             item = re.match(r"(\s*)([-*+]|\d+[.)])\s+(.*)$", line)
             cells = review_stamp.table_cells(line)
             if fence:
@@ -263,13 +305,13 @@ class Page:
                     out.append(f'<pre class="cmd"><code>{esc(chr(10).join(body))}</code></pre>')
                 i = end + 1
                 continue
-            if heading:
+            if title:
                 flush()
-                level = min(6, top + len(heading.group(1)) - shallowest)
-                step = re.match(review_stamp.GUIDE_STEP, heading.group(2))
-                anchor = self.new_id(f"{prefix}-{step.group(1) if step else heading.group(2).lower()}")
-                out.append(f'<h{level} id="{anchor}">{self.inline(heading.group(2))}</h{level}>')
-            elif cells and i + 1 < len(lines) and re.match(r"\s*\|?\s*:?-{3,}", lines[i + 1]):
+                level = min(6, top + title[0] - shallowest)
+                step = re.match(review_stamp.GUIDE_STEP, title[1])
+                anchor = self.new_id(f"{prefix}-{step.group(1) if step else title[1].lower()}")
+                out.append(f'<h{level} id="{anchor}">{self.inline(title[1])}</h{level}>')
+            elif cells and i + 1 < len(lines) and TABLE_RULE.match(lines[i + 1]):
                 flush()
                 rows = []
                 j = i + 2
@@ -283,10 +325,8 @@ class Page:
                 if para:
                     flush()
                 if not items:
-                    list_indent[0] = len(item.group(1))
-                    items.append([item.group(2)[0].isdigit(), False, item.group(3)])
-                else:
-                    items.append([items[0][0], len(item.group(1)) > list_indent[0], item.group(3)])
+                    list_indent = len(item.group(1))
+                items.append([item.group(2)[0].isdigit(), bool(items) and len(item.group(1)) > list_indent, item.group(3)])
             elif not line.strip():
                 flush()
             elif items and line.startswith((" ", "\t")):
@@ -311,9 +351,9 @@ def notes_by_section(text):
     """{section number: the notes' Markdown under its heading}."""
     found, current = {}, None
     for line in text.split("\n"):
-        heading = re.match(r"#{1,3}\s+(.*?)\s*#*\s*$", line)
-        if heading and heading.group(1).strip().lower() in NOTE_SECTIONS:
-            current = NOTE_SECTIONS[heading.group(1).strip().lower()]
+        title = heading(line, 3)
+        if title and title[1].lower() in NOTE_SECTIONS:
+            current = NOTE_SECTIONS[title[1].lower()]
             found[current] = []
         elif current:
             found[current].append(line)
@@ -321,10 +361,14 @@ def notes_by_section(text):
 
 
 def first_paragraph(text):
+    """The first paragraph of prose, past any leading headings and HTML comments a PR template puts first."""
+    text = re.sub(r"<!--.*?(-->|$)", "", text, flags=re.S)
     lines = []
     for line in text.strip().split("\n"):
-        if not line.strip():
-            break
+        if not line.strip() or line.startswith("#") and not lines:
+            if lines:
+                break
+            continue
         lines.append(line)
     return "\n".join(lines)
 
@@ -336,8 +380,12 @@ def parse_review(text):
     header = next((line.strip() for line in lines if re.match(r"(Self-review|Review)( \(|$)", line)), None)
     labels = "|".join(re.escape(o) for o in REVIEW_OUTCOMES)
     entries = []
+    starts = {}  # each line's text after its label or bullet, to its first line number
+    for n, l in enumerate(lines, 1):
+        bullet = re.match(r"[ \t]*[-*][ \t]+(.*)$", l)
+        starts.setdefault((bullet.group(1) if bullet else l.partition(":")[2]).strip(), n)
     for label, entry in pr_validation.labelled(text, rf"(?:{labels})(?: \([^)\n]*\))?"):
-        line = next((n for n, l in enumerate(lines, 1) if entry in l), None)
+        line = starts.get(entry.strip())
         entries.append((next(o for o in REVIEW_OUTCOMES if label.startswith(o)), label, entry, line))
     if header is None and not entries:
         return None
@@ -350,12 +398,16 @@ def parse_review(text):
 
 
 def check_rows(text):
-    """[{id, result, check, ac, acs, case, expected (None without the column), observed, line, group}] in report order."""
+    """[{id, result, check, ac, acs, ac_column, case, expected (None without the column), observed, line, group}] in
+    report order."""
     lines = text.split("\n")
-    rows, group = [], None
-    headings = {n: l for n, l in enumerate(lines) if l.startswith("## ")}
+    rows = []
+    groups, group = [], ""  # each line's `## ` section
+    for line in lines:
+        group = line[3:].strip() if line.startswith("## ") else group
+        groups.append(group)
     for index, names, cells, result in review_stamp.result_table(lines):
-        group = next((headings[n][3:].strip() for n in sorted(headings, reverse=True) if n < index), "")
+        group = groups[index]
 
         def cell(name, prefix=False):
             at = next((i for i, n in enumerate(names) if (n.startswith(name) if prefix else n == name)), None)
@@ -376,13 +428,16 @@ def named_files(page, row):
         target = (link.group(4) or "").strip()
         if link.group(4) is not None and not (re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target) and not target.startswith("file://")):
             found.append(page.resolve(target))
-    bare = INLINE.sub(" ", cell)
-    found += [page.resolve(token) for token in PATH_TOKEN.findall(bare)]
-    found += [page.resolve(token) for token in FILE_TOKEN.findall(bare)]
-    scripts = os.path.join(page.evidence, "checks")
-    if os.path.isdir(scripts):
-        found += [page.resolve(os.path.join(scripts, name)) for name in sorted(os.listdir(scripts))
-                  if name.startswith(row["id"] + ".")]
+    # A code span or bold text names its files on purpose; a word in the prose ("took ~3s", "GET /api/x 200",
+    # "README.md updated") counts only when that file exists.
+    spans = " ".join(m.group(1) or m.group(2) for m in INLINE.finditer(cell) if m.group(4) is None)
+    prose = INLINE.sub(" ", cell)
+    exists = lambda token: os.path.lexists(os.path.join(page.evidence, os.path.expanduser(token)))
+    for text, named_on_purpose in ((spans, True), (prose, False)):
+        found += [page.resolve(token) for token in PATH_TOKEN.findall(text) + FILE_TOKEN.findall(text)
+                  if named_on_purpose or exists(token)]
+    found += [page.resolve(os.path.join(page.evidence, "checks", name)) for name in page.scripts
+              if name.startswith(row["id"] + ".")]
     unique, seen = [], set()
     for named, real in found:
         key = real or named
@@ -393,18 +448,23 @@ def named_files(page, row):
 
 
 def follow_pr_pending(text):
-    """The CI checks and comments the follow-pr report's latest run leaves pending, and its Status when not ready."""
+    """The CI checks the follow-pr report's latest run leaves pending, the comments every run left pending (a reply
+    drafted or a question to the user, until a later line for the same id says otherwise), and the latest Status when
+    it isn't ready to merge."""
     runs = re.split(r"^## Run\b", text, flags=re.M)
     last = runs[-1] if len(runs) > 1 else text
+    comments = {}  # a comment is recorded once, in the run that handled it, and again only when its outcome changes
+    for line in text.split("\n"):
+        parts = [p.strip() for p in line.split(" — ")]
+        if len(parts) >= 3 and not line.startswith(("CI:", "Status:")):
+            comments[line.split()[0]] = line.strip() if re.match(r"(reply drafted|asked the user)\b", parts[-1], re.I) else None
     pending = []
     for line in last.split("\n"):
         ci = re.match(r"CI:\s*(.+)$", line)
         if ci and re.search(r":\s*pending\b", ci.group(1)):
             pending.append(f"CI {ci.group(1).strip()}")
-        parts = [p.strip() for p in line.split(" — ")]
-        if len(parts) >= 3 and not line.startswith(("CI:", "Status:")) and \
-                re.match(r"(reply drafted|asked the user)\b", parts[-1], re.I):
-            pending.append(line.strip())
+    pending += [line for line in comments.values() if line]
+    for line in last.split("\n"):
         status = re.match(r"Status:\s*(.+)$", line)
         if status and not status.group(1).strip().lower().startswith("ready to merge"):
             pending.append(f"Status: {status.group(1).strip()}")
@@ -445,6 +505,8 @@ def ci_state(pr, pr_error, off):
     except ci_wait.Unreadable as error:
         return "unknown", "need", f"GitHub couldn't be read for {head}: {error}"
     if not checks:
+        if ci_wait.runs_no_ci(head):
+            return "no CI", "dim", "the repository runs no CI"
         return "missing", "need", f"no checks for {head}"
     failed = [name for name, check, _ in checks if ci_wait.failed(check)]
     running = [name for name, check, _ in checks if ci_wait.running(check)]
@@ -456,9 +518,18 @@ def ci_state(pr, pr_error, off):
     return "PASS", "ok", f"on {head}: {names}"
 
 
-def stamp_state(kind, phase, off):
+QUIET = ("phase off", "not needed")  # states that ask nothing of the reader
+
+
+def stamp_tone(word):
+    return "ok" if word == "current" else "dim" if word in QUIET else "need"
+
+
+def stamp_state(kind, phase, off, needed=True):
     if phase in off:
         return "phase off"
+    if not needed:
+        return "not needed"
     if review_stamp.stamp_matches(kind, review_stamp.fingerprint_for(kind)):
         return "current"
     stamps = (review_stamp.stamp_path(kind), review_stamp.legacy_stamp_path(kind))
@@ -467,9 +538,14 @@ def stamp_state(kind, phase, off):
 
 def changed_files(base):
     """{top-level directory: [(path, added, removed)]} of the change against its base, the working tree's included."""
+    counted = []
+    for entry in review_stamp.git_checked("diff", "--numstat", "-z", "--no-renames", base).split(b"\0"):
+        if entry:
+            added, removed, path = os.fsdecode(entry).split("\t", 2)
+            counted.append((path, added, removed))
+    counted += [(path, "new", "0") for path in review_stamp.git_paths("ls-files", "--others", "--exclude-standard")]
     groups = {}
-    for line in review_stamp.git_checked("diff", "--numstat", "--no-renames", base).decode(errors="replace").splitlines():
-        added, removed, path = line.split("\t", 2)
+    for path, added, removed in counted:
         top = path.split("/", 1)[0] + "/" if "/" in path else "(top level)"
         groups.setdefault(top, []).append((path, added, removed))
     return groups
@@ -495,10 +571,10 @@ def unavailable(why):
 def notes_block(page, notes, number, path, fallback=None):
     if notes is not None and notes.get(number):
         return (f'<div class="notes"><p class="by">Written by the agent</p>'
-                f"{page.markdown(notes[number], f'notes-{number}', top=4, figure=True)}</div>")
+                f"{page.markdown(notes[number], f'notes-{number}', top=3, figure=True)}</div>")
     block = not_recorded("decision-notes", path)
     if fallback:
-        label, text, _source = fallback
+        label, text = fallback
         block += (f'<div class="fallback"><p class="by">{esc(label[0].upper() + label[1:])}</p>'
                   f"<blockquote>{page.inline(text)}</blockquote></div>")
     return block
@@ -526,7 +602,9 @@ def build(page_path, evidence):
     base_ref = review_stamp.branch_base()[0]
     pr, pr_error = pull_request()
     ci_word, ci_tone, ci_detail = ci_state(pr, pr_error, off)
-    stamps = {"review": stamp_state("review", "review", off), "validate": stamp_state("validate", "validate", off)}
+    validate_needed = any(not review_stamp.NOT_BEHAVIOR.search(p) for p in review_stamp.changed_paths()[1])
+    stamps = {"review": stamp_state("review", "review", off),
+              "validate": stamp_state("validate", "validate", off, validate_needed)}
     now = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
 
     # Verify
@@ -534,9 +612,10 @@ def build(page_path, evidence):
     if "verify" in off:
         verify_word, verify_line = "phase off", "phase off"
     elif texts["verify"] is not None:
-        verdict = re.search(r"^# Verify: (\S+)", texts["verify"], re.M)
+        verdict = re.search(r"^# Verify: (.+)$", texts["verify"], re.M)
         if verdict:
-            verify_word = verdict.group(1).rstrip(".,")
+            words = verdict.group(1).strip().rstrip(".")
+            verify_word = "checked nothing" if words.startswith("PASS, but nothing") else words.split()[0].rstrip(",")
             verify_line = pr_validation.verify_line(texts["verify"])[0][len("- Verify: "):]
         else:
             whys["verify"] = f"{paths['verify']} has no `# Verify:` line"
@@ -565,6 +644,8 @@ def build(page_path, evidence):
         """The state word for a source report: phase off, or unavailable with the reason, or None when it was read."""
         if phase in off:
             return "phase off"
+        if kind == "validation" and not validate_needed and texts["validation"] is None:
+            return "not needed"
         if kind == "verify" and verify_word is None or kind == "review" and review is None or \
                 kind == "validation" and not validation_ok:
             return "unavailable: " + whys[kind]
@@ -587,7 +668,7 @@ def build(page_path, evidence):
             f'<details{" open" if row["result"] != "PASS" else ""}><summary>'
             f'<span class="cid">{esc(row["id"])}</span> {state(row["result"], tone)} '
             f'<span class="ac">{esc(row["ac"]) or state("no AC", "dim")}</span> <span class="case">{esc(CASE_WORDS.get(row["case"], row["case"]))}</span> '
-            f'<span class="ctext">{page.inline(row["check"])}</span></summary>'
+            f'<span class="ctext">{page.inline(row["check"], links=False)}</span></summary>'
             f'<dl class="row"><dt>Expected</dt><dd>{expected_html}</dd>'
             f'<dt>Observed</dt><dd>{page.inline(row["observed"]) or state("not recorded", "dim")}</dd>'
             f'<dt>Source</dt><dd><code>{esc(paths["validation"])}:{row["line"]}</code></dd></dl>'
@@ -599,19 +680,19 @@ def build(page_path, evidence):
     def review_count_html():
         why = source_state("review", "review")
         if why:
-            return state(why, "dim" if why == "phase off" else "need")
+            return state(why, "dim" if why in QUIET else "need")
         return " · ".join(f"{o} {review_counts[o]}" for o in REVIEW_OUTCOMES)
 
     def validation_count_html():
         why = source_state("validation", "validate")
         if why:
-            return state(why, "dim" if why == "phase off" else "need")
+            return state(why, "dim" if why in QUIET else "need")
         return " · ".join(f"{r} {counts[r]}" for r in RESULTS)
 
     def verify_html():
         why = source_state("verify", "verify")
         if why:
-            return state(why, "dim" if why == "phase off" else "need")
+            return state(why, "dim" if why in QUIET else "need")
         return f'{state(verify_word, result_tone(verify_word))} {esc(verify_line.split(", ", 1)[1] if ", " in verify_line else "")}'
 
     # 06's items, each linking to what it names
@@ -619,17 +700,17 @@ def build(page_path, evidence):
     for kind, phase, label in (("verify", "verify", "Verify report"), ("review", "review", "Review report"),
                                ("validation", "validate", "Validation report")):
         why = source_state(kind, phase)
-        if why and why != "phase off":
+        if why and why not in QUIET:
             items.append(("#s04", f"{label}: {state('unavailable', 'need')} {esc(why[len('unavailable: '):])}"))
     if verify_word and verify_word not in ("PASS", "phase off"):
         items.append(("#s04", f"Verify: {state(verify_word, 'need')} {esc(verify_line)}"))
-    if ci_word not in ("PASS", "no PR yet", "CI phase off"):
+    if ci_word not in ("PASS", "no PR yet", "CI phase off", "no CI"):
         items.append(("#footer", f"CI for the PR head: {state(ci_word, 'need')} {esc(ci_detail)}"))
     if pr and head != pr["headRefOid"]:
         items.append(("#footer", f"Local HEAD <code>{esc(head)}</code> differs from the PR head <code>{esc(pr['headRefOid'])}</code>"))
     for kind, word in stamps.items():
         if word in ("stale", "missing"):
-            items.append(("#s04", f"The {kind} stamp: {state(word, 'need')}"))
+            items.append(("#rests", f"The {kind} stamp: {state(word, 'need')}"))
     for n, (outcome, label, entry, _) in enumerate([e for e in (review[2] if review else []) if e[0] == "Open"], 1):
         items.append((f"#review-open-{n}", f"Open finding: {page.inline(entry)}"))
     for row in rows:
@@ -644,7 +725,13 @@ def build(page_path, evidence):
             [(page.new_id("fresh"), "freshness warning", warning) for warning in stale_warnings]
     for anchor, word, message in fresh:
         items.append((f"#{anchor}", f"{state(word, 'need')} {esc(message)}"))
-    guide_ids = {}
+    environment = os.path.join(evidence, review_stamp.ENVIRONMENT_RECORD)
+    if validation_ok and not pre_pr_a and not os.path.isfile(environment):
+        items.append(("#environment", f"<code>{esc(environment)}</code>: {state('missing', 'need')}"))
+    for kind, label in (("checks-guide", "Checks guide"), ("follow-pr", "Follow-pr report")):
+        if texts[kind] is None and not whys[kind].startswith("no report") and not (kind == "checks-guide" and "validate" in off):
+            items.append(("#s05" if kind == "checks-guide" else "#follow-pr",
+                          f"{label}: {state('unavailable', 'need')} {esc(whys[kind])}"))
     if "validate" not in off and texts["checks-guide"] is not None:
         for step, info in review_stamp.guide_steps(texts["checks-guide"]).items():
             after = step.startswith("P")
@@ -653,7 +740,6 @@ def build(page_path, evidence):
             named = f"{step} {info['name']}".strip()
             word = info["result"] or ("left" if after else "not run")
             where = "after the merge, left" if after else "before the merge, optional"
-            guide_ids[step] = f"#guide-{step}"
             items.append((f"#guide-{step}", f"<code>{esc(named)}</code>: {state(word, 'need' if after or word == 'FAIL' else 'dim')}"
                                             f"{esc(info['date'])} ({where}; {esc(info['owner'])})"))
     if texts["follow-pr"] is not None:
@@ -667,7 +753,7 @@ def build(page_path, evidence):
 
     # 01
     s1 = notes_block(page, notes, 1, paths["decision-notes"],
-                     ("the spec's goal", goal.group(1), spec_path) if goal else None)
+                     ("the spec's goal", goal.group(1)) if goal else None)
     if spec_text is None:
         s1 += not_recorded("spec", spec_path) if not spec_read_why or spec_read_why.startswith("no report") else unavailable(spec_read_why)
     else:
@@ -679,7 +765,8 @@ def build(page_path, evidence):
             n = int(number.group(1))
             covering = [row for row in rows if n in row["acs"]]
             if not validation_ok:
-                checks = state((source_state("validation", "validate") or "not recorded").split(":")[0], "dim")  # the reason is in 04
+                why = (source_state("validation", "validate") or "not recorded").split(":")[0]
+                checks = state(why, "dim" if why in QUIET or why == "not recorded" else "need")  # the reason is in 04
             elif not any(row["ac_column"] for row in rows):
                 checks = state("not recorded", "dim") + " the validation tables have no AC column"
             elif covering:
@@ -687,17 +774,19 @@ def build(page_path, evidence):
                                   f'{state(row["result"], result_tone(row["result"]))}' for row in covering)
             else:
                 checks = state("no check", "need")
-            criteria_rows.append(f'<tr id="ac-{n}"><th scope="row">{n}</th><td>{page.inline(number.group(2))}</td>'
-                                 f"<td>{checks}</td></tr>")
-        s1 += ('<div class="table"><table class="criteria"><thead><tr><th scope="col">AC</th><th scope="col">Criterion</th>'
-               f'<th scope="col">Checks</th></tr></thead><tbody>{"".join(criteria_rows)}</tbody></table></div>'
+            # Explicit roles: the phone layout makes the cells blocks, which drops their table semantics.
+            criteria_rows.append(f'<tr role="row" id="ac-{n}"><th role="rowheader" scope="row">{n}</th>'
+                                 f'<td role="cell">{page.inline(number.group(2))}</td><td role="cell">{checks}</td></tr>')
+        s1 += ('<div class="table"><table class="criteria" role="table"><thead><tr role="row">'
+               '<th role="columnheader" scope="col">AC</th><th role="columnheader" scope="col">Criterion</th>'
+               f'<th role="columnheader" scope="col">Checks</th></tr></thead><tbody>{"".join(criteria_rows)}</tbody></table></div>'
                if criteria_rows else f'<p>{state("not recorded", "dim")} no numbered acceptance criteria</p>')
     s1 += source_line([paths["decision-notes"], spec_path] + ([paths["validation"]] if validation_ok else []))
 
     # 02
     body = texts["pr-body"]
     s2 = notes_block(page, notes, 2, paths["decision-notes"],
-                     ("the PR description's first paragraph", first_paragraph(body), paths["pr-body"]) if body else None)
+                     ("the PR description's first paragraph", first_paragraph(body)) if body else None)
     s2 += f'<h3>Pull request</h3><p class="prtitle">{esc(pr_title) if pr_title else (state("not recorded", "dim") + " GitHub gives no title" if pr else state("no PR yet", "dim"))}</p>'
     s2 += f'<div class="prbody">{page.markdown(body, "pr", top=4)}</div>' if body is not None else \
         (not_recorded("pr-body", paths["pr-body"]) if whys["pr-body"].startswith("no report") else unavailable(whys["pr-body"]))
@@ -721,32 +810,42 @@ def build(page_path, evidence):
     # 04
     header_fields = review[1] if review else {}
     model = header_fields.get("cross-model") or header_fields.get("cross-model reading")
-    s4 = ('<ul class="counts">'
+    s4 = ('<ul class="counts" role="list">'
           f'<li><span class="k">Review:</span> {review_count_html()}'
           + (f' <span class="meta">lenses: {esc(header_fields.get("lenses") or "not recorded")}; model family: '
              f'{esc(model or "not recorded")}</span>' if review else "") + "</li>"
           f'<li><span class="k">Validation:</span> {validation_count_html()}</li>'
           f'<li><span class="k">Suite (verify):</span> {verify_html()}</li>'
           f'<li><span class="k">CI:</span> {state(ci_word, ci_tone)}</li></ul>')
-    environment = os.path.join(evidence, review_stamp.ENVIRONMENT_RECORD)
     if os.path.isfile(environment):
-        s4 += f'<h3>Environment</h3>{page.file_block(*page.resolve(environment))}'
+        s4 += f'<h3 id="environment">Environment</h3>{page.file_block(*page.resolve(environment))}'
     elif validation_ok:
-        s4 += (f'<p class="absent"><span class="k">Environment:</span> '
+        s4 += (f'<p class="absent" id="environment"><span class="k">Environment:</span> '
                f'{state("not recorded", "dim") if pre_pr_a else state("missing", "need")} <code>{esc(environment)}</code></p>')
     if fresh:
         s4 += '<h3>Evidence freshness</h3><ul class="fresh">' + "".join(
             f'<li id="{anchor}">{state(word, "need")} {esc(message)}</li>' for anchor, word, message in fresh) + "</ul>"
     if validation_ok:
         filters = [("all", "All", len(rows))] + [(r.lower().replace(" ", ""), r, counts[r]) for r in RESULTS]
-        s4 += ('<h3>Checks</h3><div class="filter" role="group" aria-label="Show checks by result">'
+        s4 += ('<h3>Checks</h3><div class="filter"><div class="radios" role="group" aria-label="Show checks by result">'
                + "".join(f'<input type="radio" name="result" id="f-{key}"{" checked" if key == "all" else " disabled" if not n else ""}>'
                          f'<label for="f-{key}">{esc(label)} <span class="n">{n}</span></label>' for key, label, n in filters)
-               + f'<ol class="checks">{"".join(check_items)}</ol></div>')
-        sections = re.split(r"^(?=## )", texts["validation"], flags=re.M)
+               + f'</div><ol class="checks" role="list">{"".join(check_items)}</ol></div>')
+        # The report's own text, around the result tables already shown as rows: its preamble, notes in a check
+        # section, the Notes and Limits sections.
+        lines = texts["validation"].split("\n")
+        table = set()
+        for row in rows:
+            start = end = row["line"] - 1
+            while start > 0 and lines[start - 1].lstrip().startswith("|"):
+                start -= 1
+            while end + 1 < len(lines) and lines[end + 1].lstrip().startswith("|"):
+                end += 1
+            table.update(range(start, end + 1))
+        prose = "\n".join(line for n, line in enumerate(lines) if n not in table and not line.startswith("# "))
         limits = []
-        for block in sections[1:]:
-            if any(row["group"] == block.split("\n", 1)[0][3:].strip() for row in rows):
+        for block in re.split(r"^(?=## )", prose, flags=re.M):
+            if not block.strip() or re.fullmatch(r"## [^\n]*\s*", block):
                 continue
             rendered = page.markdown(block, "validation", top=3)
             if re.match(r"## (Notes|Limits)", block):
@@ -755,7 +854,7 @@ def build(page_path, evidence):
                 s4 += rendered
     else:
         why = source_state("validation", "validate")
-        s4 += f'<h3>Checks</h3>{unavailable(why[len("unavailable: "):]) if why and why != "phase off" else "<p>" + state("phase off", "dim") + "</p>"}'
+        s4 += f'<h3>Checks</h3>{unavailable(why[len("unavailable: "):]) if why and why not in QUIET else "<p>" + state(why, "dim") + "</p>"}'
         limits = []
     s4 += '<h3 id="review">Review</h3>'
     if review:
@@ -773,16 +872,17 @@ def build(page_path, evidence):
                 + (f' <code class="ref">{esc(paths["review"])}:{line}</code>' if line else "") + "</li>"
                 for n, (_, label, entry, line) in enumerate(entries, 1))
             s4 += (f'<div class="outcome" id="{anchor}"><h4>{esc(outcome)} <span class="n">{len(entries)}</span></h4>'
-                   + (f"<ul>{listed}</ul>" if entries else f'<p>{state("none", "dim")}</p>') + "</div>")
+                   + (f'<ul role="list">{listed}</ul>' if entries else f'<p>{state("none", "dim")}</p>') + "</div>")
         s4 += (f'<details class="report"><summary>The whole review report</summary>'
                f'{page.markdown(texts["review"], "review-report", top=4)}</details>')
     else:
         why = source_state("review", "review")
         s4 += f'<p>{state("phase off", "dim")}</p>' if why == "phase off" else unavailable(why[len("unavailable: "):])
     s4 += '<h3 id="follow-pr">Follow-pr outcomes</h3>'
-    page.ids.update({"review", "follow-pr"})
-    s4 += page.markdown(texts["follow-pr"], "follow-pr", top=4) if texts["follow-pr"] is not None else \
-        not_recorded("follow-pr", paths["follow-pr"])
+    page.ids.update({"review", "follow-pr", "rests", "environment"})
+    s4 += (page.markdown(texts["follow-pr"], "follow-pr", top=4) if texts["follow-pr"] is not None else
+           not_recorded("follow-pr", paths["follow-pr"]) if whys["follow-pr"].startswith("no report") else
+           unavailable(whys["follow-pr"]))
     if limits:
         s4 += "".join(limits)
     s4 += source_line([paths["validation"], paths["review"], paths["verify"], paths["follow-pr"], evidence])
@@ -805,13 +905,13 @@ def build(page_path, evidence):
               if items else f'<p>{state("nothing to decide", "ok")}</p><ol class="decide"></ol>'))
     para = first_paragraph(body) if body else None
     phases = f'{state("unavailable", "need")} {esc(phases_error)}' if phases_error else esc(phase_switches.describe(off))
-    s6 += ('<h3>What it rests on</h3><ul class="facts">'
+    s6 += ('<h3 id="rests">What it rests on</h3><ul class="facts" role="list">'
            f'<li><span class="k">Goal:</span> {page.inline(goal.group(1)) if goal else state("not recorded", "dim")}</li>'
            f'<li><span class="k">PR title:</span> {esc(pr_title) if pr_title else state("not recorded", "dim")}</li>'
            f'<li><span class="k">PR description, first paragraph:</span> {page.inline(para) if para else state("not recorded", "dim")}</li>'
            f'<li><span class="k">Verify:</span> {verify_html()}</li>'
-           f'<li><span class="k">Stamps:</span> review {state(stamps["review"], "ok" if stamps["review"] == "current" else "need" if stamps["review"] != "phase off" else "dim")}'
-           f' · validate {state(stamps["validate"], "ok" if stamps["validate"] == "current" else "need" if stamps["validate"] != "phase off" else "dim")}</li>'
+           f'<li><span class="k">Stamps:</span> review {state(stamps["review"], stamp_tone(stamps["review"]))}'
+           f' · validate {state(stamps["validate"], stamp_tone(stamps["validate"]))}</li>'
            f'<li><span class="k">Review:</span> {review_count_html()}</li>'
            f'<li><span class="k">Validation:</span> {validation_count_html()}</li>'
            f'<li><span class="k">Phases off:</span> {phases}</li></ul>')
@@ -828,8 +928,8 @@ def build(page_path, evidence):
     strip = [("PR", f'#{pr["number"]}' if pr else ("unknown" if pr_error else "no PR yet"), "ok" if pr else "need" if pr_error else "dim"),
              ("CI", ci_word, ci_tone), ("verify", (source_state("verify", "verify") or verify_word).split(":")[0],
                                          "ok" if verify_word == "PASS" else "dim" if "verify" in off else "need"),
-             ("review stamp", stamps["review"], "ok" if stamps["review"] == "current" else "dim" if stamps["review"] == "phase off" else "need"),
-             ("validate stamp", stamps["validate"], "ok" if stamps["validate"] == "current" else "dim" if stamps["validate"] == "phase off" else "need")]
+             ("review stamp", stamps["review"], stamp_tone(stamps["review"])),
+             ("validate stamp", stamps["validate"], stamp_tone(stamps["validate"]))]
     decide_link = (f'<a class="todo need" href="#s06">{len(items)} item{"s" * (len(items) != 1)} to decide</a>' if items
                    else '<a class="todo ok" href="#s06">nothing to decide</a>')
     sections = {1: s1, 2: s2, 3: s3, 4: s4, 5: s5, 6: s6}
@@ -929,20 +1029,22 @@ li.sub{margin-left:1.25rem}
 .decide li{margin:.5rem 0;color:var(--text)}
 .decide li::marker{font-family:var(--mono);color:var(--human)}
 .decide a.go{font-family:var(--mono);font-size:.875rem;color:var(--human);text-decoration-color:var(--human);white-space:nowrap}
-.filter>input{position:absolute;opacity:0;width:1px;height:1px}
-.filter>label{display:inline-flex;align-items:center;min-height:2.75rem;font-family:var(--mono);font-size:.8125rem;
+.radios>input{position:absolute;opacity:0;width:1px;height:1px}
+.radios>label{display:inline-flex;align-items:center;min-height:2.75rem;font-family:var(--mono);font-size:.8125rem;
 border:1px solid var(--line);padding:.375rem 1rem;margin:0 .375rem .75rem 0;cursor:pointer;color:var(--muted)}
-.filter>label:hover{border-color:var(--dim);color:var(--text)}
-.filter>input:disabled+label{color:var(--dim);border-style:dashed;cursor:default}
-.filter>input:checked+label{border-color:var(--text);color:var(--text)}
-.filter>input:focus-visible+label{outline:2px solid var(--lime);outline-offset:2px}
+.radios>label:hover{border-color:var(--dim);color:var(--text)}
+.radios>input:disabled+label{color:var(--dim);border-style:dashed;cursor:default}
+.radios>input:checked+label{border-color:var(--text);color:var(--text);font-weight:700;text-decoration:underline;
+text-underline-offset:4px}
+.radios>input:focus-visible+label{outline:2px solid var(--lime);outline-offset:2px}
 .filter:has(#f-pass:checked) .check:not(.r-pass),.filter:has(#f-fail:checked) .check:not(.r-fail),
 .filter:has(#f-notrun:checked) .check:not(.r-notrun){display:none}
+.check:target{display:list-item!important}
 .checks{list-style:none;padding:.5rem 0 0;border-top:1px solid var(--line)}
 .check{border-bottom:1px solid var(--line);margin:0;max-width:none;padding:.25rem 0 .5rem}
 .check summary{cursor:pointer;padding:.75rem .5rem;display:flex;flex-wrap:wrap;gap:.25rem .75rem;align-items:baseline}
 .check summary{list-style:none}.check summary::-webkit-details-marker{display:none}
-.check summary::before{content:"▸";color:var(--dim);font-family:var(--mono);transition:transform .15s}
+.check summary::before{content:"▸" / "";color:var(--dim);font-family:var(--mono);transition:transform .15s}
 .check details[open]>summary::before{transform:rotate(90deg)}
 @media (prefers-reduced-motion:reduce){.check summary::before{transition:none}}
 .check summary:hover{background:var(--surface)}
@@ -974,7 +1076,7 @@ footer{padding-top:2rem;padding-bottom:3rem}
 .ids dt{color:var(--dim)}
 @media (max-width:640px){dl.row,dl.fields,dl.ids{grid-template-columns:minmax(0,1fr)}dl dd{margin-bottom:.5rem}
 h2,.num{font-size:1.5rem}h3{font-size:1.125rem}figure pre{white-space:pre-wrap;overflow-wrap:anywhere}figure .ln{padding-left:4ch;text-indent:-4ch}
-.criteria thead{display:none}.criteria tr{display:block;border-bottom:1px solid var(--line);padding:.5rem 0}
+.criteria thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.criteria tr{display:block;border-bottom:1px solid var(--line);padding:.5rem 0}
 .criteria td,.criteria th{display:block;border:0;min-width:0;width:auto;padding:.25rem .75rem}
 .criteria td:last-child::before{content:"Checks: ";color:var(--dim);font-family:var(--mono)}.notes{padding:1rem 1rem .25rem}}
 """
@@ -996,6 +1098,8 @@ def main():
         sys.exit("usage: decision-report <page> <evidence dir>")
     page, evidence = sys.argv[1:]
     try:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(page)  # even a kill mid-build leaves no older page
         os.chdir(review_stamp.git("rev-parse", "--show-toplevel"))
         write_atomically(page, build(page, evidence))
     except BaseException as error:  # no page beats an older one taken for the current one
