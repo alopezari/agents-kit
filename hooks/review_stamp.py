@@ -6,9 +6,12 @@
                                                    # needs a report whose PASS/FAIL rows name their evidence, no empty
                                                    # recording among it, every criterion of the spec covered by a PASS
                                                    # and a negative row (or a reasoned NOT RUN when its check is
-                                                   # manual), and a Test types row for each type bin/triage selects
+                                                   # manual), a Test types row for each type bin/triage selects, and,
+                                                   # where ~/.agents/repos/<repo>/suite lists the full suite's commands,
+                                                   # a green bin/evidence run of one on the code as it is now
   review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
   review_stamp.py needs-validate                   # exit 0 if the change touches behavior, not just tests/docs
+  review_stamp.py fingerprint                      # the code's fingerprint, as verify's stamp holds it (bin/evidence records it)
   review_stamp.py follow-renames                   # move spec, reports and stamps from this branch's earlier names, and out of $TMPDIR
   review_stamp.py branch-key                       # the current branch as it appears in those file names
   review_stamp.py base [--matches <branch>]        # (both options also take --name=value) the ref the change is measured against (see branch_base), or
@@ -28,6 +31,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -41,6 +45,7 @@ NOT_BEHAVIOR = re.compile(
     re.I,
 )
 SPEC_LOOKUP_SECS = 10
+EVIDENCE_LINE_BYTES = 64 * 1024
 TRIAGE_SECS = 60
 NEGATIVE_CASE = re.compile(r"[\u2212\u00b1]|(?<![\w-])-(?![\w-])")  # −, ± or a lone hyphen; `regression` and `+` aren't
 # A criterion no test can check: its `verify:` starts with manual/by hand (not a path: ./manual.py), or says it can't be automated.
@@ -49,7 +54,7 @@ MANUAL_VERIFY = re.compile(r"[\s*_]*(manual(ly)?|by hand)(?!\.?[\w/-])|.*\b(can[
 NOT_STAMPED = re.compile(r"(^|/)CHANGELOG(\.(md|txt|rst))?\Z|(^|/)changelog\.d/[^/]+\.md\Z", re.I)
 VERIFY_KINDS = ("verify", "verify-empty")
 STAMP_KINDS = ("review", "validate", *VERIFY_KINDS)
-COMMANDS = ("check", "write", "base", "branch-key", "follow-renames", "needs-validate")
+COMMANDS = ("check", "write", "base", "branch-key", "follow-renames", "needs-validate", "fingerprint")
 # Normal calls take milliseconds. A git that hangs (a stuck lock, a network filesystem) would hang every stop and PR
 # gate that asks it. The stamps, the stop hook and the verify scripts' lookups run git through run_git; phase_switches
 # and the branch-name notice set their own timeout, and --red-check's tree copy runs under verify's limit.
@@ -590,10 +595,98 @@ def test_type_problems(text, evidence):
     return problems
 
 
+def suite_command(command):
+    """A full-suite command's arguments as the suite overlay and bin/evidence's `$ ` line compare: shell quoting aside,
+    `./x`, `bash x` and `x` alike. None for a line that isn't one plain command."""
+    try:
+        words = shlex.split(command)
+        # Unquoted operators only: posix=False keeps a quoted `'|'` in its quotes, so it stays an argument.
+        raw = list(shlex.shlex(command, posix=False, punctuation_chars=";&|<>"))
+    except ValueError:  # an unclosed quote
+        return None
+    words = words[1:] if words[:1] == ["bash"] else words
+    if not words or "=" in words[0] or any(set(token) <= set(";&|<>") for token in raw):
+        return None
+    return (words[0][len("./"):] if words[0].startswith("./") else words[0], *words[1:])
+
+
+def evidence_header(path):
+    """(command, directory, exit code, fingerprint or None) from the header bin/evidence saves, or None for any other file."""
+    try:
+        with open(path, "rb") as fh:
+            head = [fh.readline(EVIDENCE_LINE_BYTES).decode(errors="replace").rstrip("\n") for _ in range(3)]
+    except OSError:
+        return None
+    ran = re.fullmatch(r"# in (.+), \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4}, exit (\d{1,3})", head[1])
+    if not head[0].startswith("$ ") or not ran:
+        return None
+    recorded = re.fullmatch(r"# fingerprint ([0-9a-f]{64})", head[2])
+    return head[0][2:], ran.group(1), int(ran.group(2)), recorded.group(1) if recorded else None
+
+
+def suite_problems(evidence):
+    """Why no file of the evidence directory shows a green run, from a checkout's root, of a command the repo's suite
+    overlay lists on the code as it is now (the fingerprint verify's stamp holds, which bin/evidence records before the
+    run). Empty without an overlay."""
+    shown = f"~/.agents/repos/{repo_name()}/suite"
+    overlay = os.path.expanduser(shown)
+    try:
+        with open(overlay, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        if not os.path.islink(overlay):
+            return []
+        return [f"The suite overlay {shown} is a link to {os.readlink(overlay)}, which doesn't exist: restore it or remove "
+                "the link."]
+    except (OSError, ValueError) as error:  # ValueError: not UTF-8
+        return [f"Can't read the suite overlay {shown}: {getattr(error, 'strerror', None) or error}."]
+    commands = [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    if not commands:
+        return [f"The suite overlay {shown} holds no command: list the repo's full-suite commands in it, one per line, "
+                "or remove it."]
+    unusable = [c for c in commands if suite_command(c) is None]
+    if unusable:
+        return [f"The suite overlay {shown} has lines that aren't one plain command (no pipes, `&&`, `;`, redirects or "
+                "`VAR=` prefixes; a script can hold those):"] + [f"  {c}" for c in unusable]
+    names = sorted(os.listdir(evidence))
+    try:
+        current = fingerprint()
+    except RuntimeError as error:
+        return [f"Can't compute the code's fingerprint to match the suite runs against: {error}"]
+    wanted, reasons = {suite_command(c): c for c in commands}, []
+    for name in names:
+        header = evidence_header(os.path.join(evidence, name))
+        if not header:
+            continue
+        ran, where, status, recorded = header
+        words = suite_command(ran)
+        if words not in wanted:
+            line = next((c for w, c in wanted.items() if words and words[:len(w)] == w), None)
+            if line:
+                reasons.append(f"{name} ran `{ran}`, which doesn't count as the suite line `{line}`: run the line as it is.")
+            continue
+        if status != 0:
+            reasons.append(f"{name} ran `{ran}`, but it exited {status}: fix what failed and run it again.")
+        elif not os.path.exists(os.path.join(where, ".git")):
+            reasons.append(f"{name} ran `{ran}` in {where}, which isn't a checkout's root: run it from the repo root.")
+        elif not recorded:
+            reasons.append(f"{name} ran `{ran}` with no recorded fingerprint (a bin/evidence from before it recorded one, "
+                           "or run outside a checkout): run it again.")
+        elif recorded != current:
+            reasons.append(f"{name} ran `{ran}` on different code: a file changed during or after the run (an untracked "
+                           "file the suite left counts), or the branch moved onto a newer base. Run it again.")
+        else:
+            return []
+    return ([f"The suite overlay {shown} asks for a green run of the repo's full suite on the code as it is now, and "
+             f"{evidence} holds none. Run one of its commands from the repo root:"]
+            + [f"  ~/.agents/bin/evidence suite {c}" for c in commands] + reasons)
+
+
 def validation_report_problems():
     """Why the validation report can't back a validate stamp: it's missing, PASS/FAIL rows whose Evidence cell names no
     non-empty file of the evidence directory, an empty recording, a criterion of the spec without its PASS and negative
-    rows, or a test type triage selects that its Test types table leaves out. Empty when it can."""
+    rows, a test type triage selects that its Test types table leaves out, or, where the repo has a suite overlay, no
+    green run of the full suite on the code as it is now. Empty when it can."""
     report, evidence = report_paths("validation", "evidence")
     try:
         with open(report) as fh:
@@ -602,6 +695,10 @@ def validation_report_problems():
         return [f"No validation report at {report}: save it first (kit-validate skill, step 5)."]
     if not evidence:  # reports path evidence refuses on a detached HEAD
         return ["No evidence directory: a detached HEAD has none. Validate from the branch's checkout."]
+    try:
+        os.listdir(evidence)
+    except OSError as error:  # every check below lists it
+        return [f"Can't list the evidence directory {evidence}: {error.strerror}."]
     lines, problems = text.splitlines(), []
     missing = unbacked_rows(lines, evidence)
     if missing:
@@ -617,6 +714,8 @@ def validation_report_problems():
     elif items is not None:
         problems += criteria_problems(items, result_rows(lines, evidence))
     problems += test_type_problems(text, evidence)
+    # Last, after triage's run: the closer to the stamp's own fingerprint, the less an edit can slip between them.
+    problems += suite_problems(evidence)
     if items is None and not why and not problems:
         print(f"No spec at {path}: the per-criterion check was skipped.")
     return problems
@@ -700,6 +799,9 @@ def main():
         return 0
     if command == "needs-validate":
         return 0 if any(not NOT_BEHAVIOR.search(p) for p in changed_paths()[1]) else 1
+    if command == "fingerprint":
+        print(fingerprint())
+        return 0
     problems = validation_report_problems() if command == "write" and kind == "validate" else []
     if problems:
         print("\n".join(problems), file=sys.stderr)
