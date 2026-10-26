@@ -276,7 +276,7 @@ docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the 
 **`bin/evidence-env`**: Print the environment a validation's checks run in.
 
 ```
-evidence-env      run it as `bin/evidence environment bin/evidence-env`, which saves the record as environment.txt
+evidence-env      run it as `~/.agents/bin/evidence environment ~/.agents/bin/evidence-env`, which saves it as environment.txt
 ```
 
 **`bin/free-branch`**: Free a pushed branch from its worktree, so the user can switch to it in the main checkout.

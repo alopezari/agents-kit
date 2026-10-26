@@ -38,7 +38,7 @@ def stamp(repo, kind):
     if kind.startswith("verify"):
         code = f"import sys; sys.path.insert(0, {os.path.dirname(STAMP)!r}); import review_stamp as r; r.record_verify({kind!r}, r.fingerprint())"
         return sh(repo, "python3", "-c", code)
-    if kind == "validate":  # the writer needs a report whose checks name their evidence
+    if kind == "validate":  # the writer needs a report whose checks name their evidence and Expected, and an environment record
         reports = os.path.expanduser("~/.agents/bin/reports")
         types = json.loads(sh(repo, os.path.expanduser("~/.agents/bin/triage"), "--json"))["tests"]
         with open(sh(repo, reports, "path", "validation"), "w") as fh:
@@ -50,7 +50,7 @@ def stamp(repo, kind):
         with open(os.path.join(evidence, "a1.txt"), "w") as fh:
             fh.write("$ python3 app.py\nexit 0\n")
         with open(os.path.join(evidence, "environment.txt"), "w") as fh:
-            fh.write("branch: feat\ncommit: abc\nOS: Darwin 1\n")
+            fh.write("# in /x, 2026-10-26 09:00:00 +0100, exit 0, commit none\n$ ~/.agents/bin/evidence-env\n\nbranch: feat\n")
     return sh(repo, "python3", STAMP, "write", "--kind", kind)
 
 

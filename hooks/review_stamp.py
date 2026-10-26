@@ -7,7 +7,9 @@
                                                    # recording among it, no output recorded before a change to files
                                                    # other than tests, every criterion of the spec covered by a PASS
                                                    # and a negative row (or a reasoned NOT RUN when its check is
-                                                   # manual), a Test types row for each type bin/triage selects, and,
+                                                   # manual), an Expected cell on each PASS/FAIL row, a current
+                                                   # environment record that bin/evidence saved from a run that
+                                                   # exited 0, a Test types row for each type bin/triage selects, and,
                                                    # where ~/.agents/repos/<repo>/suite lists the full suite's commands,
                                                    # a green bin/evidence run of one on the code as it is now
   review_stamp.py check [--kind review|validate|verify|verify-empty]   # exit 1 if the change differs from the stamped one
@@ -441,7 +443,7 @@ def result_rows(lines, evidence):
             names = [c.strip("*_") for c in cells]
             columns = (names.index("Result"), names.index("Evidence"), names.index("AC") if "AC" in names else None,
                        next((i for i, n in enumerate(names) if n.startswith("Case")), None),
-                       names.index("Expected") if "Expected" in names else None)
+                       next((i for i, n in enumerate(names) if n.startswith("Expected")), None))
         elif columns and len(cells) > columns[0]:
             result = re.match(r"[*_]*(?:(PASS|FAIL|NOT RUN)\b)?", cells[columns[0]]).group(1)
             cell = cells[columns[1]] if len(cells) > columns[1] else ""
@@ -493,7 +495,7 @@ def evidence_tree(path):
 
 
 ENVIRONMENT_RECORD = "environment.txt"
-RECORD_ENVIRONMENT = "~/.agents/bin/evidence environment ~/.agents/bin/evidence-env"
+RECORD_ENVIRONMENT_COMMAND = "~/.agents/bin/evidence environment ~/.agents/bin/evidence-env"
 
 
 def stale_evidence(lines, evidence):
@@ -540,7 +542,7 @@ def stale_evidence(lines, evidence):
         if code:
             checks = [n for n in names if n != ENVIRONMENT_RECORD]
             again = ([f"Run {'those checks' if len(checks) > 1 else 'that check'} again through bin/evidence and update "
-                      "their rows."] if checks else []) + ([f"Record the environment again: {RECORD_ENVIRONMENT}"]
+                      "their rows."] if checks else []) + ([f"Record the environment again: {RECORD_ENVIRONMENT_COMMAND}"]
                                                            if ENVIRONMENT_RECORD in names else [])
             problems.append(f"{named} ran on content the working tree no longer has: {shown} changed since, and aren't "
                             "tests. " + " ".join(again))
@@ -561,23 +563,28 @@ def rows_without_expected(lines, evidence):
     as "<first cell>: <why>". A checks guide's results tables have no such column: only the validation report is asked."""
     return [f"{first}: " + ("its table has no Expected column" if expected is None else "its Expected cell is blank")
             for first, result, *_, expected in result_rows(lines, evidence)
-            if result in ("PASS", "FAIL") and (expected is None or not has_reason(expected))]
+            if result in ("PASS", "FAIL") and (expected is None or not has_reason(re.sub(r"\s", "", expected)))]
 
 
 def environment_notes(lines, evidence):
-    """(problems, warnings) for the environment record behind the PASS/FAIL rows: a problem when it is missing or empty, a
+    """(problems, warnings) for the environment record behind the PASS/FAIL rows: a problem when it is missing, empty, or
+    not saved by bin/evidence from a recorder that exited 0 (a crash leaves a traceback that names no environment), a
     warning naming the probes it ends by calling incomplete. A service being down can be what the change is about, so an
     incomplete record isn't refused."""
     if not any(row[1] in ("PASS", "FAIL") for row in result_rows(lines, evidence)):
         return [], []
     if ENVIRONMENT_RECORD not in evidence_files(evidence):
         return [f"{evidence} has no {ENVIRONMENT_RECORD}, or it is empty: the checks ran in an environment nobody wrote down. "
-                f"Record it, once the stack answers: {RECORD_ENVIRONMENT}"], []
+                f"Record it, once the stack answers: {RECORD_ENVIRONMENT_COMMAND}"], []
+    header = evidence_header(os.path.join(evidence, ENVIRONMENT_RECORD))
+    if not header or header[2] != 0:
+        why = f"exited {header[2]}" if header else "wasn't saved through bin/evidence, so nothing says what ran or on which content"
+        return [f"{ENVIRONMENT_RECORD} {why}: record it again, once the stack answers: {RECORD_ENVIRONMENT_COMMAND}"], []
     with open(os.path.join(evidence, ENVIRONMENT_RECORD), errors="replace") as fh:
         last = next((l for l in reversed(fh.read().splitlines()) if l.strip()), "")
     if last.startswith("incomplete: "):
         return [], [f"{ENVIRONMENT_RECORD} is incomplete ({last[len('incomplete: '):]}): the stamp doesn't refuse it, but the "
-                    "report should say what that probe's failure means for the checks."]
+                    "report should say what those failures mean for the checks."]
     return [], []
 
 

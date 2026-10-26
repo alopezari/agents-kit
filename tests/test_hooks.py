@@ -84,9 +84,11 @@ def test_types_section(cwd, evidence="a1.txt"):
 
 
 def record_environment(evidence):
-    """The environment record the validate stamp asks for, as a file with no header: it names no content to compare."""
+    """The environment record the validate stamp asks for, as bin/evidence saves it from a run that exited 0; its header
+    names no commit, so no content change makes it stale."""
     with open(os.path.join(evidence, "environment.txt"), "w") as fh:
-        fh.write("branch: feat\ncommit: abc\nOS: Darwin 1\n")
+        fh.write("# in /x, 2026-10-26 09:00:00 +0100, exit 0, commit none\n$ ~/.agents/bin/evidence-env\n\n"
+                 "branch: feat\ncommit: abc\nOS: Darwin 1\n")
 
 
 def write_stamp(cwd, kind, equals=False):
@@ -1831,7 +1833,7 @@ def a_checks_guide_results_table_needs_no_expected_column(base):
     assert steps["M1"]["result"] == "PASS" and steps["P1"]["result"] == "FAIL", (done.stdout, done.stderr)
 
 
-def probe_environment(repo, *probes, compose=False, path=None):
+def probe_environment(repo, *probes, path=None):
     """(the record bin/evidence-env prints in repo, with the repo's environment file listing probes, its seconds, the
     children's CPU seconds)."""
     overlay = os.path.expanduser("~/.agents/repos/repo/environment")
@@ -1872,20 +1874,76 @@ def evidence_env_records_the_environment(base):
     assert "shop-web-1" not in probe_environment(repo, path=path)[0], "no compose file, no services"
     open(os.path.join(repo, "compose.yaml"), "w").write("services: {}\n")
     out, _, _ = probe_environment(repo, path=path)
-    assert "compose ps" in out and "shop-web-1: Up 5 minutes" in out, "the services, when the repo has a compose file: " + out
+    assert "$ docker ps" in out and "shop-web-1: Up 5 minutes" in out, "the services, when the repo has a compose file: " + out
 
 
 def evidence_env_survives_probes_that_fail_hang_or_flood(base):
     repo = new_repo(base)
-    out, elapsed, cpu = probe_environment(repo, "sleep 997", "false", "yes", "echo after")
-    assert "$ sleep 997 (timed out" in out and "$ false (exit 1)" in out and "$ yes (output cut" in out, out
+    pidfile = os.path.join(base, "sleeper.pid")
+    sleeper = f"sh -c 'echo $$ > {pidfile}; exec sleep 997'; true"
+    out, elapsed, cpu = probe_environment(repo, sleeper, "false", "yes", "echo after")
+    assert f"$ {sleeper} (timed out)" in out and "$ false (exit 1)" in out and "$ yes (output cut at 4096 bytes)" in out, out
     assert "$ echo after (exit 0)\nafter\n" in out, "later probes still run: " + out
-    assert out.rstrip().splitlines()[-1].startswith("incomplete: ") and all(
-        name in out.rstrip().splitlines()[-1] for name in ("sleep 997", "false", "yes")) and "echo after" not in out.splitlines()[-1], out
-    assert len(out) < 10000, "each probe's output is cut at 4 KB: " + str(len(out))
+    last = out.rstrip().splitlines()[-1]
+    assert last.startswith("incomplete: ") and all(name in last for name in (sleeper, "false", "yes")) and "echo after" not in last, out
+    flood = out.split("$ yes (output cut at 4096 bytes)\n")[1].split("\n\n## ")[0]
+    assert len(flood) == 4095, "the flood is cut at exactly 4 KB (its last newline stripped): " + str(len(flood))
     # CPU, not wall time, bounds the flood: a `yes` read for its whole 10 s would burn ~10 s of CPU, a loaded runner only stretches the wait.
     assert cpu < 4 and elapsed < 60, (cpu, elapsed)
-    assert subprocess.run(["pgrep", "-fx", "sleep 997"], capture_output=True).returncode == 1, "a timed-out probe is killed, not left behind"
+    sleeper_state = subprocess.run(["ps", "-o", "stat=", "-p", open(pidfile).read().strip()], capture_output=True, text=True).stdout.strip()
+    assert sleeper_state in ("", "Z"), "a timed-out probe's children are killed, not left behind: " + sleeper_state
+
+
+def run_evidence_env(cwd, **constants):
+    """What bin/evidence-env prints in cwd with its module constants (PROBE_SECONDS, BIN...) replaced, so a test can reach
+    its bounds in a second rather than a minute."""
+    code = ("import importlib.machinery, importlib.util, json, sys; "
+            "loader = importlib.machinery.SourceFileLoader('evidence_env', sys.argv[1]); "
+            "m = importlib.util.module_from_spec(importlib.util.spec_from_loader('evidence_env', loader)); loader.exec_module(m); "
+            "[setattr(m, k, v) for k, v in json.loads(sys.argv[2]).items()]; sys.exit(m.main())")
+    done = subprocess.run(["python3", "-B", "-c", code, os.path.expanduser("~/.agents/bin/evidence-env"), json.dumps(constants)],
+                          cwd=cwd, capture_output=True, text=True, timeout=100)
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def evidence_env_keeps_its_bounds(base):
+    repo = new_repo(base)
+    source = open(os.path.expanduser("~/.agents/bin/evidence-env")).read()
+    assert all(re.search(rf"^{bound}$", source, re.M) for bound in ("PROBE_SECONDS = 10", "RECORD_SECONDS = 60", "PROBE_BYTES = 4096")), \
+        "the bounds the spec names"
+
+    overlay = os.path.expanduser("~/.agents/repos/repo/environment")
+    os.makedirs(os.path.dirname(overlay), exist_ok=True)
+    try:
+        with open(overlay, "w") as fh:
+            fh.write("printf 'abcdefghij%.0s' 1 2 3\nsleep 991\nsleep 992\nsleep 993\necho late\n")
+        started, cpu = time.time(), child_cpu()
+        out = run_evidence_env(repo, PROBE_SECONDS=1, RECORD_SECONDS=2.5, PROBE_BYTES=25)
+        cpu = child_cpu() - cpu
+    finally:
+        os.remove(overlay)
+    assert "(output cut at 25 bytes)\nabcdefghijabcdefghijabcde\n" in out, "a probe is cut at exactly its byte bound: " + out
+    assert "$ sleep 991 (timed out)" in out and "$ sleep 992 (timed out)" in out, out
+    assert "$ sleep 993 (" in out and "$ echo late (not run)" in out and "late\n" not in out.split("$ echo late")[1], \
+        "the record's budget, once spent, runs nothing more: " + out
+    assert "echo late (not run: the record's 2.5 s ran out)" in out.splitlines()[-1], out
+    assert cpu < 4, cpu
+
+    blind = os.path.join(base, "blind-bin")
+    os.makedirs(blind)
+    with open(os.path.join(blind, "repo-name"), "w") as fh:
+        fh.write("#!/bin/sh\nexit 3\n")
+    os.chmod(os.path.join(blind, "repo-name"), 0o755)
+    out = run_evidence_env(repo, BIN=blind)
+    assert "repo-name (exit 3: the repo's environment probes weren't read)" in out.splitlines()[-1], \
+        "a failed lookup is named, not taken for a repo without probes: " + out
+    outside = os.path.join(base, "not-a-repo")
+    os.makedirs(outside)
+    out = run_evidence_env(outside)
+    assert "git rev-parse --show-toplevel (exit " in out.splitlines()[-1] and "probes ran from the current directory" in out, out
+    assert "branch: unknown" in out.splitlines() and "git branch --show-current (exit " in out.splitlines()[-1], \
+        "a default line that fails says unknown and is named incomplete: " + out
 
 
 def validate_stamp_needs_a_current_environment_record(base):
@@ -1895,7 +1953,7 @@ def validate_stamp_needs_a_current_environment_record(base):
     record = os.path.join(evidence, "environment.txt")
     rows = validation_row("A1", "", "+", "PASS")
 
-    def refused(*texts):
+    def refused(*texts, rows=rows):
         done = attempt(rows, criteria=None)
         assert done.returncode == 2 and "validate stamp written" not in done.stdout, (done.stdout, done.stderr)
         for text in texts:
@@ -1917,8 +1975,15 @@ def validate_stamp_needs_a_current_environment_record(base):
 
     os.remove(record)
     refused("environment.txt", "evidence environment")
+    refused("environment.txt", "evidence environment", rows=validation_row("A1", "", "\u2212", "FAIL", expected="exit 3"))
     open(record, "w").close()
     refused("environment.txt", "evidence environment")
+    with open(record, "w") as fh:
+        fh.write("branch: feat\ncommit: abc\nOS: Darwin 1\n")
+    refused("wasn't saved through bin/evidence", "evidence environment")
+    with open(record, "w") as fh:
+        fh.write("# in /x, 2026-10-26 09:00:00 +0100, exit 1, commit none\n$ ~/.agents/bin/evidence-env\n\nTraceback (most recent call last):\n")
+    refused("environment.txt exited 1", "evidence environment")
     recorded()
     done = attempt(rows, criteria=None)
     assert done.returncode == 0 and "environment" not in done.stdout, "a fresh record, complete: " + done.stdout + done.stderr
@@ -4735,7 +4800,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
          validate_stamp_refuses_a_suite_run_that_doesnt_count, validate_stamp_suite_overlay_edge_cases,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, evidence_env_keeps_its_bounds, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
