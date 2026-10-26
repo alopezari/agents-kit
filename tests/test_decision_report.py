@@ -309,9 +309,20 @@ def summary_row(page, name):
 
 def listed(page, name):
     """The items of one of the summary's lists: decisions, blockers or warnings."""
-    found = re.search(rf'<ol class="items" id="{name}-items">(.*?)</ol>', summary(page), re.S)
-    assert found, f"no {name} list in the summary"
-    return [text(item) for item in re.findall(r"<li[^>]*>(.*?)</li>", found.group(1), re.S)]
+    markup = summary(page)
+    start = markup.find(f'<ol class="items" id="{name}-items">')
+    assert start >= 0, f"no {name} list in the summary"
+    items, depth, item_start = [], 0, None
+    for tag in re.finditer(r"<(/?)(ol|li)\b[^>]*>", markup[start:]):
+        closing, kind = tag.group(1), tag.group(2)
+        depth += -1 if closing else 1
+        if kind == "li" and depth == 2 and not closing:
+            item_start = tag.end()
+        elif kind == "li" and depth == 1 and closing:
+            items.append(text(markup[start:][item_start:tag.start()]))
+        elif depth == 0:
+            return items
+    raise AssertionError(f"the {name} list is not closed")
 
 
 def footer(page):
@@ -971,6 +982,7 @@ def the_three_lists_hold_their_items(base):
     decisions = listed(markup, "decisions")
     assert sum("left Open" in d for d in decisions) == 1 and "3 review findings left Open" in "".join(decisions), decisions
     assert not any("Open finding" in d or re.search(r"\bM0\b", d) for d in decisions), decisions
+    assert any("Keep the phone check" in d for d in decisions), decisions
 
 
 def sections_fold_unless_they_hold_a_failure(base):
@@ -987,8 +999,21 @@ def sections_fold_unless_they_hold_a_failure(base):
 """)
     write(repo, "checks-guide", GUIDE.replace("| M1 | FAIL | the coupon doubled on Safari |", "| M1 | PASS | one line |"))
     _, markup = generate(repo, base)
-    assert not is_open(markup, 2) and not is_open(markup, 1) and not is_open(markup, 3), \
-        [is_open(markup, n) for n in (1, 2, 3)]
+    assert not is_open(markup, 2) and not is_open(markup, 1) and not is_open(markup, 3) and not is_open(markup, 5), \
+        [is_open(markup, n) for n in (1, 2, 3, 5)]
+    write(repo, "checks-guide", GUIDE)
+    _, markup = generate(repo, base)
+    assert is_open(markup, 5), "AC1: a FAIL step in the checks guide leaves the Reports section closed"
+    write(repo, "checks-guide", GUIDE.replace("| M1 | FAIL | the coupon doubled on Safari |", "| M1 | PASS | one line |"))
+    write(repo, "validation", f"""# Validation
+
+| # | AC | Check | Case | Expected | Result | Evidence |
+|---|---|---|---|---|---|---|
+| A1 | AC1, AC2, AC3 | Coupon applied once | + | one line | FAIL | [output]({evidence}/A1.txt) |
+""")
+    _, markup = generate(repo, base)
+    assert is_open(markup, 2), "AC1: a lone FAIL check leaves Tests closed"
+    assert [b for b in listed(markup, "blockers") if "A1" in b], listed(markup, "blockers")
     os.remove(path_of(repo, "review"))
     _, markup = generate(repo, base)
     assert is_open(markup, 3), "AC1: Review is unavailable and its section is closed"
