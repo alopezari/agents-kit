@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Print the environment a validation's checks run in.
+
+Prints the branch, commit and OS as `name: value` lines, the running containers when the repo has a compose file, then a
+section for each line of ~/.agents/repos/<repo>/environment (one command per line, run from the repo root): its exit status
+and output. A command is cut after 10 s or 4 KB of output and the whole record after 60 s; the record ends with an
+`incomplete:` line naming each probe that was cut, failed or skipped, and each lookup that failed, which the validate
+stamp warns about.
+
+  evidence-env      run it as `~/.agents/bin/evidence environment ~/.agents/bin/evidence-env`, which saves it as environment.txt
+"""
+import os
+import select
+import shlex
+import signal
+import subprocess
+import sys
+import time
+
+PROBE_SECONDS = 10
+RECORD_SECONDS = 60
+PROBE_BYTES = 4096
+COMPOSE_FILES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
+BIN = os.path.dirname(os.path.abspath(__file__))
+
+
+def run_probe(command, seconds, cwd):
+    """(output, status): status is "exit N", "timed out" or "output cut at PROBE_BYTES bytes". A cut probe is killed with every
+    process it started, or `sleep 999` and `yes` would outlive the record."""
+    proc = subprocess.Popen(command, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, start_new_session=True)
+    deadline = time.monotonic() + seconds
+    output, status = b"", None
+    while status is None:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            status = "timed out"
+        elif select.select([proc.stdout], [], [], left)[0]:
+            chunk = os.read(proc.stdout.fileno(), PROBE_BYTES + 1)
+            if not chunk:
+                break
+            output += chunk
+            if len(output) > PROBE_BYTES:
+                output, status = output[:PROBE_BYTES], f"output cut at {PROBE_BYTES} bytes"
+    if status is None:
+        try:
+            status = f"exit {proc.wait(timeout=max(deadline - time.monotonic(), 0.1))}"
+        except subprocess.TimeoutExpired:
+            status = "timed out"
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):  # macOS answers EPERM for a group left with only its unreaped leader
+        pass
+    proc.wait()
+    proc.stdout.close()
+    return output.decode(errors="replace"), status
+
+
+def main():
+    started = time.monotonic()
+    incomplete = []
+
+    def probe(command, cwd):
+        left = RECORD_SECONDS - (time.monotonic() - started)
+        if left <= 0:
+            incomplete.append(f"{command} (not run: the record's {RECORD_SECONDS} s ran out)")
+            return "", "not run"
+        output, status = run_probe(command, min(PROBE_SECONDS, left), cwd)
+        if status != "exit 0":
+            incomplete.append(f"{command} ({status})")
+        return output, status
+
+    def line(name, command):
+        output, status = probe(command, root)
+        print(f"{name}: " + ((output.strip() or "(none)") if status == "exit 0" else "unknown"))
+
+    def lookup(command, consequence):
+        output, status = run_probe(command, PROBE_SECONDS, os.getcwd())
+        if status == "exit 0" and output.strip():
+            return output.strip()
+        incomplete.append(f"{command} ({status}: {consequence})")
+        return ""
+
+    root = lookup("git rev-parse --show-toplevel", "probes ran from the current directory") or os.getcwd()
+    line("branch", "git branch --show-current")
+    line("commit", "git rev-parse HEAD")
+    line("OS", "uname -sr")
+    commands = []
+    if any(os.path.exists(os.path.join(root, name)) for name in COMPOSE_FILES):
+        # Every container, not `docker compose ps`: Compose names a project after its directory, so from a worktree it
+        # asks about a project nobody started and prints nothing.
+        commands.append("docker ps --format '{{.Names}}: {{.Status}}'")
+    name = lookup(shlex.quote(os.path.join(BIN, "repo-name")), "the repo's environment probes weren't read")
+    overlay = os.path.expanduser(f"~/.agents/repos/{name}/environment")
+    try:
+        if name:
+            with open(overlay, encoding="utf-8", errors="replace") as fh:
+                commands += [c.strip() for c in fh.read().splitlines() if c.strip() and not c.lstrip().startswith("#")]
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        incomplete.append(f"{overlay} (unreadable: {error.strerror})")
+    for command in commands:
+        output, status = probe(command, root)
+        print(f"\n## $ {command} ({status})")
+        if output:
+            print(output.rstrip("\n"))
+    if incomplete:
+        print("\nincomplete: " + "; ".join(incomplete))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

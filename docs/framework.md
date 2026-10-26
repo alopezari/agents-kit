@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **18 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, docs, evidence, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
+- **19 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, docs, evidence, evidence-env, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -273,6 +273,12 @@ docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the 
 
 **`bin/evidence`**: Run a validation check and keep what it showed: evidence <id> <command> [args...] Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the command, directory, time, exit code, the commit and content it ran on, the code's fingerprint before it ran (in a git checkout: the validate stamp matches it where ~/.agents/repos/<repo>/suite lists the full suite) and output. The command is argv, not a string: for a pipe, pass `bash -c '...'`, which the shell guard reads as code. Exits 74 when the evidence couldn't be saved, whatever the command returned. EVIDENCE_DIR saves there instead, from any directory: a checks guide's steps run outside the repository. Without it, a detached HEAD has no evidence directory, so it exits 74.
 
+**`bin/evidence-env`**: Print the environment a validation's checks run in.
+
+```
+evidence-env      run it as `~/.agents/bin/evidence environment ~/.agents/bin/evidence-env`, which saves it as environment.txt
+```
+
 **`bin/free-branch`**: Free a pushed branch from its worktree, so the user can switch to it in the main checkout.
 
 ```
@@ -463,7 +469,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `mods/` | The kit's Claude Code plugin (`mods/kit/`): a mod that adds what only Claude Code can show, on top of the shared flow. |
 | `monitors/` | The weekly health check and the mid-month trends scan. |
 | `packs/` | Framework signal packs for `bin/triage` (`wordpress.json`), applied in the repos that use the framework. |
-| `repos/` | Per-repository overlays (`notes.md`, `ship.md`, `verify`, `review.md`, `packs`, `suite`, `wp-cli`) and the shared verify scripts in `_shared/`. |
+| `repos/` | Per-repository overlays (`notes.md`, `ship.md`, `verify`, `review.md`, `packs`, `suite`, `environment`, `wp-cli`) and the shared verify scripts in `_shared/`. |
 | `review-mining/` | The monthly job that learns from human code-review comments. |
 | `site/` | The public landing page and these docs as a website, built from README.md and this file (`site/build.mjs`). |
 | `skills.external` | Third-party skills install.sh fetches from their source, some pinned to a commit in `vendor/`. |

@@ -83,6 +83,14 @@ def test_types_section(cwd, evidence="a1.txt"):
     return test_types_table((name, "yes", evidence) for name in selected_test_types(cwd))
 
 
+def record_environment(evidence):
+    """The environment record the validate stamp asks for, as bin/evidence saves it from a run that exited 0; its header
+    names no commit, so no content change makes it stale."""
+    with open(os.path.join(evidence, "environment.txt"), "w") as fh:
+        fh.write("# in /x, 2026-10-26 09:00:00 +0100, exit 0, commit none\n$ ~/.agents/bin/evidence-env\n\n"
+                 "branch: feat\ncommit: abc\nOS: Darwin 1\n")
+
+
 def write_stamp(cwd, kind, equals=False):
     """Write a stamp as the skills do: validate first saves a report whose check names its evidence."""
     if kind == "validate":
@@ -91,9 +99,10 @@ def write_stamp(cwd, kind, equals=False):
         evidence = subprocess.run([reports, "path", "evidence"], cwd=cwd, capture_output=True, text=True).stdout.strip()
         assert os.path.isdir(evidence), f"no evidence directory from {reports}: {evidence!r}"
         with open(path, "w") as fh:
-            fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n| A1 | app runs | + | PASS | a1.txt |\n" + test_types_section(cwd))
+            fh.write("| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n| A1 | app runs | + | exit 0 | PASS | a1.txt |\n" + test_types_section(cwd))
         with open(os.path.join(evidence, "a1.txt"), "w") as fh:
             fh.write("$ python3 app.py\nexit 0\n")
+        record_environment(evidence)
     flags = [f"--kind={kind}"] if equals else ["--kind", kind]
     return subprocess.run(["python3", H + "review_stamp.py", "write", *flags], cwd=cwd, capture_output=True, text=True)
 
@@ -1605,29 +1614,30 @@ def validate_stamp_needs_evidence(base):
     with open(os.path.join(evidence, "empty.png"), "w"):
         pass
     with open(report, "w") as fh:
-        fh.write("A. CLI\n\n| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
-                 "| A1 | exits 3 | − | PASS | [output](evidence-x/A1.txt) |\n"
-                 "| A2 | prints | + | PASS | printed it, rc=0 |\n"
-                 "| A3 | staging only | + | NOT RUN | needs staging |\n\n"
-                 "B. UI\n\n| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
-                 "| B1 | page | + | FAIL | ![page](empty.png) |\n"
-                 "| B2 | named inside another name | + | PASS | xA1.txt |\n"
-                 "| B3 | a \\| b in the check | + | PASS | rc=0 |\n"
-                 "| B4 | bold result | + | **PASS** | rc=0 |\n"
-                 "| B5 | empty evidence | + | PASS ||\n"
-                 "| B6 | no evidence cell | + | PASS |\n\n"
-                 "D. Bold header\n\n| # | Check | Case | **Result** | **Evidence** |\n|---|---|---|---|---|\n| D1 | x | + | PASS | rc=0 |\n\n"
-                 "C. No outer pipes\n\n# | Check | Case | Result | Evidence\n---|---|---|---|---\nC1 | x | + | PASS | rc=0\n")
+        fh.write("A. CLI\n\n| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n"
+                 "| A1 | exits 3 | − | exit 3 | PASS | [output](evidence-x/A1.txt) |\n"
+                 "| A2 | prints | + | prints it | PASS | printed it, rc=0 |\n"
+                 "| A3 | staging only | + | | NOT RUN | needs staging |\n\n"
+                 "B. UI\n\n| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n"
+                 "| B1 | page | + | page shown | FAIL | ![page](empty.png) |\n"
+                 "| B2 | named inside another name | + | rc=0 | PASS | xA1.txt |\n"
+                 "| B3 | a \\| b in the check | + | rc=0 | PASS | rc=0 |\n"
+                 "| B4 | bold result | + | rc=0 | **PASS** | rc=0 |\n"
+                 "| B5 | empty evidence | + | rc=0 | PASS ||\n"
+                 "| B6 | no evidence cell | + | rc=0 | PASS |\n\n"
+                 "D. Bold header\n\n| # | Check | Case | **Expected** | **Result** | **Evidence** |\n|---|---|---|---|---|---|\n| D1 | x | + | rc=0 | PASS | rc=0 |\n\n"
+                 "C. No outer pipes\n\n# | Check | Case | Expected | Result | Evidence\n---|---|---|---|---|---\nC1 | x | + | rc=0 | PASS | rc=0\n")
     done = write_validate()
     named = {row for row in ("A1", "A2", "A3", "B1", "B2", "B3", "B4", "B5", "B6", "C1", "D1") if f"{row}:" in done.stderr}
     assert done.returncode == 2 and named == {"A2", "B1", "B2", "B3", "B4", "B5", "B6", "C1", "D1"} and not stamped(), done.stderr
     with open(os.path.join(evidence, "b1.png"), "wb") as fh:
         fh.write(b"\x89PNG")
+    record_environment(evidence)
     with open(report, "w") as fh:
-        fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
-                 "| A1 | exits 3 | − | PASS | `A1.txt` |\n| A3 | staging only | + | NOT RUN | needs staging |\n"
-                 "| B1 | page | + | FAIL | ![page](evidence-x/b1.png) |\n"
-                 f"| B2 | linked by absolute path, as validate writes it | + | PASS | [output]({evidence}/A1.txt) |\n"
+        fh.write("| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n"
+                 "| A1 | exits 3 | − | exit 3 | PASS | `A1.txt` |\n| A3 | staging only | + | | NOT RUN | needs staging |\n"
+                 "| B1 | page | + | page shown | FAIL | ![page](evidence-x/b1.png) |\n"
+                 f"| B2 | linked by absolute path, as validate writes it | + | rc=0 | PASS | [output]({evidence}/A1.txt) |\n"
                  + test_types_section(repo, "A1.txt"))
     done = write_validate()
     assert done.returncode == 0 and stamped(), done.stderr
@@ -1784,6 +1794,221 @@ def validate_stamp_refuses_stale_evidence(base):
     refused("abcdef1234567890abcdef1234567890abcdef12", why="unable to read")
 
 
+def validate_stamp_requires_an_expected_result(base):
+    repo, attempt = validation_fixture(base, "feat/expected")
+    ok = validation_row("E1", "", "+", "PASS") + validation_row("E2", "", "\u2212", "FAIL", expected="exit 3, `denied`")
+    done = attempt(ok, criteria=None)
+    assert done.returncode == 0 and "validate stamp written" in done.stdout, done.stdout + done.stderr
+
+    def refused(rows, offending, **kwargs):
+        done = attempt(rows, criteria=None, **kwargs)
+        assert done.returncode == 2 and "validate stamp written" not in done.stdout, (rows, done.stdout, done.stderr)
+        assert "Expected" in done.stderr, done.stderr
+        for row in ("E1", "E2", "N1", "T1", "T2", "T3", "T4"):
+            assert (f"{row}:" in done.stderr) == (row in offending), (row, offending, done.stderr)
+
+    for blank in ("", " ", "\u2014\u00a0\u2014", "-", "\u2014", "*", "_", "`", "**\u2014**"):
+        refused(ok + validation_row("T1", "", "+", "PASS", expected=blank), ["T1"])
+    refused(ok + validation_row("T1", "", "+", "FAIL", expected="\u2014"), ["T1"])
+    no_column = "| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
+    refused("| T1 | check | + | PASS | a1.txt |\n| T2 | check | \u2212 | FAIL | a1.txt |\n", ["T1", "T2"],
+            head=no_column)
+    refused(validation_row("T1", "", "+", "PASS", expected="") + "\nB. Another block\n\n" + no_column
+            + "| T2 | check | + | PASS | a1.txt |\n| T3 | check | + | NOT RUN | needs staging |\n",
+            ["T1", "T2"])
+    worded = "| # | AC | Check | Case (+/\u2212) | Expected (exact output) | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
+    done = attempt(ok, criteria=None, head=worded)
+    assert done.returncode == 0, "a header that words the column more fully is still the Expected column: " + done.stderr
+    refused(ok + validation_row("T1", "", "+", "PASS", expected=""), ["T1"], head=worded)
+    unran = validation_row("N1", "", "+", "NOT RUN", "needs staging", expected="")
+    done = attempt(ok + unran, criteria=None)
+    assert done.returncode == 0, "a row that didn't run asserts nothing, so it needs no Expected: " + done.stderr
+    done = attempt("| N1 | check | + | NOT RUN | needs staging |\n", criteria=None, head=no_column)
+    assert done.returncode == 0, "and a table of such rows needs no column: " + done.stderr
+
+
+def a_checks_guide_results_table_needs_no_expected_column(base):
+    # The Expected rule is the validation report's; a guide's step has **Expected:** in its own text.
+    guide = ("### M1. Pay by card\n\n**Where:** you\n\n### P1. Backfill\n\n**Where:** the agent, on this machine\n\n"
+             "## Results (2026-10-27)\n\n| Step | Result | Evidence |\n|---|---|---|\n| M1 | PASS | m1.txt |\n| P1 | FAIL | p1.txt |\n")
+    code = f"import json, sys; sys.path.insert(0, {H!r}); import review_stamp; print(json.dumps(review_stamp.guide_steps(sys.stdin.read())))"
+    done = subprocess.run(["python3", "-B", "-c", code], input=guide, capture_output=True, text=True)
+    steps = json.loads(done.stdout)
+    assert steps["M1"]["result"] == "PASS" and steps["P1"]["result"] == "FAIL", (done.stdout, done.stderr)
+
+
+def probe_environment(repo, *probes, path=None):
+    """(the record bin/evidence-env prints in repo, with the repo's environment file listing probes, its seconds, the
+    children's CPU seconds)."""
+    overlay = os.path.expanduser("~/.agents/repos/repo/environment")
+    os.makedirs(os.path.dirname(overlay), exist_ok=True)
+    try:
+        if probes:
+            with open(overlay, "w") as fh:
+                fh.write("\n".join(probes) + "\n")
+        started, cpu = time.time(), child_cpu()
+        done = subprocess.run([os.path.expanduser("~/.agents/bin/evidence-env")], cwd=repo, capture_output=True, text=True,
+                              timeout=100, env={**os.environ, "PATH": path or os.environ["PATH"]})
+        elapsed, cpu = time.time() - started, child_cpu() - cpu
+    finally:
+        if os.path.exists(overlay):
+            os.remove(overlay)
+    assert done.returncode == 0, done.stderr
+    return done.stdout, elapsed, cpu
+
+
+def evidence_env_records_the_environment(base):
+    repo = new_repo(base)
+    out, _, _ = probe_environment(repo)
+    lines = out.splitlines()
+    assert f"branch: {git(repo, 'branch', '--show-current').stdout.strip()}" in lines, out
+    assert f"commit: {git(repo, 'rev-parse', 'HEAD').stdout.strip()}" in lines, out
+    assert f"OS: {subprocess.run(['uname', '-sr'], capture_output=True, text=True).stdout.strip()}" in lines, out
+    assert "##" not in out and "docker" not in out and "incomplete" not in out, "without a repo file or a compose file, only the default lines: " + out
+
+    out, _, _ = probe_environment(repo, "echo probe-ok", "# a comment", "")
+    assert "$ echo probe-ok (exit 0)\nprobe-ok\n" in out and "comment" not in out and "incomplete" not in out, out
+
+    bin_dir = os.path.join(base, "fakebin")
+    os.makedirs(bin_dir)
+    with open(os.path.join(bin_dir, "docker"), "w") as fh:
+        fh.write("#!/bin/sh\necho \"$@\"\necho 'shop-web-1: Up 5 minutes'\n")
+    os.chmod(os.path.join(bin_dir, "docker"), 0o755)
+    path = bin_dir + os.pathsep + os.environ["PATH"]
+    assert "shop-web-1" not in probe_environment(repo, path=path)[0], "no compose file, no services"
+    open(os.path.join(repo, "compose.yaml"), "w").write("services: {}\n")
+    out, _, _ = probe_environment(repo, path=path)
+    assert "$ docker ps" in out and "shop-web-1: Up 5 minutes" in out, "the services, when the repo has a compose file: " + out
+
+
+def evidence_env_survives_probes_that_fail_hang_or_flood(base):
+    repo = new_repo(base)
+    pidfile = os.path.join(base, "sleeper.pid")
+    sleeper = f"sh -c 'echo $$ > {pidfile}; exec sleep 997'; true"
+    out, elapsed, cpu = probe_environment(repo, sleeper, "false", "yes", "echo after")
+    assert f"$ {sleeper} (timed out)" in out and "$ false (exit 1)" in out and "$ yes (output cut at 4096 bytes)" in out, out
+    assert "$ echo after (exit 0)\nafter\n" in out, "later probes still run: " + out
+    last = out.rstrip().splitlines()[-1]
+    assert last.startswith("incomplete: ") and all(name in last for name in (sleeper, "false", "yes")) and "echo after" not in last, out
+    flood = out.split("$ yes (output cut at 4096 bytes)\n")[1].split("\n\n## ")[0]
+    assert len(flood) == 4095, "the flood is cut at exactly 4 KB (its last newline stripped): " + str(len(flood))
+    # CPU, not wall time, bounds the flood: a `yes` read for its whole 10 s would burn ~10 s of CPU, a loaded runner only stretches the wait.
+    assert cpu < 4 and elapsed < 60, (cpu, elapsed)
+    sleeper_state = subprocess.run(["ps", "-o", "stat=", "-p", open(pidfile).read().strip()], capture_output=True, text=True).stdout.strip()
+    assert sleeper_state in ("", "Z"), "a timed-out probe's children are killed, not left behind: " + sleeper_state
+
+
+def run_evidence_env(cwd, **constants):
+    """What bin/evidence-env prints in cwd with its module constants (PROBE_SECONDS, BIN...) replaced, so a test can reach
+    its bounds in a second rather than a minute."""
+    code = ("import importlib.machinery, importlib.util, json, sys; "
+            "loader = importlib.machinery.SourceFileLoader('evidence_env', sys.argv[1]); "
+            "m = importlib.util.module_from_spec(importlib.util.spec_from_loader('evidence_env', loader)); loader.exec_module(m); "
+            "[setattr(m, k, v) for k, v in json.loads(sys.argv[2]).items()]; sys.exit(m.main())")
+    done = subprocess.run(["python3", "-B", "-c", code, os.path.expanduser("~/.agents/bin/evidence-env"), json.dumps(constants)],
+                          cwd=cwd, capture_output=True, text=True, timeout=100)
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def evidence_env_keeps_its_bounds(base):
+    repo = new_repo(base)
+    source = open(os.path.expanduser("~/.agents/bin/evidence-env")).read()
+    assert all(re.search(rf"^{bound}$", source, re.M) for bound in ("PROBE_SECONDS = 10", "RECORD_SECONDS = 60", "PROBE_BYTES = 4096")), \
+        "the bounds the spec names"
+
+    overlay = os.path.expanduser("~/.agents/repos/repo/environment")
+    os.makedirs(os.path.dirname(overlay), exist_ok=True)
+    try:
+        with open(overlay, "w") as fh:
+            fh.write("printf 'abcdefghij%.0s' 1 2 3\nsleep 991\nsleep 992\nsleep 993\necho late\n")
+        started, cpu = time.time(), child_cpu()
+        out = run_evidence_env(repo, PROBE_SECONDS=1, RECORD_SECONDS=2.5, PROBE_BYTES=25)
+        cpu = child_cpu() - cpu
+    finally:
+        os.remove(overlay)
+    assert "(output cut at 25 bytes)\nabcdefghijabcdefghijabcde\n" in out, "a probe is cut at exactly its byte bound: " + out
+    assert "$ sleep 991 (timed out)" in out and "$ sleep 992 (timed out)" in out, out
+    assert "$ sleep 993 (" in out and "$ echo late (not run)" in out and "late\n" not in out.split("$ echo late")[1], \
+        "the record's budget, once spent, runs nothing more: " + out
+    assert "echo late (not run: the record's 2.5 s ran out)" in out.splitlines()[-1], out
+    assert cpu < 4, cpu
+
+    blind = os.path.join(base, "blind-bin")
+    os.makedirs(blind)
+    with open(os.path.join(blind, "repo-name"), "w") as fh:
+        fh.write("#!/bin/sh\nexit 3\n")
+    os.chmod(os.path.join(blind, "repo-name"), 0o755)
+    out = run_evidence_env(repo, BIN=blind)
+    assert "repo-name (exit 3: the repo's environment probes weren't read)" in out.splitlines()[-1], \
+        "a failed lookup is named, not taken for a repo without probes: " + out
+    outside = os.path.join(base, "not-a-repo")
+    os.makedirs(outside)
+    out = run_evidence_env(outside)
+    assert "git rev-parse --show-toplevel (exit " in out.splitlines()[-1] and "probes ran from the current directory" in out, out
+    assert "branch: unknown" in out.splitlines() and "git branch --show-current (exit " in out.splitlines()[-1], \
+        "a default line that fails says unknown and is named incomplete: " + out
+
+
+def validate_stamp_needs_a_current_environment_record(base):
+    repo, attempt = validation_fixture(base, "feat/env")
+    evidence = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "evidence"], cwd=repo,
+                              capture_output=True, text=True).stdout.strip()
+    record = os.path.join(evidence, "environment.txt")
+    rows = validation_row("A1", "", "+", "PASS")
+
+    def refused(*texts, rows=rows):
+        done = attempt(rows, criteria=None)
+        assert done.returncode == 2 and "validate stamp written" not in done.stdout, (done.stdout, done.stderr)
+        for text in texts:
+            assert text in done.stderr, f"{text!r} missing: {done.stderr}"
+
+    def recorded(*probes):
+        overlay = os.path.expanduser("~/.agents/repos/repo/environment")
+        os.makedirs(os.path.dirname(overlay), exist_ok=True)
+        try:
+            if probes:
+                with open(overlay, "w") as fh:
+                    fh.write("\n".join(probes) + "\n")
+            ran = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "environment", os.path.expanduser("~/.agents/bin/evidence-env")],
+                                 cwd=repo, capture_output=True, text=True)
+        finally:
+            if os.path.exists(overlay):
+                os.remove(overlay)
+        assert ran.returncode == 0 and os.path.getsize(record) > 0, ran
+
+    os.remove(record)
+    refused("environment.txt", "evidence environment")
+    refused("environment.txt", "evidence environment", rows=validation_row("A1", "", "\u2212", "FAIL", expected="exit 3"))
+    open(record, "w").close()
+    refused("environment.txt", "evidence environment")
+    with open(record, "w") as fh:
+        fh.write("branch: feat\ncommit: abc\nOS: Darwin 1\n")
+    refused("wasn't saved through bin/evidence", "evidence environment")
+    with open(record, "w") as fh:
+        fh.write("# in /x, 2026-10-26 09:00:00 +0100, exit 1, commit none\n$ ~/.agents/bin/evidence-env\n\nTraceback (most recent call last):\n")
+    refused("environment.txt exited 1", "evidence environment")
+    recorded()
+    done = attempt(rows, criteria=None)
+    assert done.returncode == 0 and "environment" not in done.stdout, "a fresh record, complete: " + done.stdout + done.stderr
+    open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
+    refused("environment.txt", "app.py", "evidence environment")
+    recorded()
+    assert attempt(rows, criteria=None).returncode == 0
+    os.makedirs(os.path.join(repo, "tests"))
+    open(os.path.join(repo, "tests", "test_app.py"), "w").write("assert True\n")
+    done = attempt(rows, criteria=None)
+    assert done.returncode == 0 and "environment.txt" in done.stdout and "tests/test_app.py" in done.stdout, \
+        "a change to tests only warns, as it does for a check's output: " + done.stdout + done.stderr
+    os.remove(record)
+    done = attempt(validation_row("A1", "", "+", "NOT RUN", "needs staging"), criteria=None)
+    assert done.returncode == 0, "no row ran, so nothing ran in an environment: " + done.stderr
+    recorded("false", "echo after")
+    done = attempt(rows, criteria=None)
+    assert done.returncode == 0 and "incomplete" in done.stdout and "false" in done.stdout and "echo after" not in done.stdout, \
+        "a failed probe is warned about, not refused: " + done.stdout + done.stderr
+
+
 def validate_stamp_refuses_empty_recordings(base):
     repo = new_repo(base)
     git(repo, "switch", "-q", "-c", "feat/recorded")
@@ -1794,9 +2019,10 @@ def validate_stamp_refuses_empty_recordings(base):
     for name, content in (("C1-done.png", b"\x89PNG"), ("C1.contact-sheet.png", b"\x89PNG"), ("C1.webm", b"")):
         with open(os.path.join(evidence, name), "wb") as fh:
             fh.write(content)
+    record_environment(evidence)
     with open(report, "w") as fh:
-        fh.write("| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
-                 "| C1 | pays | + | PASS | ![done](C1-done.png) ![frames](C1.contact-sheet.png) [video](C1.webm) |\n"
+        fh.write("| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n"
+                 "| C1 | pays | + | receipt shown | PASS | ![done](C1-done.png) ![frames](C1.contact-sheet.png) [video](C1.webm) |\n"
                  + test_types_section(repo, "C1-done.png"))
 
     def write_validate():
@@ -1825,9 +2051,10 @@ def validation_fixture(base, branch):
     spec = subprocess.run([KIT + "/skills/kit-spec/path.sh"], cwd=repo, capture_output=True, text=True).stdout.strip()
     with open(os.path.join(evidence, "a1.txt"), "w") as fh:
         fh.write("$ python3 app.py\nexit 0\n")
+    record_environment(evidence)
 
     def attempt(rows, criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: tests/b.py"), types=None,
-                head="| # | AC | Check | Case (+/\u2212) | Result | Evidence |\n|---|---|---|---|---|---|\n"):
+                head="| # | AC | Check | Case (+/\u2212) | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n"):
         if criteria is not None:
             with open(spec, "w") as fh:
                 fh.write("# T\n\nRisk: standard \u2014 local\n\n## Acceptance criteria\n" + "\n".join(criteria) + "\n\n## Out of scope\n- x\n")
@@ -1839,8 +2066,8 @@ def validation_fixture(base, branch):
     return repo, attempt
 
 
-def validation_row(number, acs, case, result, evidence="a1.txt"):
-    return f"| {number} | {acs} | check | {case} | {result} | {evidence} |\n"
+def validation_row(number, acs, case, result, evidence="a1.txt", expected="exit 0"):
+    return f"| {number} | {acs} | check | {case} | {expected} | {result} | {evidence} |\n"
 
 
 def validate_stamp_checks_criteria_coverage(base):
@@ -1876,14 +2103,15 @@ def validate_stamp_checks_criteria_coverage(base):
         assert done.returncode == 0, f"{case!r} is a negative case: {done.stderr}"
     for case in ("re-run", "worst-case"):
         refused(validation_row("A1", "AC1", "+", "PASS") + validation_row("A2", "AC1", case, "PASS") + two_plus + two_minus_ran, "AC1 has no negative")
-    done = attempt(one + two_plus + two_minus_ran, head="| # | AC | Check | Case | Result | Evidence |\n|---|---|---|---|---|---|\n")
+    done = attempt(one + two_plus + two_minus_ran, head="| # | AC | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n")
     assert done.returncode == 0, "a plain `Case` header is the Case column too: " + done.stderr
     assert attempt(both + validation_row("R1", "", "regression", "PASS")).returncode == 0, "a row naming no criterion is allowed"
 
     assert "AC3" in refused(both + validation_row("A5", "AC3", "+", "PASS"), "no criterion of the spec")
     refused(both, "more than once", criteria=("1. One. \u2014 verify: tests/a.py", "1. Again. \u2014 verify: tests/b.py"))
     refused(both, "no numbered", criteria=())
-    refused("| A1 | check | + / \u2212 | PASS | a1.txt |\n", "AC column", head="| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n")
+    refused("| A1 | check | + / \u2212 | exit 0 | PASS | a1.txt |\n", "AC column",
+            head="| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n")
 
     manual = ("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: manual check on staging")
     covered = one + validation_row("A3", "AC2", "+", "NOT RUN", "needs staging")
@@ -4576,7 +4804,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
          validate_stamp_refuses_a_suite_run_that_doesnt_count, validate_stamp_suite_overlay_edge_cases,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, evidence_env_keeps_its_bounds, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
