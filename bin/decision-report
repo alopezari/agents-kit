@@ -59,6 +59,8 @@ VIDEOS = (".webm", ".mp4", ".mov")
 PLAYABLE = {".webm": "video/webm", ".mp4": "video/mp4"}  # a .mov plays only in Safari, so it stays a link
 TAIL_LINES = 40
 ACTIVE = (".html", ".htm", ".xhtml", ".svg", ".xml")  # opened from a link, these run their own scripts, outside the CSP
+# A bare path in report text links only to these: an extensionless or unknown file can be sniffed as HTML from file:
+LINKABLE = (".txt", ".log", ".out", ".md", ".json", ".csv", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".webm", ".mp4", ".mov", ".sh", ".py")
 FILE_TOKEN = re.compile(r"(?<![\w./~-])[\w.-]+\.(?:txt|log|out|md|json|csv|png|jpe?g|gif|webp|webm|mp4|mov|sh|py|html)(?![\w.-])")
 PATH_TOKEN = re.compile(r"(?<![\w(\]])(?:~|/)[^\s|()\[\]`'\"<>]*[^\s|()\[\]`'\"<>.,;:]")
 # The label excludes `[`: a run of unmatched brackets would otherwise be scanned again from each one.
@@ -157,6 +159,7 @@ class Page:
         self.repo_root = os.path.realpath(os.getcwd())
         self.local_roots = [self.root]  # where a bare absolute path may link from: the evidence and the reports
         self.exists = {}
+        self.tracked = None  # the files at blob_sha, read once on the first `path:line`
         scripts = os.path.join(evidence, "checks")
         inside = os.path.isdir(scripts) and os.path.realpath(scripts) == os.path.join(self.root, "checks")
         self.scripts = sorted(os.listdir(scripts)) if inside else []  # the kept check scripts, listed once
@@ -325,22 +328,37 @@ class Page:
             return url
         if path:
             return self.blob_href(path, line)
-        return self.local_href(re.sub(r":\d+$", "", local))
+        local, line = re.fullmatch(r"(.*?)(?::(\d+))?", local).groups()
+        real = os.path.realpath(os.path.expanduser(local))
+        if real.startswith(self.repo_root + os.sep):
+            return self.blob_href(os.path.relpath(real, self.repo_root), line)
+        return self.local_href(local)
 
     def blob_href(self, path, line=None):
-        """A repository file on GitHub at the PR's head, or None without a PR or for a path that isn't a file here."""
+        """A repository file on GitHub at the PR's head, or None without a PR or for a path the PR's head doesn't hold."""
         if not self.repo_url:
             return None
         real = os.path.realpath(os.path.join(self.repo_root, path))
-        if not real.startswith(self.repo_root + os.sep) or not self.is_file(real):
+        relative = os.path.relpath(real, self.repo_root)
+        if not real.startswith(self.repo_root + os.sep) or relative not in self.files_at_head():
             return None
-        return f"{self.repo_url}/blob/{self.blob_sha}/{urllib.parse.quote(os.path.relpath(real, self.repo_root))}" + \
+        return f"{self.repo_url}/blob/{self.blob_sha}/{urllib.parse.quote(relative)}" + \
             (f"#L{line}" if line else "")
+
+    def files_at_head(self):
+        if self.tracked is None:
+            try:
+                out = subprocess.run(["git", "ls-tree", "-r", "-z", "--name-only", self.blob_sha], cwd=self.repo_root,
+                                     capture_output=True, text=True, timeout=10)
+                self.tracked = set(out.stdout.split("\0")) if out.returncode == 0 else set()
+            except (OSError, subprocess.TimeoutExpired):
+                self.tracked = set()
+        return self.tracked
 
     def local_href(self, path):
         """A file under the evidence or reports directories, never an active one, by its file: URL; else None."""
         real = os.path.realpath(os.path.expanduser(path))
-        if real.lower().endswith(ACTIVE) or not any(real.startswith(root + os.sep) for root in self.local_roots):
+        if not real.lower().endswith(LINKABLE) or not any(real.startswith(root + os.sep) for root in self.local_roots):
             return None
         return file_href(real) if self.is_file(real) else None
 
@@ -504,17 +522,18 @@ def split_outside_parentheses(text, separator=","):
 
 def nit_list(entry):
     """(the lead, its items) for a review entry holding several Nits, "(re-check Nits kept) a; b; c"; else None."""
-    found = re.match(r"\s*\(([^()]*\bnits?\b[^()]*)\)\s*(.+)", entry, re.I | re.S)
+    found = re.match(r"\s*\(([^()]*)\)\s*(.+)", entry, re.S)
+    found = found if found and re.search(r"\bnits?\b", found.group(1), re.I) else None
     items = [item.strip() for item in split_outside_parentheses(found.group(2), ";") if item.strip()] if found else []
     return (found.group(1), items) if len(items) > 1 else None
 
 
 def first_sentence(text):
     """(the first sentence, the rest): the sentence ends at a stop followed by a space and a capital, outside code spans."""
-    for found in re.finditer(r"`[^`\n]*`|[.!?](?=\s+[A-Z(`*])|\s+— verify:", text):
+    for found in re.finditer(r"`[^`\n]*`|[.!?](?=\s+[A-Z(`*])|(?<=\s)— verify:", text):
         if not found.group(0).startswith("`"):
             end = found.start() + (found.group(0) in ".!?")
-            return text[:end], text[end:].strip()
+            return text[:end].rstrip(), text[end:].strip()
     return text, ""
 
 
@@ -677,8 +696,8 @@ def ci_state(pr, pr_error, off):
     return "PASS", "ok", f"on {head}: {names}"
 
 
-# "Merge: …" or "Merge with …", "Merge now …": not "Merge order: …", which is a decision of its own
-MERGE_NOTE = r"\W*merge\b(?:[*_ ]*:|\s+(?:with|without|now|as is|after|once|before|when|it|this)\b)"
+# "Merge: …", "Merge with …", "Merge once …": not "Merge order: …", which is a decision of its own
+MERGE_NOTE = r"\W*merge\b(?![*_ ]*\s+order\b)"
 QUIET = ("phase off", "not needed")  # states that ask nothing of the reader
 
 
@@ -860,6 +879,7 @@ def build(page_path, evidence):
     github = GITHUB_PR.fullmatch(pr.get("url") or "") if pr else None
     if github:
         page.repo_url, page.blob_sha = github.group(1), pr["headRefOid"]
+    pr_link = f'<a href="{esc(pr["url"])}"{REL}>#{pr["number"]}</a>' if github else f'#{pr["number"]}' if pr else ""
     page.local_roots.append(os.path.realpath(os.path.dirname(paths["review"])))
     ci_word, ci_tone, ci_detail = ci_state(pr, pr_error, off)
     validate_needed = any(not review_stamp.NOT_BEHAVIOR.search(p) for p in review_stamp.changed_paths()[1])
@@ -987,6 +1007,8 @@ def build(page_path, evidence):
                 by_section.setdefault(section, []).append((name, result))
             failed = [(name, result) for _, name, result in tests if result == "FAIL"]
             named = [(name, result) for _, name, result in tests if name in named_in]
+            if not page.charge(*(name for name, _ in failed + named)):  # shown again above the full list
+                failed, named = [], []
             runner += (f'<details class="runner"><summary>{len(tests)} tests from the runner · {row["tests"][1]} FAIL · criteria '
                        f'{esc(row["ac"]) or "none"}' + (" · partial: the log's middle was cut" if partial else "") + "</summary>"
                        '<div class="table" tabindex="0" role="region" aria-label="Table: tests by section"><table><thead><tr>'
@@ -1031,7 +1053,7 @@ def build(page_path, evidence):
     for kind, phase, label, number in (("verify", "verify", "Verify report", 5), ("review", "review", "Review report", 3),
                                        ("validation", "validate", "Validation report", 2)):
         why = source_state(kind, phase)
-        if kind == "verify" and why and whys["verify"] and whys["verify"].startswith("no report"):
+        if kind == "verify" and why and why not in QUIET and whys["verify"] and whys["verify"].startswith("no report"):
             blockers.append(("#annex-verify", f"Verify: {state('missing', 'need')} {verify_missing}", 5))
         elif why and why not in QUIET:
             blockers.append((f"#annex-{kind}", f"{label}: {state('unavailable', 'need')} {esc(why[len('unavailable: '):])}", number))
@@ -1051,7 +1073,7 @@ def build(page_path, evidence):
     if ci_word not in ("PASS", "no PR yet", "CI phase off", "no CI"):
         blockers.append(("#footer", f"CI for the PR head: {state(ci_word, 'need')} {esc(ci_detail)}", None))
     if pr and head != pr["headRefOid"]:
-        blockers.append(("#footer", f"Local HEAD <code>{esc(head)}</code> differs from the PR head <code>{esc(pr['headRefOid'])}</code>", None))
+        blockers.append(("#footer", f"Local HEAD <code>{esc(head)}</code> differs from the PR head {page.commit(pr['headRefOid'])}", None))
     for kind, word in stamps.items():
         if word in ("stale", "missing"):
             blockers.append(("#sum-gates", f"The {kind} stamp: {state(word, 'need')}", None))
@@ -1128,16 +1150,16 @@ def build(page_path, evidence):
     for item in decide:
         if item is not merge_note:
             decisions.append(("#annex-decision-notes", note_html(item)))
-    def entry_html(entry):
+    def entry_html(entry, links=True):
         nits = nit_list(entry)
-        return (esc(nits[0]) + "".join(f'<span class="sub">{page.inline(item)}</span>' for item in nits[1]) if nits
-                else page.inline(entry))
+        return (esc(nits[0]) + "".join(f'<span class="sub">{page.inline(item, links)}</span>' for item in nits[1]) if nits
+                else page.inline(entry, links))
     open_entries = [entry for outcome, _, entry, _ in (review[2] if review else []) if outcome == "Open"]
     if len(open_entries) == 1:
         decisions.append(("#review-open-1", f"Open finding: {entry_html(open_entries[0])}"))
     elif open_entries:
         decisions.append(("#review-open-1", f'<details class="group"><summary>{len(open_entries)} review findings left Open</summary><ol>'
-                                            + "".join(f'<li><a href="#review-open-{n}">{entry_html(entry)}</a></li>'
+                                            + "".join(f'<li><a href="#review-open-{n}">{entry_html(entry, links=False)}</a></li>'
                                                       for n, entry in enumerate(open_entries, 1)) + "</ol></details>"))
     for step, info in guide.items():
         # M0 is the guide's setup (access, exports), not a check to choose
@@ -1273,8 +1295,8 @@ def build(page_path, evidence):
                 if re.match(r"[`*_]*unknown\b", body, re.I):
                     part = f'<p>{state("unconfirmed", "need")}</p>{part}'
             if key == "rollback":
-                part += (f'<p class="ids">PR #{pr["number"]} · merge commit <code>{esc(merged)}</code></p>' if merged else
-                         f'<p class="ids">PR #{pr["number"]} · {state("not merged", "dim")}</p>' if pr else
+                part += (f'<p class="ids">PR {pr_link} · merge commit {page.commit(merged)}</p>' if merged else
+                         f'<p class="ids">PR {pr_link} · {state("not merged", "dim")}</p>' if pr else
                          f'<p class="ids">{state("no PR yet", "dim")}</p>')
             s4 += f'<div class="ship" id="ship-{key}"><h4>{name}</h4>{part}</div>'
     s4_meta = f'{len(decisions)} decision{"s" * (len(decisions) != 1)} · {len(after)} step{"s" * (len(after) != 1)} after the merge'
@@ -1349,7 +1371,8 @@ def build(page_path, evidence):
         rounds = re.match(r"\d+", header_fields.get("re-check rounds") or "")
         # each Not run entry by its name only: its reason is in the review section, one click away
         skipped = [re.split(r":| — ", entry, maxsplit=1)[0].strip() for outcome, _, entry, _ in review[2]
-                   if outcome == "Not run" and not re.match(r"[*_`]*none\b", entry.strip(), re.I)] + \
+                   if outcome == "Not run" and not re.match(r"[*_`]*none\b", entry.strip(), re.I)
+                   and not re.search(r"\bswitched off by the user\b", entry, re.I)] + \
                   [f'{lens["model"]} {lens["lens"]}: {lens["findings"]}' for lens in failed_lenses]
         readers_off = [phase for phase in ("second-model", "claude-review", "codex-review") if phase in off]
         review_line = (f'{len(names)} lens{"es" * (len(names) != 1)}: {esc(", ".join(names)) or state("not recorded", "dim")}'
@@ -1368,10 +1391,15 @@ def build(page_path, evidence):
             if re.sub(r"[\s*_`]", "", t["ran"]).lower() == "no":
                 not_run_types.setdefault(test_level(t["type"]), t)
         folded = {level for level in levels if level in not_run_types and all(r["result"] == "NOT RUN" for r in rows_at[level])}
-        for level in levels:
-            at = rows_at[level]
-            if level in folded:
+        for level in [level for level in LEVELS + (OTHER_LEVEL, NO_LEVEL) if level in rows_at or level in not_run_types]:
+            if level in not_run_types:
+                t, at = not_run_types[level], rows_at.get(level, [])
+                by_level.append(f'<span class="lvl">{esc(t["type"])}</span> not run'
+                                + (f' ({len(at)} check{"s" * (len(at) != 1)})' if level in folded else "")
+                                + f': {page.inline(t["evidence"]) or state("no reason recorded", "need")}')
+            if level in folded or level not in rows_at:
                 continue
+            at = rows_at[level]
             fails, not_run = sum(r["result"] == "FAIL" for r in at), sum(r["result"] == "NOT RUN" for r in at)
             ran, ran_failed = sum(r["tests"][0] for r in at), sum(r["tests"][1] for r in at)
             by_level.append(f'<span class="lvl">{esc(level)}</span> {sum(r["result"] == "PASS" for r in at)}/{len(at)} PASS'
@@ -1379,12 +1407,7 @@ def build(page_path, evidence):
                             + (f", {state(f'{not_run} NOT RUN', 'need')}" if not_run else "")
                             + (f' ({ran} test{"s" * (ran != 1)} in the runner output' + (f", {ran_failed} FAIL" if ran_failed else "") + ")"
                                if ran else ""))
-        skipped_types = [f'<span class="lvl">{esc(t["type"])}</span> not run'
-                         + (f' ({len(rows_at[level])} check{"s" * (len(rows_at[level]) != 1)})' if level in folded else "")
-                         + f': {page.inline(t["evidence"]) or state("no reason recorded", "need")}'
-                         for t in test_types if re.sub(r"[\s*_`]", "", t["ran"]).lower() == "no"
-                         for level in [test_level(t["type"])]]
-        tests_line = "; ".join(by_level + skipped_types)
+        tests_line = "; ".join(by_level)
     else:
         tests_line = source_html("validation", "validate")
     verify_html = (state(verify_word, result_tone(verify_word)) if verify_word and verify_word != "phase off"
@@ -1412,7 +1435,7 @@ def build(page_path, evidence):
     # Header, footer
     pr_title = pr["title"] if pr else None
     title = pr_title or (spec_title.group(1) if spec_title else branch)
-    pr_text = (f'<a href="{esc(pr["url"])}"{REL}>#{pr["number"]}</a> {esc(pr.get("state") or "")} '
+    pr_text = (f'{pr_link} {esc(pr.get("state") or "")} '
                f'<a href="{esc(pr["url"])}"{REL}>{esc(pr["url"])}</a>' if github else
                f'#{pr["number"]} {esc(pr.get("state") or "")} <code>{esc(pr.get("url") or "")}</code>' if pr else
                state("unknown", "need") + " " + esc(pr_error) if pr_error else state("no PR yet", "dim"))

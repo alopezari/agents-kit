@@ -1285,6 +1285,7 @@ def merge_and_ship_reads_ship_md(base):
     assert owners and set(owners) <= {"you", "agent"} and "agent" in owners, owners
     rollback = re.search(r'id="ship-rollback".*?(?=id="ship-installed")', four, re.S)
     assert rollback and "#7" in text(rollback.group(0)) and merged in text(rollback.group(0)), "AC5: no PR and merge commit by the rollback"
+    assert f'href="https://github.com/o/shop/commit/{merged}"' in rollback.group(0), "AC7: the merge commit isn't linked"
     assert "unconfirmed" not in words and "not recorded" not in words.split("Deploy", 1)[1], words
     assert ship_path(repo) in words
 
@@ -1574,6 +1575,51 @@ def an_autolink_takes_linear_time(base):
     assert spent < 5, f"{spent:.1f} s of CPU for 800 KB of near-links"
 
 
+def references_link_only_what_the_pr_head_holds(base):
+    repo, evidence = full_branch(base)
+    head = git(repo, "rev-parse", "HEAD")
+    pr = {"number": 7, "url": "https://github.com/o/shop/pull/7", "title": "Cart", "headRefOid": head, "state": "OPEN"}
+    put(os.path.join(repo, "untracked.py"), "x\n")
+    put(os.path.join(evidence, "notes"), "<script>alert(1)</script>\n")
+    hostile = 'https://x.test/a"onmouseover="alert(15)'
+    write(repo, "decision-notes", NOTES.replace("A shopper sees", f"See {repo}/src/cart.py:2, untracked.py:1, {evidence}/notes "
+                                                                  f"and {hostile}. A shopper sees"))
+    _, markup = generate(repo, base, {"pr": pr})
+    assert re.search(r'<a href="https://github\.com/o/shop/blob/[0-9a-f]+/src/cart\.py#L2"[^>]*>' + re.escape(repo), markup), \
+        "an absolute repository path:line isn't linked to GitHub"
+    hrefs = [dict(attrs).get("href") or "" for tag, attrs in tags(markup) if tag == "a"]
+    assert not [h for h in hrefs if "untracked.py" in h or h.endswith("/notes")], "linked a file the PR head lacks, or an extensionless file"
+    assert not [name for _, attrs in tags(markup) for name, _ in attrs if name.startswith("on")], "a quote in a URL broke out of its attribute"
+
+
+def switching_verify_off_raises_no_verify_blocker(base):
+    repo, _ = full_branch(base)
+    os.remove(path_of(repo, "verify"))
+    out = sh(repo, "python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "verify")
+    assert out.returncode == 0, out
+    _, markup = generate(repo, base)
+    assert not [b for b in listed(markup, "blockers") if b.startswith("Verify")], listed(markup, "blockers")
+
+
+def the_summary_parsers_take_linear_time(base):
+    repo, _ = full_branch(base)
+    write(repo, "review", REVIEW + "Open:      (" + "nit " * 20_000 + "\n")
+    put(path_of(repo, "spec"), SPEC.replace("1. A coupon applies once.", "1. A" + " " * 80_000 + "coupon applies once."))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
+    generate(repo, base)
+    spent = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime - before
+    assert spent < 5, f"{spent:.1f} s of CPU for a long Nits entry and a long criterion"
+
+
+def open_findings_hold_no_link_inside_a_link(base):
+    repo, _ = full_branch(base)
+    head = git(repo, "rev-parse", "HEAD")
+    pr = {"number": 7, "url": "https://github.com/o/shop/pull/7", "title": "Cart", "headRefOid": head, "state": "OPEN"}
+    write(repo, "review", REVIEW + "Open:      a bug at src/cart.py:2 — decide\nOpen:      another at src/cart.py:1 — decide\n")
+    _, markup = generate(repo, base, {"pr": pr})
+    assert "/blob/" in markup and not re.search(r"<a [^>]*>(?:(?!</a>).)*<a ", markup, re.S), "a link nested in a link"
+
+
 # v2 AC8: the testing pyramid
 
 PYRAMID_ROWS = """# Validation
@@ -1641,6 +1687,10 @@ def a_level_not_run_shows_once(base):
     _, markup = generate(repo, base)
     line = summary_row(markup, "tests")
     assert line.count("a11y") == 1 and "a11y not run (1 check): no screen reader here" in line, line
+    skipped = "| e2e | no | no browser here |\n"
+    write(repo, "validation", report.replace("| unit | yes | [A1]", skipped * 2 + "| unit | yes | [A1]"))
+    line = summary_row(generate(repo, base)[1], "tests")
+    assert line.count("e2e not run") == 1 and line.index("e2e") < line.index("unit"), line
 
 
 def the_review_line_counts_lenses_and_rounds_apart(base):
@@ -1655,11 +1705,15 @@ def the_review_line_counts_lenses_and_rounds_apart(base):
     assert "recheck" not in line and "2 re-check rounds" in line, line
     assert "none" not in line and "every lens ran" not in line, line
     assert "cross-model: codex" in line and "claude-review off by you" in line, line
+    write(repo, "review", review.replace("Not run:   none (every lens ran)", "Not run:   cross-model, claude-review switched off by the user"))
+    line = summary_row(generate(repo, base)[1], "review")
+    assert "switched off" not in line and "claude-review off by you" in line, line
 
 
 def a_merge_item_in_the_notes_is_the_recommendation(base):
     repo, _ = full_branch(base)
-    for item in ("- Merge with CI green: the risk is low.", "- Merge: with CI green, the risk is low."):
+    for item in ("- Merge with CI green: the risk is low.", "- Merge: with CI green, the risk is low.",
+                 "- Merge if CI is green: the risk is low.", "- Merge — CI is green, the risk is low."):
         write(repo, "decision-notes", NOTES.replace("Decide if one FAIL", item + "\n- Decide if one FAIL"))
         _, markup = generate(repo, base)
         items = listed(markup, "decisions")
@@ -1729,7 +1783,9 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
              a_missing_verify_report_says_how_to_make_it, an_autolink_takes_linear_time, the_tests_follow_the_pyramid,
              a_level_without_checks_is_not_a_choice, the_coverage_shows_each_criterion_short, a_level_not_run_shows_once,
              the_review_line_counts_lenses_and_rounds_apart, a_merge_item_in_the_notes_is_the_recommendation,
-             several_nits_show_one_per_line):
+             several_nits_show_one_per_line, references_link_only_what_the_pr_head_holds,
+             switching_verify_off_raises_no_verify_blocker, the_summary_parsers_take_linear_time,
+             open_findings_hold_no_link_inside_a_link):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
         test(os.path.realpath(base))
