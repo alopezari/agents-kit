@@ -1594,6 +1594,20 @@ def references_link_only_what_the_pr_head_holds(base):
     assert not [name for _, attrs in tags(markup) for name, _ in attrs if name.startswith("on")], "a quote in a URL broke out of its attribute"
 
 
+def a_filename_git_holds_in_any_bytes_keeps_the_page(base):
+    repo, _ = full_branch(base)
+    put(os.path.join(base, "blob.txt"), "x\n")
+    blob = git(repo, "hash-object", "-w", os.path.join(base, "blob.txt"))
+    out = subprocess.run(["git", "update-index", "--add", "--cacheinfo", b"100644," + blob.encode() + b",bad\xffname"], cwd=repo,
+                         capture_output=True)  # macOS can't hold the file itself; git's tree can
+    assert out.returncode == 0, out
+    git(repo, "commit", "-qm", "a non-UTF-8 name")
+    head = git(repo, "rev-parse", "HEAD")
+    pr = {"number": 7, "url": "https://github.com/o/shop/pull/7", "title": "Cart", "headRefOid": head, "state": "OPEN"}
+    _, markup = generate(repo, base, {"pr": pr})
+    assert f"/blob/{head}/src/cart.py#L" in markup, "a path:line stopped linking next to a non-UTF-8 name"
+
+
 def switching_verify_off_raises_no_verify_blocker(base):
     repo, _ = full_branch(base)
     os.remove(path_of(repo, "verify"))
@@ -1710,6 +1724,9 @@ def the_review_line_counts_lenses_and_rounds_apart(base):
     write(repo, "review", review.replace("Not run:   none (every lens ran)", "Not run:   cross-model, claude-review switched off by the user"))
     line = summary_row(generate(repo, base)[1], "review")
     assert "switched off" not in line and "claude-review off by you" in line, line
+    write(repo, "review", review + LENSES + "| correctness | claude | not run: claude-review switched off by the user | | |\n")
+    line = summary_row(generate(repo, base)[1], "review")
+    assert "switched off" not in line and "claude-review off by you" in line, line
 
 
 def a_merge_item_in_the_notes_is_the_recommendation(base):
@@ -1787,7 +1804,7 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
              the_review_line_counts_lenses_and_rounds_apart, a_merge_item_in_the_notes_is_the_recommendation,
              several_nits_show_one_per_line, references_link_only_what_the_pr_head_holds,
              switching_verify_off_raises_no_verify_blocker, the_summary_parsers_take_linear_time,
-             open_findings_hold_no_link_inside_a_link):
+             open_findings_hold_no_link_inside_a_link, a_filename_git_holds_in_any_bytes_keeps_the_page):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
         test(os.path.realpath(base))

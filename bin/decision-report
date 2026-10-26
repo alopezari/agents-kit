@@ -349,8 +349,8 @@ class Page:
         if self.tracked is None:
             try:
                 out = subprocess.run(["git", "ls-tree", "-r", "-z", "--name-only", self.blob_sha], cwd=self.repo_root,
-                                     capture_output=True, text=True, timeout=10)
-                self.tracked = set(out.stdout.split("\0")) if out.returncode == 0 else set()
+                                     capture_output=True, timeout=10)
+                self.tracked = {os.fsdecode(name) for name in out.stdout.split(b"\0")} if out.returncode == 0 else set()
             except (OSError, subprocess.TimeoutExpired):
                 self.tracked = set()
         return self.tracked
@@ -1007,7 +1007,8 @@ def build(page_path, evidence):
                 by_section.setdefault(section, []).append((name, result))
             failed = [(name, result) for _, name, result in tests if result == "FAIL"]
             named = [(name, result) for _, name, result in tests if name in named_in]
-            if not page.charge(*(name for name, _ in failed + named)):  # shown again above the full list
+            # shown again above the full list: the failed and named tests, and each section's name twice more
+            if not page.charge(*(name for name, _ in failed + named), *(2 * section for section in by_section)):
                 failed, named = [], []
             runner += (f'<details class="runner"><summary>{len(tests)} tests from the runner · {row["tests"][1]} FAIL · criteria '
                        f'{esc(row["ac"]) or "none"}' + (" · partial: the log's middle was cut" if partial else "") + "</summary>"
@@ -1373,7 +1374,8 @@ def build(page_path, evidence):
         skipped = [re.split(r":| — ", entry, maxsplit=1)[0].strip() for outcome, _, entry, _ in review[2]
                    if outcome == "Not run" and not re.match(r"[*_`]*none\b", entry.strip(), re.I)
                    and not re.search(r"\bswitched off by the user\b", entry, re.I)] + \
-                  [f'{lens["model"]} {lens["lens"]}: {lens["findings"]}' for lens in failed_lenses]
+                  [f'{lens["model"]} {lens["lens"]}: {lens["findings"]}' for lens in failed_lenses
+                   if not re.search(r"\bswitched off by the user\b", lens["findings"], re.I)]
         readers_off = [phase for phase in ("second-model", "claude-review", "codex-review") if phase in off]
         review_line = (f'{len(names)} lens{"es" * (len(names) != 1)}: {esc(", ".join(names)) or state("not recorded", "dim")}'
                        + (f' · {rounds.group(0)} re-check round{"s" * (rounds.group(0) != "1")}' if rounds else "")
