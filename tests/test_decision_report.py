@@ -414,7 +414,7 @@ def sections_come_in_order_with_the_notes(base):
                          (3, "A shopper sees one discount line"), (6, "Decide if one FAIL on the phone check")):
         part = section(markup, number)
         assert line in text(part), (number, text(part)[:300])
-        assert "written by the agent" in text(part), number
+        assert "Written by the agent" in text(part), number
         assert path_of(repo, "decision-notes") in text(part), number
     assert re.search(r"<pre[^>]*>(?:<code[^>]*>)?[^<]*└── apply_coupon", section(markup, 2)), "the notes' figure isn't preformatted"
     one = section(markup, 1)

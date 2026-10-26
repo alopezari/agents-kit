@@ -221,7 +221,7 @@ class Page:
             return esc(source)
         _, real = self.resolve(target)
         if real is None or not os.path.exists(real):
-            return esc(source)
+            return f"{esc(label)} <code>{esc(target)}</code>" if label else esc(source)
         return f'<a href="{esc(file_href(real))}">{esc(label or os.path.basename(real))}</a>'
 
     def markdown(self, text, prefix, top=3, figure=False):
@@ -239,6 +239,13 @@ class Page:
                                                 for _, deep, body in items) + f"</{tag}>")
                 items.clear()
 
+        fenced, depths = False, []
+        for line in lines:  # a shell comment inside a fence is not a heading
+            if re.match(r"\s*(```|~~~)", line):
+                fenced = not fenced
+            elif not fenced and re.match(r"#{1,6}\s", line):
+                depths.append(len(line) - len(line.lstrip("#")))
+        shallowest = min(depths, default=1)
         while i < len(lines):
             line = lines[i]
             fence = re.match(r"\s*(```+|~~~+)", line)
@@ -254,7 +261,7 @@ class Page:
                 continue
             if heading:
                 flush()
-                level = min(6, top + len(heading.group(1)) - 1)
+                level = min(6, top + len(heading.group(1)) - shallowest)
                 step = re.match(review_stamp.GUIDE_STEP, heading.group(2))
                 anchor = self.new_id(f"{prefix}-{step.group(1) if step else heading.group(2).lower()}")
                 out.append(f'<h{level} id="{anchor}">{self.inline(heading.group(2))}</h{level}>')
@@ -351,7 +358,7 @@ def check_rows(text):
             return None if at is None else (cells[at] if at < len(cells) else "")
         ac = cell("AC")
         rows.append({"id": cells[0].strip("*_ "), "result": result, "check": cell("Check") or "", "ac": ac or "",
-                     "acs": [int(n) for n in re.findall(r"\bAC(\d+)\b", ac or "")], "case": cell("Case", True) or "",
+                     "acs": [int(n) for n in re.findall(r"\bAC(\d+)\b", ac or "")], "ac_column": ac is not None, "case": cell("Case", True) or "",
                      "expected": cell("Expected", True), "observed": cell("Evidence") or "", "line": index + 1,
                      "group": group})
     return rows
@@ -480,12 +487,12 @@ def unavailable(why):
 
 def notes_block(page, notes, number, path, fallback=None):
     if notes is not None and notes.get(number):
-        return (f'<div class="notes"><p class="by">written by the agent · <code>{esc(path)}</code></p>'
+        return (f'<div class="notes"><p class="by">Written by the agent</p>'
                 f"{page.markdown(notes[number], f'notes-{number}', top=4, figure=True)}</div>")
     block = not_recorded("decision-notes", path)
     if fallback:
-        label, text, source = fallback
-        block += (f'<div class="fallback"><p class="by">{esc(label)} · <code>{esc(source)}</code></p>'
+        label, text, _source = fallback
+        block += (f'<div class="fallback"><p class="by">{esc(label[0].upper() + label[1:])}</p>'
                   f"<blockquote>{page.inline(text)}</blockquote></div>")
     return block
 
@@ -657,14 +664,17 @@ def build(page_path, evidence):
     if spec_text is None:
         s1 += not_recorded("spec", spec_path) if not spec_read_why or spec_read_why.startswith("no report") else unavailable(spec_read_why)
     else:
-        s1 += f'<blockquote class="goal">Goal: {page.inline(goal.group(1)) if goal else state("not recorded", "dim")}</blockquote>'
+        if notes is not None and notes.get(1) or not goal:  # without notes, the fallback above already quotes the goal
+            s1 += f'<blockquote class="goal">Goal: {page.inline(goal.group(1)) if goal else state("not recorded", "dim")}</blockquote>'
         criteria_rows = []
         for item in criteria or []:
             number = re.match(r"(\d+)\.\s*(.*)", item)
             n = int(number.group(1))
             covering = [row for row in rows if n in row["acs"]]
             if not validation_ok:
-                checks = state(source_state("validation", "validate") or "not recorded", "dim")
+                checks = state((source_state("validation", "validate") or "not recorded").split(":")[0], "dim")  # the reason is in 04
+            elif not any(row["ac_column"] for row in rows):
+                checks = state("not recorded", "dim") + " the validation tables have no AC column"
             elif covering:
                 checks = " ".join(f'<a href="#{row["anchor"]}"><code>{esc(row["id"])}</code></a> '
                                   f'{state(row["result"], result_tone(row["result"]))}' for row in covering)
@@ -723,7 +733,7 @@ def build(page_path, evidence):
     if validation_ok:
         filters = [("all", "All", len(rows))] + [(r.lower().replace(" ", ""), r, counts[r]) for r in RESULTS]
         s4 += ('<h3>Checks</h3><div class="filter" role="group" aria-label="Show checks by result">'
-               + "".join(f'<input type="radio" name="result" id="f-{key}"{" checked" if key == "all" else ""}>'
+               + "".join(f'<input type="radio" name="result" id="f-{key}"{" checked" if key == "all" else " disabled" if not n else ""}>'
                          f'<label for="f-{key}">{esc(label)} <span class="n">{n}</span></label>' for key, label, n in filters)
                + f'<ol class="checks">{"".join(check_items)}</ol></div>')
         sections = re.split(r"^(?=## )", texts["validation"], flags=re.M)
@@ -811,8 +821,8 @@ def build(page_path, evidence):
     strip = [("PR", f'#{pr["number"]}' if pr else ("unknown" if pr_error else "no PR yet"), "ok" if pr else "need" if pr_error else "dim"),
              ("CI", ci_word, ci_tone), ("verify", (source_state("verify", "verify") or verify_word).split(":")[0],
                                          "ok" if verify_word == "PASS" else "dim" if "verify" in off else "need"),
-             ("review", stamps["review"], "ok" if stamps["review"] == "current" else "dim" if stamps["review"] == "phase off" else "need"),
-             ("validate", stamps["validate"], "ok" if stamps["validate"] == "current" else "dim" if stamps["validate"] == "phase off" else "need")]
+             ("review stamp", stamps["review"], "ok" if stamps["review"] == "current" else "dim" if stamps["review"] == "phase off" else "need"),
+             ("validate stamp", stamps["validate"], "ok" if stamps["validate"] == "current" else "dim" if stamps["validate"] == "phase off" else "need")]
     decide_link = (f'<a class="todo need" href="#s06">{len(items)} item{"s" * (len(items) != 1)} to decide</a>' if items
                    else '<a class="todo ok" href="#s06">nothing to decide</a>')
     sections = {1: s1, 2: s2, 3: s3, 4: s4, 5: s5, 6: s6}
@@ -858,32 +868,34 @@ a:hover{text-decoration-color:var(--lime)}
 h1{color:var(--text);font-size:clamp(1.5rem,1.1rem + 1.6vw,2.25rem);line-height:1.2;margin:0 0 .5rem;max-width:40ch;
 overflow-wrap:anywhere}
 h2,h3,h4,h5,h6{color:var(--text);line-height:1.3}
-h2{font-size:1.5rem;margin:0 0 1.25rem;display:flex;gap:.75rem;align-items:baseline}
-h3{font-size:1.125rem;margin:2rem 0 .75rem}
-h4{font-size:1rem;margin:1.5rem 0 .5rem}
+h2{font-family:var(--mono);font-size:1.75rem;font-weight:700;letter-spacing:-.01em;margin:0 0 1.5rem;display:flex;
+gap:.875rem;align-items:baseline}
+h3{font-size:1.25rem;margin:2.25rem 0 .75rem}
+h4{font-size:1.0625rem;margin:1.75rem 0 .5rem}
 h5,h6{font-size:.9375rem;margin:1.25rem 0 .5rem}
-.num{font-family:var(--mono);color:var(--dim);font-size:1rem;font-weight:400}
+.num{color:var(--lime);font-size:1.75rem;font-weight:400}
 .purpose{color:var(--muted);margin:0 0 1rem}
 .strip{font-family:var(--mono);font-size:.875rem;display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;margin:0;color:var(--muted)}
 .todo{font-weight:600}
 .todo.need{color:var(--human)}.todo.ok{color:var(--lime)}
 section{padding:2.5rem 0;border-bottom:1px solid var(--line);scroll-margin-top:1rem}
-p,li,blockquote,dd{max-width:70ch}
+p,li,blockquote,dd{max-width:70ch;overflow-wrap:anywhere}
 p{margin:0 0 .75rem}
 code,pre,.st,.cid,.ac,.case,.n,.k,.src,.ref,.size,.fields dt,.ids dt{font-family:var(--mono)}
 code{font-size:.875em;color:var(--text);overflow-wrap:anywhere}
-.st{font-size:.8125rem;letter-spacing:.02em;white-space:nowrap}
+.st{font-size:.8125rem;letter-spacing:.02em;overflow-wrap:anywhere}
 .st.ok{color:var(--lime)}.st.need{color:var(--human)}.st.dim{color:var(--dim)}
 .k{color:var(--muted);font-size:.875rem}
 .n{color:var(--dim);font-size:.875rem;font-weight:400}
 .meta,.src,.by,.size{color:var(--dim);font-size:.8125rem}
 .src{margin-top:1.5rem;overflow-wrap:anywhere}
-.by{margin:0 0 .5rem}
-.notes{border-left:2px solid var(--line);padding:0 0 0 1rem;margin:0 0 1.5rem}
-.notes p,.notes li{color:var(--text)}
+.by{margin:0 0 .75rem;font-family:var(--mono)}
+.notes{background:var(--surface);border:1px solid var(--line);padding:1.25rem 1.5rem .5rem;margin:0 0 2rem}
+.notes p,.notes li{color:var(--text);font-size:1.0625rem}
 .fallback{margin:0 0 1.5rem}
-blockquote{margin:0 0 1rem;padding:0 0 0 1rem;border-left:2px solid var(--line);color:var(--text)}
+blockquote{margin:0 0 1rem;padding:0 0 0 1rem;border-left:1px solid var(--dim);color:var(--text)}
 figure{margin:0 0 1rem}
+figure pre{white-space:pre;overflow-wrap:normal;overflow-x:auto;background:var(--bg)}
 pre{background:var(--surface);border:1px solid var(--line);padding:.75rem 1rem;margin:0 0 1rem;font-size:.8125rem;
 line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text);user-select:text}
 pre code{font-size:inherit;color:inherit}
@@ -892,6 +904,7 @@ table{border-collapse:collapse;font-size:.875rem;min-width:100%}
 th,td{border:1px solid var(--line);padding:.375rem .625rem;text-align:left;vertical-align:top}
 thead th{color:var(--muted);font-weight:600;background:var(--surface)}
 tbody th{color:var(--text);font-family:var(--mono);font-weight:400}
+.criteria td:nth-child(2){min-width:18rem;width:70%}
 .dirs td{font-family:var(--mono)}
 ul,ol{padding-left:1.25rem;margin:0 0 1rem}
 li{margin:.25rem 0}
@@ -904,23 +917,27 @@ li.sub{margin-left:1.25rem}
 .decide li::marker{font-family:var(--mono);color:var(--human)}
 .decide a{text-decoration-color:var(--human)}
 .filter>input{position:absolute;opacity:0;width:1px;height:1px}
-.filter>label{display:inline-block;font-family:var(--mono);font-size:.8125rem;border:1px solid var(--line);
-padding:.375rem .75rem;margin:0 .25rem .75rem 0;cursor:pointer;color:var(--muted)}
+.filter>label{display:inline-flex;align-items:center;min-height:2.75rem;font-family:var(--mono);font-size:.8125rem;
+border:1px solid var(--line);padding:.375rem 1rem;margin:0 .375rem .75rem 0;cursor:pointer;color:var(--muted)}
+.filter>label:hover{border-color:var(--dim);color:var(--text)}
+.filter>input:disabled+label{color:var(--dim);border-style:dashed;cursor:default}
 .filter>input:checked+label{border-color:var(--text);color:var(--text)}
 .filter>input:focus-visible+label{outline:2px solid var(--lime);outline-offset:2px}
 .filter:has(#f-pass:checked) .check:not(.r-pass),.filter:has(#f-fail:checked) .check:not(.r-fail),
 .filter:has(#f-notrun:checked) .check:not(.r-notrun){display:none}
-.checks{list-style:none;padding:0;border-top:1px solid var(--line)}
-.check{border-bottom:1px solid var(--line);margin:0;max-width:none}
-.check summary{cursor:pointer;padding:.625rem .25rem;display:flex;flex-wrap:wrap;gap:.25rem .75rem;align-items:baseline}
+.checks{list-style:none;padding:.5rem 0 0;border-top:1px solid var(--line)}
+.check{border-bottom:1px solid var(--line);margin:0;max-width:none;padding:.25rem 0 .5rem}
+.check summary{cursor:pointer;padding:.75rem .5rem;display:flex;flex-wrap:wrap;gap:.25rem .75rem;align-items:baseline}
 .check summary::marker{color:var(--dim)}
-.check details>*:not(summary){margin-left:1.25rem}
+.check summary:hover{background:var(--surface)}
+.check details>*:not(summary){margin-left:1.75rem;margin-right:.5rem}
+.check details[open]{padding-bottom:1rem}
 .cid{color:var(--text)}
 .ac,.case{color:var(--dim);font-size:.8125rem}
 .ctext{color:var(--text);flex:1 1 20rem;min-width:0;overflow-wrap:anywhere}
 .check.r-fail .cid{color:var(--human)}
 dl.row,dl.fields,dl.ids{display:grid;grid-template-columns:minmax(6rem,max-content) minmax(0,1fr);gap:.25rem 1rem;margin:0 0 1rem}
-dl dt{color:var(--dim);font-size:.8125rem}
+dl dt{color:var(--muted);font-size:.875rem}
 dl dd{margin:0;overflow-wrap:anywhere}
 .file{margin:0 0 1rem}
 .file.text .name{margin:0 0 .25rem}
@@ -928,10 +945,10 @@ dl dd{margin:0;overflow-wrap:anywhere}
 figcaption{font-size:.8125rem;margin-top:.25rem}
 .cut{font-size:.8125rem;color:var(--muted)}
 .outcome ul{list-style:none;padding:0}
-.entry{border-left:2px solid var(--line);padding:.25rem 0 .25rem .75rem;margin:.5rem 0}
+.entry{border-left:1px solid var(--line);padding:.375rem 0 .375rem 1rem;margin:.5rem 0}
 .entry .lab{font-family:var(--mono);font-size:.8125rem;color:var(--dim);margin-right:.5rem}
 .entry .part{display:block;color:var(--muted);font-size:.875rem}
-#review-open .entry{border-left-color:var(--human)}
+#review-open .entry .lab{color:var(--human)}
 .ref{display:block;color:var(--dim);font-size:.75rem}
 details.report>summary,.dirs+details>summary{cursor:pointer;color:var(--muted);margin:.5rem 0}
 .check:target,.entry:target,.fresh li:target,[id^="guide-"]:target{outline:2px solid var(--human);outline-offset:4px;
@@ -940,7 +957,7 @@ scroll-margin-top:1.5rem}
 footer{padding-top:2rem;padding-bottom:3rem}
 .ids dt{color:var(--dim)}
 @media (max-width:600px){dl.row,dl.fields,dl.ids{grid-template-columns:minmax(0,1fr)}dl dd{margin-bottom:.5rem}
-h2{font-size:1.25rem}}
+h2,.num{font-size:1.5rem}h3{font-size:1.125rem}.notes{padding:1rem 1rem .25rem}}
 """
 
 
