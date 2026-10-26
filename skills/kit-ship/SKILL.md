@@ -14,7 +14,7 @@ gh pr view <number or head branch> --json number,url,state,mergedAt,mergeCommit,
 Otherwise run it without an argument, from the checkout that has the branch.
 
 - **No pull request** (`no pull requests found`): part 1, the whole of it, but only on a branch of its own. On the default branch or a detached HEAD there is nothing to open: ask which PR the user means.
-- **Open:** part 1 without opening a second one, from a checkout of its `headRefName`: the main checkout once the user has switched to it, otherwise add a worktree (`git worktree add <path> <headRefName>`), since everything below reads the branch checked out where it runs. First record the PR's `baseRefName` as the base (step 4's last paragraph), so the evidence is measured against what GitHub shows. Then check the evidence (step 1), push the commits GitHub doesn't have yet (step 2), refresh the description when it no longer matches the change (step 3, then `gh pr edit <n> --body-file <body file>` as a command of its own), wait for CI (step 5), free the branch (step 6) and report.
+- **Open:** part 1 without opening a second one, from a checkout of its `headRefName`: the main checkout once the user has switched to it, otherwise add a worktree (`git worktree add <path> <headRefName>`), since everything below reads the branch checked out where it runs. First record the PR's `baseRefName` as the base (step 4's last paragraph), so the evidence is measured against what GitHub shows. Then check the evidence (step 1), push the commits GitHub doesn't have yet (step 2), refresh the description when it no longer matches the change (step 3, then `gh pr edit <n> --body-file <body file>` as a command of its own), write the decision page (step 5's last part), wait for CI (step 5), write it again, free the branch (step 6) and report.
 - **Merged:** part 2, only when the user asked for it ("ship", "install", a deploy guide, a production check). When they only say it's merged or deployed, report its status and list what part 2 would do as optional, without running any of it or asking.
 - **Closed without a merge:** say so and stop.
 
@@ -70,6 +70,8 @@ If the guard or GitHub refuses it, the branch is pushed with no pull request: sa
 
 Then record the PR's target as the branch's base, `git config branch.<head branch>.agentsBase <base>`, even when `review_stamp.py base` found it on its own: a parent found by detection is lost once its pushed tip moves past this branch, and later fixes (kit-follow-pr) measure against this base.
 
+Then write the decision page (below), before the CI wait, so the user has it even when the wait is skipped or cut short.
+
 ### 5. Wait for CI
 
 Unless `~/.agents/bin/phase switches` lists `ci`, wait for the checks of the commit you pushed, in the foreground:
@@ -81,6 +83,18 @@ Unless `~/.agents/bin/phase switches` lists `ci`, wait for the checks of the com
 It waits up to 30 minutes and prints each check, with the failing lines of a failed job's log. When your harness caps a command's run time (Claude Code's is 10 minutes), pass a `--timeout` under the cap and run it again while it exits 2, up to 30 minutes in all. Report its result as it is, each exit code by name: 0 passed, 1 failed (name the failing checks), 2 still running after the wait, 3 no checks appeared, 4 GitHub couldn't be read, 5 the repo runs no CI. Only 0 is "CI passed".
 
 On a failure, don't fix it here: report it, and offer the `kit-follow-pr` skill, which works out whether the change caused it and fixes it. Never call the pull request ready to merge: review comments may still come, and that's follow-pr's call. When the user's message asked you to merge it, merge once it is ready to merge as follow-pr defines it: CI passed (or the repo runs no CI, or the user switched `ci` off), no review request pending and every comment answered (`gh pr merge <n>`, which the guard allows for that message). Then run part 2 if they asked for an install or ship too.
+
+When the wait ends, whatever its exit, write the decision page again, before step 6 frees the branch: the page shows CI for the PR's head as it stands.
+
+**The decision page.** One local HTML page that answers what the task must do, what the change does, what it changes for users, what was tested, how to test it by hand and what the user must decide, from the spec, the reports and the evidence. Write it after opening the PR or updating an open one, and again when the CI wait ends; never publish it (evidence can hold sensitive data).
+
+First write the decision notes, at the path `~/.agents/bin/reports path decision-notes` prints, and refresh them whenever the change or its reports changed since they were written. They are Markdown with these four headings, in ASD-STE100 style (short sentences, one statement each, active voice): `## What the task must do`, `## What the change does`, `## What it changes for users`, `## What you must decide`. Write them from the spec, the diff (`git diff <base>`) and the reports; each claim about the code names its `file:line`, and a fenced block can hold a small tree or flow. The page shows them labelled as written by the agent, and adds no prose of its own. Then:
+
+```bash
+~/.agents/bin/reports html
+```
+
+It prints the page's absolute path. When it fails, it removes the page and prints the error: report that error, link no page, and carry on, since the page never blocks the pull request.
 
 ### 6. Free the branch
 
@@ -99,7 +113,10 @@ PR:        <url> (opened | already open: <N> commits pushed, description <refres
 CI:        passed | failed: <checks> (kit-follow-pr can take it) | still running | no checks | GitHub unreadable | no CI | not waited: ci switched off
 Branch:    free (<worktree removed | detached>; `cd <main checkout> && git switch <branch>`) | in the main checkout
 Evidence:  verify <PASS | FAIL | checked nothing: <tests run instead>> · review <stamp ok> · validate <stamp ok | not needed: tests/docs only>
+Decision:  <the page's absolute path> | not written: <the error reports html printed>
 ```
+
+The final report's **Review and testing** section links the decision page first, by its absolute path, or says it wasn't written and gives the error.
 
 ## Part 2. After the merge
 

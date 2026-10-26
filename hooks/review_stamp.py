@@ -260,11 +260,13 @@ def fingerprint_for(kind):
 
 
 # Files skills/kit-spec/path.sh and bin/reports name <kind>-<repo>-<branch key>.md, next to the spec.
-REPORT_KINDS = ("spec", "verify", "review", "validation", "checks-guide", "staging-guide", "follow-pr", "pr-body")
+REPORT_KINDS = ("spec", "verify", "review", "validation", "checks-guide", "staging-guide", "follow-pr", "pr-body",
+                "decision-notes")
 
 
 def branch_file_names(repo, key):
-    return [f"{kind}-{repo}-{key}.md" for kind in REPORT_KINDS] + [f"browser-ab-spec-{repo}-{key}.json", f"evidence-{repo}-{key}"]
+    return [f"{kind}-{repo}-{key}.md" for kind in REPORT_KINDS] + [f"browser-ab-spec-{repo}-{key}.json", f"evidence-{repo}-{key}",
+                                                                  f"decision-{repo}-{key}.html"]
 
 
 def renamed_from(branch):

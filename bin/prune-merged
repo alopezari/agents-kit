@@ -9,7 +9,7 @@ and removing it loses nothing: no changes, no ignored files other than regenerat
 submodules, not locked, not where this runs, and no running process has its working directory inside it (another
 session may still work there). A worktree it can't inspect is kept. Then each local branch merged into
 origin/<default> and checked out nowhere is deleted, if it hasn't moved since, with the phases the user switched for it
-(`phase off … branch`) and the kit's files for it: its stamps, spec, reports and evidence, in .git/agents and
+(`phase off … branch`) and the kit's files for it: its stamps, spec, reports, evidence and decision page, in .git/agents and
 $TMPDIR/agents-specs, also under the earlier names it was renamed from. A new branch of that name starts with every phase
 on and no reports. A branch whose checks guide has a step after the merge that hasn't passed, or can't be read, is kept
 with its files, as is one whose rename history can't be read. Prints one line per linked worktree and merged branch: what it removed, or why it kept it, exiting 1
