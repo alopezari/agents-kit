@@ -3,7 +3,9 @@
 the evidence and the pull request's CI. A summary comes first: the task, the solution, the review, the tests and the
 gates, then your decisions, the blockers the agent owns and the warnings. Five folded sections follow (coverage, tests,
 review, merge and ship, and the reports as annexes), each open only while it holds a failure or a blocker, then a footer
-of identifiers.
+of identifiers. The tests follow the testing pyramid (e2e, integration, unit, then the other levels), and a drawn
+pyramid filters them by layer. References link: the PR, its commits and file:line to GitHub, https URLs, and local
+reports and evidence by file://.
 
   decision-report <page> <evidence dir>    run by `reports html`, which passes both paths; prints the page's path
 
@@ -60,15 +62,21 @@ ACTIVE = (".html", ".htm", ".xhtml", ".svg", ".xml")  # opened from a link, thes
 FILE_TOKEN = re.compile(r"(?<![\w./~-])[\w.-]+\.(?:txt|log|out|md|json|csv|png|jpe?g|gif|webp|webm|mp4|mov|sh|py|html)(?![\w.-])")
 PATH_TOKEN = re.compile(r"(?<![\w(\]])(?:~|/)[^\s|()\[\]`'\"<>]*[^\s|()\[\]`'\"<>.,;:]")
 # The label excludes `[`: a run of unmatched brackets would otherwise be scanned again from each one.
+# In plain report text: an https URL, a repository path with a line, or an absolute path; each linked only when it checks out.
+AUTOLINK = re.compile(r"(https://[^\s<>\"'`|()\[\]]*[^\s<>\"'`|()\[\].,;:!?])"
+                      r"|(?<![\w/.~-])([\w.-]+(?:/[\w.-]+)*):(\d+)\b"
+                      r"|(?<![\w/~.-])(/[^\s|()\[\]`'\"<>]*[^\s|()\[\]`'\"<>.,;:])")
+GITHUB_PR = re.compile(r"(https://github\.com/[\w.-]+/[\w.-]+)/pull/\d+")
 INLINE = re.compile(r"`([^`\n]+)`|\*\*([^*\n]+)\*\*|!?\[([^\[\]\n]*)\]\(((?:[^()\n]|\([^()\n]*\))*)\)")
 TABLE_RULE = re.compile(r"[ \t]*(?:\|[ \t]*)?:?-{3,}")
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 NOTE_SECTIONS = {"what the task must do": "task", "what the change does": "change", "what it changes for users": "users",
                  "what you must decide": "decide"}
 SECTIONS = {1: "Coverage", 2: "Tests", 3: "Review", 4: "Merge and ship", 5: "Reports"}
-LEVELS = ("unit", "integration", "e2e", "mutation", "property", "regex", "design", "a11y", "query budget", "migration", "manual")
+LEVELS = ("e2e", "integration", "unit", "mutation", "property", "regex", "design", "a11y", "query budget", "migration", "manual")
 # triage's and the quality log's names for a test type, as a Test types row or a Level cell may give them
 LEVEL_ALIASES = {"accessibility": "a11y", "visual": "design", "query-budget": "query budget"}
+PYRAMID = LEVELS[:3]  # the drawn filter's layers, top to bottom
 OTHER_LEVEL = "other"  # any other name: one column, so a report can't widen the matrix without bound
 NO_LEVEL = "level not recorded"
 LENS_COLUMNS = ("Lens", "What it checks", "Model", "Findings", "Confirmed", "Outcomes")
@@ -86,6 +94,9 @@ MAKERS = {"spec": "the kit-spec skill writes it", "decision-notes": "kit-ship wr
 
 def esc(text):
     return html.escape(CONTROL.sub("�", text), quote=True)
+
+
+REL = ' rel="noreferrer noopener"'
 
 
 def file_href(path):
@@ -140,8 +151,12 @@ class Page:
         self.shown = {}  # realpath of a file already embedded: the id of the block that shows it
         self.lines = {}  # realpath of a text file embedded: its lines past bin/evidence's header, the cut middle left out
         self.cut = set()
-        self.past = set()  # text files linked, not read, past the total: their steps and results are not on the page  # realpath of a text file whose middle was cut, so its lines are partial
+        self.past = set()  # text files linked, not read, past the total: their steps and results are not on the page
         self.ids = set()
+        self.repo_url = self.blob_sha = None  # set once the PR is read: where `path:line` and commits link on GitHub
+        self.repo_root = os.path.realpath(os.getcwd())
+        self.local_roots = [self.root]  # where a bare absolute path may link from: the evidence and the reports
+        self.exists = {}
         scripts = os.path.join(evidence, "checks")
         inside = os.path.isdir(scripts) and os.path.realpath(scripts) == os.path.join(self.root, "checks")
         self.scripts = sorted(os.listdir(scripts)) if inside else []  # the kept check scripts, listed once
@@ -276,22 +291,80 @@ class Page:
         out, at = [], 0
         text = text.replace("\\|", "|")
         for found in INLINE.finditer(text):
-            out.append(esc(text[at:found.start()]))
+            out.append(self.plain(text[at:found.start()], links))
             at = found.end()
             code, bold, label, target = found.groups()
             if code is not None:
-                out.append(f"<code>{esc(code)}</code>")
+                whole = AUTOLINK.fullmatch(code.strip()) if links else None
+                href = self.autolink_href(whole) if whole else None
+                out.append(f'<a href="{esc(href)}"{REL}><code>{esc(code)}</code></a>' if href else f"<code>{esc(code)}</code>")
             elif bold is not None:
                 out.append(f"<strong>{self.inline(bold, links)}</strong>")
             elif links:
                 out.append(self.link(found.group(0), label, target.strip()))
             else:
                 out.append(esc(label or target))
-        out.append(esc(text[at:]))
+        out.append(self.plain(text[at:], links))
         return "".join(out)
 
+    def plain(self, text, links=True):
+        """Escaped text, with its URLs, `path:line` refs and local paths linked where they check out."""
+        if not links:
+            return esc(text)
+        out, at = [], 0
+        for found in AUTOLINK.finditer(text):
+            href = self.autolink_href(found)
+            if href:
+                out.append(esc(text[at:found.start()]) + f'<a href="{esc(href)}"{REL}>{esc(found.group(0))}</a>')
+                at = found.end()
+        return "".join(out) + esc(text[at:])
+
+    def autolink_href(self, found):
+        url, path, line, local = found.groups()
+        if url:
+            return url
+        if path:
+            return self.blob_href(path, line)
+        return self.local_href(re.sub(r":\d+$", "", local))
+
+    def blob_href(self, path, line=None):
+        """A repository file on GitHub at the PR's head, or None without a PR or for a path that isn't a file here."""
+        if not self.repo_url:
+            return None
+        real = os.path.realpath(os.path.join(self.repo_root, path))
+        if not real.startswith(self.repo_root + os.sep) or not self.is_file(real):
+            return None
+        return f"{self.repo_url}/blob/{self.blob_sha}/{urllib.parse.quote(os.path.relpath(real, self.repo_root))}" + \
+            (f"#L{line}" if line else "")
+
+    def local_href(self, path):
+        """A file under the evidence or reports directories, never an active one, by its file: URL; else None."""
+        real = os.path.realpath(os.path.expanduser(path))
+        if real.lower().endswith(ACTIVE) or not any(real.startswith(root + os.sep) for root in self.local_roots):
+            return None
+        return file_href(real) if self.is_file(real) else None
+
+    def is_file(self, real):
+        if real not in self.exists:
+            self.exists[real] = os.path.isfile(real)
+        return self.exists[real]
+
+    def commit(self, sha, pushed=True):
+        """A commit id, linked to GitHub when the PR names its repository and the commit is pushed."""
+        code = f"<code>{esc(sha)}</code>"
+        return f'<a href="{esc(self.repo_url)}/commit/{esc(sha)}"{REL}>{code}</a>' if self.repo_url and pushed else code
+
+    def path(self, path, label=None):
+        """A local report or file named by its path: linked when it exists, the path as text otherwise."""
+        href = self.local_href(path)
+        code = f"<code>{esc(label or path)}</code>"
+        return f'<a href="{esc(href)}">{code}</a>' if href else code
+
     def link(self, source, label, target):
-        """A link to a file of the evidence directory; anything else (another scheme, a path outside) stays its text."""
+        """A link to a file of the evidence directory or an https URL; anything else (another scheme, a path outside) stays its text."""
+        url = AUTOLINK.fullmatch(target)
+        if url and url.group(1):
+            return f'{esc(label)} <a href="{esc(target)}"{REL}>{esc(target)}</a>' if label else self.plain(target)
         if re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target) and not target.startswith("file://"):
             return esc(source)
         _, real = self.resolve(target)
@@ -415,7 +488,7 @@ def notes_by_section(text):
     return {n: "\n".join(lines).strip() for n, lines in found.items()}
 
 
-def split_outside_parentheses(text):
+def split_outside_parentheses(text, separator=","):
     """The comma-separated parts of text, a comma inside parentheses not splitting: "a (added: b, c), d" is two parts."""
     parts, depth, start = [], 0, 0
     for i, char in enumerate(text):
@@ -423,10 +496,26 @@ def split_outside_parentheses(text):
             depth += 1
         elif char == ")":
             depth = max(depth - 1, 0)
-        elif char == "," and not depth:
+        elif char == separator and not depth:
             parts.append(text[start:i])
             start = i + 1
     return parts + [text[start:]]
+
+
+def nit_list(entry):
+    """(the lead, its items) for a review entry holding several Nits, "(re-check Nits kept) a; b; c"; else None."""
+    found = re.match(r"\s*\(([^()]*\bnits?\b[^()]*)\)\s*(.+)", entry, re.I | re.S)
+    items = [item.strip() for item in split_outside_parentheses(found.group(2), ";") if item.strip()] if found else []
+    return (found.group(1), items) if len(items) > 1 else None
+
+
+def first_sentence(text):
+    """(the first sentence, the rest): the sentence ends at a stop followed by a space and a capital, outside code spans."""
+    for found in re.finditer(r"`[^`\n]*`|[.!?](?=\s+[A-Z(`*])|\s+— verify:", text):
+        if not found.group(0).startswith("`"):
+            end = found.start() + (found.group(0) in ".!?")
+            return text[:end], text[end:].strip()
+    return text, ""
 
 
 def first_paragraph(text):
@@ -588,6 +677,8 @@ def ci_state(pr, pr_error, off):
     return "PASS", "ok", f"on {head}: {names}"
 
 
+# "Merge: …" or "Merge with …", "Merge now …": not "Merge order: …", which is a decision of its own
+MERGE_NOTE = r"\W*merge\b(?:[*_ ]*:|\s+(?:with|without|now|as is|after|once|before|when|it|this)\b)"
 QUIET = ("phase off", "not needed")  # states that ask nothing of the reader
 
 
@@ -766,6 +857,10 @@ def build(page_path, evidence):
     base = review_stamp.merge_base()
     base_ref = review_stamp.branch_base()[0]
     pr, pr_error = pull_request()
+    github = GITHUB_PR.fullmatch(pr.get("url") or "") if pr else None
+    if github:
+        page.repo_url, page.blob_sha = github.group(1), pr["headRefOid"]
+    page.local_roots.append(os.path.realpath(os.path.dirname(paths["review"])))
     ci_word, ci_tone, ci_detail = ci_state(pr, pr_error, off)
     validate_needed = any(not review_stamp.NOT_BEHAVIOR.search(p) for p in review_stamp.changed_paths()[1])
     stamps = {"review": stamp_state("review", "review", off),
@@ -852,6 +947,16 @@ def build(page_path, evidence):
     missing_files = {}
     check_items = {}
     scripts = os.path.join(page.root, "checks")
+
+    def test_rows(at):
+        return "".join(f'<tr><td><code>{esc(name)}</code></td><td>{state(result, "need" if result == "FAIL" else "ok")}</td>'
+                       f'<td>{", ".join(f"AC{n}" for n in named_in.get(name, []))}</td></tr>' for name, result in at)
+
+    def test_table(label, at):
+        return (f'<div class="table" tabindex="0" role="region" aria-label="Table: {esc(label)}">'
+                '<table><thead><tr><th scope="col">Test</th><th scope="col">Result</th><th scope="col">Named in</th></tr></thead>'
+                f"<tbody>{test_rows(at)}</tbody></table></div>")
+
     outputs = {}  # realpath of a text output: its (steps, result lines, runner tests), and the row that lists its tests
     for row in rows:
         blocks, steps, said, tests, partial, listed_in, unread = [], [], [], [], False, [], False
@@ -880,14 +985,20 @@ def build(page_path, evidence):
             by_section = {}
             for section, name, result in tests:
                 by_section.setdefault(section, []).append((name, result))
+            failed = [(name, result) for _, name, result in tests if result == "FAIL"]
+            named = [(name, result) for _, name, result in tests if name in named_in]
             runner += (f'<details class="runner"><summary>{len(tests)} tests from the runner · {row["tests"][1]} FAIL · criteria '
-                       f'{esc(row["ac"]) or "none"}' + (" · partial: the log's middle was cut" if partial else "") + "</summary>" + "".join(
-                           f'<h4>{esc(section)}</h4><div class="table" tabindex="0" role="region" aria-label="Table: tests in {esc(section)}">'
-                           '<table><thead><tr><th scope="col">Test</th><th scope="col">Result</th><th scope="col">Named in</th></tr></thead><tbody>'
-                           + "".join(f'<tr><td><code>{esc(name)}</code></td><td>{state(result, "need" if result == "FAIL" else "ok")}</td>'
-                                     f'<td>{", ".join(f"AC{n}" for n in named_in.get(name, []))}</td></tr>'
-                                     for name, result in at)
-                           + "</tbody></table></div>" for section, at in by_section.items()) + "</details>")
+                       f'{esc(row["ac"]) or "none"}' + (" · partial: the log's middle was cut" if partial else "") + "</summary>"
+                       '<div class="table" tabindex="0" role="region" aria-label="Table: tests by section"><table><thead><tr>'
+                       '<th scope="col">Section</th><th scope="col">Tests</th><th scope="col">FAIL</th></tr></thead><tbody>'
+                       + "".join(f'<tr><td><code>{esc(section)}</code></td><td>{len(at)}</td><td>'
+                                 + (state(str(n), "need") if (n := sum(r == "FAIL" for _, r in at)) else "0") + "</td></tr>"
+                                 for section, at in by_section.items()) + "</tbody></table></div>"
+                       + (f"<h4>Failures</h4>{test_table('failed tests', failed)}" if failed else "")
+                       + (f"<h4>Named in the spec</h4>{test_table('tests the spec names', named)}" if named else "")
+                       + f'<details class="earlier"><summary>All {len(tests)} tests, by section</summary>'
+                       + "".join(f"<h4>{esc(section)}</h4>{test_table(f'tests in {section}', at)}" for section, at in by_section.items())
+                       + "</details></details>")
         expected = row["expected"]
         check_items[row["anchor"]] = (
             f'<li class="check r-{row["result"].lower().replace(" ", "")}" id="{row["anchor"]}"><details><summary>'
@@ -902,19 +1013,27 @@ def build(page_path, evidence):
             f'<dt>Actual</dt><dd>{page.inline(row["observed"]) or state("not recorded", "dim")}'
             + "".join(f'<span class="said">{esc(line)}</span>' for line in said) + runner
             + f'</dd><dt>Evidence</dt><dd>{"".join(blocks) or state("no evidence named", "dim")}</dd>'
-            f'<dt>Source</dt><dd><code>{esc(paths["validation"])}:{row["line"]}</code></dd></dl></details></li>')
+            f'<dt>Source</dt><dd>{page.path(paths["validation"], paths["validation"] + ":" + str(row["line"]))}</dd></dl></details></li>')
 
     counts = {result: sum(row["result"] == result for row in rows) for result in RESULTS}
     review_counts = {o: sum(e[0] == o for e in review[2]) for o in REVIEW_OUTCOMES} if review else None
     guide = review_stamp.guide_steps(texts["checks-guide"]) if "validate" not in off and texts["checks-guide"] is not None else {}
     environment = os.path.join(evidence, review_stamp.ENVIRONMENT_RECORD)
 
+    suite = os.path.join(evidence, "suite.txt")
+    verify_missing = ("no report yet: the stop hook writes it when verify runs, or run "
+                      "<code>python3 ~/.agents/hooks/stop_checks.py verify</code>, which also writes the verify stamp"
+                      + (f". Until then the unit evidence is the full suite run, {page.path(suite, 'suite.txt')}"
+                         if os.path.isfile(suite) else ""))
+
     # Blockers the agent owns: (link, text, the section that holds it or None)
     blockers = []
     for kind, phase, label, number in (("verify", "verify", "Verify report", 5), ("review", "review", "Review report", 3),
                                        ("validation", "validate", "Validation report", 2)):
         why = source_state(kind, phase)
-        if why and why not in QUIET:
+        if kind == "verify" and why and whys["verify"] and whys["verify"].startswith("no report"):
+            blockers.append(("#annex-verify", f"Verify: {state('missing', 'need')} {verify_missing}", 5))
+        elif why and why not in QUIET:
             blockers.append((f"#annex-{kind}", f"{label}: {state('unavailable', 'need')} {esc(why[len('unavailable: '):])}", number))
     for kind, label in (("checks-guide", "Checks guide"), ("follow-pr", "Follow-pr report"),
                         ("decision-notes", "Decision notes"), ("pr-body", "PR description")):
@@ -974,13 +1093,18 @@ def build(page_path, evidence):
             uncovered.append(n)
             blockers.append((f"#ac-{n}", f"AC{n} {page.inline(number.group(2))}: {state('no check', 'need')}", 1))
         else:
-            cells = [" ".join(f'<a href="#{row["anchor"]}"><code>{esc(row["id"])}</code></a> {state(row["result"], result_tone(row["result"]))}'
-                              for row in covering if row["level"] == level) or "—" for level in levels]
+            cells = ["".join(f'<a class="chip" href="#{row["anchor"]}"><code>{esc(row["id"])}</code> '
+                             f'{state(row["result"], result_tone(row["result"]))}</a>'
+                             for row in covering if row["level"] == level) or '<span class="none">—</span>' for level in levels]
         # Explicit roles: the phone layout makes the cells blocks, which drops their table semantics.
         checks = (f'<td role="cell" colspan="{max(len(columns), 1)}" data-label="Checks">{state("no check", "need")}</td>' if not cells else
                   "".join(f'<td role="cell" data-label="{esc(column)}">{cell}</td>' for column, cell in zip(columns, cells)))
+        first, rest = first_sentence(number.group(2))
+        fold = "how it's checked" if rest.startswith("— verify:") else "the rest"
+        criterion = page.inline(first) + (f'<details class="crit"><summary>{esc(fold)}</summary><p>{page.inline(rest)}</p></details>'
+                                          if rest else "")
         criteria_rows.append(f'<tr role="row" id="ac-{n}"><th role="rowheader" scope="row">{n}</th>'
-                             f'<td role="cell">{page.inline(number.group(2))}</td>{checks}</tr>')
+                             f'<td role="cell">{criterion}</td>{checks}</tr>')
     if spec_text is None:
         s1 = not_recorded("spec", spec_path) if not spec_read_why or spec_read_why.startswith("no report") else unavailable(spec_read_why)
     elif criteria_rows:
@@ -996,7 +1120,7 @@ def build(page_path, evidence):
     # Your decisions: (link, text)
     decisions = []
     decide = note_items(notes["decide"]) if notes and notes.get("decide") else []
-    merge_note = next((item for item in decide if re.match(r"\W*merge\b[*_ ]*:", item, re.I)), None)
+    merge_note = next((item for item in decide if re.match(MERGE_NOTE, item, re.I)), None)
 
     def note_html(item):
         first, *rest = item.split("\n")
@@ -1004,12 +1128,16 @@ def build(page_path, evidence):
     for item in decide:
         if item is not merge_note:
             decisions.append(("#annex-decision-notes", note_html(item)))
+    def entry_html(entry):
+        nits = nit_list(entry)
+        return (esc(nits[0]) + "".join(f'<span class="sub">{page.inline(item)}</span>' for item in nits[1]) if nits
+                else page.inline(entry))
     open_entries = [entry for outcome, _, entry, _ in (review[2] if review else []) if outcome == "Open"]
     if len(open_entries) == 1:
-        decisions.append(("#review-open-1", f"Open finding: {page.inline(open_entries[0])}"))
+        decisions.append(("#review-open-1", f"Open finding: {entry_html(open_entries[0])}"))
     elif open_entries:
         decisions.append(("#review-open-1", f'<details class="group"><summary>{len(open_entries)} review findings left Open</summary><ol>'
-                                            + "".join(f'<li><a href="#review-open-{n}">{page.inline(entry)}</a></li>'
+                                            + "".join(f'<li><a href="#review-open-{n}">{entry_html(entry)}</a></li>'
                                                       for n, entry in enumerate(open_entries, 1)) + "</ol></details>"))
     for step, info in guide.items():
         # M0 is the guide's setup (access, exports), not a check to choose
@@ -1037,10 +1165,18 @@ def build(page_path, evidence):
             f'<li id="{anchor}">{state(word, "need")} {esc(message)}</li>' for anchor, word, message in fresh) + "</ul>"
     if validation_ok:
         filters = [("all", "All", len(rows))] + [(r.lower().replace(" ", ""), r, counts[r]) for r in RESULTS]
-        s2 += ('<div class="filter"><div class="radios" role="group" aria-label="Show checks by result">'
+        tiers = "".join(
+            f'<input type="radio" name="level" id="f-lvl-{level}"{"" if level in rows_at else " disabled"}>'
+            f'<label for="f-lvl-{level}" class="tier t{n}"><span>{level}</span> <span class="n">{len(rows_at.get(level, []))}</span></label>'
+            for n, level in enumerate(PYRAMID, 1))
+        s2 += ('<div class="filter"><div class="filters">'
+               '<div><p class="flabel" id="by-level">Test pyramid</p><div class="pyramid" role="group" aria-labelledby="by-level">'
+               + tiers + f'<input type="radio" name="level" id="f-lvl-all" checked><label for="f-lvl-all" class="tier-all">'
+               f'All levels <span class="n">{len(rows)}</span></label></div></div>'
+               '<div><p class="flabel" id="by-result">Result</p><div class="radios" role="group" aria-labelledby="by-result">'
                + "".join(f'<input type="radio" name="result" id="f-{key}"{" checked" if key == "all" else " disabled" if not n else ""}>'
-                         f'<label for="f-{key}">{esc(label)} <span class="n">{n}</span></label>' for key, label, n in filters) + "</div>"
-               + "".join(f'<div class="level"><h3 id="{page.new_id(level_id(level))}">{esc(level)} <span class="n">'
+                         f'<label for="f-{key}">{esc(label)} <span class="n">{n}</span></label>' for key, label, n in filters) + "</div></div></div>"
+               + "".join(f'<div class="level lvl-{re.sub(r"[^a-z0-9]+", "-", level)}"><h3 id="{page.new_id(level_id(level))}">{esc(level)} <span class="n">'
                          f'{len(rows_at[level])}</span></h3><ol class="checks" role="list">'
                          + "".join(check_items[row["anchor"]] for row in rows_at[level]) + "</ol></div>"
                          for level in levels) + "</div>")
@@ -1088,9 +1224,13 @@ def build(page_path, evidence):
             page.ids.add(anchor)
             listed = "".join(
                 f'<li class="entry" id="{anchor}-{n}"><details><summary><span class="lab">{esc(label)}</span> '
-                f'{page.inline(entry.split(" — ")[0], links=False)}</summary>'
-                + "".join(f'<span class="part">{page.inline(part)}</span>' for part in entry.split(" — ")[1:])
-                + (f' <code class="ref">{esc(paths["review"])}:{line}</code>' if line else "") + "</details></li>"
+                + (f'{esc(nits[0])} <span class="n">{len(nits[1])}</span></summary>'
+                   + "".join(f'<span class="part">{page.inline(item)}</span>' for item in nits[1])
+                   if (nits := nit_list(entry)) else
+                   f'{page.inline(entry.split(" — ")[0], links=False)}</summary>'
+                   + "".join(f'<span class="part">{page.inline(part)}</span>' for part in entry.split(" — ")[1:]))
+                + (f' <span class="ref">{page.path(paths["review"], paths["review"] + ":" + str(line))}</span>' if line else "")
+                + "</details></li>"
                 for n, (_, label, entry, line) in enumerate(entries, 1))
             s3 += (f'<div class="outcome" id="{anchor}"><h4>{esc(outcome)} <span class="n">{len(entries)}</span></h4>'
                    + (f'<ul role="list">{listed}</ul>' if entries else f'<p>{state("none", "dim")}</p>') + "</div>")
@@ -1156,7 +1296,9 @@ def build(page_path, evidence):
         else:
             body = page.markdown(text, "guide" if kind == "checks-guide" else f"annex-{kind}", top=3)
         s5 += (f'<details class="annex" id="annex-{kind}"><summary>{label} <code>{esc(path)}</code></summary>'
-               f'<div class="annex-body">{body}</div></details>')
+               f'<div class="annex-body">' + (f'<p class="meta"><a href="{esc(href)}">open the file</a></p>'
+                  if text is not None and phase_of.get(kind) not in off and (href := page.local_href(path)) else "")
+               + f'{body}</div></details>')
     groups = changed_files(base)
     dir_rows = "".join(f'<tr><th scope="row">{esc(top)}</th><td>{len(files)}</td>'
                        f'<td>+{sum(int(a) for _, a, _ in files if a.isdigit())}</td>'
@@ -1203,20 +1345,33 @@ def build(page_path, evidence):
     if review:
         names = (list(dict.fromkeys(lens["lens"] for lens in lenses if lens not in failed_lenses)) if lenses is not None
                  else header_lenses)
+        names = [name for name in names if not name.lower().endswith("-recheck")]  # a re-check round, not a lens
+        rounds = re.match(r"\d+", header_fields.get("re-check rounds") or "")
         # each Not run entry by its name only: its reason is in the review section, one click away
-        skipped = [re.split(r":| — ", entry, maxsplit=1)[0].strip() for outcome, _, entry, _ in review[2] if outcome == "Not run"] + \
+        skipped = [re.split(r":| — ", entry, maxsplit=1)[0].strip() for outcome, _, entry, _ in review[2]
+                   if outcome == "Not run" and not re.match(r"[*_`]*none\b", entry.strip(), re.I)] + \
                   [f'{lens["model"]} {lens["lens"]}: {lens["findings"]}' for lens in failed_lenses]
+        readers_off = [phase for phase in ("second-model", "claude-review", "codex-review") if phase in off]
         review_line = (f'{len(names)} lens{"es" * (len(names) != 1)}: {esc(", ".join(names)) or state("not recorded", "dim")}'
-                       f' · cross-model: {esc(model) if model else state("not recorded", "dim")}'
-                       f' · Fixed {review_counts["Fixed"]} · Open '
+                       + (f' · {rounds.group(0)} re-check round{"s" * (rounds.group(0) != "1")}' if rounds else "")
+                       + f' · cross-model: {esc(model) if model else state("not recorded", "dim")}'
+                       + "".join(f"; {esc(phase)} off by you" for phase in readers_off)
+                       + f' · Fixed {review_counts["Fixed"]} · Open '
                        + (state(str(review_counts["Open"]), "need") if review_counts["Open"] else "0")
                        + (f' · {state("not run:", "need")} {esc("; ".join(skipped))} <a class="go" href="#s03">why</a>' if skipped else ""))
     else:
         review_line = source_html("review", "review")
     if validation_ok:
         by_level = []
+        not_run_types = {}  # a level the Test types table marks not run: its row, said once with the checks it holds
+        for t in test_types:
+            if re.sub(r"[\s*_`]", "", t["ran"]).lower() == "no":
+                not_run_types.setdefault(test_level(t["type"]), t)
+        folded = {level for level in levels if level in not_run_types and all(r["result"] == "NOT RUN" for r in rows_at[level])}
         for level in levels:
             at = rows_at[level]
+            if level in folded:
+                continue
             fails, not_run = sum(r["result"] == "FAIL" for r in at), sum(r["result"] == "NOT RUN" for r in at)
             ran, ran_failed = sum(r["tests"][0] for r in at), sum(r["tests"][1] for r in at)
             by_level.append(f'<span class="lvl">{esc(level)}</span> {sum(r["result"] == "PASS" for r in at)}/{len(at)} PASS'
@@ -1224,8 +1379,11 @@ def build(page_path, evidence):
                             + (f", {state(f'{not_run} NOT RUN', 'need')}" if not_run else "")
                             + (f' ({ran} test{"s" * (ran != 1)} in the runner output' + (f", {ran_failed} FAIL" if ran_failed else "") + ")"
                                if ran else ""))
-        skipped_types = [f'<span class="lvl">{esc(t["type"])}</span> not run: {page.inline(t["evidence"]) or state("no reason recorded", "need")}'
-                         for t in test_types if re.sub(r"[\s*_`]", "", t["ran"]).lower() == "no"]
+        skipped_types = [f'<span class="lvl">{esc(t["type"])}</span> not run'
+                         + (f' ({len(rows_at[level])} check{"s" * (len(rows_at[level]) != 1)})' if level in folded else "")
+                         + f': {page.inline(t["evidence"]) or state("no reason recorded", "need")}'
+                         for t in test_types if re.sub(r"[\s*_`]", "", t["ran"]).lower() == "no"
+                         for level in [test_level(t["type"])]]
         tests_line = "; ".join(by_level + skipped_types)
     else:
         tests_line = source_html("validation", "validate")
@@ -1254,11 +1412,13 @@ def build(page_path, evidence):
     # Header, footer
     pr_title = pr["title"] if pr else None
     title = pr_title or (spec_title.group(1) if spec_title else branch)
-    pr_text = (f'#{pr["number"]} {esc(pr.get("state") or "")} <code>{esc(pr.get("url") or "")}</code>' if pr else
+    pr_text = (f'<a href="{esc(pr["url"])}"{REL}>#{pr["number"]}</a> {esc(pr.get("state") or "")} '
+               f'<a href="{esc(pr["url"])}"{REL}>{esc(pr["url"])}</a>' if github else
+               f'#{pr["number"]} {esc(pr.get("state") or "")} <code>{esc(pr.get("url") or "")}</code>' if pr else
                state("unknown", "need") + " " + esc(pr_error) if pr_error else state("no PR yet", "dim"))
     pr_head = review_stamp.git("rev-parse", "--verify", "--quiet", f"{pr['headRefOid']}^{{tree}}") if pr else ""
-    covers = (f'commit <code>{esc(pr["headRefOid"])}</code>, tree <code>{esc(pr_head)}</code>' if pr and pr_head else
-              f'commit <code>{esc(pr["headRefOid"])}</code>, tree {state("unavailable", "dim")} not in this repository'
+    covers = (f'commit {page.commit(pr["headRefOid"])}, tree <code>{esc(pr_head)}</code>' if pr and pr_head else
+              f'commit {page.commit(pr["headRefOid"])}, tree {state("unavailable", "dim")} not in this repository'
               if pr else state("no PR yet", "dim"))
     # CI, verify and the stamps are the summary's Gates row: the strip holds only what the row doesn't
     strip = [("PR", f'#{pr["number"]}' if pr else ("unknown" if pr_error else "no PR yet"), "ok" if pr else "need" if pr_error else "dim")]
@@ -1271,17 +1431,26 @@ def build(page_path, evidence):
         f'<details class="sec"{" open" if n in opened else ""} id="s0{n}"><summary><h2 id="h0{n}"><span class="num">0{n}</span> '
         f'{SECTIONS[n]}</h2><span class="meta">{esc(metas[n])}</span></summary><div class="sec-body">{sections[n]}</div></details>'
         for n in sorted(sections))
+    # the CI detail names the PR head; a commit is linked only once GitHub has it: the PR's head, or one a remote branch holds
+    ci_html = esc(ci_detail).replace(esc(pr["headRefOid"]), page.commit(pr["headRefOid"])) if pr else esc(ci_detail)
+    pushed = bool(pr) and (head == pr["headRefOid"] or bool(review_stamp.git("branch", "-r", "--contains", head)))
+    head_html = page.commit(head, pushed) if re.fullmatch(r"[0-9a-f]{40,64}", head) else f"<code>{esc(head)}</code>"
     phases = f'{state("unavailable", "need")} {esc(phases_error)}' if phases_error else esc(phase_switches.describe(off))
     footer = ('<footer id="footer"><dl class="ids">'
               f'<dt>PR</dt><dd>{pr_text}</dd>'
               f'<dt>Commit and tree</dt><dd>{covers}</dd>'
-              f'<dt>CI</dt><dd>{state(ci_word, ci_tone)} {esc(ci_detail)}</dd>'
-              f'<dt>Verify</dt><dd>{verify_html} {esc(verify_line or "")}</dd>'
+              f'<dt>CI</dt><dd>{state(ci_word, ci_tone)} {ci_html}</dd>'
+              '<dt>Verify</dt><dd>'
+              + (f'{state("missing", "need")} {verify_missing}'
+                 if whys["verify"] and whys["verify"].startswith("no report") and "verify" not in off
+                 else f'{verify_html} {esc(verify_line or "")}' + (f" · {page.path(paths['verify'])}" if texts["verify"] is not None else ""))
+              + '</dd>'
               f'<dt>Phases off</dt><dd>{phases}</dd>'
-              f'<dt>HEAD read</dt><dd>commit <code>{esc(head)}</code>, working tree <code>{esc(tree)}</code>, branch '
+              f'<dt>HEAD read</dt><dd>commit {head_html}, working tree <code>{esc(tree)}</code>, branch '
               f'<code>{esc(branch)}</code></dd>'
               f'<dt>Generated</dt><dd>{esc(now)}</dd>'
-              f'<dt>Page</dt><dd>local file, not published · <code>{esc(page_path)}</code></dd></dl></footer>')
+              f'<dt>Page</dt><dd>local file, not published · <a href="{esc(file_href(page_path))}"><code>{esc(page_path)}</code></a></dd>'
+              '</dl></footer>')
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta http-equiv="Content-Security-Policy" content="{esc(CSP)}">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">'
@@ -1398,7 +1567,38 @@ video{max-width:100%;height:auto;border:1px solid var(--line);display:block;back
 .annex>summary code{color:var(--dim)}
 .annex-body{padding:.25rem 0 1.25rem}
 .items a.go,.sum a.go{font-family:var(--mono);font-size:.875rem;color:var(--human);text-decoration-color:var(--human);white-space:nowrap}
-.radios>input{position:absolute;opacity:0;width:1px;height:1px}
+.filters{display:flex;flex-wrap:wrap;gap:1rem 2.5rem;align-items:flex-end}
+.flabel{font-family:var(--mono);font-size:.75rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin:0 0 .5rem}
+.filters>div{min-width:0;max-width:100%}
+.pyramid{display:grid;width:22rem;max-width:100%;gap:3px;margin-bottom:.75rem}
+.pyramid>input,.radios>input{position:absolute;opacity:0;width:1px;height:1px}
+.tier{position:relative;isolation:isolate;display:flex;justify-content:center;align-items:center;gap:.5rem;min-height:2.75rem;
+font-family:var(--mono);font-size:.8125rem;color:var(--text);cursor:pointer}
+.tier::before{content:"";position:absolute;inset:0;z-index:-1;background:var(--line);transition:background .15s}
+.t1::before{clip-path:polygon(38% 0,62% 0,72% 100%,28% 100%)}
+.t2::before{clip-path:polygon(28% 0,72% 0,82% 100%,18% 100%)}
+.t3::before{clip-path:polygon(18% 0,82% 0,92% 100%,8% 100%)}
+.tier:hover::before{background:#3A3F3B}
+.pyramid>input:checked+.tier{color:var(--bg);font-weight:700}
+.pyramid>input:checked+.tier::before{background:var(--lime)}
+.pyramid>input:checked+.tier .n{color:var(--bg)}
+.pyramid>input:disabled+.tier{color:var(--dim);cursor:default}
+.pyramid>input:disabled+.tier::before{background:var(--surface)}
+.pyramid>input:focus-visible+.tier>span:first-child{outline:2px solid var(--lime);outline-offset:4px}
+@media (prefers-reduced-motion:reduce){.tier::before{transition:none}}
+.tier-all{justify-self:center;display:inline-flex;align-items:center;gap:.5rem;min-height:2.75rem;padding:0 1rem;
+font-family:var(--mono);font-size:.8125rem;color:var(--muted);cursor:pointer;border:1px solid var(--line)}
+.tier-all:hover{border-color:var(--dim);color:var(--text)}
+.pyramid>input:checked+.tier-all{border-color:var(--text);color:var(--text);font-weight:700}
+.pyramid>input:focus-visible+.tier-all{outline:2px solid var(--lime);outline-offset:2px}
+.filter:has(#f-lvl-e2e:checked) .level:not(.lvl-e2e):not(:has(.check:target)),
+.filter:has(#f-lvl-integration:checked) .level:not(.lvl-integration):not(:has(.check:target)),
+.filter:has(#f-lvl-unit:checked) .level:not(.lvl-unit):not(:has(.check:target)){display:none}
+.chip{display:inline-flex;align-items:baseline;gap:.375rem;border:1px solid var(--line);padding:.25rem .5rem;margin:0 .25rem .25rem 0;
+font-family:var(--mono);font-size:.75rem;white-space:nowrap;text-decoration:none}
+.chip:hover{border-color:var(--lime)}
+.none{color:var(--dim)}
+.crit>summary{cursor:pointer;color:var(--dim);font-size:.8125rem;padding:.25rem 0}
 .radios>label{display:inline-flex;align-items:center;min-height:2.75rem;font-family:var(--mono);font-size:.8125rem;
 border:1px solid var(--line);padding:.375rem 1rem;margin:0 .375rem .75rem 0;cursor:pointer;color:var(--muted)}
 .radios>label:hover{border-color:var(--dim);color:var(--text)}

@@ -264,7 +264,7 @@ changelog release <version>   move CHANGELOG.md's Unreleased lines and every cha
 ci-wait [--sha SHA] [--timeout SECS] [--once] [--no-log]
 ```
 
-**`bin/decision-report`**: Write the branch's decision page: one local HTML page, built from the spec, the agent's decision notes, the reports, the evidence and the pull request's CI. A summary comes first: the task, the solution, the review, the tests and the gates, then your decisions, the blockers the agent owns and the warnings. Five folded sections follow (coverage, tests, review, merge and ship, and the reports as annexes), each open only while it holds a failure or a blocker, then a footer of identifiers.
+**`bin/decision-report`**: Write the branch's decision page: one local HTML page, built from the spec, the agent's decision notes, the reports, the evidence and the pull request's CI. A summary comes first: the task, the solution, the review, the tests and the gates, then your decisions, the blockers the agent owns and the warnings. Five folded sections follow (coverage, tests, review, merge and ship, and the reports as annexes), each open only while it holds a failure or a blocker, then a footer of identifiers. The tests follow the testing pyramid (e2e, integration, unit, then the other levels), and a drawn pyramid filters them by layer. References link: the PR, its commits and file:line to GitHub, https URLs, and local reports and evidence by file://.
 
 ```
 decision-report <page> <evidence dir>    run by `reports html`, which passes both paths; prints the page's path

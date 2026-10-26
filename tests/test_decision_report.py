@@ -373,8 +373,10 @@ def writes_the_page_with_its_csp_and_prints_its_path(base):
     assert [m["content"] for m in metas if m["http-equiv"] == "Content-Security-Policy"] == [CSP], metas
     for tag, attrs in tags(markup):
         for name, value in attrs:
-            assert not (name in ("href", "src", "action", "poster", "srcset") and re.match(r"\s*(https?:)?//", value or "")), \
-                (tag, name, value)
+            remote = re.match(r"\s*(?!file:)([a-z]+:)?//", value or "", re.I)
+            # a link the reader clicks may leave the page, and only to https; nothing loads from elsewhere
+            assert not (name in ("src", "action", "poster", "srcset") and remote), (tag, name, value)
+            assert not (name == "href" and remote and not (tag == "a" and value.startswith("https://"))), (tag, name, value)
     assert not re.search(r"url\(|@import", markup), "a stylesheet reaches out"
     assert git(repo, "rev-parse", "HEAD") in footer_value(markup, "HEAD read")
     assert re.search(r"\d{4}-\d\d-\d\d \d\d:\d\d", footer_value(markup, "Generated")), footer(markup)
@@ -863,7 +865,10 @@ def hostile_text_renders_inert(base):
         assert tag not in ("script", "iframe", "object", "embed", "base", "form"), tag
         for name, value in attrs:
             assert not name.startswith("on"), (tag, name, value)
-            assert not (value or "").strip().lower().startswith(("javascript:", "http:", "https:")), (tag, name, value)
+            assert not (value or "").strip().lower().startswith(("javascript:", "http:", "data:text")), (tag, name, value)
+            if (value or "").strip().lower().startswith("https:"):
+                assert tag == "a" and name == "href" and "alert" not in value and "evil" not in value, (tag, name, value)
+    assert "/commit/" not in markup and "/blob/" not in markup, "a PR URL that isn't GitHub's gave the page a repository"
     words = text(markup)
     assert "[x](javascript:alert(6))" in words and "[y](http://evil.test/z)" in words, "an unsafe link wasn't kept as text"
     assert "[x](javascript:alert(7))" in words
@@ -1069,18 +1074,18 @@ def levels_come_from_the_level_column(base):
     _, markup = generate(repo, base)
     one = section(markup, 1)
     head = re.search(r"<thead>(.*?)</thead>", one, re.S)
-    assert head and text(head.group(1)) == "AC Criterion unit e2e", head and text(head.group(1))
+    assert head and text(head.group(1)) == "AC Criterion e2e unit", head and text(head.group(1))
     rows = {n: body for n, body in re.findall(r'<tr[^>]*id="ac-(\d+)">(.*?)</tr>', one, re.S)}
     cells = lambda n: [text(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", rows[n], re.S)]
-    assert cells("1")[1:] == ["A1 PASS", "A2 FAIL"], cells("1")
-    assert cells("2")[1:] == ["—", "A2 FAIL"], cells("2")
+    assert cells("1")[1:] == ["A2 FAIL", "A1 PASS"], cells("1")
+    assert cells("2")[1:] == ["A2 FAIL", "—"], cells("2")
     assert 'href="#check-A1"' in rows["1"] and 'href="#check-A2"' in rows["1"], rows["1"]
     assert "no check" in text(rows["3"]), rows["3"]
     assert any("AC3" in b and "no check" in b for b in listed(markup, "blockers")), listed(markup, "blockers")
     two = section(markup, 2)
     groups = re.findall(r'<h3 id="level-([^"]+)">', two)
-    assert groups == ["unit", "e2e"], groups
-    assert two.index('id="level-unit"') < two.index('id="check-A1"') < two.index('id="level-e2e"') < two.index('id="check-A2"')
+    assert groups == ["e2e", "unit"], groups
+    assert two.index('id="level-e2e"') < two.index('id="check-A2"') < two.index('id="level-unit"') < two.index('id="check-A1"')
 
 
 def levels_fall_back_to_test_types(base):
@@ -1179,11 +1184,20 @@ def a_suite_output_lists_its_tests(base):
     assert runner, "AC3: no test-runner list"
     summary_line = text(re.search(r"<summary>(.*?)</summary>", runner.group(1), re.S).group(1))
     assert "3 tests" in summary_line and "1 FAIL" in summary_line and "AC1" in summary_line, summary_line
-    groups = re.findall(r"<h4>(.*?)</h4>", runner.group(1))
+    def rows_of(markup):
+        return [[text(c) for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.S)]
+                for r in re.findall(r"<tr>(.*?)</tr>", markup, re.S) if "<td" in r]
+    every = re.search(r'<details class="earlier"><summary>All 3 tests, by section</summary>(.*)', runner.group(1), re.S)
+    assert every, "AC9: the full list isn't folded under its count"
+    head = runner.group(1)[:runner.group(1).index('<details class="earlier">')]
+    assert rows_of(head.split("<h4>")[0]) == [["cart", "2", "1"], ["refunds", "1", "0"]], rows_of(head.split("<h4>")[0])
+    parts = dict(re.findall(r"<h4>(.*?)</h4>(.*?)(?=<h4>|$)", head, re.S))
+    assert list(parts) == ["Failures", "Named in the spec"], list(parts)
+    assert rows_of(parts["Failures"]) == [["tampered_total", "FAIL", "AC2"]], rows_of(parts["Failures"])
+    assert [r[0] for r in rows_of(parts["Named in the spec"])] == ["tampered_total", "refund_issued"], parts["Named in the spec"]
+    groups = re.findall(r"<h4>(.*?)</h4>", every.group(1))
     assert groups == ["cart", "refunds"], groups
-    rows = [[text(c) for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.S)]
-            for r in re.findall(r"<tr>(.*?)</tr>", runner.group(1), re.S) if "<td" in r]
-    assert rows == [["coupon_once", "ok", ""], ["tampered_total", "FAIL", "AC2"], ["refund_issued", "ok", "AC2"]], rows
+    assert rows_of(every.group(1)) == [["coupon_once", "ok", ""], ["tampered_total", "FAIL", "AC2"], ["refund_issued", "ok", "AC2"]]
     assert "<details class=\"runner\">" not in check_block(markup, "A1"), "AC3: `ok 12 rows` outside a section was read as a test"
     assert "(3 tests in the runner output, 1 FAIL)" in summary_row(markup, "tests"), summary_row(markup, "tests")
 
@@ -1511,9 +1525,157 @@ def a_check_id_with_punctuation_gets_its_level(base):
     report = open(path_of(repo, "validation")).read()
     write(repo, "validation", report.replace("| unit | yes | [A1]", "| e2e | yes | A1.2. |\n|  | yes | A1 |\n| unit | yes | [A1]"))
     _, markup = generate(repo, base)
-    groups = re.findall(r'<div class="level"><h3 id="level-([^"]+)">(.*?)</div>', section(markup, 2), re.S)
+    groups = re.findall(r'<div class="level[^"]*"><h3 id="level-([^"]+)">(.*?)</div>', section(markup, 2), re.S)
     assert [level for level, body in groups if "A1.2" in body] == ["e2e"], [(level, "A1.2" in body) for level, body in groups]
     assert [level for level, body in groups if 'id="check-A1"' in body] == ["unit"], [level for level, _ in groups]
+
+
+
+# v2 AC7: every reference the page can open is a link
+
+def references_link_to_github_and_local_files(base):
+    repo, evidence = full_branch(base)
+    head = git(repo, "rev-parse", "HEAD")
+    pr = {"number": 7, "url": "https://github.com/o/shop/pull/7", "title": "Cart", "headRefOid": head, "state": "OPEN"}
+    page, markup = generate(repo, base, {"pr": pr})
+    hrefs = [dict(attrs).get("href") for tag, attrs in tags(markup) if tag == "a"]
+    for wanted in ("https://github.com/o/shop/pull/7", f"https://github.com/o/shop/commit/{head}",
+                   f"https://github.com/o/shop/blob/{head}/src/cart.py#L2", "https://github.com/o/shop/pull/7#c123",
+                   "file://" + urllib.parse.quote(os.path.realpath(path_of(repo, "review")))):
+        assert wanted in hrefs, (wanted, [h for h in hrefs if h and not h.startswith("#")])
+    foot = footer(markup)
+    assert f'href="https://github.com/o/shop/commit/{head}"' in foot and 'href="https://github.com/o/shop/pull/7"' in foot, foot
+    assert f'href="file://{urllib.parse.quote(os.path.realpath(page))}"' in foot, "the page doesn't link itself"
+    tree = git(repo, "rev-parse", "HEAD^{tree}")
+    assert f"/commit/{tree}" not in markup, "a tree id was linked as a commit"
+    assert all(re.search(r' rel="noreferrer noopener"', a) for a in re.findall(r'<a href="https:[^>]*>', markup)), "a remote link without rel"
+    _, markup = generate(repo, base)
+    assert "github.com/o/shop/commit" not in markup and "/blob/" not in markup, "no PR, yet a GitHub link"
+    assert "file://" + urllib.parse.quote(os.path.realpath(path_of(repo, "review"))) in markup, "local reports stop linking without a PR"
+
+
+def a_missing_verify_report_says_how_to_make_it(base):
+    repo, evidence = full_branch(base)
+    os.remove(path_of(repo, "verify"))
+    put(os.path.join(evidence, "suite.txt"), "# in shop, exit 0\nALL PASSED\n")
+    _, markup = generate(repo, base)
+    blocker = [b for b in listed(markup, "blockers") if b.startswith("Verify")]
+    assert blocker and "stop_checks.py verify" in blocker[0] and "suite.txt" in blocker[0], listed(markup, "blockers")
+    assert "stop_checks.py verify" in footer_value(markup, "Verify"), footer_value(markup, "Verify")
+    assert 'href="file://' + urllib.parse.quote(os.path.realpath(os.path.join(evidence, "suite.txt"))) + '"' in summary(markup)
+
+
+def an_autolink_takes_linear_time(base):
+    repo, _ = full_branch(base)
+    write(repo, "decision-notes", NOTES.replace("A shopper sees", "https://x" + "/a" * 200_000 + " " + "a/" * 200_000 + ":" + " A shopper sees"))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
+    generate(repo, base)
+    spent = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime - before
+    assert spent < 5, f"{spent:.1f} s of CPU for 800 KB of near-links"
+
+
+# v2 AC8: the testing pyramid
+
+PYRAMID_ROWS = """# Validation
+
+| # | AC | Level | Check | Case | Expected | Result | Evidence |
+|---|---|---|---|---|---|---|---|
+| A1 | AC1 | unit | one | + | ok | PASS | none |
+| A2 | AC1 | a11y | two | + | ok | PASS | none |
+| A3 | AC2 | e2e | three | + | ok | FAIL | none |
+| A4 | AC1 | integration | four | + | ok | PASS | none |
+| A5 | AC3 | unit | five | + | ok | PASS | none |
+"""
+
+
+def the_tests_follow_the_pyramid(base):
+    repo, _ = full_branch(base)
+    write(repo, "validation", PYRAMID_ROWS)
+    _, markup = generate(repo, base)
+    two = section(markup, 2)
+    assert re.findall(r'<h3 id="level-([^"]+)">', two) == ["e2e", "integration", "unit", "a11y"], re.findall(r'<h3 id="level-([^"]+)">', two)
+    tiers = [text(m) for m in re.findall(r'<label for="f-lvl-[a-z0-9]+" class="tier t\d">(.*?)</label>', two, re.S)]
+    assert tiers == ["e2e 1", "integration 1", "unit 2"], tiers
+    assert re.search(r'<label for="f-lvl-all" class="tier-all">All levels <span class="n">5</span>', two), "no All choice"
+    assert re.search(r'id="f-lvl-all" checked', two), "All isn't the default"
+    for level in ("e2e", "integration", "unit"):
+        assert f".filter:has(#f-lvl-{level}:checked) .level:not(.lvl-{level})" in markup, level
+        assert f'<div class="level lvl-{level}">' in two, level
+    head = re.search(r"<thead>(.*?)</thead>", section(markup, 1), re.S)
+    assert text(head.group(1)) == "AC Criterion e2e integration unit a11y", text(head.group(1))
+    line = summary_row(markup, "tests")
+    assert line.index("e2e") < line.index("integration") < line.index("unit") < line.index("a11y"), line
+
+
+def a_level_without_checks_is_not_a_choice(base):
+    repo, _ = full_branch(base)
+    write(repo, "validation", PYRAMID_ROWS.replace("| e2e |", "| unit |").replace("| integration |", "| unit |"))
+    _, markup = generate(repo, base)
+    two = section(markup, 2)
+    assert re.search(r'id="f-lvl-e2e" disabled>', two) and re.search(r'id="f-lvl-integration" disabled>', two), two[:1500]
+    assert not re.search(r'id="f-lvl-unit" disabled>', two)
+
+
+def the_coverage_shows_each_criterion_short(base):
+    repo, _ = full_branch(base)
+    put(path_of(repo, "spec"), SPEC.replace("1. A coupon applies once. — verify: test.",
+                                            "1. A coupon applies once. A refresh never adds a second one, nor does `a.b()`. — verify: test."))
+    _, markup = generate(repo, base)
+    row = re.search(r'<tr[^>]*id="ac-1">(.*?)</tr>', section(markup, 1), re.S).group(1)
+    cell = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)[0]
+    assert text(cell.split('<details class="crit">')[0]) == "A coupon applies once.", cell
+    fold = re.search(r'<details class="crit"><summary>(.*?)</summary>(.*?)</details>', cell, re.S)
+    assert fold and text(fold.group(2)).startswith("A refresh never adds a second one, nor does a.b()"), cell
+    assert re.search(r'<a class="chip" href="#check-A1"><code>A1</code>', row), row
+    short = re.search(r'<tr[^>]*id="ac-3">(.*?)</tr>', section(markup, 1), re.S).group(1)
+    assert '<summary>the rest</summary>' in row and "<summary>how it&#x27;s checked</summary>" in short, short
+
+
+# v2 AC9: the summary says each thing once
+
+def a_level_not_run_shows_once(base):
+    repo, evidence = full_branch(base)
+    add_rows(repo, "| A9 | AC3 | screen reader | + | read | NOT RUN | no screen reader here |\n")
+    report = open(path_of(repo, "validation")).read()
+    write(repo, "validation", report.replace("| unit | yes | [A1]", "| a11y | no | no screen reader here (A9) |\n| unit | yes | [A1]"))
+    _, markup = generate(repo, base)
+    line = summary_row(markup, "tests")
+    assert line.count("a11y") == 1 and "a11y not run (1 check): no screen reader here" in line, line
+
+
+def the_review_line_counts_lenses_and_rounds_apart(base):
+    repo, _ = full_branch(base)
+    review = REVIEW.replace("re-check rounds: 1", "re-check rounds: 2").replace(
+        "Not run:   security lens — no auth code touched", "Not run:   none (every lens ran)")
+    write(repo, "review", review + LENSES + "| correctness-recheck | codex | 1 | 1 | fixed=1 |\n")
+    out = sh(repo, "python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "claude-review")
+    assert out.returncode == 0, out
+    _, markup = generate(repo, base)
+    line = summary_row(markup, "review")
+    assert "recheck" not in line and "2 re-check rounds" in line, line
+    assert "none" not in line and "every lens ran" not in line, line
+    assert "cross-model: codex" in line and "claude-review off by you" in line, line
+
+
+def a_merge_item_in_the_notes_is_the_recommendation(base):
+    repo, _ = full_branch(base)
+    for item in ("- Merge with CI green: the risk is low.", "- Merge: with CI green, the risk is low."):
+        write(repo, "decision-notes", NOTES.replace("Decide if one FAIL", item + "\n- Decide if one FAIL"))
+        _, markup = generate(repo, base)
+        items = listed(markup, "decisions")
+        merge = [i for i in items if "the risk is low" in i]
+        assert len(merge) == 1 and "recommendation not recorded" not in " ".join(items), items
+
+
+def several_nits_show_one_per_line(base):
+    repo, _ = full_branch(base)
+    write(repo, "review", REVIEW + "Open:      (3 Nits kept) a typo in the help; a long line; a stale comment — decide later\n")
+    _, markup = generate(repo, base)
+    three = section(markup, 3)
+    entry = re.search(r'<li class="entry"[^>]*><details><summary>(?:(?!</summary>).)*3 Nits kept.*?</details>', three, re.S)
+    assert entry, three[:3000]
+    parts = [text(p) for p in re.findall(r'<[^>]*class="part"[^>]*>(.*?)</span>', entry.group(0), re.S)]
+    assert any(p.startswith("a typo in the help") for p in parts) and any(p.startswith("a long line") for p in parts), parts
 
 
 def lens_names_split_in_linear_time(base):
@@ -1563,7 +1725,11 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
              a_comment_before_the_first_paragraph_is_skipped, triage_lens_names_get_their_brief,
              coverage_without_an_ac_column_is_not_recorded, a_merge_order_item_is_not_the_merge_note,
              a_check_id_with_punctuation_gets_its_level, lens_names_split_in_linear_time,
-             report_copies_past_the_total_leave_nothing_embedded):
+             report_copies_past_the_total_leave_nothing_embedded, references_link_to_github_and_local_files,
+             a_missing_verify_report_says_how_to_make_it, an_autolink_takes_linear_time, the_tests_follow_the_pyramid,
+             a_level_without_checks_is_not_a_choice, the_coverage_shows_each_criterion_short, a_level_not_run_shows_once,
+             the_review_line_counts_lenses_and_rounds_apart, a_merge_item_in_the_notes_is_the_recommendation,
+             several_nits_show_one_per_line):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
         test(os.path.realpath(base))
