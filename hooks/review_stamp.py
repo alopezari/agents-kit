@@ -428,30 +428,37 @@ def has_reason(cell):
     return bool(cell.strip(" \t-\u2013\u2014*_`"))
 
 
+def result_table(lines):
+    """(index in lines, column names, cells, result) for each PASS, FAIL and NOT RUN row of the tables in lines that have
+    Result and Evidence columns."""
+    names = None
+    for index, line in enumerate(lines):
+        cells = table_cells(line)
+        if not cells:
+            names = None  # a table per block, each with its own header
+        elif {"Result", "Evidence"} <= {c.strip("*_") for c in cells}:
+            names = [c.strip("*_") for c in cells]
+        elif names and len(cells) > names.index("Result"):
+            result = re.match(r"[*_]*(?:(PASS|FAIL|NOT RUN)\b)?", cells[names.index("Result")]).group(1)
+            if result:
+                yield index, names, cells, result
+
+
 def result_rows(lines, evidence):
     """The PASS, FAIL and NOT RUN rows of the tables in lines that have Result and Evidence columns, as (first cell,
     result, evidence cell, whether that cell names a non-empty file of the evidence directory, the criteria numbers
     its AC cell names (None in a table with no AC column), its Case cell, its Expected cell (None in a table with no
     Expected column))."""
     files = evidence_files(evidence)
-    rows, columns = [], None
-    for line in lines:
-        cells = table_cells(line)
-        if not cells:
-            columns = None  # a table per block, each with its own header
-        elif {"Result", "Evidence"} <= {c.strip("*_") for c in cells}:
-            names = [c.strip("*_") for c in cells]
-            columns = (names.index("Result"), names.index("Evidence"), names.index("AC") if "AC" in names else None,
-                       next((i for i, n in enumerate(names) if n.startswith("Case")), None),
-                       next((i for i, n in enumerate(names) if n.startswith("Expected")), None))
-        elif columns and len(cells) > columns[0]:
-            result = re.match(r"[*_]*(?:(PASS|FAIL|NOT RUN)\b)?", cells[columns[0]]).group(1)
-            cell = cells[columns[1]] if len(cells) > columns[1] else ""
-            ac, case, expected = (cells[i] if i is not None and len(cells) > i else "" for i in columns[2:])
-            acs = None if columns[2] is None else [int(n) for n in re.findall(r"\bAC(\d+)\b", ac)]
-            if result:
-                rows.append((cells[0], result, cell, names_a_file(cell, files), acs, case,
-                             None if columns[4] is None else expected))
+    rows = []
+    for _, names, cells, result in result_table(lines):
+        ac = names.index("AC") if "AC" in names else None
+        case, expected = (next((i for i, n in enumerate(names) if n.startswith(p)), None) for p in ("Case", "Expected"))
+        cell, ac_cell, case_cell, expected_cell = (cells[i] if i is not None and len(cells) > i else ""
+                                                   for i in (names.index("Evidence"), ac, case, expected))
+        acs = None if ac is None else [int(n) for n in re.findall(r"\bAC(\d+)\b", ac_cell)]
+        rows.append((cells[0], result, cell, names_a_file(cell, files), acs, case_cell,
+                     None if expected is None else expected_cell))
     return rows
 
 
@@ -726,6 +733,12 @@ def suite_command(command):
     return (words[0][len("./"):] if words[0].startswith("./") else words[0], *words[1:])
 
 
+# The first line bin/evidence saves: where and when the check ran, its exit code, and the commit and tree it ran on.
+EVIDENCE_IN_LINE = re.compile(r"# in (?P<dir>.+), (?P<time>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4}), exit (?P<exit>\d{1,3})"
+                              r"(?:, commit none|, commit (?P<commit>[0-9a-f]+)(?P<uncommitted>, uncommitted changes)?, "
+                              r"tree (?P<tree>\S+))?")
+
+
 def evidence_header(path):
     """(command, directory, exit code, fingerprint or None) from the header bin/evidence saves, or None for any other file."""
     try:
@@ -738,12 +751,11 @@ def evidence_header(path):
         command, ran, recorded = head[0], head[1], head[2]
     else:
         ran, recorded, command = head[0], head[1], head[2] if head[1].startswith("# fingerprint ") else head[1]
-    ran = re.fullmatch(r"# in (.+), \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4}, exit (\d{1,3})"
-                       r"(?:, commit none|, commit [0-9a-f]+(?:, uncommitted changes)?, tree \S+)?", ran)
+    ran = EVIDENCE_IN_LINE.fullmatch(ran)
     if not command.startswith("$ ") or not ran:
         return None
     recorded = re.fullmatch(r"# fingerprint ([0-9a-f]{64})", recorded)
-    return command[2:], ran.group(1), int(ran.group(2)), recorded.group(1) if recorded else None
+    return command[2:], ran.group("dir"), int(ran.group("exit")), recorded.group(1) if recorded else None
 
 
 def suite_problems(evidence):
