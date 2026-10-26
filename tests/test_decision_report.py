@@ -1505,6 +1505,38 @@ def a_merge_order_item_is_not_the_merge_note(base):
     items = listed(markup, "decisions")
     assert "recommendation not recorded" in items[0] and any("Merge order" in i for i in items[1:]), items
 
+def a_check_id_with_punctuation_gets_its_level(base):
+    repo, evidence = full_branch(base)
+    add_rows(repo, "| A1.2 | AC1 | dotted | + | ok | PASS | none |\n")
+    report = open(path_of(repo, "validation")).read()
+    write(repo, "validation", report.replace("| unit | yes | [A1]", "| e2e | yes | A1.2. |\n|  | yes | A1 |\n| unit | yes | [A1]"))
+    _, markup = generate(repo, base)
+    groups = re.findall(r'<div class="level"><h3 id="level-([^"]+)">(.*?)</div>', section(markup, 2), re.S)
+    assert [level for level, body in groups if "A1.2" in body] == ["e2e"], [(level, "A1.2" in body) for level, body in groups]
+    assert [level for level, body in groups if 'id="check-A1"' in body] == ["unit"], [level for level, _ in groups]
+
+
+def lens_names_split_in_linear_time(base):
+    repo, _ = full_branch(base)
+    write(repo, "review", REVIEW.replace("lenses: correctness, tests", "lenses: correctness, tests (" + "a," * 300_000))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
+    generate(repo, base)
+    spent = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime - before
+    assert spent < 5, f"{spent:.1f} s of CPU for a lenses field of 300,000 commas"
+
+
+def report_copies_past_the_total_leave_nothing_embedded(base):
+    repo, evidence = full_branch(base)
+    wide = "\n" + "語" * (1900 * 1024) + "\n"
+    write(repo, "decision-notes", NOTES + wide)
+    write(repo, "review", REVIEW + wide)
+    write(repo, "pr-body", "A body." + wide)
+    put(os.path.join(evidence, "img.png"), PNG + b"x" * 1024)
+    add_rows(repo, f"| B1 | AC1 | an image | + | an image | PASS | [img]({evidence}/img.png) |\n")
+    _, markup = generate(repo, base)
+    assert "data:image/png" not in check_block(markup, "B1"), "AC6: the copies passed 20 MB and an image was still embedded"
+
+
 for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
              reads_nothing_outside_the_evidence_directory, a_long_last_line_keeps_its_tail,
              unmatched_brackets_take_linear_time, a_long_check_table_takes_linear_time, a_failed_generation_leaves_no_page, the_older_page_is_gone_while_it_builds,
@@ -1529,7 +1561,9 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
              a_failed_step_after_the_merge_is_a_blocker, test_types_heading_and_ran_in_any_form, levels_map_aliases_and_stay_bounded,
              a_shared_suite_output_counts_once, steps_past_the_total_are_linked, the_notes_count_toward_the_total,
              a_comment_before_the_first_paragraph_is_skipped, triage_lens_names_get_their_brief,
-             coverage_without_an_ac_column_is_not_recorded, a_merge_order_item_is_not_the_merge_note):
+             coverage_without_an_ac_column_is_not_recorded, a_merge_order_item_is_not_the_merge_note,
+             a_check_id_with_punctuation_gets_its_level, lens_names_split_in_linear_time,
+             report_copies_past_the_total_leave_nothing_embedded):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
         test(os.path.realpath(base))

@@ -415,6 +415,20 @@ def notes_by_section(text):
     return {n: "\n".join(lines).strip() for n, lines in found.items()}
 
 
+def split_outside_parentheses(text):
+    """The comma-separated parts of text, a comma inside parentheses not splitting: "a (added: b, c), d" is two parts."""
+    parts, depth, start = [], 0, 0
+    for i, char in enumerate(text):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif char == "," and not depth:
+            parts.append(text[start:i])
+            start = i + 1
+    return parts + [text[start:]]
+
+
 def first_paragraph(text):
     """The first paragraph of prose, past any leading headings and HTML comments a PR template puts first."""
     text = re.sub(r"<!--.*?(-->|$)", "", text, flags=re.S)
@@ -789,8 +803,9 @@ def build(page_path, evidence):
     test_types = (section_table(texts["validation"], "Test types", ("type", "ran", "evidence")) or []) if validation_ok else []
     type_of = {}  # a check id a Test types row's Evidence names: that row's level, the first row winning
     for t in test_types:
-        for word in re.findall(r"[A-Za-z0-9_]+", t["evidence"]):
-            type_of.setdefault(word, test_level(t["type"]))
+        if t["type"].strip():
+            for word in re.findall(r"[A-Za-z0-9_.-]+", t["evidence"]):
+                type_of.setdefault(word.strip(".-"), test_level(t["type"]))
     rows_at = {}
     for row in rows:
         row["anchor"] = page.new_id(f"check-{row['id']}")
@@ -805,9 +820,11 @@ def build(page_path, evidence):
     # The copies of report text shown outside the annexes: the summary's notes, the decide items again in Merge and ship,
     # the review's findings and its Open ones twice more, the checks, the ship steps. Each source is under REPORT_LIMIT,
     # so they fit in the total before any evidence, and the evidence and annexes after them fall back to links.
+    # When they don't (long non-ASCII reports), nothing is left for evidence or annexes.
     notes_decide = (notes or {}).get("decide") or ""
-    page.charge(texts["decision-notes"] or "", notes_decide, texts["review"] or "", texts["review"] or "",
-                texts["validation"] or "", ship_text or "", texts["checks-guide"] or "", texts["pr-body"] or "")
+    if not page.charge(texts["decision-notes"] or "", notes_decide, texts["review"] or "", texts["review"] or "",
+                texts["validation"] or "", ship_text or "", texts["checks-guide"] or "", texts["pr-body"] or ""):
+        page.embedded = TOTAL_LIMIT
 
     def source_state(kind, phase):
         """The state word for a source report: phase off, or unavailable with the reason, or None when it was read."""
@@ -1023,9 +1040,9 @@ def build(page_path, evidence):
         s2 += ('<div class="filter"><div class="radios" role="group" aria-label="Show checks by result">'
                + "".join(f'<input type="radio" name="result" id="f-{key}"{" checked" if key == "all" else " disabled" if not n else ""}>'
                          f'<label for="f-{key}">{esc(label)} <span class="n">{n}</span></label>' for key, label, n in filters) + "</div>"
-               + "".join(f'<h3 id="{page.new_id(level_id(level))}">{esc(level)} <span class="n">'
+               + "".join(f'<div class="level"><h3 id="{page.new_id(level_id(level))}">{esc(level)} <span class="n">'
                          f'{len(rows_at[level])}</span></h3><ol class="checks" role="list">'
-                         + "".join(check_items[row["anchor"]] for row in rows_at[level]) + "</ol>"
+                         + "".join(check_items[row["anchor"]] for row in rows_at[level]) + "</ol></div>"
                          for level in levels) + "</div>")
         s2_meta = " · ".join(f"{r} {counts[r]}" for r in RESULTS)
     else:
@@ -1042,7 +1059,7 @@ def build(page_path, evidence):
               + "".join(f'<dt>{name}</dt><dd>{esc(header_fields[key]) if header_fields.get(key) else state("not recorded", "dim")}</dd>'
                         for name, key in (("Risk", "risk"), ("Lenses", "lenses"), ("Re-check rounds", "re-check rounds")))
               + f'<dt>Cross-model</dt><dd>{esc(model) if model else state("not recorded", "dim")}</dd></dl>')
-        header_lenses = [name.strip() for name in re.split(r",(?![^()]*\))", header_fields.get("lenses") or "") if name.strip()]
+        header_lenses = [name.strip() for name in split_outside_parentheses(header_fields.get("lenses") or "") if name.strip()]
 
         def brief(name):
             if briefs_why:
@@ -1391,9 +1408,9 @@ text-underline-offset:4px}
 .radios>input:focus-visible+label{outline:2px solid var(--lime);outline-offset:2px}
 .filter:has(#f-pass:checked) .check:not(.r-pass),.filter:has(#f-fail:checked) .check:not(.r-fail),
 .filter:has(#f-notrun:checked) .check:not(.r-notrun){display:none}
-.filter:has(#f-pass:checked) h3:has(+.checks:not(:has(.r-pass))),.filter:has(#f-pass:checked) .checks:not(:has(.r-pass)),
-.filter:has(#f-fail:checked) h3:has(+.checks:not(:has(.r-fail))),.filter:has(#f-fail:checked) .checks:not(:has(.r-fail)),
-.filter:has(#f-notrun:checked) h3:has(+.checks:not(:has(.r-notrun))),.filter:has(#f-notrun:checked) .checks:not(:has(.r-notrun)){display:none}
+.filter:has(#f-pass:checked) .level:not(:has(.r-pass,.check:target)),
+.filter:has(#f-fail:checked) .level:not(:has(.r-fail,.check:target)),
+.filter:has(#f-notrun:checked) .level:not(:has(.r-notrun,.check:target)){display:none}
 .check:target{display:list-item!important}
 .checks{list-style:none;padding:.5rem 0 0;border-top:1px solid var(--line)}
 .check{border-bottom:1px solid var(--line);margin:0;max-width:none;padding:.25rem 0 .5rem}
