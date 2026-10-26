@@ -1582,11 +1582,13 @@ def references_link_only_what_the_pr_head_holds(base):
     put(os.path.join(repo, "untracked.py"), "x\n")
     put(os.path.join(evidence, "notes"), "<script>alert(1)</script>\n")
     hostile = 'https://x.test/a"onmouseover="alert(15)'
+    review = os.path.realpath(path_of(repo, "review"))
     write(repo, "decision-notes", NOTES.replace("A shopper sees", f"See {repo}/src/cart.py:2, untracked.py:1, {evidence}/notes "
-                                                                  f"and {hostile}. A shopper sees"))
+                                                                  f"and {hostile}. Report {review} here. A shopper sees"))
     _, markup = generate(repo, base, {"pr": pr})
     assert re.search(r'<a href="https://github\.com/o/shop/blob/[0-9a-f]+/src/cart\.py#L2"[^>]*>' + re.escape(repo), markup), \
         "an absolute repository path:line isn't linked to GitHub"
+    assert re.search(r'<a href="file://[^"]*"[^>]*>' + re.escape(review) + "</a>", markup), "a report path in the text lost its link"
     hrefs = [dict(attrs).get("href") or "" for tag, attrs in tags(markup) if tag == "a"]
     assert not [h for h in hrefs if "untracked.py" in h or h.endswith("/notes")], "linked a file the PR head lacks, or an extensionless file"
     assert not [name for _, attrs in tags(markup) for name, _ in attrs if name.startswith("on")], "a quote in a URL broke out of its attribute"

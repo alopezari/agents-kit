@@ -330,9 +330,9 @@ class Page:
             return self.blob_href(path, line)
         local, line = re.fullmatch(r"(.*?)(?::(\d+))?", local).groups()
         real = os.path.realpath(os.path.expanduser(local))
-        if real.startswith(self.repo_root + os.sep):
-            return self.blob_href(os.path.relpath(real, self.repo_root), line)
-        return self.local_href(local)
+        # the main checkout holds the reports too, under .git: a path GitHub doesn't have still links locally
+        in_repo = real.startswith(self.repo_root + os.sep)
+        return (in_repo and self.blob_href(os.path.relpath(real, self.repo_root), line)) or self.local_href(local)
 
     def blob_href(self, path, line=None):
         """A repository file on GitHub at the PR's head, or None without a PR or for a path the PR's head doesn't hold."""
