@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **19 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, docs, evidence, evidence-env, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
+- **20 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, decision-report, docs, evidence, evidence-env, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -264,6 +264,12 @@ changelog release <version>   move CHANGELOG.md's Unreleased lines and every cha
 ci-wait [--sha SHA] [--timeout SECS] [--once] [--no-log]
 ```
 
+**`bin/decision-report`**: Write the branch's decision page: one local HTML page, built from the spec, the agent's decision notes, the reports, the evidence and the pull request's CI, in six numbered sections and a footer of identifiers.
+
+```
+decision-report <page> <evidence dir>    run by `reports html`, which passes both paths; prints the page's path
+```
+
 **`bin/docs`**: Generate docs/framework.md, the reference for what the kit does, from the kit's own source.
 
 ```
@@ -329,7 +335,9 @@ quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --cate
 ```
 reports path <verify|review|validation|checks-guide|follow-pr>   where the stop hook or a skill saves that report
 reports path pr-body                             where kit-ship and kit-follow-pr save the PR description; left out of the listings
+reports path decision-notes                      where kit-ship saves its decision notes for the decision page; left out of the listings
 reports path evidence                            the directory (created) for validation evidence: outputs, screenshots; needs a branch, as pr-body does
+reports html                                     writes the branch's decision page (bin/decision-report) next to its reports and prints its path
 reports                                          every report that exists, with its path, the evidence, the phases off
 reports brief                                    the phase and one line per report, to pick a branch up in a new session
 reports --branch <name> …                        the same for another branch of this repo, without phase and switches
@@ -452,9 +460,11 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | `.claude-plugin/` | Makes `~/.agents` the `agents-kit` plugin marketplace, so `mods/kit` loads in place. |
 | `.githooks/` | Keeps this reference in sync on every commit. |
 | `.github/` | CI: installs the kit on three macOS runners and runs part of `tests/run.sh` on each, on every pull request, and checks each one adds a changelog entry under `changelog.d/`. |
+| `.impeccable/` | Impeccable's design briefs for generated pages. |
 | `AGENTS.md` | The instructions every harness loads (linked as CLAUDE.md / AGENTS.md). |
 | `CHANGELOG.md` | What changed in each version, and how a release is cut. |
 | `LICENSE` | MIT. |
+| `PRODUCT.md` | Product context Impeccable reads. |
 | `README.md` | Install and first steps. |
 | `VERSION` | The kit's version; `install.sh --doctor` prints it. |
 | `adapters/` | Per-harness glue: the Claude Code status line, Codex profiles. |

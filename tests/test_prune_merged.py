@@ -13,7 +13,7 @@ PRUNE = os.path.join(KIT, "bin", "prune-merged")
 RESULTS = []
 # prune-merged deletes phase switches in HOME's store: never the user's own, whatever the test sets.
 os.environ["HOME"] = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-home-"))
-KINDS = ("spec", "verify", "review", "validation", "checks-guide", "staging-guide", "follow-pr", "pr-body")
+KINDS = ("spec", "verify", "review", "validation", "checks-guide", "staging-guide", "follow-pr", "pr-body", "decision-notes")
 
 
 def sh(cwd, *cmd):
@@ -69,6 +69,8 @@ def kit_files(main, key, guide=None):
         for kind in KINDS:
             paths.append(os.path.join(where, f"{kind}-shop-{key}.md"))
             open(paths[-1], "w").write(guide if guide is not None and kind == "checks-guide" else f"# {kind}\n")
+        paths.append(os.path.join(where, f"decision-shop-{key}.html"))
+        open(paths[-1], "w").write("<!doctype html>\n")
         paths.append(os.path.join(where, f"browser-ab-spec-shop-{key}.json"))
         open(paths[-1], "w").write("{}\n")
         paths.append(os.path.join(where, f"evidence-shop-{key}"))
