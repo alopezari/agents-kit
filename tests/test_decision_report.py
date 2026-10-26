@@ -463,6 +463,27 @@ def a_failed_generation_leaves_no_page(base):
         os.listdir(os.path.dirname(page))
 
 
+
+def the_older_page_is_gone_while_it_builds(base):
+    repo = os.path.join(base, "shop")
+    os.makedirs(repo)
+    git(repo, "init", "-q", "-b", "feature/cart")
+    put(os.path.join(repo, "a.txt"), "a\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "a")
+    page, _ = generate(repo, base)
+    # gh runs mid-build: a kill there must not leave the older page to be taken for the current one.
+    env = fake_gh(base, {})
+    spy = os.path.join(base, "spy-bin")
+    put(os.path.join(spy, "gh"), f'#!/bin/sh\n[ -e "{page}" ] && echo present >> "{base}/seen" || echo absent >> "{base}/seen"\n'
+        f'exec "{base}/fake-bin/gh" "$@"\n')
+    os.chmod(os.path.join(spy, "gh"), 0o755)
+    out = sh(repo, REPORTS, "html", env={**env, "PATH": spy + ":" + env["PATH"]})
+    assert out.returncode == 0, out
+    with open(os.path.join(base, "seen")) as fh:
+        seen = fh.read().split()
+    assert seen and set(seen) == {"absent"}, seen
+
 # AC2
 
 def sections_come_in_order_with_the_notes(base):
@@ -837,7 +858,7 @@ def refuses_another_branch_and_a_detached_head(base):
 
 for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
              reads_nothing_outside_the_evidence_directory, a_long_last_line_keeps_its_tail,
-             unmatched_brackets_take_linear_time, a_long_check_table_takes_linear_time, a_failed_generation_leaves_no_page,
+             unmatched_brackets_take_linear_time, a_long_check_table_takes_linear_time, a_failed_generation_leaves_no_page, the_older_page_is_gone_while_it_builds,
              sections_come_in_order_with_the_notes, a_branch_without_notes_or_pr_body_says_not_recorded,
              falls_back_to_the_pr_body_first_paragraph, decide_names_every_item, a_symlink_to_a_file_inside_keeps_its_freshness, decide_keeps_what_later_sources_drop,
              ci_is_read_for_the_pr_head_only,

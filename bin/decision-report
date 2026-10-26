@@ -342,7 +342,8 @@ class Page:
     def table(self, header, rows):
         head = "".join(f'<th scope="col">{self.inline(c)}</th>' for c in header)
         body = "".join("<tr>" + "".join(f"<td>{self.inline(c)}</td>" for c in row) + "</tr>" for row in rows)
-        return f'<div class="table"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+        name = esc("Table: " + ", ".join(header))
+        return f'<div class="table" tabindex="0" role="region" aria-label="{name}"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
 
 
 # Sources
@@ -777,7 +778,7 @@ def build(page_path, evidence):
             # Explicit roles: the phone layout makes the cells blocks, which drops their table semantics.
             criteria_rows.append(f'<tr role="row" id="ac-{n}"><th role="rowheader" scope="row">{n}</th>'
                                  f'<td role="cell">{page.inline(number.group(2))}</td><td role="cell">{checks}</td></tr>')
-        s1 += ('<div class="table"><table class="criteria" role="table"><thead><tr role="row">'
+        s1 += ('<div class="table" tabindex="0" role="region" aria-label="Acceptance criteria"><table class="criteria" role="table"><thead><tr role="row">'
                '<th role="columnheader" scope="col">AC</th><th role="columnheader" scope="col">Criterion</th>'
                f'<th role="columnheader" scope="col">Checks</th></tr></thead><tbody>{"".join(criteria_rows)}</tbody></table></div>'
                if criteria_rows else f'<p>{state("not recorded", "dim")} no numbered acceptance criteria</p>')
@@ -797,9 +798,9 @@ def build(page_path, evidence):
     file_rows = "".join(f"<tr><td><code>{esc(path)}</code></td><td>+{esc(a)}</td><td>-{esc(r)}</td></tr>"
                         for _, files in sorted(groups.items()) for path, a, r in files)
     s2 += (f'<h3>Changed files</h3><p class="meta">against <code>{esc(base)}</code> ({esc(base_ref)}), the working tree included</p>'
-           + ('<div class="table"><table class="dirs"><thead><tr><th scope="col">Directory</th><th scope="col">Files</th>'
+           + ('<div class="table" tabindex="0" role="region" aria-label="Changed directories"><table class="dirs"><thead><tr><th scope="col">Directory</th><th scope="col">Files</th>'
               f'<th scope="col">Added</th><th scope="col">Removed</th></tr></thead><tbody>{dir_rows}</tbody></table></div>'
-              '<details><summary>Every file</summary><div class="table"><table><thead><tr><th scope="col">File</th>'
+              '<details><summary>Every file</summary><div class="table" tabindex="0" role="region" aria-label="Changed files"><table><thead><tr><th scope="col">File</th>'
               f'<th scope="col">Added</th><th scope="col">Removed</th></tr></thead><tbody>{file_rows}</tbody></table></div></details>'
               if groups else f'<p>{state("none", "dim")} no file differs from the base</p>'))
     s2 += source_line([paths["decision-notes"], paths["pr-body"]])
@@ -990,10 +991,10 @@ h5,h6{font-size:.9375rem;margin:1.25rem 0 .5rem}
 .todo{font-weight:600}
 .todo.need{color:var(--human)}.todo.ok{color:var(--lime)}
 section{padding:2.5rem 0;border-bottom:1px solid var(--line);scroll-margin-top:1rem}
-p,li,blockquote,dd{max-width:70ch;overflow-wrap:anywhere}
+p,li,blockquote,dd{max-width:34em;overflow-wrap:anywhere}
 p{margin:0 0 .75rem}
 code,pre,.st,.cid,.ac,.case,.n,.k,.src,.ref,.size,.fields dt,.ids dt{font-family:var(--mono)}
-code{font-size:.875em;color:var(--text);overflow-wrap:anywhere}
+code{font-size:.9em;color:var(--text);overflow-wrap:anywhere}
 .st{font-size:.8125rem;letter-spacing:.02em;overflow-wrap:anywhere}
 .st.ok{color:var(--lime)}.st.need{color:var(--human)}.st.dim{color:var(--dim)}
 .k{color:var(--muted);font-size:.875rem}
@@ -1018,12 +1019,12 @@ table{border-collapse:collapse;font-size:.875rem;min-width:100%}
 th,td{border:1px solid var(--line);padding:.375rem .625rem;text-align:left;vertical-align:top}
 thead th{color:var(--muted);font-weight:600;background:var(--surface)}
 tbody th{color:var(--text);font-family:var(--mono);font-weight:400}
-.criteria td:nth-child(2){min-width:18rem;width:70%}
+.criteria td:nth-child(2){min-width:18rem;width:34em;max-width:34em}
 .dirs td{font-family:var(--mono)}
 ul,ol{padding-left:1.25rem;margin:0 0 1rem}
 li{margin:.25rem 0}
 li.sub{margin-left:1.25rem}
-.counts,.facts{list-style:none;padding:0}
+.counts,.facts{list-style:none;padding:0;max-width:34em}
 .counts li,.facts li{padding:.375rem 0;border-bottom:1px solid var(--line);max-width:none}
 .absent{color:var(--muted)}
 .decide{padding-left:1.75rem}
@@ -1068,7 +1069,7 @@ figcaption{font-size:.8125rem;margin-top:.25rem}
 .entry .lab{font-family:var(--mono);font-size:.8125rem;color:var(--dim);margin-right:.5rem}
 .entry .part{display:block;color:var(--muted);font-size:.875rem}
 #review-open .entry .lab{color:var(--human)}
-.ref{display:block;color:var(--dim);font-size:.75rem}
+.ref{display:block;color:var(--dim);font-size:.8125rem}
 details.report>summary,.dirs+details>summary{cursor:pointer;color:var(--muted);margin:.5rem 0}
 .check:target,.entry:target,.fresh li:target,[id^="guide-"]:target{outline:2px solid var(--human);outline-offset:4px;
 scroll-margin-top:1.5rem}
@@ -1078,7 +1079,7 @@ footer{padding-top:2rem;padding-bottom:3rem}
 @media (max-width:640px){dl.row,dl.fields,dl.ids{grid-template-columns:minmax(0,1fr)}dl dd{margin-bottom:.5rem}
 h2,.num{font-size:1.5rem}h3{font-size:1.125rem}figure pre{white-space:pre-wrap;overflow-wrap:anywhere}figure .ln{padding-left:4ch;text-indent:-4ch}
 .criteria thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.criteria tr{display:block;border-bottom:1px solid var(--line);padding:.5rem 0}
-.criteria td,.criteria th{display:block;border:0;min-width:0;width:auto;padding:.25rem .75rem}
+.criteria td,.criteria th,.criteria td:nth-child(2){display:block;border:0;min-width:0;width:auto;max-width:none;padding:.25rem .75rem}
 .criteria td:last-child::before{content:"Checks: ";color:var(--dim);font-family:var(--mono)}.notes{padding:1rem 1rem .25rem}}
 """
 
