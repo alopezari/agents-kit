@@ -473,8 +473,11 @@ def changed_files(base):
 
 # Rendering
 
+CASE_WORDS = {"+": "positive case", "-": "negative case", "−": "negative case"}
+
 def source_line(paths):
-    return '<p class="src">From ' + ", ".join(f"<code>{esc(path)}</code>" for path in paths) + "</p>"
+    return (f'<details class="src"><summary>Built from {len(paths)} source{"s" if len(paths) != 1 else ""}</summary><ul>'
+            + "".join(f"<li><code>{esc(path)}</code></li>" for path in paths) + "</ul></details>")
 
 
 def not_recorded(kind, path):
@@ -579,7 +582,7 @@ def build(page_path, evidence):
             f'<li class="check r-{row["result"].lower().replace(" ", "")}" id="{row["anchor"]}">'
             f'<details{" open" if row["result"] != "PASS" else ""}><summary>'
             f'<span class="cid">{esc(row["id"])}</span> {state(row["result"], tone)} '
-            f'<span class="ac">{esc(row["ac"]) or state("no AC", "dim")}</span> <span class="case">{esc(row["case"])}</span> '
+            f'<span class="ac">{esc(row["ac"]) or state("no AC", "dim")}</span> <span class="case">{esc(CASE_WORDS.get(row["case"], row["case"]))}</span> '
             f'<span class="ctext">{page.inline(row["check"])}</span></summary>'
             f'<dl class="row"><dt>Expected</dt><dd>{expected_html}</dd>'
             f'<dt>Observed</dt><dd>{page.inline(row["observed"]) or state("not recorded", "dim")}</dd>'
@@ -691,7 +694,7 @@ def build(page_path, evidence):
     body = texts["pr-body"]
     s2 = notes_block(page, notes, 2, paths["decision-notes"],
                      ("the PR description's first paragraph", first_paragraph(body), paths["pr-body"]) if body else None)
-    s2 += f'<h3>Pull request</h3><p class="prtitle">{esc(pr_title) if pr_title else state("not recorded", "dim") + " " + esc(MAKERS["pr-body"])}</p>'
+    s2 += f'<h3>Pull request</h3><p class="prtitle">{esc(pr_title) if pr_title else state("not recorded", "dim") + (" GitHub gives no title" if pr else " no pull request yet")}</p>'
     s2 += f'<div class="prbody">{page.markdown(body, "pr", top=4)}</div>' if body is not None else \
         (not_recorded("pr-body", paths["pr-body"]) if whys["pr-body"].startswith("no report") else unavailable(whys["pr-body"]))
     groups = changed_files(base)
@@ -794,7 +797,7 @@ def build(page_path, evidence):
     # 06
     s6 = notes_block(page, notes, 6, paths["decision-notes"])
     s6 += (f'<h3>Items to decide <span class="n">{len(items)}</span></h3>'
-           + (f'<ol class="decide">{"".join(f"<li><a href={chr(34)}{esc(href)}{chr(34)}>{body}</a></li>" for href, body in items)}</ol>'
+           + (f'<ol class="decide">{"".join(f"<li>{body} <a class={chr(34)}go{chr(34)} href={chr(34)}{esc(href)}{chr(34)}>details</a></li>" for href, body in items)}</ol>'
               if items else f'<p>{state("nothing to decide", "ok")}</p><ol class="decide"></ol>'))
     para = first_paragraph(body) if body else None
     phases = f'{state("unavailable", "need")} {esc(phases_error)}' if phases_error else esc(phase_switches.describe(off))
@@ -817,7 +820,7 @@ def build(page_path, evidence):
     pr_head = review_stamp.git("rev-parse", "--verify", "--quiet", f"{pr['headRefOid']}^{{tree}}") if pr else ""
     covers = (f'commit <code>{esc(pr["headRefOid"])}</code>, tree <code>{esc(pr_head)}</code>' if pr and pr_head else
               f'commit <code>{esc(pr["headRefOid"])}</code>, tree {state("unavailable", "dim")} not in this repository'
-              if pr else state("no PR yet", "dim"))
+              if pr else state("not recorded", "dim") + " no pull request yet")
     strip = [("PR", f'#{pr["number"]}' if pr else ("unknown" if pr_error else "no PR yet"), "ok" if pr else "need" if pr_error else "dim"),
              ("CI", ci_word, ci_tone), ("verify", (source_state("verify", "verify") or verify_word).split(":")[0],
                                          "ok" if verify_word == "PASS" else "dim" if "verify" in off else "need"),
@@ -861,6 +864,8 @@ body{margin:0;background:var(--bg);color:var(--body);font:1rem/1.6 var(--sans);f
 a{color:var(--text);text-decoration:underline;text-decoration-color:var(--dim);text-underline-offset:3px}
 a:hover{text-decoration-color:var(--lime)}
 :focus-visible{outline:2px solid var(--lime);outline-offset:3px}
+html{accent-color:var(--lime);scrollbar-color:var(--line) var(--bg)}
+.counts,.facts,.n,.st,table,footer{font-variant-numeric:tabular-nums}
 .skip{position:absolute;left:-999px;top:0;background:var(--lime);color:var(--bg);padding:.5rem 1rem}
 .skip:focus{left:1rem}
 .top,main,footer{max-width:72rem;margin:0 auto;padding:0 1rem}
@@ -875,7 +880,8 @@ h4{font-size:1.0625rem;margin:1.75rem 0 .5rem}
 h5,h6{font-size:.9375rem;margin:1.25rem 0 .5rem}
 .num{color:var(--lime);font-size:1.75rem;font-weight:400}
 .purpose{color:var(--muted);margin:0 0 1rem}
-.strip{font-family:var(--mono);font-size:.875rem;display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;margin:0;color:var(--muted)}
+.strip{font-family:var(--mono);font-size:.875rem;display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;margin:0;color:var(--muted);max-width:none}
+.gate{white-space:nowrap}
 .todo{font-weight:600}
 .todo.need{color:var(--human)}.todo.ok{color:var(--lime)}
 section{padding:2.5rem 0;border-bottom:1px solid var(--line);scroll-margin-top:1rem}
@@ -886,9 +892,11 @@ code{font-size:.875em;color:var(--text);overflow-wrap:anywhere}
 .st{font-size:.8125rem;letter-spacing:.02em;overflow-wrap:anywhere}
 .st.ok{color:var(--lime)}.st.need{color:var(--human)}.st.dim{color:var(--dim)}
 .k{color:var(--muted);font-size:.875rem}
-.n{color:var(--dim);font-size:.875rem;font-weight:400}
+.n{color:var(--dim);font-size:.875rem;font-weight:400;margin-left:.375rem}
 .meta,.src,.by,.size{color:var(--dim);font-size:.8125rem}
-.src{margin-top:1.5rem;overflow-wrap:anywhere}
+.src{margin-top:1.5rem;overflow-wrap:anywhere;font-size:.875rem}
+.src>summary{cursor:pointer;color:var(--dim);font-family:var(--mono)}
+.src ul{padding-left:1.25rem}
 .by{margin:0 0 .75rem;font-family:var(--mono)}
 .notes{background:var(--surface);border:1px solid var(--line);padding:1.25rem 1.5rem .5rem;margin:0 0 2rem}
 .notes p,.notes li{color:var(--text);font-size:1.0625rem}
@@ -915,7 +923,7 @@ li.sub{margin-left:1.25rem}
 .decide{padding-left:1.75rem}
 .decide li{margin:.5rem 0;color:var(--text)}
 .decide li::marker{font-family:var(--mono);color:var(--human)}
-.decide a{text-decoration-color:var(--human)}
+.decide a.go{font-family:var(--mono);font-size:.875rem;color:var(--human);text-decoration-color:var(--human);white-space:nowrap}
 .filter>input{position:absolute;opacity:0;width:1px;height:1px}
 .filter>label{display:inline-flex;align-items:center;min-height:2.75rem;font-family:var(--mono);font-size:.8125rem;
 border:1px solid var(--line);padding:.375rem 1rem;margin:0 .375rem .75rem 0;cursor:pointer;color:var(--muted)}
@@ -928,7 +936,10 @@ border:1px solid var(--line);padding:.375rem 1rem;margin:0 .375rem .75rem 0;curs
 .checks{list-style:none;padding:.5rem 0 0;border-top:1px solid var(--line)}
 .check{border-bottom:1px solid var(--line);margin:0;max-width:none;padding:.25rem 0 .5rem}
 .check summary{cursor:pointer;padding:.75rem .5rem;display:flex;flex-wrap:wrap;gap:.25rem .75rem;align-items:baseline}
-.check summary::marker{color:var(--dim)}
+.check summary{list-style:none}.check summary::-webkit-details-marker{display:none}
+.check summary::before{content:"▸";color:var(--dim);font-family:var(--mono);transition:transform .15s}
+.check details[open]>summary::before{transform:rotate(90deg)}
+@media (prefers-reduced-motion:reduce){.check summary::before{transition:none}}
 .check summary:hover{background:var(--surface)}
 .check details>*:not(summary){margin-left:1.75rem;margin-right:.5rem}
 .check details[open]{padding-bottom:1rem}
@@ -956,8 +967,11 @@ scroll-margin-top:1.5rem}
 .guide h3{border-top:1px solid var(--line);padding-top:1.25rem}
 footer{padding-top:2rem;padding-bottom:3rem}
 .ids dt{color:var(--dim)}
-@media (max-width:600px){dl.row,dl.fields,dl.ids{grid-template-columns:minmax(0,1fr)}dl dd{margin-bottom:.5rem}
-h2,.num{font-size:1.5rem}h3{font-size:1.125rem}.notes{padding:1rem 1rem .25rem}}
+@media (max-width:640px){dl.row,dl.fields,dl.ids{grid-template-columns:minmax(0,1fr)}dl dd{margin-bottom:.5rem}
+h2,.num{font-size:1.5rem}h3{font-size:1.125rem}figure pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.criteria thead{display:none}.criteria tr{display:block;border-bottom:1px solid var(--line);padding:.5rem 0}
+.criteria td,.criteria th{display:block;border:0;min-width:0;width:auto;padding:.25rem .75rem}
+.criteria td:last-child::before{content:"Checks: ";color:var(--dim);font-family:var(--mono)}.notes{padding:1rem 1rem .25rem}}
 """
 
 
