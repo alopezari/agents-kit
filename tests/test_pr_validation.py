@@ -211,6 +211,21 @@ def counts_findings_listed_under_their_label(base):
     assert "  - Not run: B1 needs the payment sandbox\n  - Not run: B2 needs a phone\n" in out.stdout, out.stdout
 
 
+def a_lenses_table_adds_no_entry(base):
+    repo = new_repo(base)
+    write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
+    write(repo, "review", "Review (risk: standard; lenses: correctness, tests)\n"
+                          "Fixed:     the total ignored tax — cart.py:52\n"
+                          "Not run:\n- tests lens, codex: exit 1\n\n"
+                          "## Lenses\n| Lens | Model | Findings | Confirmed | Outcomes |\n|---|---|---|---|---|\n"
+                          "| Correctness | claude | 2 | 1 | fixed=1, open=1 |\n| Tests | codex | not run: exit 1 | — | — |\n")
+    out = sh(repo, PR_VALIDATION)
+    assert out.returncode == 0, out
+    assert ("- Review (risk: standard; lenses: correctness, tests): 1 fixed, 0 rejected, 0 open.\n"
+            "  - Fixed: the total ignored tax.\n  - Not run: tests lens, codex: exit 1\n") in out.stdout, out.stdout
+    assert "Correctness" not in out.stdout and "fixed=1" not in out.stdout, out.stdout
+
+
 def turns_tabs_into_spaces(base):
     repo = new_repo(base)
     write(repo, "verify", "# Verify: PASS\n\nran: tests/test_cart.py\n")
@@ -290,7 +305,7 @@ for test in (names_the_phases_the_user_switched_off, builds_the_section_from_eve
              keeps_qualified_verdicts_and_bounded_sections,
              a_guide_with_only_steps_after_the_merge_lists_them, says_when_the_guide_has_no_steps_or_cannot_be_read,
              counts_findings_listed_under_their_label, a_missing_verify_or_review_fails_naming_it, turns_tabs_into_spaces,
-             a_long_unclosed_link_is_read_in_time):
+             a_long_unclosed_link_is_read_in_time, a_lenses_table_adds_no_entry):
     base = tempfile.mkdtemp(prefix="agents-test-pr-validation-")
     try:
         test(base)

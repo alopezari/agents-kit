@@ -119,4 +119,12 @@ Rejected:  <finding> — evidence: <file:line where it's handled, or the command
 Pre-existing: <finding> — <file:line> — evidence: <the line on the base branch> (also under Found in the final message)
 Open:      <finding> — <uncertain | confirmed, not fixed after the last re-check: why | needs another round: the design question> — <evidence that would settle it, or the decision for the human>
 Not run:   <lens or reviewer skipped, and why>
+
+## Lenses
+| Lens | Model | Findings | Confirmed | Outcomes |
+|---|---|---|---|---|
+| Correctness | claude | 3 | 2 | fixed=2, wrong=1 |
+| Correctness | codex | not run: exit 1 | — | — |
 ```
+
+The `## Lenses` table has one row per lens and model family, with the counts you logged above; a reviewer that failed or was skipped keeps its row, `not run: <why>` in Findings and `—` in the rest. The decision page shows it lens by lens.
