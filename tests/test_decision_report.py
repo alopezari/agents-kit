@@ -1157,9 +1157,11 @@ def a_video_plays_inline(base):
     assert video, "AC3: the .webm isn't a video"
     assert f'<source src="file://{real}/run.webm" type="video/webm">' in video.group(1), video.group(1)
     assert f'href="file://{real}/run.webm"' in video.group(1), "AC3: no link inside the video as its fallback"
+    assert '<video controls preload="metadata" aria-label="run.webm">' in block, "the video has no accessible name"
     hostile = check_block(markup, "V1")
     assert f'src="file://{real}/v%22%3Cb%3E.mp4" type="video/mp4"' in hostile, hostile[:800]
     assert "<b>" not in hostile, hostile[:800]
+    assert 'aria-label="v&quot;&lt;b&gt;.mp4"' in hostile, hostile[:800]
     outside = check_block(markup, "V2")
     assert "<video" not in outside and "not read" in text(outside), outside[:800]
 
