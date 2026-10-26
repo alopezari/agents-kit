@@ -252,7 +252,7 @@ class Page:
         if re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target) and not target.startswith("file://"):
             return esc(source)
         _, real = self.resolve(target)
-        if real is None or not os.path.exists(real):
+        if real is None or not os.path.exists(real) or real.lower().endswith(ACTIVE):
             return f"{esc(label)} <code>{esc(target)}</code>" if label else esc(source)
         return f'<a href="{esc(file_href(real))}">{esc(label or os.path.basename(real))}</a>'
 
@@ -365,7 +365,7 @@ def first_paragraph(text):
     text = re.sub(r"<!--.*?(-->|$)", "", text, flags=re.S)
     lines = []
     for line in text.strip().split("\n"):
-        if not line.strip() or line.startswith("#") and not lines:
+        if not line.strip() or heading(line) and not lines:
             if lines:
                 break
             continue
@@ -613,12 +613,12 @@ def build(page_path, evidence):
         verify_word, verify_line = "phase off", "phase off"
     elif texts["verify"] is not None:
         verdict = re.search(r"^# Verify: (.+)$", texts["verify"], re.M)
-        if verdict:
-            words = verdict.group(1).strip().rstrip(".")
+        words = verdict.group(1).strip().rstrip(".,") if verdict else ""
+        if words:
             verify_word = "checked nothing" if words.startswith("PASS, but nothing") else words.split()[0].rstrip(",")
             verify_line = pr_validation.verify_line(texts["verify"])[0][len("- Verify: "):]
         else:
-            whys["verify"] = f"{paths['verify']} has no `# Verify:` line"
+            whys["verify"] = f"{paths['verify']} has no `# Verify:` verdict"
 
     # Review
     review = None
@@ -834,15 +834,16 @@ def build(page_path, evidence):
         # The report's own text, around the result tables already shown as rows: its preamble, notes in a check
         # section, the Notes and Limits sections.
         lines = texts["validation"].split("\n")
-        table = set()
-        for row in rows:
-            start = end = row["line"] - 1
-            while start > 0 and lines[start - 1].lstrip().startswith("|"):
-                start -= 1
-            while end + 1 < len(lines) and lines[end + 1].lstrip().startswith("|"):
-                end += 1
-            table.update(range(start, end + 1))
-        prose = "\n".join(line for n, line in enumerate(lines) if n not in table and not line.startswith("# "))
+        row_lines, table, block = {row["line"] - 1 for row in rows}, set(), []
+        for n, line in enumerate(lines + [""]):
+            if line.lstrip().startswith("|"):
+                block.append(n)
+                continue
+            if row_lines.intersection(block):
+                table.update(block)
+            block = []
+        h1 = next((n for n, line in enumerate(lines) if line.startswith("# ")), None)
+        prose = "\n".join(line for n, line in enumerate(lines) if n not in table and n != h1)
         limits = []
         for block in re.split(r"^(?=## )", prose, flags=re.M):
             if not block.strip() or re.fullmatch(r"## [^\n]*\s*", block):

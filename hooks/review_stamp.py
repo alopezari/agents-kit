@@ -422,7 +422,7 @@ def evidence_files(evidence):
         return []
     root = os.path.realpath(evidence)
     return [name for name in os.listdir(evidence) if os.path.isfile(os.path.join(evidence, name))
-            and os.path.dirname(os.path.realpath(os.path.join(evidence, name))) == root
+            and os.path.commonpath([root, os.path.realpath(os.path.join(evidence, name))]) == root
             and os.path.getsize(os.path.join(evidence, name)) > 0]
 
 

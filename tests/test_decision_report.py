@@ -432,6 +432,17 @@ def unmatched_brackets_take_linear_time(base):
     assert spent < 5, f"{spent:.1f} s of CPU for 60,000 unmatched brackets"
 
 
+def a_long_check_table_takes_linear_time(base):
+    repo, _ = full_branch(base)
+    with open(path_of(repo, "validation"), "a") as fh:
+        fh.write("\n## E. Many\n\n| # | AC | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
+                 + "".join(f"| E{n} | AC1 | row {n} | + | ok | PASS | none |\n" for n in range(8000)))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
+    generate(repo, base)
+    spent = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime - before
+    assert spent < 5, f"{spent:.1f} s of CPU for 8,000 check rows"
+
+
 def a_failed_generation_leaves_no_page(base):
     repo = os.path.join(base, "shop")
     os.makedirs(repo)
@@ -535,6 +546,16 @@ def decide_names_every_item(base):
     assert 'href="#check-A2"' in links and 'href="#s06"' in markup
 
 
+def a_symlink_to_a_file_inside_keeps_its_freshness(base):
+    repo, evidence = full_branch(base)
+    os.makedirs(os.path.join(evidence, "saved"))
+    os.rename(os.path.join(evidence, "A2.txt"), os.path.join(evidence, "saved", "A2.txt"))
+    os.symlink(os.path.join(evidence, "saved", "A2.txt"), os.path.join(evidence, "A2.txt"))
+    _, markup = generate(repo, base)
+    items = decide_items(markup)
+    assert any("A2.txt" in item and "src/cart.py" in item for item in items), items
+
+
 def decide_keeps_what_later_sources_drop(base):
     repo, evidence = full_branch(base)
     os.remove(os.path.join(evidence, "environment.txt"))
@@ -589,6 +610,10 @@ def missing_or_malformed_reports_are_unavailable(base):
     assert not re.search(r"\b(PASS|FAIL|NOT RUN|Fixed|Open) 0\b", six), six[:900]
     items = "\n".join(decide_items(markup))
     assert "validation" in items.lower() and "unavailable" in items, items
+    for verdict in ("   ", " ."):
+        write(repo, "verify", f"# Verify:{verdict}\n")
+        _, markup = generate(repo, base)
+        assert re.search(r"Verify: unavailable", text(section(markup, 6))), f"verdict {verdict!r}"
 
 
 def ci_states_and_phases_off(base):
@@ -657,6 +682,17 @@ def a_template_heading_is_not_the_first_paragraph(base):
     _, markup = generate(repo, base)
     six = text(section(markup, 6))
     assert "first paragraph: The cart applies a coupon once." in six and "Summary" not in six.split("first paragraph:")[1][:40], six
+    write(repo, "pr-body", "## Summary\n\n#123 is fixed here.\nMore.\n")
+    _, markup = generate(repo, base)
+    assert "first paragraph: #123 is fixed here." in text(section(markup, 6)), "an issue reference was taken for a heading"
+
+
+def the_validation_notes_keep_their_code(base):
+    repo, _ = full_branch(base)
+    with open(path_of(repo, "validation"), "a") as fh:
+        fh.write("- Rerun it:\n\n```\n# KEEP-THIS-COMMENT\nmake test\n```\n")
+    _, markup = generate(repo, base)
+    assert "KEEP-THIS-COMMENT" in markup, "a shell comment in the validation notes was dropped"
 
 
 # AC4
@@ -760,7 +796,11 @@ def hostile_text_renders_inert(base):
     head = git(repo, "rev-parse", "HEAD")
     pr = {"number": 7, "url": f"https://github.com/o/shop/pull/7{evil}", "title": evil, "headRefOid": head, "state": evil}
     checks = {head: {"check_runs": [{"name": evil, "status": "completed", "conclusion": "failure", "details_url": evil}]}}
+    put(os.path.join(evidence, "attack.html"), "<script>alert(14)</script>\n")
+    with open(path_of(repo, "validation"), "a") as fh:
+        fh.write(f"| D3 | AC1 | active file | + | not linked | PASS | proof in [open proof](attack.html) |\n")
     _, markup = generate(repo, base, {"pr": pr, "checks": checks})
+    assert "attack.html" not in "".join(v or "" for _, attrs in tags(markup) for _, v in attrs), "a Markdown link opens an active file"
     assert "<script" not in markup.lower(), "a script tag reached the page"
     for tag, attrs in tags(markup):
         assert tag not in ("script", "iframe", "object", "embed", "base", "form"), tag
@@ -797,16 +837,16 @@ def refuses_another_branch_and_a_detached_head(base):
 
 for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
              reads_nothing_outside_the_evidence_directory, a_long_last_line_keeps_its_tail,
-             unmatched_brackets_take_linear_time, a_failed_generation_leaves_no_page,
+             unmatched_brackets_take_linear_time, a_long_check_table_takes_linear_time, a_failed_generation_leaves_no_page,
              sections_come_in_order_with_the_notes, a_branch_without_notes_or_pr_body_says_not_recorded,
-             falls_back_to_the_pr_body_first_paragraph, decide_names_every_item, decide_keeps_what_later_sources_drop,
+             falls_back_to_the_pr_body_first_paragraph, decide_names_every_item, a_symlink_to_a_file_inside_keeps_its_freshness, decide_keeps_what_later_sources_drop,
              ci_is_read_for_the_pr_head_only,
              no_pr_and_gh_failing_are_named, missing_or_malformed_reports_are_unavailable,
              each_check_row_carries_its_evidence, evidence_named_in_code_spans_and_old_headers,
              a_report_from_before_pr_a_says_not_recorded,
              every_review_entry_and_guide_step_in_order, hostile_text_renders_inert,
              ci_states_and_phases_off, stamps_verify_and_validation_states, prose_names_no_file_it_lacks,
-             a_template_heading_is_not_the_first_paragraph,
+             a_template_heading_is_not_the_first_paragraph, the_validation_notes_keep_their_code,
              the_skills_regenerate_and_link_the_page, refuses_another_branch_and_a_detached_head):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
