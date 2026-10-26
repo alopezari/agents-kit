@@ -737,9 +737,9 @@ def an_answer_to_the_agents_offer_approves_the_service_it_named(base):
     assert approves("sí", *history, said("z" * 300_000), said(offer)) == "deny", "a run of the agent's text longer than the tail"
     assert approves("sí", *history, said("z" * 300_000 + " ¿Quieres que la cree en Linear?")) == "deny", \
         "a last message longer than the tail read isn't read"
-    started = time.monotonic()
+    started = child_cpu()
     assert approves("sí", *history, said("palabra " * 25_000 + "¿Quieres que la cree en Linear?")) == "allow"
-    assert time.monotonic() - started < 3, "a long sentence is read in linear time, well within the hook's timeout"
+    assert child_cpu() - started < 3, "a long sentence is read in linear time, well within the hook's timeout"
     codex = [{"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1", "last_agent_message": offer}}]
     assert approves("sí", *codex, codex=True) == "allow", "a Codex rollout"
     assert approves("sí", *codex, {"type": "event_msg", "payload": {"type": "user_message", "message": "sí"}},

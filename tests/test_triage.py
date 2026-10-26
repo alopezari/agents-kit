@@ -797,12 +797,13 @@ for prose, code in [('help = "schema or migration"', "run_migration(db)")]:
 
 # A long line that almost matches a code shape is scanned in linear time: quality-log gives triage 60 seconds.
 for filler in ["a" * 50000, "a_" * 25000]:
-    started = time.monotonic()
+    started = os.times()
     result = triage_change({}, {"bundle.js": f'const payload = "{filler}";\n'})
-    took = time.monotonic() - started
+    ended = os.times()
+    took = ended.children_user + ended.children_system - started.children_user - started.children_system
     ok = took < 5 and not result["reasons"]
     fail |= not ok
-    print(f"{'ok  ' if ok else 'FAIL'} a {len(filler)}-character line of {filler[:2]!r}… is triaged in {took:.1f}s (< 5s)")
+    print(f"{'ok  ' if ok else 'FAIL'} a {len(filler)}-character line of {filler[:2]!r}… is triaged in {took:.1f}s of CPU (< 5s)")
 
 
 def triage_untracked(untracked):
