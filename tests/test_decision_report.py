@@ -416,7 +416,7 @@ def sections_come_in_order_with_the_notes(base):
         assert line in text(part), (number, text(part)[:300])
         assert "Written by the agent" in text(part), number
         assert path_of(repo, "decision-notes") in text(part), number
-    assert re.search(r"<pre[^>]*>(?:<code[^>]*>)?[^<]*└── apply_coupon", section(markup, 2)), "the notes' figure isn't preformatted"
+    assert re.search(r'<pre[^>]*>(?:<code[^>]*>)?(?:[^<]|<span class="ln">|</span>)*└── apply_coupon', section(markup, 2)), "the notes' figure isn't preformatted"
     one = section(markup, 1)
     criteria = re.findall(r'<tr id="ac-(\d+)">(.*?)</tr>', one, re.S)
     assert [n for n, _ in criteria] == ["1", "2", "3"], criteria
