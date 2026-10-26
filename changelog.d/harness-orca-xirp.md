@@ -1,0 +1,3 @@
+- The status line shows the kit's line once when a profile segment runs a wrapper that calls it back, such as Xirp's: the nested call prints nothing, so the line no longer repeats when the kit's own script holds the slot.
+- The usage report attributes a session in a removed Orca worktree (`<dir>/<repo>/<worktree>`) to its repo, through the one main checkout named `<repo>` among the scanned sessions.
+- `install.sh --doctor` reports Xirp and Orca when either app or its hooks are there: whether each app is installed, where its hooks are, who runs the status line, a note when Xirp's PermissionRequest hook can hold up a permission prompt in Orca's sessions for up to 30 s, and a warning when an app's hooks are left after the app is gone.

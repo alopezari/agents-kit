@@ -83,6 +83,55 @@ def status_line_names_the_branch(base):
         assert f"flow {label}: spec" in line(), (branch, line())
 
 
+def status_line_shows_the_kit_once_in_every_host(base):
+    # Xirp's wrapper can hold the statusLine slot, or a profile segment can run it from the kit's line: either way
+    # the kit's line shows once. The wrapper calling the kit back from a segment once printed it twice.
+    statusline = os.path.expanduser("~/.agents/adapters/claude/statusline.sh")
+    for own in ("profiles", "monitors"):  # this process's HOME: no real profile or rate-limit cache reaches the line
+        path = os.path.expanduser(f"~/.agents/{own}")
+        if os.path.islink(path):
+            os.remove(path)
+    wrapper = os.path.expanduser("~/.claude/xirp-statusline-wrapper.sh")
+    os.makedirs(os.path.dirname(wrapper))
+    with open(wrapper, "w") as fh:  # Xirp's, less the ping to its daemon
+        fh.write(f"""#!/bin/bash
+# xirp-statusline-wrapper
+# xirp-original-command: {statusline}
+input=$(cat)
+if [ -z "${{CHIRP_STATUSLINE_NESTED:-}}" ]; then
+  export CHIRP_STATUSLINE_NESTED=1
+  original_output=$(echo "$input" | {statusline})
+  unset CHIRP_STATUSLINE_NESTED
+  [ -n "$original_output" ] && printf '%s | ' "$original_output"
+fi
+cost=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
+LC_ALL=C printf 'Est. usage: $%.2f\\n' "$cost"
+""")
+    segments = {"a-host": '[ -z "${CHIRP_STATUSLINE_NESTED:-}" ] && [ -x "$HOME/.claude/xirp-statusline-wrapper.sh" ] || exit 0; '
+                          'exec "$HOME/.claude/xirp-statusline-wrapper.sh"',  # a profile's segment as installed today
+                "b-plain": "cat >/dev/null; echo plain"}
+    for name, body in segments.items():
+        path = os.path.expanduser(f"~/.agents/profiles/{name}/statusline")
+        os.makedirs(os.path.dirname(path))
+        open(path, "w").write(f"#!/bin/bash\n{body}\n")
+    for path in (wrapper, *(os.path.expanduser(f"~/.agents/profiles/{n}/statusline") for n in segments)):
+        os.chmod(path, 0o755)
+    repo = new_repo(base)
+    env = {k: v for k, v in os.environ.items() if k not in ("CHIRP_STATUSLINE_NESTED", "AGENTS_STATUSLINE_NESTED")}
+
+    def line(slot):
+        phase(repo)
+        payload = json.dumps({"model": {"display_name": "M"}, "cwd": repo, "cost": {"total_cost_usd": 0.123}})
+        return subprocess.run([slot], input=payload, capture_output=True, text=True, env=env, timeout=30).stdout
+
+    kit = "M · default · ctx – · 5h ? · 7d ?"
+    assert line(statusline) == f"{kit} · Est. usage: $0.12 · plain\n", f"the kit's script in the slot: {line(statusline)!r}"
+    assert line(wrapper) == f"{kit} · plain | Est. usage: $0.12\n", f"Xirp's wrapper in the slot: {line(wrapper)!r}"
+    sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
+    assert line(statusline) == f"{kit} · flow cart: spec · Est. usage: $0.12 · plain\n", line(statusline)
+    assert line(wrapper) == f"{kit} · flow cart: spec · plain | Est. usage: $0.12\n", line(wrapper)
+
+
 def walks_the_flow(base):
     repo = os.path.join(base, "shop")
     os.makedirs(repo)
@@ -187,6 +236,31 @@ def new_repo(base):
     sh(repo, "git", "add", "-A")
     sh(repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
     return repo
+
+
+def kit_state_follows_the_branch_from_a_xirp_to_an_orca_worktree(base):
+    # Moving a branch between tools: Xirp names its worktree <main>-worktree-<session>, Orca nests it as
+    # <dir>/<repo>/<worktree>. Git allows the branch in one worktree at a time, so the first goes before the second.
+    repo = new_repo(base)
+    xirp = f"{repo}-worktree-wary-falcon"
+    sh(repo, "git", "worktree", "add", "-q", "-b", "feature/cart", xirp)
+    open(sh(xirp, SPEC_PATH), "w").write("# Spec\n")
+    open(os.path.join(xirp, "app.py"), "a").write("y = 2\n")
+    sh(xirp, "git", "commit", "-qam", "cart")
+    stamp(xirp, "verify")
+    stamp(xirp, "review")
+    reports = os.path.expanduser("~/.agents/bin/reports")
+    open(sh(xirp, reports, "path", "checks-guide"), "w").write("# Checks guide\n")
+    before = (phase(xirp), sh(xirp, SPEC_PATH), sh(xirp, reports, "path", "checks-guide"))
+    assert before[0] == "validate", before
+    sh(repo, "git", "worktree", "remove", xirp)
+
+    orca = os.path.join(base, "orca", "workspaces", "shop", "cart")
+    sh(repo, "git", "worktree", "add", "-q", orca, "feature/cart")
+    after = (phase(orca), sh(orca, SPEC_PATH), sh(orca, reports, "path", "checks-guide"))
+    assert after == before, f"Xirp's worktree: {before}; Orca's: {after}"
+    assert open(after[1]).read() == "# Spec\n" and open(after[2]).read() == "# Checks guide\n", after
+    assert sh(orca, os.path.expanduser("~/.agents/bin/repo-name")) == "shop"
 
 
 def no_spec_is_flagged_not_a_gate(base):
@@ -461,7 +535,9 @@ def reading_a_reflog_keeps_to_the_deadline(base):
         del phase_switches.open
 
 
-TESTS = (switched_off_phases_leave_the_flow, status_line_names_the_branch, walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate,
+TESTS = (switched_off_phases_leave_the_flow, status_line_names_the_branch, status_line_shows_the_kit_once_in_every_host,
+         kit_state_follows_the_branch_from_a_xirp_to_an_orca_worktree,
+         walks_the_flow, pr_opened_without_follow_pr, no_spec_is_flagged_not_a_gate,
          red_verify_after_self_review_stays_at_the_furthest_step, spec_reports_and_stamps_follow_branch_renames,
          a_rename_log_that_cannot_be_written_leaves_the_spec_path,
          slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,
