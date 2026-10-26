@@ -25,6 +25,8 @@ WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "S
 LAYOUT = {
     "AGENTS.md": "The instructions every harness loads (linked as CLAUDE.md / AGENTS.md).",
     "README.md": "Install and first steps.",
+    "PRODUCT.md": "Product context Impeccable reads.",
+    ".impeccable/": "Impeccable's design briefs for generated pages.",
     "LICENSE": "MIT.",
     "VERSION": "The kit's version; `install.sh --doctor` prints it.",
     "CHANGELOG.md": "What changed in each version, and how a release is cut.",
