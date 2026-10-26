@@ -1807,7 +1807,7 @@ def validate_stamp_requires_an_expected_result(base):
         for row in ("E1", "E2", "N1", "T1", "T2", "T3", "T4"):
             assert (f"{row}:" in done.stderr) == (row in offending), (row, offending, done.stderr)
 
-    for blank in ("", " ", "-", "\u2014", "*", "_", "`", "**\u2014**"):
+    for blank in ("", " ", "\u2014\u00a0\u2014", "-", "\u2014", "*", "_", "`", "**\u2014**"):
         refused(ok + validation_row("T1", "", "+", "PASS", expected=blank), ["T1"])
     refused(ok + validation_row("T1", "", "+", "FAIL", expected="\u2014"), ["T1"])
     no_column = "| # | Check | Case | Result | Evidence |\n|---|---|---|---|---|\n"
@@ -1816,6 +1816,10 @@ def validate_stamp_requires_an_expected_result(base):
     refused(validation_row("T1", "", "+", "PASS", expected="") + "\nB. Another block\n\n" + no_column
             + "| T2 | check | + | PASS | a1.txt |\n| T3 | check | + | NOT RUN | needs staging |\n",
             ["T1", "T2"])
+    worded = "| # | AC | Check | Case (+/\u2212) | Expected (exact output) | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
+    done = attempt(ok, criteria=None, head=worded)
+    assert done.returncode == 0, "a header that words the column more fully is still the Expected column: " + done.stderr
+    refused(ok + validation_row("T1", "", "+", "PASS", expected=""), ["T1"], head=worded)
     unran = validation_row("N1", "", "+", "NOT RUN", "needs staging", expected="")
     done = attempt(ok + unran, criteria=None)
     assert done.returncode == 0, "a row that didn't run asserts nothing, so it needs no Expected: " + done.stderr
