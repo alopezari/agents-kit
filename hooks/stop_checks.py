@@ -57,7 +57,7 @@ TRANSCRIPT_TAIL_BYTES = 2_000_000
 SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "kit-spec", "path.sh"))
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
 
-TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec)/|[._-](test|spec)\.[a-z]+$|Test\.php$", re.I)
+TEST_FILE = review_stamp.TEST_FILE
 WEAKENED_TEST = re.compile(
     r"\b(it|test|describe)\.(skip|only)\(|\bx(it|describe|test)\(|markTest(Skipped|Incomplete)\("
     r"|@pytest\.mark\.skip|\bt\.Skip\(|@Disabled\b|@group\s+(skip|ignore)"

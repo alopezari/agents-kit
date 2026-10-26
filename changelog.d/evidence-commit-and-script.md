@@ -1,0 +1,2 @@
+- `bin/evidence` records the commit and the content each check ran on (and whether the tree had uncommitted changes), and the validate stamp refuses a PASS/FAIL row whose output was recorded before a change to files other than tests, warning when only tests changed since.
+- kit-validate keeps each check's script in the evidence directory's `checks/`, linked from its report row, so anyone can re-run the check; a fix on an open PR that touches code re-runs every check.

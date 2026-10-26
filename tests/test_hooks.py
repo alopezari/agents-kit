@@ -1579,6 +1579,15 @@ def validate_stamp_needs_evidence(base):
     outside = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "M1", "echo", "from the guide"], cwd=base,
                              capture_output=True, text=True, env={**os.environ, "EVIDENCE_DIR": elsewhere})
     assert outside.returncode == 0 and "from the guide" in open(os.path.join(elsewhere, "M1.txt")).read(), outside.stderr
+    outside = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "M3", "bash", "-c", "exit 5"], cwd=base,
+                             capture_output=True, text=True, env={**os.environ, "EVIDENCE_DIR": elsewhere})
+    assert outside.returncode == 5 and evidence_header(os.path.join(elsewhere, "M3.txt")) == ("none", False, None), \
+        ("no repository: no commit, no tree, the exit code kept", outside.stderr)
+    unborn = os.path.join(base, "unborn")
+    git(base, "init", "-q", unborn)
+    first = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "M4", "true"], cwd=unborn,
+                           capture_output=True, text=True, env={**os.environ, "EVIDENCE_DIR": elsewhere})
+    assert first.returncode == 0 and evidence_header(os.path.join(elsewhere, "M4.txt")) == ("none", False, None), first.stderr
     unset_dir = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "M2", "true"], cwd=base, capture_output=True, text=True,
                                env={**os.environ, "EVIDENCE_DIR": ""})
     assert unset_dir.returncode == 74 and "EVIDENCE_DIR" in unset_dir.stderr, "an empty EVIDENCE_DIR means step 0 failed"
@@ -1624,6 +1633,155 @@ def validate_stamp_needs_evidence(base):
     assert done.returncode == 0 and stamped(), done.stderr
     listed = subprocess.run([reports], cwd=repo, capture_output=True, text=True).stdout
     assert "A1.txt" in listed and "b1.png" in listed and "\x89PNG" not in listed, listed
+
+    head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit, dirty, tree = evidence_header(os.path.join(evidence, "A1.txt"))
+    assert (commit, dirty) == (head, True) and git(repo, "show", f"{tree}:app.py").stdout == "x = 1\ny = 2\n", \
+        ("the header names the commit, the uncommitted edit and the content it ran on", commit, dirty, tree)
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "checked")
+    head, index = git(repo, "rev-parse", "HEAD").stdout.strip(), os.path.join(repo, ".git", "index")
+    later = time.time() + 100
+    os.utime(os.path.join(repo, "app.py"), (later, later))  # a plain `git status` would refresh the index's stat data
+    before = open(index, "rb").read()
+
+    def run_evidence(name, *command):
+        ran = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), name, *command], cwd=repo, capture_output=True, text=True)
+        return ran, evidence_header(os.path.join(evidence, f"{name}.txt"))
+    ran, header = run_evidence("T1", "true")
+    assert ran.returncode == 0 and header == (head, False, git(repo, "rev-parse", "HEAD^{tree}").stdout.strip()), (ran, header)
+    assert open(index, "rb").read() == before, "the repository's index is untouched"
+    open(os.path.join(repo, "new.py"), "w").write("z = 3\n")
+    ran, (commit, dirty, tree) = run_evidence("T2", "true")
+    assert (commit, dirty) == (head, True) and git(repo, "show", f"{tree}:new.py").stdout == "z = 3\n", \
+        ("an untracked file is an uncommitted change, and part of the content", commit, dirty, tree)
+    assert open(index, "rb").read() == before, "the repository's index is untouched"
+    ran, (commit, dirty, tree) = run_evidence("T3", "bash", "-c", "git add -A && git -c user.email=t@t -c user.name=t commit -qm during")
+    assert ran.returncode == 0 and git(repo, "rev-parse", "HEAD").stdout.strip() != head, ran
+    assert (commit, dirty) == (head, True) and git(repo, "show", f"{tree}:new.py").stdout == "z = 3\n", \
+        ("the state from before the command, not the commit it made", commit, dirty, tree)
+    saved = open(index, "rb").read()
+    open(index, "wb").write(b"not an index")
+    try:
+        ran, header = run_evidence("T4", "bash", "-c", "exit 4")
+    finally:
+        open(index, "wb").write(saved)
+    assert ran.returncode == 4 and header[2] == "unknown" and "evidence:" in ran.stderr, \
+        ("a git failure leaves the tree unknown, says so, and keeps the exit code", ran, header)
+    unreadable = os.path.join(repo, "locked.py")
+    open(unreadable, "w").write("secret\n")
+    os.chmod(unreadable, 0)
+    try:
+        ran, header = run_evidence("T5", "true")
+    finally:
+        os.remove(unreadable)
+    assert header[1:] == (True, "unknown") and "evidence:" in ran.stderr, \
+        ("a file git can't read leaves the tree unknown, and the uncommitted change still shows", ran, header)
+
+
+def evidence_header(path):
+    """(commit, whether it had uncommitted changes, tree or None) from the `# in` line bin/evidence saved in path."""
+    text = open(path).read()
+    found = re.match(r"# in .*, exit \d+, commit (\S+?)(, uncommitted changes)?(?:, tree (\S+))?\n(?:# fingerprint \S+\n)?\$ ", text)
+    assert found, text
+    return found.group(1), bool(found.group(2)), found.group(3)
+
+
+def validate_stamp_refuses_stale_evidence(base):
+    repo, attempt = validation_fixture(base, "feat/stale")
+    row = validation_row("A1", "", "+", "PASS", "[output](a1.txt)")
+    evidence = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "evidence"], cwd=repo,
+                              capture_output=True, text=True).stdout.strip()
+
+    def check(name="a1", *command):
+        ran = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), name, *(command or ("python3", "-c", "print('ran')"))],
+                             cwd=repo, capture_output=True, text=True)
+        assert ran.returncode == 0, ran
+
+    def commit(files=None, *command):
+        for name, content in (files or {}).items():
+            os.makedirs(os.path.dirname(os.path.join(repo, name)), exist_ok=True)
+            open(os.path.join(repo, name), "w").write(content)
+        if command:
+            assert git(repo, *command).returncode == 0, command
+        git(repo, "add", "-A")
+        done = git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "change")
+        assert done.returncode == 0, done
+
+    index = os.path.join(repo, ".git", "index")
+
+    def stamp(rows):
+        before = open(index, "rb").read()
+        done = attempt(rows, criteria=None)
+        assert open(index, "rb").read() == before, "the gate compares through a copy of the index, never the real one"
+        return done
+
+    def stamped(warned=None, rows=row):
+        done = stamp(rows)
+        assert done.returncode == 0 and "validate stamp written" in done.stdout, (done.stdout, done.stderr)
+        assert ("a1.txt" in done.stdout) == bool(warned) and (not warned or warned in done.stdout), done.stdout
+
+    def refused(path, why="ran on", rows=row):
+        done = stamp(rows)
+        assert done.returncode == 2 and "validate stamp written" not in done.stdout, (path, done.stdout, done.stderr)
+        assert "a1.txt" in done.stderr and why in done.stderr and re.search(rf"(?<![\w/.-]){re.escape(path)}(?![\w/.-])", done.stderr), \
+            (path, done.stderr)
+        return done.stderr
+
+    open(os.path.join(repo, "notes.tmp"), "w").write("untracked\n")
+    check()
+    stamped()
+    commit()
+    stamped()  # the content it ran on, now committed
+    open(os.path.join(repo, "app.py"), "a").write("z = 3\n")
+    refused("app.py")
+    commit()
+    refused("app.py")
+    check()
+    stamped()
+    commit({"tests/test_app.py": "assert True\n"})
+    stamped(warned="tests/test_app.py")
+    check()
+    commit({"changelog.d/stale.md": "- A changelog entry, often written last.\n"})
+    stamped()  # outside the stamps' fingerprint, so it doesn't outdate the checks either
+    commit({"README.md": "# app\n"})
+    refused("README.md")
+    check()
+    commit({"tests/test_app.py": "assert 1\n", "app.py": "x = 4\n"})
+    assert "tests/test_app.py" not in refused("app.py"), "only the changed files that aren't tests are named"
+    check()
+    commit(None, "mv", "app.py", "tests/app.py")
+    refused("app.py")  # a rename into tests/ still removes app.py
+    check()
+    commit({"app.py": "x = 6\n"})
+    refused("app.py", rows=validation_row("A1", "", "+", "FAIL", "[output](a1.txt)"))  # a FAIL also rests on its run
+    stamped(rows=validation_row("A1", "", "+", "NOT RUN", "[output](a1.txt)"))  # a row that didn't run cites nothing
+    check("a1", "bash", "-c", f"echo ran\n# in {repo}, 2026-10-25 10:00:00 +0200, exit 0")
+    commit({"app.py": "x = 5\n"})
+    refused("app.py")  # a script line shaped like the header doesn't hide the real one
+    check("a2")
+    both = validation_row("A1", "", "+", "PASS", "[output](a1.txt)") + validation_row("A2", "", "+", "PASS", "[output](a2.txt)")
+    assert "a2.txt" not in refused("app.py", rows=both), "a check run on the current content isn't out of date"
+    os.remove(os.path.join(evidence, "a2.txt"))
+
+    def saved_as(header):
+        with open(os.path.join(evidence, "a1.txt"), "w") as fh:
+            fh.write(f"# in {repo}, 2026-10-25 10:00:00 +0200, exit 0{header}\n$ python3 app.py\n\nran\n")
+    head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    for unknown in ("", ", commit none", f", commit {head}, tree unknown"):
+        saved_as(unknown)
+        stamped()  # outside a repository, or git failed: nothing to compare
+    with open(os.path.join(evidence, "a1.txt"), "w") as fh:
+        fh.write(f"$ python3 app.py\n# in {repo}, 2026-10-25 10:00:00 +0200, exit 0\n\nran\n")
+    stamped()  # written before this change, with the command first
+    saved_as(f", commit {head}, tree {'1234567890abcdef' * 2 + '12345678'}")
+    stamped(warned="can't be compared")
+    sha256_name = "ab" * 32  # not a valid object name in a SHA-1 repository: git fails, it doesn't say "missing"
+    saved_as(f", commit {head}, tree {sha256_name}")
+    refused(sha256_name, why="couldn't look up")
+    broken = subprocess.run(["git", "mktree", "--missing"], cwd=repo, capture_output=True, text=True,
+                            input=f"040000 tree {'abcdef1234567890' * 2 + 'abcdef12'}\tsub\n").stdout.strip()
+    saved_as(f", commit {head}, tree {broken}")
+    refused("abcdef1234567890abcdef1234567890abcdef12", why="unable to read")
 
 
 def validate_stamp_refuses_empty_recordings(base):
@@ -1869,9 +2027,10 @@ def evidence_records_the_code_fingerprint(base):
     assert ran.returncode == 0 and ran.stdout == "edited\n", ran
     with open(os.path.join(evidence, "F1.txt")) as fh:
         lines = fh.read().split("\n")
-    assert lines[0] == "$ bash -c 'echo '\\''z = 3'\\'' >> app.py; echo edited'", lines
-    assert re.fullmatch(rf"# in {re.escape(os.path.realpath(repo))}, \d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{{4}}, exit 0", lines[1]), lines
-    assert lines[2] == f"# fingerprint {before}", "the code's fingerprint before the run, on a line of its own: " + repr(lines[:4])
+    assert re.fullmatch(rf"# in {re.escape(os.path.realpath(repo))}, \d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{{4}}, exit 0, "
+                        r"commit [0-9a-f]{40}, uncommitted changes, tree [0-9a-f]{40}", lines[0]), lines
+    assert lines[1] == f"# fingerprint {before}", "the code's fingerprint before the run, on a line of its own: " + repr(lines[:4])
+    assert lines[2] == "$ bash -c 'echo '\\''z = 3'\\'' >> app.py; echo edited'", lines
     assert lines[3:] == ["", "edited", ""], lines
     assert code_fingerprint(repo) != before, "the run's own edit changed the code after the line was recorded"
 
@@ -1881,7 +2040,7 @@ def evidence_records_the_code_fingerprint(base):
                              capture_output=True, text=True, env={**os.environ, "EVIDENCE_DIR": elsewhere})
     with open(os.path.join(elsewhere, "M1.txt")) as fh:
         lines = fh.read().split("\n")
-    assert outside.returncode == 5 and lines[1].endswith(", exit 5") and lines[2:] == ["", "guide", ""], (outside.stderr, lines)
+    assert outside.returncode == 5 and lines[0].endswith(", exit 5, commit none") and lines[2:] == ["", "guide", ""], (outside.stderr, lines)
 
     # A copy of bin/evidence whose hook is broken, then missing: the check still runs and keeps its exit code.
     kit = os.path.join(base, "kit")
@@ -1968,14 +2127,15 @@ def validate_stamp_needs_a_full_suite_run(base):
         other = os.path.join(base, "other-checkout")
         os.makedirs(os.path.join(other, ".git"))
         with open(os.path.join(evidence, "S2.txt"), "w") as fh:  # as bin/evidence saves it, from another checkout
-            fh.write(f"$ make   check\n# in {other}, 2026-10-25 10:00:00 +0200, exit 0\n# fingerprint {code_fingerprint(repo)}\n\n"
+            fh.write(f"# in {other}, 2026-10-25 10:00:00 +0200, exit 0, commit {'a' * 40}, tree {'b' * 40}\n"
+                     f"# fingerprint {code_fingerprint(repo)}\n$ make   check\n\n"
                      + "ok\n" * 30000)  # output past the lines read
         written()
         os.remove(os.path.join(evidence, "S2.txt"))
         # Shell quoting is the shell's: the overlay's double quotes and bin/evidence's single ones are the same argument.
         assert run("S3", "tests/run.sh", "-k", "not slow").returncode == 0
         with open(os.path.join(evidence, "S3.txt")) as fh:
-            assert fh.readline() == "$ tests/run.sh -k 'not slow'\n"
+            assert "\n$ tests/run.sh -k 'not slow'\n" in fh.read()
         written()
     finally:
         remove_suite_overlay()
@@ -2030,6 +2190,9 @@ def validate_stamp_refuses_a_suite_run_that_doesnt_count(base):
 
         with open(os.path.join(evidence, "S1.txt"), "w") as fh:
             fh.write(f"$ tests/run.sh\n# in {repo}, 2026-10-25 10:00:00 +0200, exit 0\n\nsuite ran\n")
+        refused("S1.txt", "no recorded fingerprint")
+        with open(os.path.join(evidence, "S1.txt"), "w") as fh:  # the header bin/evidence writes when its hook fails
+            fh.write(f"# in {repo}, 2026-10-25 10:00:00 +0200, exit 0, commit none\n$ tests/run.sh\n\nsuite ran\n")
         refused("S1.txt", "no recorded fingerprint")
     finally:
         remove_suite_overlay()
@@ -4413,7 +4576,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
          validate_stamp_refuses_a_suite_run_that_doesnt_count, validate_stamp_suite_overlay_edge_cases,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,

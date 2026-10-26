@@ -4,7 +4,8 @@
   review_stamp.py write [--kind review|validate]   # end of review / validate; verify stamps come only from
                                                    # its runner (stop_checks.py), through record_verify(); validate
                                                    # needs a report whose PASS/FAIL rows name their evidence, no empty
-                                                   # recording among it, every criterion of the spec covered by a PASS
+                                                   # recording among it, no output recorded before a change to files
+                                                   # other than tests, every criterion of the spec covered by a PASS
                                                    # and a negative row (or a reasoned NOT RUN when its check is
                                                    # manual), a Test types row for each type bin/triage selects, and,
                                                    # where ~/.agents/repos/<repo>/suite lists the full suite's commands,
@@ -25,6 +26,7 @@ keeps them unless it moves the changed lines or their context; verify's holds th
 (.git/agents/stamps/<branch key>/), never in the tree: they survive removing the worktree they were
 written in, so they are still read from the main checkout once kit-ship frees the branch. They also follow `git branch -m`: agents often write the spec on a session branch and rename it afterwards.
 """
+import contextlib
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -40,10 +42,9 @@ import time
 
 # Where path.sh keeps a spec and its reports while a sandbox makes .git read-only.
 TMP_SPECS = os.path.join(os.environ.get("TMPDIR") or "/tmp", "agents-specs")
-NOT_BEHAVIOR = re.compile(
-    r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$|(^|/)(CHANGELOG|README)",
-    re.I,
-)
+TEST_PATH = r"(^|/)(tests?|__tests__|spec)/|[._-](test|spec)\.[a-z]+$|Test\.php$"
+TEST_FILE = re.compile(TEST_PATH, re.I)
+NOT_BEHAVIOR = re.compile(TEST_PATH + r"|(^|/)docs?/|\.(md|txt|rst)$|(^|/)(CHANGELOG|README)", re.I)
 SPEC_LOOKUP_SECS = 10
 EVIDENCE_LINE_BYTES = 64 * 1024
 TRIAGE_SECS = 60
@@ -211,6 +212,24 @@ def change_fingerprint():
     if not stamped:
         return digest.hexdigest()
     # Untracked files enter a copy of the index as intent-to-add, so they diff exactly as they will once added.
+    with index_copy() as env:
+        untracked = git_paths("ls-files", "--others", "--exclude-standard", "--", *stamped)
+        commands = [["add", "--intent-to-add", "--", *(f":(literal){p}" for p in untracked)]] if untracked else []
+        commands.append(["diff", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "-U3", base,
+                         "--", *stamped])
+        for args in commands:
+            # Bytes: decoding could make two different changes hash alike.
+            patch = git_checked(*args, env=env)
+    for line in patch.split(b"\n"):
+        if not line.startswith(b"index "):
+            digest.update(re.sub(rb"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", b"@@", line) + b"\n")
+    return digest.hexdigest()
+
+
+@contextlib.contextmanager
+def index_copy():
+    """An environment for git commands that stage into a copy of the repository's index (an empty one before the
+    first commit), so the real index is never touched."""
     fd, index = tempfile.mkstemp(prefix="agents-stamp-index-")
     os.close(fd)
     try:
@@ -219,21 +238,17 @@ def change_fingerprint():
             shutil.copyfile(real_index, index)
         else:
             os.remove(index)
-        env = {**os.environ, "GIT_INDEX_FILE": index}
-        untracked = git_paths("ls-files", "--others", "--exclude-standard", "--", *stamped)
-        commands = [["add", "--intent-to-add", "--", *(f":(literal){p}" for p in untracked)]] if untracked else []
-        commands.append(["diff", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "-U3", base,
-                         "--", *stamped])
-        for args in commands:
-            # Bytes: decoding could make two different changes hash alike.
-            patch = git_checked(*args, env=env)
+        yield {**os.environ, "GIT_INDEX_FILE": index}
     finally:
         if os.path.exists(index):
             os.remove(index)
-    for line in patch.split(b"\n"):
-        if not line.startswith(b"index "):
-            digest.update(re.sub(rb"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", b"@@", line) + b"\n")
-    return digest.hexdigest()
+
+
+def working_tree():
+    """The id of a tree holding the working tree's content, untracked files included, as bin/evidence records it."""
+    with index_copy() as env:
+        git_checked("add", "-A", env=env)
+        return git_checked("write-tree", env=env).decode().strip()
 
 
 def fingerprint_for(kind):
@@ -466,6 +481,61 @@ def guide_steps(text):
     return steps
 
 
+def evidence_tree(path):
+    """The tree bin/evidence recorded the check's content as, from the `# in` line it writes first; None when that
+    line has none: saved before it recorded trees, outside a repository, or after git failed."""
+    with open(path, errors="replace") as fh:
+        found = re.match(r"# in .*, exit \d+, commit .*, tree ([0-9a-f]{40,64})$", fh.readline().rstrip("\n"))
+    return found and found.group(1)
+
+
+def stale_evidence(lines, evidence):
+    """(problems, warnings) for the output files behind PASS/FAIL rows whose check ran on other content than the
+    working tree's: a problem when files other than tests changed since, a warning when only tests did, or when this
+    repository doesn't have the tree to compare (a check run in a throwaway clone)."""
+    outputs = [name for name in evidence_files(evidence) if name.endswith(".txt")]
+    judged = {name for _, result, cell, backed, *_ in result_rows(lines, evidence) if result in ("PASS", "FAIL") and backed
+              for name in outputs if names_a_file(cell, [name])}
+    trees = {}  # each tree the checks ran on, with the files that recorded it
+    for name in sorted(judged):
+        tree = evidence_tree(os.path.join(evidence, name))
+        if tree:
+            trees.setdefault(tree, []).append(name)
+    current = working_tree() if trees else None
+    problems, warnings = [], []
+    for tree, names in trees.items():
+        if tree == current:
+            continue
+        named = ", ".join(names)
+        lookup = run_git(["cat-file", "-e", tree])
+        if lookup.returncode > 1:
+            problems.append(f"{named}: couldn't look up the content it ran on: {lookup.stderr.strip()}")
+            continue
+        if lookup.returncode == 1:
+            warnings.append(f"{named} ran on a tree this repository doesn't have (pruned by `git gc`, or a throwaway "
+                            "clone's), so it can't be compared with the working tree; the stamp doesn't know whether it "
+                            "is out of date.")
+            continue
+        try:
+            changed = [p for p in git_paths("diff-tree", "-r", "--no-renames", "--name-only", tree, current)
+                       if not NOT_STAMPED.search(p)]
+        except RuntimeError as error:
+            problems.append(f"{named}: couldn't compare the content it ran on with the working tree: {error}")
+            continue
+        if not changed:
+            continue
+        code = [p for p in changed if not TEST_FILE.search(p)]
+        listed = code or changed
+        shown = ", ".join(listed[:10]) + (f" and {len(listed) - 10} more" if len(listed) > 10 else "")
+        if code:
+            problems.append(f"{named} ran on content the working tree no longer has: {shown} changed since, and aren't "
+                            "tests. Run those checks again through bin/evidence and update their rows.")
+        else:
+            warnings.append(f"{named} ran before changes to tests only ({shown}): run it again if those tests bear on "
+                            "its check.")
+    return problems, warnings
+
+
 def unbacked_rows(lines, evidence):
     """The PASS/FAIL rows whose Evidence cell names no saved file, as "<first cell>: <evidence cell>"."""
     return [f"{first}: {cell or '(empty)'}" for first, result, cell, backed, *_ in result_rows(lines, evidence)
@@ -617,11 +687,17 @@ def evidence_header(path):
             head = [fh.readline(EVIDENCE_LINE_BYTES).decode(errors="replace").rstrip("\n") for _ in range(3)]
     except OSError:
         return None
-    ran = re.fullmatch(r"# in (.+), \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4}, exit (\d{1,3})", head[1])
-    if not head[0].startswith("$ ") or not ran:
+    # `# in`, then `# fingerprint` when there is one, then `$ `; before the commit and tree, `$ ` came first.
+    if head[0].startswith("$ "):
+        command, ran, recorded = head[0], head[1], head[2]
+    else:
+        ran, recorded, command = head[0], head[1], head[2] if head[1].startswith("# fingerprint ") else head[1]
+    ran = re.fullmatch(r"# in (.+), \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4}, exit (\d{1,3})"
+                       r"(?:, commit none|, commit [0-9a-f]+(?:, uncommitted changes)?, tree \S+)?", ran)
+    if not command.startswith("$ ") or not ran:
         return None
-    recorded = re.fullmatch(r"# fingerprint ([0-9a-f]{64})", head[2])
-    return head[0][2:], ran.group(1), int(ran.group(2)), recorded.group(1) if recorded else None
+    recorded = re.fullmatch(r"# fingerprint ([0-9a-f]{64})", recorded)
+    return command[2:], ran.group(1), int(ran.group(2)), recorded.group(1) if recorded else None
 
 
 def suite_problems(evidence):
@@ -684,9 +760,10 @@ def suite_problems(evidence):
 
 def validation_report_problems():
     """Why the validation report can't back a validate stamp: it's missing, PASS/FAIL rows whose Evidence cell names no
-    non-empty file of the evidence directory, an empty recording, a criterion of the spec without its PASS and negative
-    rows, a test type triage selects that its Test types table leaves out, or, where the repo has a suite overlay, no
-    green run of the full suite on the code as it is now. Empty when it can."""
+    non-empty file of the evidence directory, an empty recording, output recorded on content that changed since in
+    files other than tests (stale_evidence), a criterion of the spec without its PASS and negative rows, a test type
+    triage selects that its Test types table leaves out, or, where the repo has a suite overlay, no green run of the
+    full suite on the code as it is now. Empty when it can."""
     report, evidence = report_paths("validation", "evidence")
     try:
         with open(report) as fh:
@@ -704,6 +781,10 @@ def validation_report_problems():
     if missing:
         problems += [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for "
                      "output, a screenshot for a UI state):"] + missing
+    stale, warnings = stale_evidence(lines, evidence)
+    problems += stale
+    for warning in warnings:
+        print(warning)
     empty = empty_recordings(evidence)
     if empty:
         problems += [f"These recordings in {evidence} are empty: the browser closed before `agent-browser record stop` "
