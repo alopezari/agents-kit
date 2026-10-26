@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Write the branch's decision page: one local HTML page, built from the spec, the agent's decision notes, the reports,
-the evidence and the pull request's CI, in six numbered sections and a footer of identifiers.
+the evidence and the pull request's CI. A summary comes first: the task, the solution, the review, the tests and the
+gates, then your decisions, the blockers the agent owns and the warnings. Five folded sections follow (coverage, tests,
+review, merge and ship, and the reports as annexes), each open only while it holds a failure or a blocker, then a footer
+of identifiers.
 
   decision-report <page> <evidence dir>    run by `reports html`, which passes both paths; prints the page's path
 
 The page runs no script and loads nothing from the network. Of the files the reports name, it reads only those inside
 the evidence directory, and embeds text up to 200 KB (head and tail kept), images up to 2 MB, 20 MB in all; the rest is linked by file:// path.
+Besides the reports, it reads the repository's ship.md under ~/.agents/repos and the review's lenses.md, bounded as a report is.
 It is written to a temporary file and renamed into place; when generation fails, the page is removed and the error
 printed (exit 1), so an older page is never taken for the current one.
 """
@@ -49,6 +53,8 @@ TOTAL_LIMIT = 20 * 1024 * 1024
 REPORT_LIMIT = 2 * 1024 * 1024
 IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 VIDEOS = (".webm", ".mp4", ".mov")
+PLAYABLE = {".webm": "video/webm", ".mp4": "video/mp4"}  # a .mov plays only in Safari, so it stays a link
+TAIL_LINES = 40
 ACTIVE = (".html", ".htm", ".xhtml", ".svg", ".xml")  # opened from a link, these run their own scripts, outside the CSP
 FILE_TOKEN = re.compile(r"(?<![\w./~-])[\w.-]+\.(?:txt|log|out|md|json|csv|png|jpe?g|gif|webp|webm|mp4|mov|sh|py|html)(?![\w.-])")
 PATH_TOKEN = re.compile(r"(?<![\w(\]])(?:~|/)[^\s|()\[\]`'\"<>]*[^\s|()\[\]`'\"<>.,;:]")
@@ -58,8 +64,14 @@ TABLE_RULE = re.compile(r"[ \t]*(?:\|[ \t]*)?:?-{3,}")
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 NOTE_SECTIONS = {"what the task must do": 1, "what the change does": 2, "what it changes for users": 3,
                  "what you must decide": 6}
-HEADINGS = {1: "What the task must do", 2: "What the change does", 3: "What it changes for users", 4: "What we tested",
-            5: "How to test it yourself", 6: "What you must decide"}
+SECTIONS = {1: "Coverage", 2: "Tests", 3: "Review", 4: "Merge and ship", 5: "Reports"}
+LEVELS = ("unit", "integration", "e2e", "mutation", "property", "regex", "design", "a11y", "query budget", "migration", "manual")
+NO_LEVEL = "level not recorded"
+LENS_COLUMNS = ("Lens", "What it checks", "Model", "Findings", "Confirmed", "Outcomes")
+SHIP_SECTIONS = (("deploy", "Deploy"), ("smoke", "Smoke checks"), ("rollback", "Rollback"), ("installed", "Installed on this machine"))
+ANNEXES = (("spec", "Spec"), ("decision-notes", "Decision notes"), ("pr-body", "PR body"), ("verify", "Verify report"),
+           ("review", "Review report"), ("validation", "Validation report"), ("checks-guide", "Checks guide"),
+           ("follow-pr", "Follow-pr report"))
 REVIEW_OUTCOMES = ("Fixed", "Rejected", "Pre-existing", "Open", "Not run")
 RESULTS = ("PASS", "FAIL", "NOT RUN")
 MAKERS = {"spec": "the kit-spec skill writes it", "decision-notes": "kit-ship writes them before it generates this page",
@@ -122,6 +134,7 @@ class Page:
         self.root = os.path.realpath(evidence)
         self.embedded = 0
         self.shown = {}  # realpath of a file already embedded: the id of the block that shows it
+        self.lines = {}  # realpath of a text file embedded: its lines past bin/evidence's header, the cut middle left out
         self.ids = set()
         scripts = os.path.join(evidence, "checks")
         inside = os.path.isdir(scripts) and os.path.realpath(scripts) == os.path.join(self.root, "checks")
@@ -164,6 +177,11 @@ class Page:
         size = os.path.getsize(real)
         ext = os.path.splitext(real)[1].lower()
         block_id = self.new_id("file-" + os.path.basename(real))
+        if ext in PLAYABLE:
+            self.shown[real] = block_id
+            return (f'<div class="file video" id="{block_id}"><video controls preload="metadata">'
+                    f'<source src="{esc(file_href(real))}" type="{PLAYABLE[ext]}">{link}</video>'
+                    f'<p class="name">{link} <span class="size">{size} bytes</span></p></div>')
         if ext in VIDEOS:
             return f'<div class="file" id="{block_id}">{link} {state("linked", "dim")} video, {size} bytes</div>'
         if ext in IMAGES:
@@ -218,13 +236,21 @@ class Page:
                 f"<dt>{name}</dt><dd>{'<code>' + esc(value) + '</code>' if value else state('not recorded', 'dim')}</dd>"
                 for name, value in pairs) + "</dl>"
             body = "\n".join(rest)
-        cut = ""
-        if tail:
-            cut = (f'<p class="cut">{state("cut", "dim")} {size - len(head) - len(tail)} of {size} bytes cut from the middle; '
-                   f"the full file: {link}</p>")
-            body += "\n" + tail.decode(errors="replace").replace("\r\n", "\n")
+        lines = body.rstrip("\n").split("\n") if body.strip("\n") else []
+        tail_lines = tail.decode(errors="replace").replace("\r\n", "\n").rstrip("\n").split("\n") if tail else []
+        self.lines[real] = lines + tail_lines
+        last = tail_lines if tail else lines  # the visible tail never spans the cut
+        earlier = last[:-TAIL_LINES]
+        fold = ""
+        if tail or earlier:
+            cut = (f'<pre class="out">{esc(chr(10).join(lines))}</pre><p class="cut">{state("cut", "dim")} '
+                   f"{size - len(head) - len(tail)} of {size} bytes cut from the middle; the full file: {link}</p>" if tail else "")
+            count = len(lines) + len(earlier) if tail else len(earlier)
+            fold = (f'<details class="earlier"><summary>{count} earlier line{"s" * (count != 1)}'
+                    f'{", the middle cut" if tail else ""}</summary>{cut}'
+                    + (f'<pre class="out">{esc(chr(10).join(earlier))}</pre>' if earlier else "") + "</details>")
         return (f'<div class="file text" id="{block_id}"><p class="name">{link} <span class="size">{size} bytes</span></p>'
-                f'{fields}<pre class="out">{esc(body)}</pre>{cut}</div>')
+                f'{fields}<pre class="out tail">{esc(chr(10).join(last[-TAIL_LINES:]))}</pre>{fold}</div>')
 
     # Markdown, a safe subset: headings, fenced blocks, tables, lists, paragraphs, code spans, bold and links
 
@@ -378,7 +404,8 @@ def parse_review(text):
     """(header line or None, {header field: value}, [(outcome, label, entry, line number)]), or None when the text
     holds neither a review header nor any entry."""
     lines = text.split("\n")
-    header = next((line.strip() for line in lines if re.match(r"(Self-review|Review)( \(|$)", line)), None)
+    header = next((re.sub(r"^#+[ \t]+", "", line.strip()) for line in lines
+                   if re.match(r"(?:#+[ \t]+)?(Self-review|Review)( \(|$)", line)), None)
     labels = "|".join(re.escape(o) for o in REVIEW_OUTCOMES)
     entries = []
     starts = {}  # each line's text after its label or bullet, to its first line number
@@ -399,8 +426,8 @@ def parse_review(text):
 
 
 def check_rows(text):
-    """[{id, result, check, ac, acs, ac_column, case, expected (None without the column), observed, line, group}] in
-    report order."""
+    """[{id, result, check, ac, acs, ac_column, case, expected (None without the column), observed, line, group, level
+    (None without the column)}] in report order."""
     lines = text.split("\n")
     rows = []
     groups, group = [], ""  # each line's `## ` section
@@ -417,7 +444,7 @@ def check_rows(text):
         rows.append({"id": cells[0].strip("*_ "), "result": result, "check": cell("Check") or "", "ac": ac or "",
                      "acs": [int(n) for n in re.findall(r"\bAC(\d+)\b", ac or "")], "ac_column": ac is not None, "case": cell("Case", True) or "",
                      "expected": cell("Expected", True), "observed": cell("Evidence") or "", "line": index + 1,
-                     "group": group})
+                     "group": group, "level": (cell("Level") or "").strip("*_` ").lower() or None})
     return rows
 
 
@@ -475,7 +502,7 @@ def follow_pr_pending(text):
 def pull_request():
     """(the PR's fields, None), (None, None) when the branch has no PR, or (None, why gh couldn't say)."""
     try:
-        out = subprocess.run(["gh", "pr", "view", "--json", "number,url,title,headRefOid,state"], capture_output=True,
+        out = subprocess.run(["gh", "pr", "view", "--json", "number,url,title,headRefOid,state,mergeCommit"], capture_output=True,
                              text=True, timeout=GH_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as error:
         return None, f"gh pr view: {error}"
@@ -552,13 +579,89 @@ def changed_files(base):
     return groups
 
 
+def section_table(text, title, columns):
+    """[{column: cell}] of the first table under the `## <title>` heading, the columns lowercased, or None without one."""
+    found = re.search(rf"^## {re.escape(title)}[ \t]*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+    names, rows = None, []
+    for line in found.group(1).split("\n") if found else ():
+        cells = review_stamp.table_cells(line)
+        if not cells:
+            if names:
+                break
+            continue
+        if TABLE_RULE.match(line):
+            continue
+        if names is None:
+            names = [c.strip("*_ ").lower() for c in cells]
+            continue
+        rows.append({c: cells[names.index(c)] if c in names and names.index(c) < len(cells) else "" for c in columns})
+    return rows if names else None
+
+
+def output_lines(lines):
+    """(steps, result lines, runner tests) of one output: its `precondition:` and `step:` lines, its `PASS` and `FAIL`
+    lines, and [(section, name, "ok" or "FAIL")] of a test runner's lines, which count only after a `== <section>` line."""
+    steps, said, tests, section = [], [], [], None
+    for line in lines:
+        bare = line.strip()
+        runner = re.match(r"(ok|FAIL) +(\S.*?)\s*$", line) if section is not None else None
+        if line.startswith("== "):
+            section = line[3:].strip()
+        elif runner:
+            tests.append((section, runner.group(2), runner.group(1)))
+        elif re.match(r"(precondition|step):\s*\S", bare):
+            steps.append(bare)
+        elif re.match(r"(PASS|FAIL)\b", bare):
+            said.append(bare)
+    return steps, said, tests
+
+
+def note_items(text):
+    """The decide section's top-level list items, each with its nested lines, or its paragraphs when it has no list."""
+    items, paragraphs, para = [], [], []
+    for line in text.split("\n") + [""]:
+        item = re.match(r"([-*+]|\d+[.)])\s+(.*)$", line)
+        if item:
+            items.append(item.group(2).strip())
+        elif items and line.strip() and line.startswith((" ", "\t")):
+            items[-1] += "\n" + re.sub(r"^([-*+]|\d+[.)])\s+", "", line.strip())
+        elif line.strip() and not heading(line):
+            para.append(line.strip())
+        elif para:
+            paragraphs.append(" ".join(para))
+            para = []
+    return items or paragraphs
+
+
+def split_first(text):
+    """(the first paragraph, the rest) of a notes section."""
+    first = first_paragraph(text)
+    at = text.find(first) if first else -1
+    return first, (text[at + len(first):].strip() if at >= 0 else text.strip())
+
+
+def ship_sections(text):
+    """{`## ` heading, lowercased: its body} of ship.md."""
+    found, current = {}, None
+    for line in text.split("\n"):
+        title = heading(line, 2)
+        if title and title[0] == 2:
+            current = title[1].strip().lower()
+            found[current] = []
+        elif current is not None:
+            found[current].append(line)
+    return {name: "\n".join(lines).strip() for name, lines in found.items()}
+
+
+def lens_briefs():
+    """({lens, lowercased: the sentence under its heading in the review's lenses.md}, why it couldn't be read or None)."""
+    text, why = read_report(os.path.join(HERE, "..", "skills", "kit-review", "lenses.md"))
+    return {m.group(1).strip().lower(): m.group(2).strip() for m in re.finditer(r"^## (.+)\n\n(.+)$", text or "", re.M)}, why
+
+
 # Rendering
 
 CASE_WORDS = {"+": "positive case", "-": "negative case", "−": "negative case"}
-
-def source_line(paths):
-    return (f'<details class="src"><summary>Built from {len(paths)} source{"s" if len(paths) != 1 else ""}</summary><ul>'
-            + "".join(f"<li><code>{esc(path)}</code></li>" for path in paths) + "</ul></details>")
 
 
 def not_recorded(kind, path):
@@ -569,20 +672,13 @@ def unavailable(why):
     return f'<p class="absent">{state("unavailable", "need")} {esc(why)}</p>'
 
 
-def notes_block(page, notes, number, path, fallback=None):
-    if notes is not None and notes.get(number):
-        return (f'<div class="notes"><p class="by">Written by the agent</p>'
-                f"{page.markdown(notes[number], f'notes-{number}', top=3, figure=True)}</div>")
-    block = not_recorded("decision-notes", path)
-    if fallback:
-        label, text = fallback
-        block += (f'<div class="fallback"><p class="by">{esc(label[0].upper() + label[1:])}</p>'
-                  f"<blockquote>{page.inline(text)}</blockquote></div>")
-    return block
+def level_id(level):
+    return "level-" + ("not-recorded" if level == NO_LEVEL else re.sub(r"[^a-z0-9]+", "-", level).strip("-"))
 
 
 def build(page_path, evidence):
     page = Page(evidence)
+    page.ids.update({"main", "summary", "h00", "footer", "environment"})
     off, phases_error = phase_switches.phases_off_or_error(os.getcwd())
     kinds = ("decision-notes", "pr-body", "verify", "review", "validation", "checks-guide", "follow-pr")
     paths = dict(zip(kinds, review_stamp.report_paths(*kinds)))
@@ -595,6 +691,8 @@ def build(page_path, evidence):
     goal = re.search(r"^Goal:\s*(.+)$", spec_text or "", re.M)
     spec_title = re.search(r"^# (.+)$", spec_text or "", re.M)
     notes = notes_by_section(texts["decision-notes"]) if texts["decision-notes"] is not None else None
+    ship_path = os.path.join(os.path.expanduser("~/.agents/repos"), review_stamp.repo_name(), "ship.md")
+    ship_text, ship_why = read_report(ship_path)
 
     branch = review_stamp.git("branch", "--show-current")
     head = review_stamp.git("rev-parse", "--verify", "--quiet", "HEAD") or "no commit yet"
@@ -636,8 +734,15 @@ def build(page_path, evidence):
             whys["validation"] = f"{paths['validation']} has no PASS, FAIL or NOT RUN row in a table with Result and Evidence columns"
     validation_ok = "validate" not in off and texts["validation"] is not None and rows
     pre_pr_a = validation_ok and all(row["expected"] is None for row in rows)
+    test_types = (section_table(texts["validation"], "Test types", ("type", "ran", "evidence")) or []) if validation_ok else []
     for row in rows:
         row["anchor"] = page.new_id(f"check-{row['id']}")
+        named = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(row['id'])}(?![A-Za-z0-9_])")
+        row["level"] = row["level"] or next((t["type"].strip("*_` ").lower() for t in test_types
+                                             if t["type"].strip() and named.search(t["evidence"])), None) or NO_LEVEL
+    levels = ([level for level in LEVELS if any(row["level"] == level for row in rows)]
+              + list(dict.fromkeys(row["level"] for row in rows if row["level"] not in LEVELS + (NO_LEVEL,)))
+              + ([NO_LEVEL] if any(row["level"] == NO_LEVEL for row in rows) else []))
     stale_problems, stale_warnings = (review_stamp.stale_evidence(texts["validation"].split("\n"), evidence)
                                       if validation_ok else ([], []))
 
@@ -652,296 +757,423 @@ def build(page_path, evidence):
             return "unavailable: " + whys[kind]
         return None
 
-    # 04, built first: the rows' evidence blocks tell 06 which files are missing
+    def source_html(kind, phase):
+        why = source_state(kind, phase)
+        return state(why.split(": ")[0], "dim") if why in QUIET else f'{state("unavailable", "need")} {esc(why[len("unavailable: "):])}'
+
+    # The criteria each test is named in, by a spec `verify:` that names it in backticks
+    named_in = {}
+    for item in criteria or []:
+        number, verify = re.match(r"(\d+)\.", item), item.partition("verify:")[2]
+        for name in re.findall(r"`([^`\n]+)`", verify) if number else ():
+            named_in.setdefault(name.strip(), []).append(int(number.group(1)))
+
+    # Tests: each check's row, built first so the lists know which files are missing
     missing_files = {}
-    check_items = []
+    check_items = {}
+    scripts = os.path.join(page.root, "checks")
     for row in rows:
-        blocks = []
+        blocks, steps, said, tests = [], [], [], []
         for named, real in named_files(page, row):
             if real is not None and not os.path.exists(real):
                 missing_files.setdefault(row["anchor"], []).append(os.path.basename(named))
             blocks.append(page.file_block(named, real))
-        tone = result_tone(row["result"])
+            if real in page.lines and os.path.dirname(real) != scripts:
+                found = output_lines(page.lines[real])
+                steps, said, tests = steps + found[0], said + found[1], tests + found[2]
+        page.embedded += sum(len(line) for line in steps + said) + sum(len(s) + len(n) for s, n, _ in tests)
+        if page.embedded > TOTAL_LIMIT:
+            raise ValueError(f"the steps and results of {row['id']} take the page past the {TOTAL_LIMIT // 1024 // 1024} MB it may embed")
+        runner = ""
+        row["tests"] = (len(tests), sum(result == "FAIL" for _, _, result in tests))
+        if tests:
+            sections = list(dict.fromkeys(section for section, _, _ in tests))
+            failed = sum(result == "FAIL" for _, _, result in tests)
+            runner = (f'<details class="runner"><summary>{len(tests)} tests from the runner · {failed} FAIL · criteria '
+                      f'{esc(row["ac"]) or "none"}</summary>' + "".join(
+                          f'<h4>{esc(section)}</h4><div class="table" tabindex="0" role="region" aria-label="Table: tests in {esc(section)}">'
+                          '<table><thead><tr><th scope="col">Test</th><th scope="col">Result</th><th scope="col">Named in</th></tr></thead><tbody>'
+                          + "".join(f'<tr><td><code>{esc(name)}</code></td><td>{state(result, "need" if result == "FAIL" else "ok")}</td>'
+                                    f'<td>{", ".join(f"AC{n}" for n in named_in.get(name, []))}</td></tr>'
+                                    for at, name, result in tests if at == section)
+                          + "</tbody></table></div>" for section in sections) + "</details>")
         expected = row["expected"]
-        expected_html = page.inline(expected) if expected and expected.strip() else state("not recorded", "dim")
-        check_items.append(
-            f'<li class="check r-{row["result"].lower().replace(" ", "")}" id="{row["anchor"]}">'
-            f'<details{" open" if row["result"] != "PASS" else ""}><summary>'
-            f'<span class="cid">{esc(row["id"])}</span> {state(row["result"], tone)} '
+        check_items[row["anchor"]] = (
+            f'<li class="check r-{row["result"].lower().replace(" ", "")}" id="{row["anchor"]}"><details><summary>'
+            f'<span class="cid">{esc(row["id"])}</span> {state(row["result"], result_tone(row["result"]))} '
             f'<span class="ac">{esc(row["ac"]) or state("no AC", "dim")}</span> <span class="case">{esc(CASE_WORDS.get(row["case"], row["case"]))}</span> '
             f'<span class="ctext">{page.inline(row["check"], links=False)}</span></summary>'
-            f'<dl class="row"><dt>Expected</dt><dd>{expected_html}</dd>'
-            f'<dt>Observed</dt><dd>{page.inline(row["observed"]) or state("not recorded", "dim")}</dd>'
-            f'<dt>Source</dt><dd><code>{esc(paths["validation"])}:{row["line"]}</code></dd></dl>'
-            f'{"".join(blocks) or state("no evidence named", "dim")}</details></li>')
+            '<dl class="row"><dt>Steps</dt><dd>'
+            + ("<ol>" + "".join(f"<li>{esc(step)}</li>" for step in steps) + "</ol>" if steps else state("not recorded", "dim"))
+            + f'</dd><dt>Expected</dt><dd>{page.inline(expected) if expected and expected.strip() else state("not recorded", "dim")}</dd>'
+            f'<dt>Actual</dt><dd>{page.inline(row["observed"]) or state("not recorded", "dim")}'
+            + "".join(f'<span class="said">{esc(line)}</span>' for line in said) + runner
+            + f'</dd><dt>Evidence</dt><dd>{"".join(blocks) or state("no evidence named", "dim")}</dd>'
+            f'<dt>Source</dt><dd><code>{esc(paths["validation"])}:{row["line"]}</code></dd></dl></details></li>')
 
     counts = {result: sum(row["result"] == result for row in rows) for result in RESULTS}
     review_counts = {o: sum(e[0] == o for e in review[2]) for o in REVIEW_OUTCOMES} if review else None
+    guide = review_stamp.guide_steps(texts["checks-guide"]) if "validate" not in off and texts["checks-guide"] is not None else {}
+    environment = os.path.join(evidence, review_stamp.ENVIRONMENT_RECORD)
 
-    def review_count_html():
-        why = source_state("review", "review")
-        if why:
-            return state(why, "dim" if why in QUIET else "need")
-        return " · ".join(f"{o} {review_counts[o]}" for o in REVIEW_OUTCOMES)
-
-    def validation_count_html():
-        why = source_state("validation", "validate")
-        if why:
-            return state(why, "dim" if why in QUIET else "need")
-        return " · ".join(f"{r} {counts[r]}" for r in RESULTS)
-
-    def verify_html():
-        why = source_state("verify", "verify")
-        if why:
-            return state(why, "dim" if why in QUIET else "need")
-        return f'{state(verify_word, result_tone(verify_word))} {esc(verify_line.split(", ", 1)[1] if ", " in verify_line else "")}'
-
-    # 06's items, each linking to what it names
-    items = []
-    for kind, phase, label in (("verify", "verify", "Verify report"), ("review", "review", "Review report"),
-                               ("validation", "validate", "Validation report")):
+    # Blockers the agent owns: (link, text, the section that holds it or None)
+    blockers = []
+    for kind, phase, label, number in (("verify", "verify", "Verify report", 5), ("review", "review", "Review report", 3),
+                                       ("validation", "validate", "Validation report", 2)):
         why = source_state(kind, phase)
         if why and why not in QUIET:
-            items.append(("#s04", f"{label}: {state('unavailable', 'need')} {esc(why[len('unavailable: '):])}"))
-    if verify_word and verify_word not in ("PASS", "phase off"):
-        items.append(("#s04", f"Verify: {state(verify_word, 'need')} {esc(verify_line)}"))
-    if ci_word not in ("PASS", "no PR yet", "CI phase off", "no CI"):
-        items.append(("#footer", f"CI for the PR head: {state(ci_word, 'need')} {esc(ci_detail)}"))
-    if pr and head != pr["headRefOid"]:
-        items.append(("#footer", f"Local HEAD <code>{esc(head)}</code> differs from the PR head <code>{esc(pr['headRefOid'])}</code>"))
-    for kind, word in stamps.items():
-        if word in ("stale", "missing"):
-            items.append(("#rests", f"The {kind} stamp: {state(word, 'need')}"))
-    for n, (outcome, label, entry, _) in enumerate([e for e in (review[2] if review else []) if e[0] == "Open"], 1):
-        items.append((f"#review-open-{n}", f"Open finding: {page.inline(entry)}"))
-    for row in rows:
-        if row["result"] != "PASS":
-            items.append((f"#{row['anchor']}", f"<code>{esc(row['id'])}</code> {state(row['result'], result_tone(row['result']))} "
-                                                f"{page.inline(row['check'])}"))
-    for row in rows:
-        for name in missing_files.get(row["anchor"], []):
-            items.append((f"#{row['anchor']}", f"<code>{esc(row['id'])}</code> names <code>{esc(name)}</code>: "
-                                                f"{state('missing', 'need')}"))
-    fresh = [(page.new_id("fresh"), "stale", problem) for problem in stale_problems] + \
-            [(page.new_id("fresh"), "freshness warning", warning) for warning in stale_warnings]
-    for anchor, word, message in fresh:
-        items.append((f"#{anchor}", f"{state(word, 'need')} {esc(message)}"))
-    environment = os.path.join(evidence, review_stamp.ENVIRONMENT_RECORD)
-    if validation_ok and not pre_pr_a and not os.path.isfile(environment):
-        items.append(("#environment", f"<code>{esc(environment)}</code>: {state('missing', 'need')}"))
+            blockers.append((f"#annex-{kind}", f"{label}: {state('unavailable', 'need')} {esc(why[len('unavailable: '):])}", number))
     for kind, label in (("checks-guide", "Checks guide"), ("follow-pr", "Follow-pr report")):
         if texts[kind] is None and not whys[kind].startswith("no report") and not (kind == "checks-guide" and "validate" in off):
-            items.append(("#s05" if kind == "checks-guide" else "#follow-pr",
-                          f"{label}: {state('unavailable', 'need')} {esc(whys[kind])}"))
-    if "validate" not in off and texts["checks-guide"] is not None:
-        for step, info in review_stamp.guide_steps(texts["checks-guide"]).items():
-            after = step.startswith("P")
-            if info["result"] == "PASS":
-                continue
+            blockers.append((f"#annex-{kind}", f"{label}: {state('unavailable', 'need')} {esc(whys[kind])}", 5))
+    if spec_text is None and spec_read_why and not spec_read_why.startswith("no report"):
+        blockers.append(("#annex-spec", f"Spec: {state('unavailable', 'need')} {esc(spec_read_why)}", 5))
+    if verify_word and verify_word not in ("PASS", "phase off"):
+        blockers.append(("#annex-verify", f"Verify: {state(verify_word, 'need')} {esc(verify_line)}", 5))
+    if ci_word not in ("PASS", "no PR yet", "CI phase off", "no CI"):
+        blockers.append(("#footer", f"CI for the PR head: {state(ci_word, 'need')} {esc(ci_detail)}", None))
+    if pr and head != pr["headRefOid"]:
+        blockers.append(("#footer", f"Local HEAD <code>{esc(head)}</code> differs from the PR head <code>{esc(pr['headRefOid'])}</code>", None))
+    for kind, word in stamps.items():
+        if word in ("stale", "missing"):
+            blockers.append(("#sum-gates", f"The {kind} stamp: {state(word, 'need')}", None))
+    for row in rows:
+        if row["result"] == "FAIL":
+            blockers.append((f"#{row['anchor']}", f"<code>{esc(row['id'])}</code> {state('FAIL', 'need')} {page.inline(row['check'])}", 2))
+    for row in rows:
+        for name in missing_files.get(row["anchor"], []):
+            blockers.append((f"#{row['anchor']}", f"<code>{esc(row['id'])}</code> names <code>{esc(name)}</code>: "
+                                                  f"{state('missing', 'need')}", 2))
+    fresh = [(page.new_id("fresh"), "stale", problem) for problem in stale_problems] + \
+            [(page.new_id("fresh"), "freshness warning", warning) for warning in stale_warnings]
+    for anchor, word, message in fresh[:len(stale_problems)]:
+        blockers.append((f"#{anchor}", f"{state(word, 'need')} {esc(message)}", 2))
+    if validation_ok and not pre_pr_a and not os.path.isfile(environment):
+        blockers.append(("#environment", f"<code>{esc(environment)}</code>: {state('missing', 'need')}", 2))
+    for step, info in guide.items():
+        if not step.startswith("P") and info["result"] == "FAIL":
             named = f"{step} {info['name']}".strip()
-            word = info["result"] or ("left" if after else "not run")
-            where = "after the merge, left" if after else "before the merge, optional"
-            items.append((f"#guide-{step}", f"<code>{esc(named)}</code>: {state(word, 'need' if after or word == 'FAIL' else 'dim')}"
-                                            f"{esc(info['date'])} ({where}; {esc(info['owner'])})"))
+            blockers.append((f"#guide-{step}", f"<code>{esc(named)}</code>: {state('FAIL', 'need')}{esc(info['date'])}", 5))
+    if phases_error:
+        blockers.append(("#footer", f"Phase switches: {state('unavailable', 'need')} {esc(phases_error)}", None))
+
+    # Coverage: one row per criterion, one column per level
+    criteria_rows, uncovered = [], []
+    ac_known = validation_ok and any(row["ac_column"] for row in rows)
+    columns = levels if ac_known else ["Checks"]
+    for item in criteria or []:
+        number = re.match(r"(\d+)\.\s*(.*)", item)
+        n = int(number.group(1))
+        covering = [row for row in rows if n in row["acs"]]
+        cells = []
+        if not validation_ok:
+            why = (source_state("validation", "validate") or "not recorded").split(":")[0]
+            cells = [state(why, "dim" if why in QUIET or why == "not recorded" else "need")]  # the reason is in 02
+        elif not ac_known:
+            cells = [state("not recorded", "dim") + " the validation tables have no AC column"]
+        elif not covering:
+            uncovered.append(n)
+            blockers.append((f"#ac-{n}", f"AC{n} {page.inline(number.group(2))}: {state('no check', 'need')}", 1))
+        else:
+            cells = [" ".join(f'<a href="#{row["anchor"]}"><code>{esc(row["id"])}</code></a> {state(row["result"], result_tone(row["result"]))}'
+                              for row in covering if row["level"] == level) or "—" for level in levels]
+        # Explicit roles: the phone layout makes the cells blocks, which drops their table semantics.
+        checks = (f'<td role="cell" colspan="{max(len(columns), 1)}" data-label="Checks">{state("no check", "need")}</td>' if not cells else
+                  "".join(f'<td role="cell" data-label="{esc(column)}">{cell}</td>' for column, cell in zip(columns, cells)))
+        criteria_rows.append(f'<tr role="row" id="ac-{n}"><th role="rowheader" scope="row">{n}</th>'
+                             f'<td role="cell">{page.inline(number.group(2))}</td>{checks}</tr>')
+    if spec_text is None:
+        s1 = not_recorded("spec", spec_path) if not spec_read_why or spec_read_why.startswith("no report") else unavailable(spec_read_why)
+    elif criteria_rows:
+        s1 = ('<div class="table" tabindex="0" role="region" aria-label="Coverage: criteria by test level"><table class="criteria" role="table">'
+              '<thead><tr role="row"><th role="columnheader" scope="col">AC</th><th role="columnheader" scope="col">Criterion</th>'
+              + "".join(f'<th role="columnheader" scope="col">{esc(column)}</th>' for column in columns)
+              + f'</tr></thead><tbody>{"".join(criteria_rows)}</tbody></table></div>')
+    else:
+        s1 = f'<p>{state("not recorded", "dim")} no numbered acceptance criteria</p>'
+    s1_meta = f'{len(criteria_rows)} criteria · {len(uncovered)} without a check' if criteria_rows else "not recorded"
+
+    # Your decisions: (link, text)
+    decisions = []
+    decide = note_items(notes[6]) if notes and notes.get(6) else []
+    merge_note = next((item for item in decide if re.match(r"\W*merge\b", item, re.I)), None)
+
+    def note_html(item):
+        first, *rest = item.split("\n")
+        return page.inline(first) + "".join(f'<span class="sub">{page.inline(line)}</span>' for line in rest)
+    for item in decide:
+        if item is not merge_note:
+            decisions.append(("#annex-decision-notes", note_html(item)))
+    open_entries = [entry for outcome, _, entry, _ in (review[2] if review else []) if outcome == "Open"]
+    if len(open_entries) == 1:
+        decisions.append(("#review-open-1", f"Open finding: {page.inline(open_entries[0])}"))
+    elif open_entries:
+        decisions.append(("#review-open-1", f'<details class="group"><summary>{len(open_entries)} review findings left Open</summary><ol>'
+                                            + "".join(f'<li><a href="#review-open-{n}">{page.inline(entry)}</a></li>'
+                                                      for n, entry in enumerate(open_entries, 1)) + "</ol></details>"))
+    for step, info in guide.items():
+        # M0 is the guide's setup (access, exports), not a check to choose
+        if step.startswith("M") and step != "M0" and info["result"] not in ("PASS", "FAIL"):
+            named = f"{step} {info['name']}".strip()
+            decisions.append((f"#guide-{step}", f"<code>{esc(named)}</code>: {state('optional', 'dim')} before the merge, "
+                                                f"{esc(info['owner'])}"))
     if texts["follow-pr"] is not None:
         for line in follow_pr_pending(texts["follow-pr"]):
-            items.append(("#follow-pr", f"Follow-pr, pending: {page.inline(line)}"))
-    if phases_error:
-        items.append(("#s06", f"Phase switches: {state('unavailable', 'need')} {esc(phases_error)}"))
+            decisions.append(("#annex-follow-pr", f"Follow-pr, pending: {page.inline(line)}"))
+    merge = ((note_html(merge_note) if merge_note else f'Merge: {state("recommendation not recorded", "dim")}')
+             + f' <span class="meta">· {len(blockers)} blocker{"s" * (len(blockers) != 1)} · CI {state(ci_word, ci_tone)}</span>')
+    decisions.insert(0, ("#s04", merge))
+    warnings = [(f"#{anchor}", f"{state(word, 'need')} {esc(message)}") for anchor, word, message in fresh[len(stale_problems):]]
 
-    pr_title = pr["title"] if pr else None
-    title = pr_title or (spec_title.group(1) if spec_title else branch)
-
-    # 01
-    s1 = notes_block(page, notes, 1, paths["decision-notes"],
-                     ("the spec's goal", goal.group(1)) if goal else None)
-    if spec_text is None:
-        s1 += not_recorded("spec", spec_path) if not spec_read_why or spec_read_why.startswith("no report") else unavailable(spec_read_why)
+    # Tests
+    s2 = ""
+    if os.path.isfile(environment):
+        s2 += f'<h3 id="environment">Environment</h3>{page.file_block(*page.resolve(environment))}'
+    elif validation_ok:
+        s2 += (f'<p class="absent" id="environment"><span class="k">Environment:</span> '
+               f'{state("not recorded", "dim") if pre_pr_a else state("missing", "need")} <code>{esc(environment)}</code></p>')
+    if fresh:
+        s2 += '<h3>Evidence freshness</h3><ul class="fresh">' + "".join(
+            f'<li id="{anchor}">{state(word, "need")} {esc(message)}</li>' for anchor, word, message in fresh) + "</ul>"
+    if validation_ok:
+        filters = [("all", "All", len(rows))] + [(r.lower().replace(" ", ""), r, counts[r]) for r in RESULTS]
+        s2 += ('<div class="filter"><div class="radios" role="group" aria-label="Show checks by result">'
+               + "".join(f'<input type="radio" name="result" id="f-{key}"{" checked" if key == "all" else " disabled" if not n else ""}>'
+                         f'<label for="f-{key}">{esc(label)} <span class="n">{n}</span></label>' for key, label, n in filters) + "</div>"
+               + "".join(f'<h3 id="{page.new_id(level_id(level))}">{esc(level)} <span class="n">'
+                         f'{sum(row["level"] == level for row in rows)}</span></h3><ol class="checks" role="list">'
+                         + "".join(check_items[row["anchor"]] for row in rows if row["level"] == level) + "</ol>"
+                         for level in levels) + "</div>")
+        s2_meta = " · ".join(f"{r} {counts[r]}" for r in RESULTS)
     else:
-        if notes is not None and notes.get(1) or not goal:  # without notes, the fallback above already quotes the goal
-            s1 += f'<blockquote class="goal">Goal: {page.inline(goal.group(1)) if goal else state("not recorded", "dim")}</blockquote>'
-        criteria_rows = []
-        for item in criteria or []:
-            number = re.match(r"(\d+)\.\s*(.*)", item)
-            n = int(number.group(1))
-            covering = [row for row in rows if n in row["acs"]]
-            if not validation_ok:
-                why = (source_state("validation", "validate") or "not recorded").split(":")[0]
-                checks = state(why, "dim" if why in QUIET or why == "not recorded" else "need")  # the reason is in 04
-            elif not any(row["ac_column"] for row in rows):
-                checks = state("not recorded", "dim") + " the validation tables have no AC column"
-            elif covering:
-                checks = " ".join(f'<a href="#{row["anchor"]}"><code>{esc(row["id"])}</code></a> '
-                                  f'{state(row["result"], result_tone(row["result"]))}' for row in covering)
-            else:
-                checks = state("no check", "need")
-            # Explicit roles: the phone layout makes the cells blocks, which drops their table semantics.
-            criteria_rows.append(f'<tr role="row" id="ac-{n}"><th role="rowheader" scope="row">{n}</th>'
-                                 f'<td role="cell">{page.inline(number.group(2))}</td><td role="cell">{checks}</td></tr>')
-        s1 += ('<div class="table" tabindex="0" role="region" aria-label="Acceptance criteria"><table class="criteria" role="table"><thead><tr role="row">'
-               '<th role="columnheader" scope="col">AC</th><th role="columnheader" scope="col">Criterion</th>'
-               f'<th role="columnheader" scope="col">Checks</th></tr></thead><tbody>{"".join(criteria_rows)}</tbody></table></div>'
-               if criteria_rows else f'<p>{state("not recorded", "dim")} no numbered acceptance criteria</p>')
-    s1 += source_line([paths["decision-notes"], spec_path] + ([paths["validation"]] if validation_ok else []))
+        s2 += f'<p>{source_html("validation", "validate")}</p>'
+        s2_meta = (source_state("validation", "validate") or "").split(":")[0]
 
-    # 02
-    body = texts["pr-body"]
-    s2 = notes_block(page, notes, 2, paths["decision-notes"],
-                     ("the PR description's first paragraph", first_paragraph(body)) if body else None)
-    s2 += f'<h3>Pull request</h3><p class="prtitle">{esc(pr_title) if pr_title else (state("not recorded", "dim") + " GitHub gives no title" if pr else state("no PR yet", "dim"))}</p>'
-    s2 += f'<div class="prbody">{page.markdown(body, "pr", top=4)}</div>' if body is not None else \
-        (not_recorded("pr-body", paths["pr-body"]) if whys["pr-body"].startswith("no report") else unavailable(whys["pr-body"]))
+    # Review
+    briefs, briefs_why = lens_briefs()
+    lenses = section_table(texts["review"], "Lenses", ("lens", "model", "findings", "confirmed", "outcomes")) if review else None
+    failed_lenses = [lens for lens in lenses or [] if not re.fullmatch(r"\d+", lens["findings"].strip())]
+    header_fields = review[1] if review else {}
+    model = header_fields.get("cross-model") or header_fields.get("cross-model reading")
+    if review:
+        s3 = (f'<p class="header"><code>{esc(review[0] or "no Review line")}</code></p><dl class="fields">'
+              + "".join(f'<dt>{name}</dt><dd>{esc(header_fields[key]) if header_fields.get(key) else state("not recorded", "dim")}</dd>'
+                        for name, key in (("Risk", "risk"), ("Lenses", "lenses"), ("Re-check rounds", "re-check rounds")))
+              + f'<dt>Cross-model</dt><dd>{esc(model) if model else state("not recorded", "dim")}</dd></dl>')
+        header_lenses = [name.strip() for name in (header_fields.get("lenses") or "").split(",") if name.strip()]
+
+        def brief(name):
+            if briefs_why:
+                return state("unavailable", "need")
+            return esc(briefs[name.lower()]) if name.lower() in briefs else state("not recorded", "dim")
+
+        def cell(value):
+            return page.inline(value) if value.strip() and value.strip() not in ("—", "-") else state("not recorded", "dim")
+        if lenses is not None:
+            body = "".join(f'<tr><th scope="row">{esc(lens["lens"])}</th><td>{brief(lens["lens"])}</td><td>{cell(lens["model"])}</td>'
+                           + (f'<td>{cell(lens["findings"])}</td>' + f'<td>{state("not recorded", "dim")}</td>' * 2
+                              if lens in failed_lenses else
+                              f'<td>{cell(lens["findings"])}</td><td>{cell(lens["confirmed"])}</td><td>{cell(lens["outcomes"])}</td>')
+                           + "</tr>" for lens in lenses)
+        else:
+            body = "".join(f'<tr><th scope="row">{esc(name)}</th><td>{brief(name)}</td>'
+                           + f'<td>{state("not recorded", "dim")}</td>' * 4 + "</tr>" for name in header_lenses)
+        s3 += ('<h3>Lenses</h3>' + ("" if lenses is not None else f'<p>{state("not recorded", "dim")} per-lens counts not recorded: '
+                                     "the review report has no Lenses table</p>")
+               + f'<div class="table" tabindex="0" role="region" aria-label="Table: {", ".join(LENS_COLUMNS)}"><table><thead><tr>'
+               + "".join(f'<th scope="col">{column}</th>' for column in LENS_COLUMNS) + f"</tr></thead><tbody>{body}</tbody></table></div>")
+        s3 += "<h3>Findings</h3>"
+        for outcome in REVIEW_OUTCOMES:
+            entries = [e for e in review[2] if e[0] == outcome]
+            anchor = f"review-{outcome.lower().replace(' ', '-')}"
+            page.ids.add(anchor)
+            listed = "".join(
+                f'<li class="entry" id="{anchor}-{n}"><details><summary><span class="lab">{esc(label)}</span> '
+                f'{page.inline(entry.split(" — ")[0], links=False)}</summary>'
+                + "".join(f'<span class="part">{page.inline(part)}</span>' for part in entry.split(" — ")[1:])
+                + (f' <code class="ref">{esc(paths["review"])}:{line}</code>' if line else "") + "</details></li>"
+                for n, (_, label, entry, line) in enumerate(entries, 1))
+            s3 += (f'<div class="outcome" id="{anchor}"><h4>{esc(outcome)} <span class="n">{len(entries)}</span></h4>'
+                   + (f'<ul role="list">{listed}</ul>' if entries else f'<p>{state("none", "dim")}</p>') + "</div>")
+        s3_meta = " · ".join(f"{o} {review_counts[o]}" for o in REVIEW_OUTCOMES)
+    else:
+        s3 = f'<p>{source_html("review", "review")}</p>'
+        s3_meta = (source_state("review", "review") or "").split(":")[0]
+
+    # Merge and ship
+    s4 = ('<h3>Your decisions</h3><ol class="owned">'
+          + "".join(f'<li><span class="owner">you</span> {body}</li>' for _, body in decisions) + "</ol><h3>After the merge</h3>")
+    after = [(step, info) for step, info in guide.items() if step.startswith("P")]
+    if "validate" in off:
+        s4 += f'<p>{state("phase off", "dim")}</p>'
+    elif texts["checks-guide"] is None:
+        s4 += f'<p>{state("not recorded", "dim") if whys["checks-guide"].startswith("no report") else state("unavailable", "need")} the checks guide</p>'
+    elif after:
+        s4 += '<ol class="owned">' + "".join(
+            f'<li><span class="owner">{esc(info["owner"])}</span> <a href="#guide-{esc(step)}"><code>{esc(step)}</code></a> '
+            f'{esc(info["name"])}: {state(info["result"] or "left", result_tone(info["result"] or ""))}{esc(info["date"])}</li>'
+            for step, info in after) + "</ol>"
+    else:
+        s4 += f'<p>{state("none", "dim")} the checks guide has no step after the merge</p>'
+    s4 += f'<h3>Ship steps</h3><p class="meta">from <code>{esc(ship_path)}</code></p>'
+    if ship_text is None:
+        s4 += (f'<p class="absent">{state("not recorded", "dim")} no ship steps for this repository</p>' if ship_why.startswith("no report")
+               else unavailable(ship_why))
+    else:
+        found = ship_sections(ship_text)
+        merged = (pr.get("mergeCommit") or {}).get("oid") if pr and pr.get("state") == "MERGED" else None
+        for key, name in SHIP_SECTIONS:
+            body = found.get(name.lower())
+            if not body:
+                part = f'<p>{state("not recorded", "dim")}</p>'
+            else:
+                part = re.sub(r"\(inferred:[^)<]*\)", lambda m: f'{state("unconfirmed", "need")} {m.group(0)}',
+                              page.markdown(body, f"shipmd-{key}", top=5))
+                if re.match(r"unknown\b", body, re.I):
+                    part = f'<p>{state("unconfirmed", "need")}</p>{part}'
+            if key == "rollback":
+                part += (f'<p class="ids">PR #{pr["number"]} · merge commit <code>{esc(merged)}</code></p>' if merged else
+                         f'<p class="ids">PR #{pr["number"]} · {state("not merged", "dim")}</p>' if pr else
+                         f'<p class="ids">{state("no PR yet", "dim")}</p>')
+            s4 += f'<div class="ship" id="ship-{key}"><h4>{name}</h4>{part}</div>'
+    s4_meta = f'{len(decisions)} decision{"s" * (len(decisions) != 1)} · {len(after)} step{"s" * (len(after) != 1)} after the merge'
+
+    # Reports, as annexes
+    annexes = {"spec": (spec_path, spec_text, spec_read_why)}
+    annexes.update({kind: (paths[kind], texts[kind], whys[kind]) for kind in kinds})
+    phase_of = {"verify": "verify", "review": "review", "validation": "validate", "checks-guide": "validate"}
+    s5 = ""
+    for kind, label in ANNEXES:
+        path, text, why = annexes[kind]
+        if phase_of.get(kind) in off:
+            body = f'<p>{state("phase off", "dim")}</p>'
+        elif text is None:
+            body = (f'<p class="absent">{state("not recorded", "dim")} {esc(MAKERS[kind])}</p>' if not why or why.startswith("no report")
+                    else unavailable(why.replace(path, "the file")))
+        elif page.embedded + len(text) > TOTAL_LIMIT:
+            body = f'<p>{state("linked", "dim")} past the 20 MB embedded in total: <a href="{esc(file_href(path))}">{esc(os.path.basename(path))}</a></p>'
+        else:
+            page.embedded += len(text)
+            body = page.markdown(text, "guide" if kind == "checks-guide" else f"annex-{kind}", top=3)
+        s5 += (f'<details class="annex" id="annex-{kind}"><summary>{label} <code>{esc(path)}</code></summary>'
+               f'<div class="annex-body">{body}</div></details>')
     groups = changed_files(base)
     dir_rows = "".join(f'<tr><th scope="row">{esc(top)}</th><td>{len(files)}</td>'
                        f'<td>+{sum(int(a) for _, a, _ in files if a.isdigit())}</td>'
                        f'<td>-{sum(int(r) for _, _, r in files if r.isdigit())}</td></tr>' for top, files in sorted(groups.items()))
     file_rows = "".join(f"<tr><td><code>{esc(path)}</code></td><td>+{esc(a)}</td><td>-{esc(r)}</td></tr>"
                         for _, files in sorted(groups.items()) for path, a, r in files)
-    s2 += (f'<h3>Changed files</h3><p class="meta">against <code>{esc(base)}</code> ({esc(base_ref)}), the working tree included</p>'
+    s5 += (f'<details class="annex" id="annex-changed"><summary>Changed files against <code>{esc(base)}</code> ({esc(base_ref)}), '
+           'the working tree included</summary><div class="annex-body">'
            + ('<div class="table" tabindex="0" role="region" aria-label="Changed directories"><table class="dirs"><thead><tr><th scope="col">Directory</th><th scope="col">Files</th>'
               f'<th scope="col">Added</th><th scope="col">Removed</th></tr></thead><tbody>{dir_rows}</tbody></table></div>'
-              '<details><summary>Every file</summary><div class="table" tabindex="0" role="region" aria-label="Changed files"><table><thead><tr><th scope="col">File</th>'
-              f'<th scope="col">Added</th><th scope="col">Removed</th></tr></thead><tbody>{file_rows}</tbody></table></div></details>'
-              if groups else f'<p>{state("none", "dim")} no file differs from the base</p>'))
-    s2 += source_line([paths["decision-notes"], paths["pr-body"]])
+              '<div class="table" tabindex="0" role="region" aria-label="Changed files"><table><thead><tr><th scope="col">File</th>'
+              f'<th scope="col">Added</th><th scope="col">Removed</th></tr></thead><tbody>{file_rows}</tbody></table></div>'
+              if groups else f'<p>{state("none", "dim")} no file differs from the base</p>') + "</div></details>")
 
-    # 03
-    s3 = notes_block(page, notes, 3, paths["decision-notes"]) + source_line([paths["decision-notes"]])
+    # The summary
+    def fold(markdown_text, prefix, extra="", by=""):
+        inner = (page.markdown(markdown_text, prefix, top=3, figure=True) if markdown_text else "") + extra
+        if not inner:
+            return f'<p class="by">{by}</p>' if by else ""
+        return (f'<details class="more"><summary>{by + " · " if by else ""}the rest of the notes</summary>'
+                f'<div class="notes">{inner}</div></details>')
 
-    # 04
-    header_fields = review[1] if review else {}
-    model = header_fields.get("cross-model") or header_fields.get("cross-model reading")
-    s4 = ('<ul class="counts" role="list">'
-          f'<li><span class="k">Review:</span> {review_count_html()}'
-          + (f' <span class="meta">lenses: {esc(header_fields.get("lenses") or "not recorded")}; model family: '
-             f'{esc(model or "not recorded")}</span>' if review else "") + "</li>"
-          f'<li><span class="k">Validation:</span> {validation_count_html()}</li>'
-          f'<li><span class="k">Suite (verify):</span> {verify_html()}</li>'
-          f'<li><span class="k">CI:</span> {state(ci_word, ci_tone)}</li></ul>')
-    if os.path.isfile(environment):
-        s4 += f'<h3 id="environment">Environment</h3>{page.file_block(*page.resolve(environment))}'
-    elif validation_ok:
-        s4 += (f'<p class="absent" id="environment"><span class="k">Environment:</span> '
-               f'{state("not recorded", "dim") if pre_pr_a else state("missing", "need")} <code>{esc(environment)}</code></p>')
-    if fresh:
-        s4 += '<h3>Evidence freshness</h3><ul class="fresh">' + "".join(
-            f'<li id="{anchor}">{state(word, "need")} {esc(message)}</li>' for anchor, word, message in fresh) + "</ul>"
-    if validation_ok:
-        filters = [("all", "All", len(rows))] + [(r.lower().replace(" ", ""), r, counts[r]) for r in RESULTS]
-        s4 += ('<h3>Checks</h3><div class="filter"><div class="radios" role="group" aria-label="Show checks by result">'
-               + "".join(f'<input type="radio" name="result" id="f-{key}"{" checked" if key == "all" else " disabled" if not n else ""}>'
-                         f'<label for="f-{key}">{esc(label)} <span class="n">{n}</span></label>' for key, label, n in filters)
-               + f'</div><ol class="checks" role="list">{"".join(check_items)}</ol></div>')
-        # The report's own text, around the result tables already shown as rows: its preamble, notes in a check
-        # section, the Notes and Limits sections.
-        lines = texts["validation"].split("\n")
-        row_lines, table, block = {row["line"] - 1 for row in rows}, set(), []
-        for n, line in enumerate(lines + [""]):
-            if line.lstrip().startswith("|"):
-                block.append(n)
-                continue
-            if row_lines.intersection(block):
-                table.update(block)
-            block = []
-        h1 = next((n for n, line in enumerate(lines) if line.startswith("# ")), None)
-        prose = "\n".join(line for n, line in enumerate(lines) if n not in table and n != h1)
-        limits = []
-        for block in re.split(r"^(?=## )", prose, flags=re.M):
-            if not block.strip() or re.fullmatch(r"## [^\n]*\s*", block):
-                continue
-            rendered = page.markdown(block, "validation", top=3)
-            if re.match(r"## (Notes|Limits)", block):
-                limits.append(rendered)
-            else:
-                s4 += rendered
+    notes_absent = (state("not recorded", "dim") if whys["decision-notes"] is None or whys["decision-notes"].startswith("no report")
+                    else state("unavailable", "need"))
+    if notes and notes.get(1):
+        first, rest = split_first(notes[1])
+        task = f'<p>{page.inline(first)}</p>{fold(rest, "notes-1", by="Written by the agent")}'
+    elif goal:
+        task = f'<p>{page.inline(goal.group(1))}</p><p class="by">The spec\'s goal · decision notes {notes_absent}</p>'
     else:
-        why = source_state("validation", "validate")
-        s4 += f'<h3>Checks</h3>{unavailable(why[len("unavailable: "):]) if why and why not in QUIET else "<p>" + state(why, "dim") + "</p>"}'
-        limits = []
-    s4 += '<h3 id="review">Review</h3>'
+        task = f'<p>{state("not recorded", "dim")} no decision notes and no spec goal</p>'
+    users = (f'<h3>What it changes for users</h3>{page.markdown(notes[3], "notes-3", top=4, figure=True)}'
+             if notes and notes.get(3) else "")
+    para = first_paragraph(texts["pr-body"]) if texts["pr-body"] else None
+    if notes and notes.get(2):
+        first, rest = split_first(notes[2])
+        solution = f'<p>{page.inline(first)}</p>{fold(rest, "notes-2", users, by="Written by the agent")}'
+    elif para:
+        solution = f'<p>{page.inline(para)}</p>{fold("", "", users, by=f"The PR description&#39;s first paragraph · decision notes {notes_absent}")}'
+    else:
+        solution = f'<p>{state("not recorded", "dim")} no decision notes and no PR description</p>{fold("", "", users)}'
+
     if review:
-        rows_html = "".join(f'<dt>{name}</dt><dd>{esc(header_fields[key]) if header_fields.get(key) else state("not recorded", "dim")}</dd>'
-                            for name, key in (("Risk", "risk"), ("Lenses", "lenses"), ("Re-check rounds", "re-check rounds")))
-        s4 += (f'<p class="header"><code>{esc(review[0] or "no Review line")}</code></p><dl class="fields">{rows_html}'
-               f'<dt>Model family per lens</dt><dd>{esc(model) if model else state("not recorded", "dim")}</dd></dl>')
-        for outcome in REVIEW_OUTCOMES:
-            entries = [e for e in review[2] if e[0] == outcome]
-            anchor = f"review-{outcome.lower().replace(' ', '-')}"
-            page.ids.add(anchor)
-            listed = "".join(
-                f'<li class="entry" id="{anchor}-{n}"><span class="lab">{esc(label)}</span> {page.inline(entry.split(" — ")[0])}'
-                + "".join(f'<span class="part">{page.inline(part)}</span>' for part in entry.split(" — ")[1:])
-                + (f' <code class="ref">{esc(paths["review"])}:{line}</code>' if line else "") + "</li>"
-                for n, (_, label, entry, line) in enumerate(entries, 1))
-            s4 += (f'<div class="outcome" id="{anchor}"><h4>{esc(outcome)} <span class="n">{len(entries)}</span></h4>'
-                   + (f'<ul role="list">{listed}</ul>' if entries else f'<p>{state("none", "dim")}</p>') + "</div>")
-        s4 += (f'<details class="report"><summary>The whole review report</summary>'
-               f'{page.markdown(texts["review"], "review-report", top=4)}</details>')
+        names = list(dict.fromkeys(lens["lens"] for lens in lenses)) if lenses is not None else header_lenses
+        # each Not run entry by its name only: its reason is in the review section, one click away
+        skipped = [re.split(r":| — ", entry, maxsplit=1)[0].strip() for outcome, _, entry, _ in review[2] if outcome == "Not run"] + \
+                  [f'{lens["model"]} {lens["lens"]}: {lens["findings"]}' for lens in failed_lenses]
+        review_line = (f'{len(names)} lens{"es" * (len(names) != 1)}: {esc(", ".join(names)) or state("not recorded", "dim")}'
+                       f' · cross-model: {esc(model) if model else state("not recorded", "dim")}'
+                       f' · Fixed {review_counts["Fixed"]} · Open {review_counts["Open"]}'
+                       + (f' · {state("not run:", "need")} {esc("; ".join(skipped))} <a class="go" href="#s03">why</a>' if skipped else ""))
     else:
-        why = source_state("review", "review")
-        s4 += f'<p>{state("phase off", "dim")}</p>' if why == "phase off" else unavailable(why[len("unavailable: "):])
-    s4 += '<h3 id="follow-pr">Follow-pr outcomes</h3>'
-    page.ids.update({"review", "follow-pr", "rests", "environment"})
-    s4 += (page.markdown(texts["follow-pr"], "follow-pr", top=4) if texts["follow-pr"] is not None else
-           not_recorded("follow-pr", paths["follow-pr"]) if whys["follow-pr"].startswith("no report") else
-           unavailable(whys["follow-pr"]))
-    if limits:
-        s4 += "".join(limits)
-    s4 += source_line([paths["validation"], paths["review"], paths["verify"], paths["follow-pr"], evidence])
-
-    # 05
-    if "validate" in off:
-        s5 = f'<p>{state("phase off", "dim")}</p>'
-    elif texts["checks-guide"] is not None:
-        s5 = f'<div class="guide">{page.markdown(texts["checks-guide"], "guide", top=3)}</div>'
-    elif whys["checks-guide"].startswith("no report"):
-        s5 = not_recorded("checks-guide", paths["checks-guide"])
+        review_line = source_html("review", "review")
+    if validation_ok:
+        by_level = []
+        for level in levels:
+            at = [row for row in rows if row["level"] == level]
+            fails, not_run = sum(r["result"] == "FAIL" for r in at), sum(r["result"] == "NOT RUN" for r in at)
+            ran, ran_failed = sum(r["tests"][0] for r in at), sum(r["tests"][1] for r in at)
+            by_level.append(f'<span class="lvl">{esc(level)}</span> {sum(r["result"] == "PASS" for r in at)}/{len(at)} PASS'
+                            + (f", {fails} FAIL" if fails else "") + (f", {not_run} NOT RUN" if not_run else "")
+                            + (f' ({ran} test{"s" * (ran != 1)} in the runner output' + (f", {ran_failed} FAIL" if ran_failed else "") + ")"
+                               if ran else ""))
+        skipped_types = [f'<span class="lvl">{esc(t["type"])}</span> not run: {page.inline(t["evidence"]) or state("no reason recorded", "need")}'
+                         for t in test_types if t["ran"].strip("*_ ").lower() == "no"]
+        tests_line = "; ".join(by_level + skipped_types)
     else:
-        s5 = unavailable(whys["checks-guide"])
-    s5 += source_line([paths["checks-guide"]])
+        tests_line = source_html("validation", "validate")
+    verify_html = (state(verify_word, result_tone(verify_word)) if verify_word and verify_word != "phase off"
+                   else source_html("verify", "verify"))
+    gates = (f'CI {state(ci_word, ci_tone)} · review stamp {state(stamps["review"], stamp_tone(stamps["review"]))}'
+             f' · validate stamp {state(stamps["validate"], stamp_tone(stamps["validate"]))} · verify {verify_html}')
 
-    # 06
-    s6 = notes_block(page, notes, 6, paths["decision-notes"])
-    s6 += (f'<h3>Items to decide <span class="n">{len(items)}</span></h3>'
-           + (f'<ol class="decide">{"".join(f"<li>{body} <a class={chr(34)}go{chr(34)} href={chr(34)}{esc(href)}{chr(34)}>details</a></li>" for href, body in items)}</ol>'
-              if items else f'<p>{state("nothing to decide", "ok")}</p><ol class="decide"></ol>'))
-    para = first_paragraph(body) if body else None
-    phases = f'{state("unavailable", "need")} {esc(phases_error)}' if phases_error else esc(phase_switches.describe(off))
-    s6 += ('<h3 id="rests">What it rests on</h3><ul class="facts" role="list">'
-           f'<li><span class="k">Goal:</span> {page.inline(goal.group(1)) if goal else state("not recorded", "dim")}</li>'
-           f'<li><span class="k">PR title:</span> {esc(pr_title) if pr_title else state("not recorded", "dim")}</li>'
-           f'<li><span class="k">PR description, first paragraph:</span> {page.inline(para) if para else state("not recorded", "dim")}</li>'
-           f'<li><span class="k">Verify:</span> {verify_html()}</li>'
-           f'<li><span class="k">Stamps:</span> review {state(stamps["review"], stamp_tone(stamps["review"]))}'
-           f' · validate {state(stamps["validate"], stamp_tone(stamps["validate"]))}</li>'
-           f'<li><span class="k">Review:</span> {review_count_html()}</li>'
-           f'<li><span class="k">Validation:</span> {validation_count_html()}</li>'
-           f'<li><span class="k">Phases off:</span> {phases}</li></ul>')
-    s6 += source_line([paths["decision-notes"], spec_path, paths["pr-body"], paths["verify"], paths["review"],
-                       paths["validation"], paths["checks-guide"], paths["follow-pr"]])
+    def item_list(key, label, items, empty):
+        page.ids.add(key)
+        return (f'<div class="list" id="{key}"><h2>{label} <span class="n">{len(items)}</span></h2>'
+                f'<ol class="items" id="{key}-items">'
+                + "".join(f'<li>{body} <a class="go" href="{esc(href)}">details</a></li>' for href, body, *_ in items)
+                + "</ol>" + ("" if items else f"<p>{state(empty, 'ok')}</p>") + "</div>")
+    summary = ('<section id="summary" aria-labelledby="h00"><h2 class="vh" id="h00">Summary</h2><dl class="sum">'
+               + "".join(f'<div class="row" id="sum-{key}"><dt>{label}</dt><dd>{body}</dd></div>'
+                         for key, label, body in (("task", "Task", task), ("solution", "Solution", solution),
+                                                  ("review", "Review", review_line), ("tests", "Tests", tests_line),
+                                                  ("gates", "Gates", gates)))
+               + "</dl>" + item_list("decisions", "Your decisions", decisions, "nothing to decide")
+               + item_list("blockers", "Blockers the agent owns", blockers, "no blocker")
+               + item_list("warnings", "Warnings", warnings, "no warning")
+               + '<nav class="toc" aria-label="Sections"><ol>'
+               + "".join(f'<li><a href="#s0{n}">{SECTIONS[n]}</a></li>' for n in SECTIONS) + "</ol></nav></section>")
 
     # Header, footer
+    pr_title = pr["title"] if pr else None
+    title = pr_title or (spec_title.group(1) if spec_title else branch)
     pr_text = (f'#{pr["number"]} {esc(pr.get("state") or "")} <code>{esc(pr.get("url") or "")}</code>' if pr else
                state("unknown", "need") + " " + esc(pr_error) if pr_error else state("no PR yet", "dim"))
     pr_head = review_stamp.git("rev-parse", "--verify", "--quiet", f"{pr['headRefOid']}^{{tree}}") if pr else ""
     covers = (f'commit <code>{esc(pr["headRefOid"])}</code>, tree <code>{esc(pr_head)}</code>' if pr and pr_head else
               f'commit <code>{esc(pr["headRefOid"])}</code>, tree {state("unavailable", "dim")} not in this repository'
               if pr else state("no PR yet", "dim"))
-    strip = [("PR", f'#{pr["number"]}' if pr else ("unknown" if pr_error else "no PR yet"), "ok" if pr else "need" if pr_error else "dim"),
-             ("CI", ci_word, ci_tone), ("verify", (source_state("verify", "verify") or verify_word).split(":")[0],
-                                         "ok" if verify_word == "PASS" else "dim" if "verify" in off else "need"),
-             ("review stamp", stamps["review"], stamp_tone(stamps["review"])),
-             ("validate stamp", stamps["validate"], stamp_tone(stamps["validate"]))]
-    decide_link = (f'<a class="todo need" href="#s06">{len(items)} item{"s" * (len(items) != 1)} to decide</a>' if items
-                   else '<a class="todo ok" href="#s06">nothing to decide</a>')
-    sections = {1: s1, 2: s2, 3: s3, 4: s4, 5: s5, 6: s6}
+    # CI, verify and the stamps are the summary's Gates row: the strip holds only what the row doesn't
+    strip = [("PR", f'#{pr["number"]}' if pr else ("unknown" if pr_error else "no PR yet"), "ok" if pr else "need" if pr_error else "dim")]
+    todo = f'{len(decisions)} decision{"s" * (len(decisions) != 1)} · {len(blockers)} blocker{"s" * (len(blockers) != 1)}'
+    decide_link = f'<a class="todo {"need" if blockers else "ok"}" href="#decisions">{todo}</a>'
+    opened = {number for _, _, number in blockers if number}
+    metas = {1: s1_meta, 2: s2_meta, 3: s3_meta, 4: s4_meta, 5: f"{len(ANNEXES)} reports and the changed files"}
+    sections = {1: s1, 2: s2, 3: s3, 4: s4, 5: s5}
     body_html = "".join(
-        f'<section id="s0{n}" aria-labelledby="h0{n}"><h2 id="h0{n}"><span class="num">0{n}</span> {HEADINGS[n]}</h2>'
-        f'{sections[n]}</section>' for n in sorted(sections))
+        f'<details class="sec"{" open" if n in opened else ""} id="s0{n}"><summary><h2 id="h0{n}"><span class="num">0{n}</span> '
+        f'{SECTIONS[n]}</h2><span class="meta">{esc(metas[n])}</span></summary><div class="sec-body">{sections[n]}</div></details>'
+        for n in sorted(sections))
+    phases = f'{state("unavailable", "need")} {esc(phases_error)}' if phases_error else esc(phase_switches.describe(off))
     footer = ('<footer id="footer"><dl class="ids">'
               f'<dt>PR</dt><dd>{pr_text}</dd>'
               f'<dt>Commit and tree</dt><dd>{covers}</dd>'
               f'<dt>CI</dt><dd>{state(ci_word, ci_tone)} {esc(ci_detail)}</dd>'
+              f'<dt>Verify</dt><dd>{verify_html} {esc(verify_line or "")}</dd>'
+              f'<dt>Phases off</dt><dd>{phases}</dd>'
               f'<dt>HEAD read</dt><dd>commit <code>{esc(head)}</code>, working tree <code>{esc(tree)}</code>, branch '
               f'<code>{esc(branch)}</code></dd>'
               f'<dt>Generated</dt><dd>{esc(now)}</dd>'
@@ -950,12 +1182,12 @@ def build(page_path, evidence):
             f'<meta http-equiv="Content-Security-Policy" content="{esc(CSP)}">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">'
             f"<title>{esc(title)}</title><style>{STYLE}</style></head><body>"
-            f'<a class="skip" href="#main">Skip to the sections</a>'
+            f'<a class="skip" href="#main">Skip to the summary</a>'
             f'<header class="top"><h1>{esc(title)}</h1>'
             f'<p class="purpose">Decision page for <code>{esc(branch)}</code>, from its spec, reports and evidence</p>'
             f'<p class="strip">' + " ".join(f'<span class="gate">{name} {state(word, tone)}</span>' for name, word, tone in strip)
             + f" {decide_link}</p></header>"
-            f'<main id="main">{body_html}</main>{footer}</body></html>\n')
+            f'<main id="main">{summary}{body_html}</main>{footer}</body></html>\n')
 
 
 STYLE = """
@@ -971,9 +1203,10 @@ a{color:var(--text);text-decoration:underline;text-decoration-color:var(--dim);t
 a:hover{text-decoration-color:var(--lime)}
 :focus-visible{outline:2px solid var(--lime);outline-offset:3px}
 html{accent-color:var(--lime);scrollbar-color:var(--line) var(--bg)}
-.counts,.facts,.n,.st,table,footer{font-variant-numeric:tabular-nums}
+.n,.st,table,footer{font-variant-numeric:tabular-nums}
 .skip{position:absolute;left:-999px;top:0;background:var(--lime);color:var(--bg);padding:.5rem 1rem}
 .skip:focus{left:1rem}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .top,main,footer{max-width:72rem;margin:0 auto;padding:0 1rem}
 .top{padding-top:2.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--line)}
 h1{color:var(--text);font-size:clamp(1.5rem,1.1rem + 1.6vw,2.25rem);line-height:1.2;margin:0 0 .5rem;max-width:40ch;
@@ -990,20 +1223,35 @@ h5,h6{font-size:.9375rem;margin:1.25rem 0 .5rem}
 .gate{white-space:nowrap}
 .todo{font-weight:600}
 .todo.need{color:var(--human)}.todo.ok{color:var(--lime)}
-section{padding:2.5rem 0;border-bottom:1px solid var(--line);scroll-margin-top:1rem}
+#summary{padding:2rem 0 1rem;border-bottom:1px solid var(--line)}
+.sum{display:grid;grid-template-columns:minmax(6rem,max-content) minmax(0,1fr);gap:.75rem 1.5rem;margin:0 0 1.5rem}
+.sum>.row{display:contents}
+.sum dt{font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em;font-size:.8125rem;color:var(--muted);padding-top:.2rem}
+.sum dd{margin:0;color:var(--text);max-width:none}
+.sum dd>p{margin:0 0 .25rem}
+.lvl{font-family:var(--mono);font-size:.875rem;color:var(--muted)}
+.list h2{font-size:1.125rem;margin:1.5rem 0 .5rem}
+#decisions h2{color:var(--human)}
+.toc ol{list-style:none;padding:0;margin:1.5rem 0 0;display:flex;flex-wrap:wrap;gap:.25rem 1.25rem;font-family:var(--mono);font-size:.875rem}
+.sec{border-bottom:1px solid var(--line);scroll-margin-top:1rem}
+.sec>summary{cursor:pointer;list-style:none;padding:1.5rem 0;display:flex;flex-wrap:wrap;align-items:baseline;gap:.25rem 1.25rem}
+.sec>summary::-webkit-details-marker{display:none}
+.sec>summary::before{content:"▸" / "";color:var(--dim);font-family:var(--mono);font-size:1.25rem}
+.sec[open]>summary::before{content:"▾" / ""}
+.sec>summary h2{margin:0}
+.sec[open]>summary{padding-bottom:.75rem}
+.sec>summary:hover h2{text-decoration:underline;text-decoration-color:var(--dim);text-underline-offset:6px}
+.sec-body{padding:0 0 2.5rem}.sec-body>h3:first-child{margin-top:0}
 p,li,blockquote,dd{max-width:34em;overflow-wrap:anywhere}
 p{margin:0 0 .75rem}
-code,pre,.st,.cid,.ac,.case,.n,.k,.src,.ref,.size,.fields dt,.ids dt{font-family:var(--mono)}
+code,pre,.st,.cid,.ac,.case,.n,.k,.ref,.said,.owner,.size,.fields dt,.ids dt{font-family:var(--mono)}
 code{font-size:.9em;color:var(--text);overflow-wrap:anywhere}
 .st{font-size:.8125rem;letter-spacing:.02em;overflow-wrap:anywhere}
 .st.ok{color:var(--lime)}.st.need{color:var(--human)}.st.dim{color:var(--dim)}
 .k{color:var(--muted);font-size:.875rem}
 .n{color:var(--dim);font-size:.875rem;font-weight:400;margin-left:.375rem}
-.meta,.src,.by,.size{color:var(--dim);font-size:.8125rem}
+.meta,.by,.size{color:var(--dim);font-size:.8125rem}
 figure .ln{display:block}
-.src{margin-top:1.5rem;overflow-wrap:anywhere;font-size:.875rem}
-.src>summary{cursor:pointer;color:var(--dim);font-family:var(--mono)}
-.src ul{padding-left:1.25rem}
 .by{margin:0 0 .75rem;font-family:var(--mono)}
 .notes{background:var(--surface);border:1px solid var(--line);padding:1.25rem 1.5rem .5rem;margin:0 0 2rem}
 .notes p,.notes li{color:var(--text);font-size:1.0625rem}
@@ -1024,13 +1272,26 @@ tbody th{color:var(--text);font-family:var(--mono);font-weight:400}
 ul,ol{padding-left:1.25rem;margin:0 0 1rem}
 li{margin:.25rem 0}
 li.sub{margin-left:1.25rem}
-.counts,.facts{list-style:none;padding:0;max-width:34em}
-.counts li,.facts li{padding:.375rem 0;border-bottom:1px solid var(--line);max-width:none}
 .absent{color:var(--muted)}
-.decide{padding-left:1.75rem}
-.decide li{margin:.5rem 0;color:var(--text)}
-.decide li::marker{font-family:var(--mono);color:var(--human)}
-.decide a.go{font-family:var(--mono);font-size:.875rem;color:var(--human);text-decoration-color:var(--human);white-space:nowrap}
+.items{padding-left:1.75rem}
+.items li{margin:.5rem 0;color:var(--text)}
+.items li::marker{font-family:var(--mono);color:var(--dim)}
+#decisions .items li::marker{color:var(--human)}
+.items .sub{display:block;color:var(--muted);font-size:.9375rem}
+.items .group{display:inline}.items .group>summary{cursor:pointer}.items .group ol{padding-left:1.25rem;margin:.25rem 0}.items .group li{font-size:.9375rem;color:var(--muted)}
+.owned{list-style:none;padding:0}
+.owner{display:inline-block;min-width:3.5rem;font-size:.8125rem;color:var(--muted)}
+.said{display:block;font-size:.8125rem;color:var(--text)}
+.ship{border-left:1px solid var(--line);padding-left:1rem;margin:0 0 1.25rem}
+.ship h4{margin-top:0}
+video{max-width:100%;height:auto;border:1px solid var(--line);display:block;background:var(--surface)}
+.more>summary,.earlier>summary,.runner>summary{cursor:pointer;color:var(--muted);margin:.5rem 0;font-size:.875rem}
+.sum .more>summary{font-family:var(--mono);margin:0 0 .25rem}
+.annex{border-top:1px solid var(--line)}
+.annex>summary{cursor:pointer;padding:.625rem 0;color:var(--text);overflow-wrap:anywhere}
+.annex>summary code{color:var(--dim)}
+.annex-body{padding:.25rem 0 1.25rem}
+.items a.go,.sum a.go{font-family:var(--mono);font-size:.875rem;color:var(--human);text-decoration-color:var(--human);white-space:nowrap}
 .radios>input{position:absolute;opacity:0;width:1px;height:1px}
 .radios>label{display:inline-flex;align-items:center;min-height:2.75rem;font-family:var(--mono);font-size:.8125rem;
 border:1px solid var(--line);padding:.375rem 1rem;margin:0 .375rem .75rem 0;cursor:pointer;color:var(--muted)}
@@ -1071,7 +1332,7 @@ figcaption{font-size:.8125rem;margin-top:.25rem}
 #review-open .entry .lab{color:var(--human)}
 .ref{display:block;color:var(--dim);font-size:.8125rem}
 details.report>summary,.dirs+details>summary{cursor:pointer;color:var(--muted);margin:.5rem 0}
-.check:target,.entry:target,.fresh li:target,[id^="guide-"]:target{outline:2px solid var(--human);outline-offset:4px;
+.check:target,.entry:target,.fresh li:target,[id^="guide-"]:target,.annex:target,.ship:target,.criteria tr:target{outline:2px solid var(--human);outline-offset:4px;
 scroll-margin-top:1.5rem}
 .guide h3{border-top:1px solid var(--line);padding-top:1.25rem}
 footer{padding-top:2rem;padding-bottom:3rem}
@@ -1080,7 +1341,8 @@ footer{padding-top:2rem;padding-bottom:3rem}
 h2,.num{font-size:1.5rem}h3{font-size:1.125rem}figure pre{white-space:pre-wrap;overflow-wrap:anywhere}figure .ln{padding-left:4ch;text-indent:-4ch}
 .criteria thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.criteria tr{display:block;border-bottom:1px solid var(--line);padding:.5rem 0}
 .criteria td,.criteria th,.criteria td:nth-child(2){display:block;border:0;min-width:0;width:auto;max-width:none;padding:.25rem .75rem}
-.criteria td:last-child::before{content:"Checks: ";color:var(--dim);font-family:var(--mono)}.notes{padding:1rem 1rem .25rem}}
+.criteria td[data-label]::before{content:attr(data-label) ": ";color:var(--dim);font-family:var(--mono)}.notes{padding:1rem 1rem .25rem}
+.sum{grid-template-columns:minmax(0,1fr);gap:.25rem}.sum dd{margin-bottom:.75rem}}
 """
 
 

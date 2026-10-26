@@ -15,13 +15,13 @@ KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 # A HOME of our own: the page reads the user's phase switches, and the real ones would change it.
 os.environ["HOME"] = tempfile.mkdtemp(prefix="agents-test-decision-report-home-")
 os.makedirs(os.path.expanduser("~/.agents"))
-for entry in set(os.listdir(KIT)) - {"approvals", "logs"}:
+for entry in set(os.listdir(KIT)) - {"approvals", "logs", "repos"}:
     os.symlink(os.path.join(KIT, entry), os.path.expanduser(f"~/.agents/{entry}"))
+os.makedirs(os.path.expanduser("~/.agents/repos"))  # a ship.md written here must not land in the kit's own overlays
 REPORTS = os.path.join(KIT, "bin", "reports")
 RESULTS = []
 CSP = ("default-src 'none'; img-src file: data:; media-src file: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
-HEADINGS = ["What the task must do", "What the change does", "What it changes for users", "What we tested",
-            "How to test it yourself", "What you must decide"]
+HEADINGS = ["Coverage", "Tests", "Review", "Merge and ship", "Reports"]
 PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
        b"\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82")
 # gh as the page calls it: `pr view`, then the check runs and statuses of one commit, from FAKE_GH_DIR/gh.json.
@@ -283,9 +283,35 @@ def text(markup):
 
 
 def section(page, number):
-    found = re.search(rf'<section id="s0{number}".*?</section>', page, re.S)
+    """A numbered section: a <details> holding nested <details>, so it ends where the next section or <main> does."""
+    found = re.search(rf'<details class="sec"[^>]* id="s0{number}".*?(?=<details class="sec"|</main>)', page, re.S)
     assert found, f"no section 0{number}"
     return found.group(0)
+
+
+def is_open(page, number):
+    found = re.search(rf'<details class="sec"([^>]*) id="s0{number}"', page)
+    assert found, f"no section 0{number}"
+    return " open" in found.group(1)
+
+
+def summary(page):
+    found = re.search(r'<section id="summary".*?</section>', page, re.S)
+    assert found, "no summary"
+    return found.group(0)
+
+
+def summary_row(page, name):
+    found = re.search(rf'<div class="row" id="sum-{name}">(.*?)(?=<div class="row" id="sum-|</dl>)', summary(page), re.S)
+    assert found, f"no {name} row in the summary"
+    return text(found.group(1))
+
+
+def listed(page, name):
+    """The items of one of the summary's lists: decisions, blockers or warnings."""
+    found = re.search(rf'<ol class="items" id="{name}-items">(.*?)</ol>', summary(page), re.S)
+    assert found, f"no {name} list in the summary"
+    return [text(item) for item in re.findall(r"<li[^>]*>(.*?)</li>", found.group(1), re.S)]
 
 
 def footer(page):
@@ -301,15 +327,14 @@ def footer_value(page, name):
 
 
 def check_block(page, check_id):
-    found = re.search(rf'<li class="check[^"]*" id="check-{check_id}">.*?</li>', page, re.S)
+    found = re.search(rf'<li class="check[^"]*" id="check-{check_id}">.*?</details></li>', page, re.S)
     assert found, f"no block for {check_id}"
     return found.group(0)
 
 
 def decide_items(page):
-    found = re.search(r'<ol class="decide">(.*?)</ol>', section(page, 6), re.S)
-    assert found, "no list of items in 06"
-    return [text(item) for item in re.findall(r"<li[^>]*>(.*?)</li>", found.group(1), re.S)]
+    """Every item of the summary's three lists."""
+    return listed(page, "decisions") + listed(page, "blockers") + listed(page, "warnings")
 
 
 class Tags(html.parser.HTMLParser):
@@ -491,29 +516,29 @@ def sections_come_in_order_with_the_notes(base):
     _, markup = generate(repo, base)
     found = [(n, h) for n, h in re.findall(r'<h2[^>]*><span class="num">(\d\d)</span>\s*([^<]+)</h2>', markup)]
     assert found == [(f"0{i + 1}", h) for i, h in enumerate(HEADINGS)], found
-    for number, line in ((1, "The task must stop a second discount"), (2, "The change adds a guard in"),
-                         (3, "A shopper sees one discount line"), (6, "Decide if one FAIL on the phone check")):
-        part = section(markup, number)
-        assert line in text(part), (number, text(part)[:300])
-        assert "Written by the agent" in text(part), number
-        assert path_of(repo, "decision-notes") in text(part), number
-    assert not re.search(r"<h[4-6]", section(markup, 2)), "a notes heading skips a level"
-    assert re.search(r'<pre[^>]*>(?:<code[^>]*>)?(?:[^<]|<span class="ln">|</span>)*└── apply_coupon', section(markup, 2)), "the notes' figure isn't preformatted"
+    for row, line in (("task", "The task must stop a second discount"), ("solution", "The change adds a guard in"),
+                      ("solution", "A shopper sees one discount line")):
+        assert line in summary_row(markup, row), (row, summary_row(markup, row)[:300])
+        assert "Written by the agent" in summary_row(markup, row), row
+    assert any("Decide if one FAIL on the phone check" in d for d in listed(markup, "decisions"))
+    assert path_of(repo, "decision-notes") in text(section(markup, 5))
+    assert re.search(r"<h3[^>]*>Where it sits</h3>", summary(markup)), "a notes heading skips a level"
+    levels = [int(n) for n in re.findall(r"<h(\d)", summary(markup))]
+    assert all(b <= a + 1 for a, b in zip(levels, levels[1:])), f"a notes heading skips a level: {levels}"
+    assert re.search(r'<pre[^>]*>(?:<code[^>]*>)?(?:[^<]|<span class="ln">|</span>)*└── apply_coupon', summary(markup)), "the notes' figure isn't preformatted"
     one = section(markup, 1)
     criteria = re.findall(r'<tr[^>]*id="ac-(\d+)">(.*?)</tr>', one, re.S)
     assert [n for n, _ in criteria] == ["1", "2", "3"], criteria
     first = text(criteria[0][1])
     assert "A1 PASS" in first and "A2 FAIL" in first and "A3" not in first, first
     assert "no check" in text(criteria[2][1]) and "no check" not in first, criteria
-    assert "Goal: a shopper gets one discount per coupon" in text(one) or "a shopper gets one discount per coupon" in text(one)
-    assert path_of(repo, "spec") in text(one)
-    two = text(section(markup, 2))
-    assert "Second paragraph with detail." in two and path_of(repo, "pr-body") in two, two[:500]
-    assert "src/ 1 +3 -1" in two and "(top level) 1 +1 -0" in two, two
-    four = text(section(markup, 4))
-    for kind in ("validation", "review", "verify"):
-        assert path_of(repo, kind) in four, kind
-    assert path_of(repo, "checks-guide") in text(section(markup, 5))
+    five = text(section(markup, 5))
+    assert "Goal: a shopper gets one discount per coupon" in five
+    assert path_of(repo, "spec") in five
+    assert "Second paragraph with detail." in five and path_of(repo, "pr-body") in five, five[:500]
+    assert "src/ 1 +3 -1" in five and "(top level) 1 +1 -0" in five, five
+    for kind in ("validation", "review", "verify", "checks-guide"):
+        assert path_of(repo, kind) in five, kind
     listing = sh(repo, REPORTS)
     assert "decision-notes" not in listing.stdout, "the notes are listed with the reports"
 
@@ -521,21 +546,22 @@ def sections_come_in_order_with_the_notes(base):
 def a_branch_without_notes_or_pr_body_says_not_recorded(base):
     repo, _ = full_branch(base, notes=False, pr_body=False)
     _, markup = generate(repo, base)
-    for number in (1, 2, 3, 6):
-        assert "not recorded" in text(section(markup, number)), number
-        assert "Written by the agent" not in text(section(markup, number)), number
-    assert "a shopper gets one discount per coupon" in text(section(markup, 1)), "no fallback to the spec's goal"
-    two = text(section(markup, 2))
-    assert "kit-ship" in two, "doesn't say what would write the missing PR body"
+    for row in ("task", "solution"):
+        assert "not recorded" in summary_row(markup, row), row
+    assert "Written by the agent" not in text(summary(markup))
+    assert "recommendation not recorded" in listed(markup, "decisions")[0]
+    assert "a shopper gets one discount per coupon" in summary_row(markup, "task"), "no fallback to the spec's goal"
+    for kind in ("decision-notes", "pr-body"):
+        annex = re.search(rf'<details class="annex" id="annex-{kind}">.*?</details>', markup, re.S)
+        assert "not recorded" in text(annex.group(0)) and "kit-ship" in text(annex.group(0)), kind
 
 
 def falls_back_to_the_pr_body_first_paragraph(base):
     repo, _ = full_branch(base, notes=False)
     _, markup = generate(repo, base)
-    fallback = re.search(r'<div class="fallback">.*?</div>', section(markup, 2), re.S)
-    assert fallback, "no fallback block in 02"
-    assert "The cart applies a coupon once." in text(fallback.group(0)), text(fallback.group(0))
-    assert "Second paragraph" not in fallback.group(0), "the fallback holds more than the first paragraph"
+    solution = summary_row(markup, "solution")
+    assert "The cart applies a coupon once." in solution, solution
+    assert "Second paragraph" not in solution, "the fallback holds more than the first paragraph"
 
 
 # AC3
@@ -545,26 +571,25 @@ def decide_names_every_item(base):
     _, markup = generate(repo, base)
     items = decide_items(markup)
     joined = "\n".join(items)
-    for name in ("totals in two currencies collapse", "A2", "A3", "A2.txt", "environment.txt", "gone.txt", "M1", "P1", "P2",
-                 "c123"):
+    for name in ("totals in two currencies collapse", "A2", "A2.txt", "environment.txt", "gone.txt", "M1", "c123"):
         assert name in joined, (name, items)
     assert not any(re.search(r"\bM2\b", item) for item in items), items
-    assert any("M1" in item and "optional" in item for item in items), items
-    assert any("P1" in item and "left" in item for item in items), items
+    assert any("M1" in item and "FAIL" in item for item in listed(markup, "blockers")), items
     assert any("environment.txt" in item and "doesn't have" in item for item in items), items
     assert any("A2.txt" in item and "src/cart.py" in item for item in items), items
-    six = text(section(markup, 6))
-    for count in ("Fixed 2", "Rejected 1", "Pre-existing 1", "Open 1", "Not run 1", "PASS 2", "FAIL 1", "NOT RUN 1"):
-        assert count in six, (count, six[:900])
-    assert "Goal: a shopper gets one discount per coupon, even on refresh." in six
-    assert "The cart applies a coupon once. A refresh no longer adds a second discount." in six
-    assert "Second paragraph with detail." not in six, "06 quotes more than the first paragraph"
-    assert "review missing" in six and "validate missing" in six, six[:900]
-    assert "PASS" in six and "tests/run.sh cart" in six
-    links = re.findall(r'<ol class="decide">.*?</ol>', section(markup, 6), re.S)[0]
-    for target in re.findall(r'href="#([^"]+)"', links):
+    after = text(section(markup, 4))
+    assert re.search(r"P1 Backfill the totals: left", after) and re.search(r"P2 Watch the error log: left", after), after[:900]
+    for count in ("Fixed 2", "Rejected 1", "Pre-existing 1", "Open 1", "Not run 1"):
+        assert count in text(section(markup, 3)), count
+    for count in ("PASS 2", "FAIL 1", "NOT RUN 1"):
+        assert count in text(section(markup, 2)), count
+    gates = summary_row(markup, "gates")
+    assert "review stamp missing" in gates and "validate stamp missing" in gates and "verify PASS" in gates, gates
+    assert "tests/run.sh cart" in footer_value(markup, "Verify")
+    links = re.findall(r'<ol class="items" id="\w+-items">.*?</ol>', summary(markup), re.S)
+    for target in re.findall(r'href="#([^"]+)"', "".join(links)):
         assert f'id="{target}"' in markup, target
-    assert 'href="#check-A2"' in links and 'href="#s06"' in markup
+    assert 'href="#check-A2"' in "".join(links) and 'href="#decisions"' in markup
 
 
 def a_symlink_to_a_file_inside_keeps_its_freshness(base):
@@ -604,7 +629,7 @@ def ci_is_read_for_the_pr_head_only(base):
     ci = footer_value(markup, "CI")
     assert "missing" in ci and head[:12] in ci and "PASS" not in ci, ci
     assert "#7" in footer_value(markup, "PR") and "https://github.com/o/shop/pull/7" in footer_value(markup, "PR")
-    assert "Apply a coupon once" in text(section(markup, 2))
+    assert re.search(r"<h1>Apply a coupon once</h1>", markup)
     other = "1234567890abcdef1234567890abcdef12345678"
     _, markup = generate(repo, base, {"pr": {**pr, "headRefOid": other}, "checks": {other: green}})
     assert "PASS" in footer_value(markup, "CI"), footer_value(markup, "CI")
@@ -626,15 +651,15 @@ def missing_or_malformed_reports_are_unavailable(base):
     os.remove(path_of(repo, "validation"))
     write(repo, "review", "some notes, nothing a review writes\n")
     _, markup = generate(repo, base)
-    six = text(section(markup, 6))
-    assert re.search(r"Validation: unavailable", six) and re.search(r"Review: unavailable", six), six[:900]
-    assert not re.search(r"\b(PASS|FAIL|NOT RUN|Fixed|Open) 0\b", six), six[:900]
+    tests, review = summary_row(markup, "tests"), summary_row(markup, "review")
+    assert "unavailable" in tests and "unavailable" in review, (tests, review)
+    assert not re.search(r"\b(PASS|FAIL|NOT RUN|Fixed|Open) 0\b", tests + review), (tests, review)
     items = "\n".join(decide_items(markup))
     assert "validation" in items.lower() and "unavailable" in items, items
     for verdict in ("   ", " ."):
         write(repo, "verify", f"# Verify:{verdict}\n")
         _, markup = generate(repo, base)
-        assert re.search(r"Verify: unavailable", text(section(markup, 6))), f"verdict {verdict!r}"
+        assert "verify unavailable" in summary_row(markup, "gates"), f"verdict {verdict!r}"
 
 
 def ci_states_and_phases_off(base):
@@ -659,7 +684,7 @@ def ci_states_and_phases_off(base):
     items = "\n".join(decide_items(markup))
     assert "CI for the PR head" not in items and "Verify" not in items and "Open finding" not in items, items
     assert "review stamp phase off" in text(markup) and "verify phase off" in text(markup)
-    assert re.search(r"Phases off:.*\bci\b", text(section(markup, 6))), text(section(markup, 6))[-600:]
+    assert re.search(r"\bci\b", footer_value(markup, "Phases off")), footer_value(markup, "Phases off")
 
 
 def stamps_verify_and_validation_states(base):
@@ -698,14 +723,14 @@ def prose_names_no_file_it_lacks(base):
 
 
 def a_template_heading_is_not_the_first_paragraph(base):
-    repo, _ = full_branch(base)
+    repo, _ = full_branch(base, notes=False)
     write(repo, "pr-body", "## Summary\n<!-- what it does -->\n\nThe cart applies a coupon once.\n\nSecond paragraph.\n")
     _, markup = generate(repo, base)
-    six = text(section(markup, 6))
-    assert "first paragraph: The cart applies a coupon once." in six and "Summary" not in six.split("first paragraph:")[1][:40], six
+    solution = summary_row(markup, "solution")
+    assert solution.startswith("Solution The cart applies a coupon once."), solution
     write(repo, "pr-body", "## Summary\n\n#123 is fixed here.\nMore.\n")
     _, markup = generate(repo, base)
-    assert "first paragraph: #123 is fixed here." in text(section(markup, 6)), "an issue reference was taken for a heading"
+    assert summary_row(markup, "solution").startswith("Solution #123 is fixed here."), "an issue reference was taken for a heading"
 
 
 def the_validation_notes_keep_their_code(base):
@@ -730,7 +755,7 @@ def each_check_row_carries_its_evidence(base):
     assert re.search(r'<img [^>]*src="data:image/png;base64,', block), "the screenshot isn't embedded"
     real = urllib.parse.quote(os.path.realpath(evidence))
     assert f'href="file://{real}/run.webm"' in block, "the video isn't linked"
-    assert "php 8.3" in text(section(markup, 4)), "environment.txt isn't shown"
+    assert "php 8.3" in text(section(markup, 2)), "environment.txt isn't shown"
     assert "missing" in text(check_block(markup, "A4")), text(check_block(markup, "A4"))
     assert "missing" not in text(block)
 
@@ -762,8 +787,8 @@ def a_report_from_before_pr_a_says_not_recorded(base):
     _, markup = generate(repo, base)
     block = text(check_block(markup, "A1"))
     assert "not recorded" in block and "missing" not in block, block
-    four = text(section(markup, 4))
-    assert re.search(r"Environment:? not recorded", four), four[:900]
+    two = text(section(markup, 2))
+    assert re.search(r"Environment:? not recorded", two), two[:900]
 
 
 # AC5
@@ -771,7 +796,7 @@ def a_report_from_before_pr_a_says_not_recorded(base):
 def every_review_entry_and_guide_step_in_order(base):
     repo, _ = full_branch(base)
     _, markup = generate(repo, base)
-    four = section(markup, 4)
+    four = section(markup, 3)
     for outcome, entry, where in (("Fixed", "a coupon applied twice on refresh", "src/cart.py:40"),
                                   ("Fixed", "the total ignored tax", "src/cart.py:52"),
                                   ("Rejected", "a race on checkout", "handled at src/cart.py:80"),
@@ -781,7 +806,7 @@ def every_review_entry_and_guide_step_in_order(base):
         group = re.search(rf'<div class="outcome" id="review-{outcome.lower().replace(" ", "-")}">(.*?)</div>', four, re.S)
         assert group and entry in text(group.group(1)) and where in text(group.group(1)), (outcome, entry)
     assert "codex on correctness" in text(four) and "re-check rounds 1" in text(four).replace(":", ""), text(four)[:600]
-    five = section(markup, 5)
+    five = re.search(r'<details class="annex" id="annex-checks-guide">.*?</details>', markup, re.S).group(0)
     words = text(five)
     positions = [words.find(s) for s in ("Before the merge (optional)", "M1. Pay on a phone", "one discount line on the phone",
                                          "send the screenshot of the cart", "M2. Refund in the sandbox", "After the merge",
@@ -856,6 +881,430 @@ def refuses_another_branch_and_a_detached_head(base):
     assert out.returncode == 2 and "branch" in out.stderr, out
 
 
+# v2 AC1: the summary first
+
+LENSES = """
+## Lenses
+
+| Lens | Model | Findings | Confirmed | Outcomes |
+|---|---|---|---|---|
+| Correctness | claude | 3 | 2 | fixed=2, wrong=1 |
+| Correctness | codex | 2 | 1 | fixed=1, intentional=1 |
+| Tests | claude | 1 | 1 | open=1 |
+| Maintainability | codex | not run: exit 1 | — | — |
+"""
+
+
+def add_rows(repo, rows, header="| # | AC | Check | Case | Expected | Result | Evidence |"):
+    with open(path_of(repo, "validation"), "a") as fh:
+        fh.write(f"\n## Z. More\n\n{header}\n|{'---|' * (header.count('|') - 1)}\n{rows}")
+
+
+def the_summary_comes_first_in_order(base):
+    repo, _ = full_branch(base)
+    _, markup = generate(repo, base)
+    main = markup[markup.index('<main id="main">'):]
+    assert main.index('<section id="summary"') < main.index('<details class="sec"'), "AC1: a section comes before the summary"
+    labels = re.findall(r'<div class="row" id="sum-(\w+)"><dt>([^<]+)</dt>', summary(markup))
+    assert [l for _, l in labels] == ["Task", "Solution", "Review", "Tests", "Gates"], labels
+    lists = re.findall(r'<ol class="items" id="(\w+)-items">', summary(markup))
+    assert lists == ["decisions", "blockers", "warnings"], lists
+    task = summary_row(markup, "task")
+    assert task.startswith("Task The task must stop a second discount for one coupon."), task
+    solution = summary_row(markup, "solution")
+    assert "The change adds a guard in src/cart.py:2" in solution, solution
+    folded = re.search(r'id="sum-solution".*?<details[^>]*>(.*?)</details>', summary(markup), re.S)
+    assert folded and "Where it sits" in text(folded.group(1)) and "A shopper sees one discount line" in text(folded.group(1)), \
+        "AC1: the rest of the notes isn't folded under the solution"
+    assert "Written by the agent" in text(summary(markup))
+    nav = re.findall(r'<a href="#s0(\d)">', summary(markup))
+    assert nav == ["1", "2", "3", "4", "5"], nav
+    sections = re.findall(r'<details class="sec"[^>]* id="s0(\d)"><summary><h2[^>]*><span class="num">0\d</span> ([^<]+)</h2>', markup)
+    assert [h for _, h in sections] == ["Coverage", "Tests", "Review", "Merge and ship", "Reports"], sections
+
+
+def the_summary_falls_back_to_the_spec_and_pr_body(base):
+    repo, _ = full_branch(base, notes=False)
+    _, markup = generate(repo, base)
+    task = summary_row(markup, "task")
+    assert "a shopper gets one discount per coupon, even on refresh." in task, task
+    solution = summary_row(markup, "solution")
+    assert "The cart applies a coupon once." in solution and "Second paragraph" not in solution, solution
+    assert "Written by the agent" not in text(summary(markup))
+
+
+def the_three_lists_hold_their_items(base):
+    repo, _ = full_branch(base)
+    assert sh(repo, "python3", os.path.join(KIT, "hooks", "review_stamp.py"), "write").returncode == 0
+    put(os.path.join(repo, "src", "cart.py"), "a = 1\nc = 3\n")  # the review stamp goes stale
+    _, markup = generate(repo, base)
+    decisions, blockers, warnings = (listed(markup, name) for name in ("decisions", "blockers", "warnings"))
+    assert decisions and decisions[0].startswith("Merge"), decisions
+    assert "recommendation not recorded" in decisions[0], decisions[0]
+    assert any("Decide if one FAIL on the phone check blocks the merge." in d for d in decisions), decisions
+    assert any("totals in two currencies collapse" in d for d in decisions), decisions
+    assert not any("M1" in d or "M2" in d for d in decisions), "AC1: a guide step with a result is left as a decision"
+    assert any("A2" in b and "FAIL" in b for b in blockers), blockers
+    assert any("review stamp" in b and "stale" in b for b in blockers), blockers
+    assert any("gone.txt" in b and "missing" in b for b in blockers), blockers
+    assert any("M1" in b and "FAIL" in b for b in blockers), blockers
+    assert any("environment.txt" in w for w in warnings), warnings
+    assert not any("environment.txt" in b for b in blockers), blockers
+    assert not any(re.search(r"\bA3\b", item) for item in decisions + blockers + warnings), "AC1: a NOT RUN check is listed"
+    counts = re.findall(r'<h2>([^<]+) <span class="n">(\d+)</span></h2>', summary(markup))
+    assert counts == [("Your decisions", str(len(decisions))), ("Blockers the agent owns", str(len(blockers))),
+                      ("Warnings", str(len(warnings)))], counts
+    assert "Gates CI no PR yet · review stamp stale · validate stamp missing" in summary_row(markup, "gates"), summary_row(markup, "gates")
+    write(repo, "decision-notes", NOTES.replace("Decide if one FAIL on the phone check blocks the merge.",
+                                                "- Merge: recommend yes once A2 is fixed; waiting costs a day.\n"
+                                                "- Keep the phone check: A to keep, B to drop; recommend A."))
+    _, markup = generate(repo, base)
+    decisions = listed(markup, "decisions")
+    assert decisions[0].startswith("Merge") and "recommend yes once A2 is fixed" in decisions[0], decisions
+    assert sum("recommend yes once A2" in d for d in decisions) == 1, decisions
+    assert any("Keep the phone check" in d for d in decisions), decisions
+    write(repo, "review", REVIEW + "Open:      a second open point — src/cart.py:80 — decision for the human\n"
+                                   "Open:      a third open point — src/cart.py:90 — decision for the human\n")
+    write(repo, "checks-guide", GUIDE.replace("## Before the merge (optional)\n",
+                                              "## Before the merge (optional)\n\n### M0. What you need\n- **Where:** you\n"))
+    _, markup = generate(repo, base)
+    decisions = listed(markup, "decisions")
+    assert sum("left Open" in d for d in decisions) == 1 and "3 review findings left Open" in "".join(decisions), decisions
+    assert not any("Open finding" in d or re.search(r"\bM0\b", d) for d in decisions), decisions
+
+
+def sections_fold_unless_they_hold_a_failure(base):
+    repo, evidence = full_branch(base)
+    _, markup = generate(repo, base)
+    assert is_open(markup, 2), "AC1: Tests holds a FAIL check and is closed"
+    assert is_open(markup, 1), "AC1: Coverage holds a criterion with no check and is closed"
+    assert not is_open(markup, 3), "AC1: Review holds no blocker and is open"
+    write(repo, "validation", f"""# Validation
+
+| # | AC | Check | Case | Expected | Result | Evidence |
+|---|---|---|---|---|---|---|
+| A1 | AC1, AC2, AC3 | Coupon applied once | + | one line | PASS | [output]({evidence}/A1.txt) |
+""")
+    write(repo, "checks-guide", GUIDE.replace("| M1 | FAIL | the coupon doubled on Safari |", "| M1 | PASS | one line |"))
+    _, markup = generate(repo, base)
+    assert not is_open(markup, 2) and not is_open(markup, 1) and not is_open(markup, 3), \
+        [is_open(markup, n) for n in (1, 2, 3)]
+    os.remove(path_of(repo, "review"))
+    _, markup = generate(repo, base)
+    assert is_open(markup, 3), "AC1: Review is unavailable and its section is closed"
+    assert any("Review report" in b and "unavailable" in b for b in listed(markup, "blockers")), listed(markup, "blockers")
+    line = summary_row(markup, "review")
+    assert ("unavailable" in line or "not recorded" in line) and not re.search(r"Fixed 0|Open 0", line), line
+
+
+def the_review_line_names_a_skipped_reviewer(base):
+    repo, _ = full_branch(base)
+    write(repo, "review", REVIEW + LENSES)
+    _, markup = generate(repo, base)
+    line = summary_row(markup, "review")
+    for part in ("3 lenses", "codex on correctness", "Fixed 2", "Open 1", "not run:", "codex Maintainability", "exit 1",
+                 "security lens"):
+        assert part in line, (part, line)
+
+
+def the_tests_line_counts_each_level(base):
+    repo, evidence = full_branch(base)
+    with open(path_of(repo, "validation")) as fh:
+        report = fh.read()
+    write(repo, "validation", report.replace("| unit | yes | [A1]({evidence}/A1.txt) |".format(evidence=evidence),
+                                             f"| unit | yes | [A1]({evidence}/A1.txt) |\n| a11y | no | no screen reader here |"))
+    _, markup = generate(repo, base)
+    line = summary_row(markup, "tests")
+    assert "unit 1/1" in line, line
+    assert "level not recorded 1/3" in line and "1 FAIL" in line and "1 NOT RUN" in line, line
+    assert "a11y not run: no screen reader here" in line, line
+    os.remove(path_of(repo, "validation"))
+    _, markup = generate(repo, base)
+    line = summary_row(markup, "tests")
+    assert ("unavailable" in line or "not recorded" in line) and not re.search(r"\b0/0\b|\b0 FAIL", line), line
+
+
+# v2 AC2: levels and coverage
+
+def levels_come_from_the_level_column(base):
+    repo, evidence = full_branch(base)
+    write(repo, "validation", f"""# Validation
+
+| # | AC | Level | Check | Case | Expected | Result | Evidence |
+|---|---|---|---|---|---|---|---|
+| A1 | AC1 | Unit | Coupon applied once | + | one line | PASS | [output]({evidence}/A1.txt) |
+| A2 | AC1, AC2 | e2e | Tampered total refused | − | exit 1 | FAIL | [output]({evidence}/A2.txt) |
+
+## Test types
+
+| Type | Ran | Evidence |
+|---|---|---|
+| mutation | yes | A1 and A2 |
+""")
+    _, markup = generate(repo, base)
+    one = section(markup, 1)
+    head = re.search(r"<thead>(.*?)</thead>", one, re.S)
+    assert head and text(head.group(1)) == "AC Criterion unit e2e", head and text(head.group(1))
+    rows = {n: body for n, body in re.findall(r'<tr[^>]*id="ac-(\d+)">(.*?)</tr>', one, re.S)}
+    cells = lambda n: [text(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", rows[n], re.S)]
+    assert cells("1")[1:] == ["A1 PASS", "A2 FAIL"], cells("1")
+    assert cells("2")[1:] == ["—", "A2 FAIL"], cells("2")
+    assert 'href="#check-A1"' in rows["1"] and 'href="#check-A2"' in rows["1"], rows["1"]
+    assert "no check" in text(rows["3"]), rows["3"]
+    assert any("AC3" in b and "no check" in b for b in listed(markup, "blockers")), listed(markup, "blockers")
+    two = section(markup, 2)
+    groups = re.findall(r'<h3 id="level-([^"]+)">', two)
+    assert groups == ["unit", "e2e"], groups
+    assert two.index('id="level-unit"') < two.index('id="check-A1"') < two.index('id="level-e2e"') < two.index('id="check-A2"')
+
+
+def levels_fall_back_to_test_types(base):
+    repo, _ = full_branch(base)
+    _, markup = generate(repo, base)
+    two = section(markup, 2)
+    groups = re.findall(r'<h3 id="level-([^"]+)">', two)
+    assert groups == ["unit", "not-recorded"], groups
+    assert two.index('id="check-A1"') < two.index('id="level-not-recorded"') < two.index('id="check-A2"'), "A1 isn't unit"
+    head = text(re.search(r"<thead>(.*?)</thead>", section(markup, 1), re.S).group(1))
+    assert head == "AC Criterion unit level not recorded", head
+    with open(path_of(repo, "validation")) as fh:
+        report = fh.read()
+    write(repo, "validation", re.sub(r"## Test types.*?(?=## Notes)", "", report, flags=re.S))
+    _, markup = generate(repo, base)
+    assert re.findall(r'<h3 id="level-([^"]+)">', section(markup, 2)) == ["not-recorded"]
+
+
+# v2 AC3: each check's steps, expected, actual and evidence
+
+def a_check_opens_to_steps_expected_actual_evidence(base):
+    repo, evidence = full_branch(base)
+    output(evidence, "S1.txt", "bash checks/S1.sh", "precondition: an empty cart\nstep: apply coupon ONE\nPASS one discount line\n"
+           "noise\nstep: refresh the cart\nFAIL two discount lines\n", repo, working_tree(repo))
+    add_rows(repo, f"| S1 | AC1 | refresh keeps one discount | + | one discount line after refresh | FAIL | two lines: [output]({evidence}/S1.txt) |\n")
+    _, markup = generate(repo, base)
+    block = check_block(markup, "S1")
+    terms = [text(t) for t in re.findall(r"<dt>(.*?)</dt>", block)]
+    assert terms[:4] == ["Steps", "Expected", "Actual", "Evidence"], terms
+    steps = re.search(r"<dt>Steps</dt><dd>(.*?)</dd>", block, re.S).group(1)
+    assert [text(s) for s in re.findall(r"<li>(.*?)</li>", steps)] == ["precondition: an empty cart", "step: apply coupon ONE",
+                                                                         "step: refresh the cart"], steps
+    actual = text(re.search(r"<dt>Actual</dt><dd>(.*?)</dd>", block, re.S).group(1))
+    assert actual.startswith("two lines") and actual.index("PASS one discount line") < actual.index("FAIL two discount lines"), actual
+    assert "noise" not in actual
+    assert "one discount line after refresh" in text(re.search(r"<dt>Expected</dt><dd>(.*?)</dd>", block, re.S).group(1))
+    assert "not recorded" in text(re.search(r"<dt>Steps</dt><dd>(.*?)</dd>", check_block(markup, "A1"), re.S).group(1))
+
+
+def a_long_log_shows_its_tail(base):
+    repo, evidence = full_branch(base)
+    output(evidence, "L1.txt", "make long", "".join(f"line {n:04d}\n" for n in range(1, 301)), repo, working_tree(repo))
+    output(evidence, "L2.txt", "make huge", "HEAD LINE\n" + "".join(f"row {n:06d} {'x' * 40}\n" for n in range(7000))
+           + "TAIL LINE\n", repo, working_tree(repo))
+    add_rows(repo, f"| L1 | AC1 | 300 lines | + | its tail | PASS | [output]({evidence}/L1.txt) |\n"
+                   f"| L2 | AC1 | 300 KB | + | its tail | PASS | [output]({evidence}/L2.txt) |\n")
+    _, markup = generate(repo, base)
+    block = check_block(markup, "L1")
+    tail = re.search(r'<pre class="out tail">(.*?)</pre>', block, re.S)
+    assert tail, "AC3: no tail block"
+    lines = tail.group(1).strip("\n").split("\n")
+    assert lines[0] == "line 0261" and lines[-1] == "line 0300" and len(lines) == 40, (lines[:2], lines[-1], len(lines))
+    earlier = re.search(r'<details class="earlier">(.*?)</details>', block, re.S)
+    assert earlier and "line 0001" in earlier.group(1) and "line 0260" in earlier.group(1) and "line 0261" not in earlier.group(1)
+    assert block.index('class="out tail"') < block.index('class="earlier"'), "AC3: the rest isn't folded under the tail"
+    big = check_block(markup, "L2")
+    tail = re.search(r'<pre class="out tail">(.*?)</pre>', big, re.S).group(1)
+    assert "TAIL LINE" in tail and "HEAD LINE" not in tail, "AC3: the 300 KB log's tail isn't shown"
+    earlier = re.search(r'<details class="earlier">(.*?)</details>', big, re.S).group(1)
+    assert "HEAD LINE" in earlier and 'class="cut"' in earlier, "AC3: the cut isn't marked inside the fold"
+    assert "row 003500" not in big and len(big) < 250_000
+
+
+def a_video_plays_inline(base):
+    repo, evidence = full_branch(base)
+    put(os.path.join(evidence, 'v"<b>.mp4'), b"\0\0\0 ftypisom not really")
+    put(os.path.join(base, "outside.webm"), b"\x1aE\xdf\xa3")
+    add_rows(repo, f'| V1 | AC1 | a hostile name | + | a video | PASS | [v]({evidence}/v"<b>.mp4) |\n'
+                   f"| V2 | AC1 | a video outside | + | not read | PASS | [v]({base}/outside.webm) |\n")
+    _, markup = generate(repo, base)
+    real = urllib.parse.quote(os.path.realpath(evidence))
+    block = check_block(markup, "A1")
+    video = re.search(r"<video controls[^>]*>(.*?)</video>", block, re.S)
+    assert video, "AC3: the .webm isn't a video"
+    assert f'<source src="file://{real}/run.webm" type="video/webm">' in video.group(1), video.group(1)
+    assert f'href="file://{real}/run.webm"' in video.group(1), "AC3: no link inside the video as its fallback"
+    hostile = check_block(markup, "V1")
+    assert f'src="file://{real}/v%22%3Cb%3E.mp4" type="video/mp4"' in hostile, hostile[:800]
+    assert "<b>" not in hostile, hostile[:800]
+    outside = check_block(markup, "V2")
+    assert "<video" not in outside and "not read" in text(outside), outside[:800]
+
+
+def a_suite_output_lists_its_tests(base):
+    repo, evidence = full_branch(base)
+    put(path_of(repo, "spec"), SPEC.replace("2. A tampered total is refused. — verify: test.",
+                                            "2. A tampered total is refused. — verify: `refund_issued` and `tampered_total`."))
+    output(evidence, "U1.txt", "tests/run.sh", "== cart\nok   coupon_once\nFAIL tampered_total\n     AssertionError: 2 != 1\n"
+           "== refunds\nok   refund_issued\nFAILURES ABOVE\n", repo, working_tree(repo), exit_code=1)
+    add_rows(repo, f"| U1 | AC1 | the suite | + | all ok | FAIL | [output]({evidence}/U1.txt) |\n")
+    _, markup = generate(repo, base)
+    block = check_block(markup, "U1")
+    runner = re.search(r'<details class="runner">(.*?)</details>', block, re.S)
+    assert runner, "AC3: no test-runner list"
+    summary_line = text(re.search(r"<summary>(.*?)</summary>", runner.group(1), re.S).group(1))
+    assert "3 tests" in summary_line and "1 FAIL" in summary_line and "AC1" in summary_line, summary_line
+    groups = re.findall(r"<h4>(.*?)</h4>", runner.group(1))
+    assert groups == ["cart", "refunds"], groups
+    rows = [[text(c) for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.S)]
+            for r in re.findall(r"<tr>(.*?)</tr>", runner.group(1), re.S) if "<td" in r]
+    assert rows == [["coupon_once", "ok", ""], ["tampered_total", "FAIL", "AC2"], ["refund_issued", "ok", "AC2"]], rows
+    assert "<details class=\"runner\">" not in check_block(markup, "A1"), "AC3: `ok 12 rows` outside a section was read as a test"
+    assert "(3 tests in the runner output, 1 FAIL)" in summary_row(markup, "tests"), summary_row(markup, "tests")
+
+
+# v2 AC4: the review per lens
+
+def the_review_shows_each_lens(base):
+    repo, _ = full_branch(base)
+    write(repo, "review", REVIEW + LENSES)
+    _, markup = generate(repo, base)
+    three = section(markup, 3)
+    table = re.search(r'aria-label="Table: Lens, What it checks, Model, Findings, Confirmed, Outcomes"><table>(.*?)</table>', three, re.S)
+    assert table, "AC4: no lens table"
+    head = [text(c) for c in re.findall(r"<th[^>]*>(.*?)</th>", re.search(r"<thead>(.*?)</thead>", table.group(1), re.S).group(1))]
+    assert head == ["Lens", "What it checks", "Model", "Findings", "Confirmed", "Outcomes"], head
+    rows = [[text(c) for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.S)]
+            for r in re.findall(r"<tr>(.*?)</tr>", re.search(r"<tbody>(.*?)</tbody>", table.group(1), re.S).group(1), re.S)]
+    assert rows[0] == ["Correctness", "You are reviewing for behavior bugs only. Ignore style.", "claude", "3", "2",
+                       "fixed=2, wrong=1"], rows[0]
+    assert rows[1][2:] == ["codex", "2", "1", "fixed=1, intentional=1"], rows[1]
+    assert rows[2][0] == "Tests" and rows[2][1].startswith("You are reviewing the tests in the diff"), rows[2]
+    assert rows[3][0] == "Maintainability" and rows[3][2] == "codex", rows[3]
+    assert rows[3][3] == "not run: exit 1" and rows[3][4] == "not recorded" and rows[3][5] == "not recorded", rows[3]
+    assert "per-lens counts not recorded" not in text(three)
+    open_entry = re.search(r'<li class="entry" id="review-open-1"><details>(.*?)</details></li>', three, re.S)
+    assert open_entry and "src/cart.py:77" in text(open_entry.group(1)), "AC4: a finding isn't folded with its parts"
+
+
+def a_review_without_lenses_says_not_recorded(base):
+    repo, _ = full_branch(base)
+    _, markup = generate(repo, base)
+    three = section(markup, 3)
+    assert "per-lens counts not recorded" in text(three), text(three)[:600]
+    rows = [[text(c) for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.S)]
+            for r in re.findall(r"<tr>(.*?)</tr>", re.search(r'aria-label="Table: Lens, What it checks[^"]*"><table>.*?<tbody>(.*?)</tbody>', three, re.S).group(1), re.S)]
+    assert [r[0] for r in rows] == ["correctness", "tests"], rows
+    assert rows[0][1] == "You are reviewing for behavior bugs only. Ignore style.", rows[0]
+    assert all(cell == "not recorded" for row in rows for cell in row[2:]), rows
+    write(repo, "review", "# " + REVIEW)
+    _, markup = generate(repo, base)
+    line = summary_row(markup, "review")
+    assert "2 lenses: correctness, tests" in line and "cross-model: codex on correctness" in line, line
+
+
+# v2 AC5: merge and ship, the reports as annexes
+
+SHIP = """# Ship
+
+## Deploy
+
+1. `make deploy` on the build host.
+
+## Smoke checks
+
+- Open the cart and apply coupon ONE.
+
+## Rollback
+
+`git revert` the merge, then `make deploy`.
+
+## Installed on this machine
+
+no
+"""
+
+
+def ship_path(repo):
+    return os.path.expanduser(f"~/.agents/repos/{os.path.basename(repo)}/ship.md")
+
+
+def merge_and_ship_reads_ship_md(base):
+    repo, _ = full_branch(base)
+    put(ship_path(repo), SHIP)
+    head = git(repo, "rev-parse", "HEAD")
+    merged = "fe" * 20
+    pr = {"number": 7, "url": "https://github.com/o/shop/pull/7", "title": "Apply a coupon once", "headRefOid": head,
+          "state": "MERGED", "mergeCommit": {"oid": merged}}
+    _, markup = generate(repo, base, {"pr": pr})
+    four = section(markup, 4)
+    words = text(four)
+    order = [words.find(s) for s in ("Your decisions", "After the merge", "P1", "P2", "Deploy", "make deploy", "Smoke checks",
+                                     "apply coupon ONE", "Rollback", "git revert", "Installed on this machine")]
+    assert -1 not in order and order == sorted(order), (order, words[:1500])
+    owners = re.findall(r'<span class="owner">([^<]+)</span>', four)
+    assert owners and set(owners) <= {"you", "agent"} and "agent" in owners, owners
+    rollback = re.search(r'id="ship-rollback".*?(?=id="ship-installed")', four, re.S)
+    assert rollback and "#7" in text(rollback.group(0)) and merged in text(rollback.group(0)), "AC5: no PR and merge commit by the rollback"
+    assert "unconfirmed" not in words and "not recorded" not in words.split("Deploy", 1)[1], words
+    assert ship_path(repo) in words
+
+
+def a_partial_or_missing_ship_md(base):
+    repo, _ = full_branch(base)
+    put(ship_path(repo), "## Deploy\n\n1. `npm run deploy` (inferred: package.json)\n2. Tag it.\n\n## Smoke checks\n\nunknown\n")
+    _, markup = generate(repo, base)
+    four = section(markup, 4)
+    deploy = text(re.search(r'id="ship-deploy".*?(?=id="ship-smoke)', four, re.S).group(0))
+    assert re.search(r"unconfirmed\s*\(inferred: package.json\)", deploy) and "Tag it." in deploy, deploy
+    assert deploy.count("unconfirmed") == 1, deploy
+    smoke = text(re.search(r'id="ship-smoke.*?(?=id="ship-rollback")', four, re.S).group(0))
+    assert "unconfirmed" in smoke, smoke
+    for name in ("rollback", "installed"):
+        part = text(re.search(rf'id="ship-{name}".*?(?=id="ship-|</details>|$)', four, re.S).group(0))
+        assert "not recorded" in part, (name, part)
+    assert "no PR yet" in text(re.search(r'id="ship-rollback".*?(?=id="ship-installed")', four, re.S).group(0))
+    os.remove(ship_path(repo))
+    _, markup = generate(repo, base)
+    four = text(section(markup, 4))
+    assert "not recorded" in four and ship_path(repo) in four, four[:900]
+    put(ship_path(repo), "## Deploy\n" + "x" * (2 * 1024 * 1024 + 10))
+    _, markup = generate(repo, base)
+    four = text(section(markup, 4))
+    assert "unavailable" in four and "over the 2 MB" in four and "xxxx" not in four, four[:900]
+
+
+def reports_are_annexes_without_built_from(base):
+    repo, _ = full_branch(base)
+    _, markup = generate(repo, base)
+    assert "Built from" not in text(markup), "AC5: a Built from line is left"
+    five = section(markup, 5)
+    for kind in ("spec", "decision-notes", "pr-body", "verify", "review", "validation", "checks-guide", "follow-pr"):
+        annex = re.search(rf'<details class="annex" id="annex-{kind}"><summary>(.*?)</summary>', five, re.S)
+        assert annex and text(annex.group(1)).endswith(path_of(repo, kind)), (kind, annex and text(annex.group(1)))
+        assert text(five).count(path_of(repo, kind)) == 1, (kind, text(five).count(path_of(repo, kind)))
+    assert "c123" in text(five) and "Only unit-tested: the refund path." in text(five) and "Second paragraph with detail." in text(five)
+    os.remove(path_of(repo, "follow-pr"))
+    _, markup = generate(repo, base)
+    annex = re.search(r'<details class="annex" id="annex-follow-pr">.*?</details>', section(markup, 5), re.S).group(0)
+    assert "not recorded" in text(annex) and text(annex).count(path_of(repo, "follow-pr")) == 1, text(annex)
+
+
+# v2 AC6: the skills ask for what the page reads
+
+def the_skills_ask_for_the_new_formats(base):
+    def read(*parts):
+        with open(os.path.join(KIT, *parts)) as fh:
+            return fh.read()
+    validate = read("skills", "kit-validate", "SKILL.md")
+    assert "`step:`" in validate and "| Level |" in validate, "kit-validate asks for no step: line or Level column"
+    for level in ("unit", "integration", "e2e", "mutation", "property", "regex", "design", "a11y", "query budget", "migration", "manual"):
+        assert level in validate, level
+    review = read("skills", "kit-review", "SKILL.md")
+    assert "## Lenses" in review and "| Lens | Model | Findings | Confirmed | Outcomes |" in review
+    ship = read("skills", "kit-ship", "SKILL.md")
+    assert "first paragraph" in ship and "recommendation" in ship
+    assert "folded" in read("docs", "framework.md").split("**`bin/decision-report`**", 1)[1][:2000]
+
+
 for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
              reads_nothing_outside_the_evidence_directory, a_long_last_line_keeps_its_tail,
              unmatched_brackets_take_linear_time, a_long_check_table_takes_linear_time, a_failed_generation_leaves_no_page, the_older_page_is_gone_while_it_builds,
@@ -868,7 +1317,13 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
              every_review_entry_and_guide_step_in_order, hostile_text_renders_inert,
              ci_states_and_phases_off, stamps_verify_and_validation_states, prose_names_no_file_it_lacks,
              a_template_heading_is_not_the_first_paragraph, the_validation_notes_keep_their_code,
-             the_skills_regenerate_and_link_the_page, refuses_another_branch_and_a_detached_head):
+             the_skills_regenerate_and_link_the_page, refuses_another_branch_and_a_detached_head,
+             the_summary_comes_first_in_order, the_summary_falls_back_to_the_spec_and_pr_body, the_three_lists_hold_their_items,
+             sections_fold_unless_they_hold_a_failure, the_review_line_names_a_skipped_reviewer, the_tests_line_counts_each_level,
+             levels_come_from_the_level_column, levels_fall_back_to_test_types, a_check_opens_to_steps_expected_actual_evidence,
+             a_long_log_shows_its_tail, a_video_plays_inline, a_suite_output_lists_its_tests, the_review_shows_each_lens,
+             a_review_without_lenses_says_not_recorded, merge_and_ship_reads_ship_md, a_partial_or_missing_ship_md,
+             reports_are_annexes_without_built_from, the_skills_ask_for_the_new_formats):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
         test(os.path.realpath(base))
@@ -877,6 +1332,7 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
         RESULTS.append((test.__name__, f"{type(error).__name__}: {str(error)[:600]}"))
     finally:
         shutil.rmtree(base, ignore_errors=True)
+        shutil.rmtree(os.path.expanduser("~/.agents/repos/shop"), ignore_errors=True)
 
 for name, error in RESULTS:
     print(f"{'FAIL' if error else 'ok  '} {name}")
