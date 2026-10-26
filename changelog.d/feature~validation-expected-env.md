@@ -1,0 +1,3 @@
+- The validate stamp refuses a validation report whose PASS or FAIL rows have no `Expected` cell, so each check shows the result it asserted on next to the observed one.
+- `bin/evidence-env` records the branch, commit, OS, compose services and the commands in `~/.agents/repos/<repo>/environment` as `environment.txt`, and the validate stamp refuses a report with a PASS or FAIL row when that record is missing, empty or stale.
+- kit-validate tells each check script to print its starting state as `precondition:` lines.

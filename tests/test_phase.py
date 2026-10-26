@@ -42,13 +42,15 @@ def stamp(repo, kind):
         reports = os.path.expanduser("~/.agents/bin/reports")
         types = json.loads(sh(repo, os.path.expanduser("~/.agents/bin/triage"), "--json"))["tests"]
         with open(sh(repo, reports, "path", "validation"), "w") as fh:
-            fh.write("| # | AC | Check | Case | Result | Evidence |\n|---|---|---|---|---|---|\n"
-                     "| A1 | AC1 | app runs | + | PASS | a1.txt |\n| A2 | AC1 | bad input refused | \u2212 | PASS | a1.txt |\n"
+            fh.write("| # | AC | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
+                     "| A1 | AC1 | app runs | + | exit 0 | PASS | a1.txt |\n| A2 | AC1 | bad input refused | \u2212 | exit 2 | PASS | a1.txt |\n"
                      "\n## Test types\n\n| Type | Ran | Evidence |\n|---|---|---|\n" + "".join(f"| {t} | yes | a1.txt |\n" for t in types))
         evidence = sh(repo, reports, "path", "evidence")
         assert os.path.isdir(evidence), f"no evidence directory from {reports}: {evidence!r}"
         with open(os.path.join(evidence, "a1.txt"), "w") as fh:
             fh.write("$ python3 app.py\nexit 0\n")
+        with open(os.path.join(evidence, "environment.txt"), "w") as fh:
+            fh.write("branch: feat\ncommit: abc\nOS: Darwin 1\n")
     return sh(repo, "python3", STAMP, "write", "--kind", kind)
 
 
