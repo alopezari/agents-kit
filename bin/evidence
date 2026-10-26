@@ -1,9 +1,10 @@
 #!/bin/bash
 # Run a validation check and keep what it showed: evidence <id> <command> [args...]
 # Prints the command's output and exits with its code, and saves <id>.txt in `reports path evidence` with the
-# command, directory, time, exit code, the commit and content it ran on, and output. The command is argv, not a
-# string: for a pipe, pass `bash -c '...'`, which the shell guard reads as code. Exits 74 when the evidence couldn't be
-# saved, whatever the command returned.
+# command, directory, time, exit code, the commit and content it ran on, the code's fingerprint before it ran (in a
+# git checkout: the validate stamp matches it where ~/.agents/repos/<repo>/suite lists the full suite) and output. The
+# command is argv, not a string: for a pipe, pass `bash -c '...'`, which the shell guard reads as code. Exits 74 when
+# the evidence couldn't be saved, whatever the command returned.
 # EVIDENCE_DIR saves there instead, from any directory: a checks guide's steps run outside the repository. Without it,
 # a detached HEAD has no evidence directory, so it exits 74.
 set -uo pipefail
@@ -37,15 +38,22 @@ if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ] && head=$(git
     || echo "evidence: couldn't record the content the check ran on (git failed above): its tree is unknown" >&2
   rm -f "$index"
 fi
+# Beside this script, not under $HOME like reports: run from a kit worktree, it must ask the hook that checks the line.
+# A fingerprint it can't get only leaves the line out: the check runs and exits as it would.
+stamp="$(dirname "$0")/../hooks/review_stamp.py"
+fingerprint=$([ -f "$stamp" ] && python3 "$stamp" fingerprint 2>/dev/null)
+[[ $fingerprint =~ ^[0-9a-f]{64}$ ]] || fingerprint=
 # A pipe, not >(tee): macOS's bash 3.2 doesn't wait for a process substitution, so the output could be cut short.
 "$@" 2>&1 | tee "$output"
 statuses=("${PIPESTATUS[@]}")
 status=${statuses[0]}
 if [ "${statuses[1]}" != 0 ]; then echo "evidence: couldn't capture the output" >&2; rm -f "$output"; exit 74; fi
 quote="'\\''"
-# The `# in` line goes first: the command after it can span lines, and hold text that looks like it.
+# The `# in` and `# fingerprint` lines go first: the command after them can span lines, and hold text that looks like them.
 {
-  printf '# in %s, %s, exit %s%s\n$' "$PWD" "$(date '+%Y-%m-%d %H:%M:%S %z')" "$status" "$state"
+  printf '# in %s, %s, exit %s%s\n' "$PWD" "$(date '+%Y-%m-%d %H:%M:%S %z')" "$status" "$state"
+  [ -z "$fingerprint" ] || printf '# fingerprint %s\n' "$fingerprint"
+  printf '$'
   for arg in "$@"; do
     if [[ $arg =~ ^[A-Za-z0-9_./:=@%+,-]+$ ]]; then printf ' %s' "$arg"; else printf " '%s'" "${arg//\'/$quote}"; fi
   done

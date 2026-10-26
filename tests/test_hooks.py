@@ -1681,7 +1681,7 @@ def validate_stamp_needs_evidence(base):
 def evidence_header(path):
     """(commit, whether it had uncommitted changes, tree or None) from the `# in` line bin/evidence saved in path."""
     text = open(path).read()
-    found = re.match(r"# in .*, exit \d+, commit (\S+?)(, uncommitted changes)?(?:, tree (\S+))?\n\$ ", text)
+    found = re.match(r"# in .*, exit \d+, commit (\S+?)(, uncommitted changes)?(?:, tree (\S+))?\n(?:# fingerprint \S+\n)?\$ ", text)
     assert found, text
     return found.group(1), bool(found.group(2)), found.group(3)
 
@@ -2005,6 +2005,253 @@ def validate_stamp_refuses_failed_lookups(base):
     os.remove(os.path.join(kit, "bin", "triage"))
     done = fake("bin/triage", "echo '{\"tier\": \"low\"}'\n")
     assert done.returncode == 2 and "no `tests` object" in done.stderr, done.stdout + done.stderr
+
+
+def code_fingerprint(repo):
+    """The fingerprint verify's stamp computes for repo's code now."""
+    code = f"import sys; sys.path.insert(0, {H!r}); import review_stamp as r; print(r.fingerprint())"
+    done = subprocess.run(["python3", "-c", code], cwd=repo, capture_output=True, text=True)
+    assert done.returncode == 0 and re.fullmatch(r"[0-9a-f]{64}\n", done.stdout), done.stderr
+    return done.stdout.strip()
+
+
+def evidence_records_the_code_fingerprint(base):
+    repo = new_repo(base)
+    git(repo, "switch", "-q", "-c", "feat/fingerprint")
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    evidence = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "evidence"], cwd=repo,
+                              capture_output=True, text=True).stdout.strip()
+    before = code_fingerprint(repo)
+    ran = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "F1", "bash", "-c", "echo 'z = 3' >> app.py; echo edited"],
+                         cwd=repo, capture_output=True, text=True)
+    assert ran.returncode == 0 and ran.stdout == "edited\n", ran
+    with open(os.path.join(evidence, "F1.txt")) as fh:
+        lines = fh.read().split("\n")
+    assert re.fullmatch(rf"# in {re.escape(os.path.realpath(repo))}, \d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{{4}}, exit 0, "
+                        r"commit [0-9a-f]{40}, uncommitted changes, tree [0-9a-f]{40}", lines[0]), lines
+    assert lines[1] == f"# fingerprint {before}", "the code's fingerprint before the run, on a line of its own: " + repr(lines[:4])
+    assert lines[2] == "$ bash -c 'echo '\\''z = 3'\\'' >> app.py; echo edited'", lines
+    assert lines[3:] == ["", "edited", ""], lines
+    assert code_fingerprint(repo) != before, "the run's own edit changed the code after the line was recorded"
+
+    elsewhere = os.path.join(base, "guide-evidence")
+    os.makedirs(elsewhere)
+    outside = subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), "M1", "bash", "-c", "echo guide; exit 5"], cwd=base,
+                             capture_output=True, text=True, env={**os.environ, "EVIDENCE_DIR": elsewhere})
+    with open(os.path.join(elsewhere, "M1.txt")) as fh:
+        lines = fh.read().split("\n")
+    assert outside.returncode == 5 and lines[0].endswith(", exit 5, commit none") and lines[2:] == ["", "guide", ""], (outside.stderr, lines)
+
+    # A copy of bin/evidence whose hook is broken, then missing: the check still runs and keeps its exit code.
+    kit = os.path.join(base, "kit")
+    os.makedirs(os.path.join(kit, "bin"))
+    os.makedirs(os.path.join(kit, "hooks"))
+    shutil.copy(KIT + "/bin/evidence", os.path.join(kit, "bin"))
+    for hook in ("import sys; print('not a fingerprint'); sys.exit(3)\n", "print('a' * 64, 'and more')\n", None):
+        if hook is None:
+            os.remove(os.path.join(kit, "hooks", "review_stamp.py"))
+        else:
+            with open(os.path.join(kit, "hooks", "review_stamp.py"), "w") as fh:
+                fh.write(hook)
+        done = subprocess.run([os.path.join(kit, "bin", "evidence"), "F2", "bash", "-c", "echo checked; exit 4"], cwd=repo,
+                              capture_output=True, text=True, env={**os.environ, "EVIDENCE_DIR": elsewhere})
+        with open(os.path.join(elsewhere, "F2.txt")) as fh:
+            lines = fh.read().split("\n")
+        assert done.returncode == 4 and done.stdout == "checked\n" and lines[2:] == ["", "checked", ""], (hook, done, lines)
+
+
+SUITE_OVERLAY = os.path.expanduser("~/.agents/repos/repo/suite")
+
+
+def suite_fixture(base, branch):
+    """(repo, evidence, written, run, refused): validation_fixture's repo with a suite overlay naming `tests/run.sh` (a
+    script in the repo that exits $SUITE_EXIT, editing app.py first when $EDIT_DURING is set), `make  check` and
+    `tests/run.sh -k "not slow"`, and its evidence directory. run(id, *command, cwd=repo, **env) saves a bin/evidence file
+    there; written() asserts the validate stamp is written; refused(*texts) removes the stamp, attempts it and asserts it
+    was refused saying each text. The overlay is in the HOME every test shares: the caller removes it, in a finally."""
+    repo, attempt = validation_fixture(base, branch)
+    os.makedirs(os.path.join(repo, "tests"))
+    with open(os.path.join(repo, "tests", "run.sh"), "w") as fh:
+        fh.write("#!/bin/sh\necho suite ran\n[ -z \"$EDIT_DURING\" ] || echo 'z = 3' >> app.py\nexit \"${SUITE_EXIT:-0}\"\n")
+    os.chmod(os.path.join(repo, "tests", "run.sh"), 0o755)
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "suite")
+    os.makedirs(os.path.dirname(SUITE_OVERLAY), exist_ok=True)
+    with open(SUITE_OVERLAY, "w") as fh:
+        fh.write("# the full suite, as CI runs it\n\ntests/run.sh\n  make  check \ntests/run.sh -k \"not slow\"\n")
+    rows = validation_row("A1", "AC1", "+ / −", "PASS")
+    common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    stamp = os.path.join(common, "agents", "stamps", branch.replace("/", "~"), "validate.stamp")
+    evidence = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "evidence"], cwd=repo,
+                              capture_output=True, text=True).stdout.strip()
+
+    def run(id, *command, cwd=repo, **env):
+        return subprocess.run([os.path.expanduser("~/.agents/bin/evidence"), id, *command], cwd=cwd, capture_output=True,
+                              text=True, env={**os.environ, **env})
+
+    def written():
+        done = attempt(rows, criteria=None)
+        assert done.returncode == 0 and "validate stamp written" in done.stdout, done.stdout + done.stderr
+
+    def refused(*texts):
+        if os.path.exists(stamp):
+            os.remove(stamp)
+        done = attempt(rows, criteria=None)
+        assert done.returncode == 2 and "validate stamp written" not in done.stdout and not os.path.exists(stamp), \
+            done.stdout + done.stderr
+        assert "Traceback" not in done.stderr, done.stderr
+        for text in texts:
+            assert text in done.stderr, f"{text!r} missing: {done.stderr}"
+        return done.stderr
+
+    return repo, evidence, written, run, refused
+
+
+def remove_suite_overlay():
+    if os.path.islink(SUITE_OVERLAY) or os.path.isfile(SUITE_OVERLAY):
+        os.remove(SUITE_OVERLAY)
+    elif os.path.isdir(SUITE_OVERLAY):
+        os.rmdir(SUITE_OVERLAY)
+
+
+def validate_stamp_needs_a_full_suite_run(base):
+    repo, evidence, written, run, refused = suite_fixture(base, "feat/suite")
+    try:
+        said = refused("~/.agents/repos/repo/suite", "tests/run.sh", "bin/evidence suite tests/run.sh")
+        assert "bin/evidence suite make  check" in said, said
+        for command in (["tests/run.sh"], ["./tests/run.sh"], ["bash", "tests/run.sh"], ["bash", "./tests/run.sh"]):
+            assert run("S1", *command).returncode == 0
+            written()
+            os.remove(os.path.join(evidence, "S1.txt"))
+        refused("tests/run.sh")
+        other = os.path.join(base, "other-checkout")
+        os.makedirs(os.path.join(other, ".git"))
+        with open(os.path.join(evidence, "S2.txt"), "w") as fh:  # as bin/evidence saves it, from another checkout
+            fh.write(f"# in {other}, 2026-10-25 10:00:00 +0200, exit 0, commit {'a' * 40}, tree {'b' * 40}\n"
+                     f"# fingerprint {code_fingerprint(repo)}\n$ make   check\n\n"
+                     + "ok\n" * 30000)  # output past the lines read
+        written()
+        os.remove(os.path.join(evidence, "S2.txt"))
+        # Shell quoting is the shell's: the overlay's double quotes and bin/evidence's single ones are the same argument.
+        assert run("S3", "tests/run.sh", "-k", "not slow").returncode == 0
+        with open(os.path.join(evidence, "S3.txt")) as fh:
+            assert "\n$ tests/run.sh -k 'not slow'\n" in fh.read()
+        written()
+    finally:
+        remove_suite_overlay()
+
+
+def validate_stamp_refuses_a_suite_run_that_doesnt_count(base):
+    repo, evidence, written, run, refused = suite_fixture(base, "feat/stale")
+    try:
+        app = os.path.join(repo, "app.py")
+        tested = open(app).read()
+
+        assert run("S1", "tests/run.sh", SUITE_EXIT="1").returncode == 1
+        refused("S1.txt", "exited 1")
+        assert run("S0", "tests/run.sh").returncode == 0
+        written()  # a green run counts beside a failed one
+        os.remove(os.path.join(evidence, "S0.txt"))
+        assert run("S1", "tests/run.sh", "hooks").returncode == 0
+        refused("S1.txt", "doesn't count as the suite line", "tests/run.sh hooks")
+        sub = os.path.join(repo, "sub")  # a subproject with a suite of its own
+        shutil.copytree(os.path.join(repo, "tests"), os.path.join(sub, "tests"))
+        assert run("S1", "tests/run.sh", cwd=sub).returncode == 0
+        refused("S1.txt", "isn't a checkout's root")
+        shutil.rmtree(sub)
+        assert run("S1", "tests/run.sh").returncode == 0
+        written()
+
+        open(app, "a").write("z = 3\n")
+        refused("S1.txt", "different code")
+        open(app, "w").write(tested)
+        written()  # the same content again is the same code
+        os.remove(app)
+        refused("S1.txt", "different code")
+        open(app, "w").write(tested)
+        assert run("S1", "tests/run.sh", EDIT_DURING="1").returncode == 0
+        refused("S1.txt", "different code")
+        open(app, "w").write(tested)
+
+        open(os.path.join(repo, "added.py"), "w").write("a = 1\n")
+        assert run("S1", "tests/run.sh").returncode == 0
+        head = git(repo, "rev-parse", "HEAD").stdout
+        git(repo, "add", "-A")
+        assert git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "the tested files").returncode == 0
+        assert git(repo, "rev-parse", "HEAD").stdout != head
+        written()  # a plain commit keeps the code it tested
+        git(repo, "switch", "-q", "trunk")
+        open(os.path.join(repo, "other.py"), "w").write("o = 1\n")
+        git(repo, "add", "-A")
+        git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "newer base")
+        git(repo, "switch", "-q", "feat/stale")
+        assert git(repo, "rebase", "-q", "trunk").returncode == 0
+        refused("S1.txt", "different code")
+
+        with open(os.path.join(evidence, "S1.txt"), "w") as fh:
+            fh.write(f"$ tests/run.sh\n# in {repo}, 2026-10-25 10:00:00 +0200, exit 0\n\nsuite ran\n")
+        refused("S1.txt", "no recorded fingerprint")
+        with open(os.path.join(evidence, "S1.txt"), "w") as fh:  # the header bin/evidence writes when its hook fails
+            fh.write(f"# in {repo}, 2026-10-25 10:00:00 +0200, exit 0, commit none\n$ tests/run.sh\n\nsuite ran\n")
+        refused("S1.txt", "no recorded fingerprint")
+    finally:
+        remove_suite_overlay()
+
+
+def validate_stamp_suite_overlay_edge_cases(base):
+    repo, evidence, written, run, refused = suite_fixture(base, "feat/edges")
+    try:
+        header = f"# in {repo}, 2026-10-25 10:00:00 +0200, exit 0\n# fingerprint {code_fingerprint(repo)}\n"
+        for name, content in (("S1.webm", b"\x1aE\xdf\xa3$ tests/run.sh\n"), ("S2.txt", b"$ tests/run.sh\xff\n" + header.encode()),
+                              ("S3.txt", b"$ tests/run.sh"), ("S4.txt", b"$ tests/run.sh\n# in x, exit zero\n" + header.encode().split(b"\n")[1]),
+                              ("S5.txt", ("# in x\n$ tests/run.sh\n" + header).encode()), ("S6.txt", b"\n" * 100000),
+                              ("S7.txt", ("$ tests/run.sh\n" + header.replace("exit 0", "exit " + "0" * 5000)).encode()),
+                              ("S8.txt", f"$ tests/run.sh\nunrelated log, exit 0\n# fingerprint {code_fingerprint(repo)}\n".encode())):
+            with open(os.path.join(evidence, name), "wb") as fh:
+                fh.write(content)
+        refused("tests/run.sh")
+        assert run("S9", "tests/run.sh").returncode == 0
+        written()  # malformed files beside a green run don't hide it
+        os.remove(os.path.join(evidence, "S9.txt"))
+        secret = os.path.join(repo, "secret.py")
+        open(secret, "w").write("s = 1\n")
+        os.chmod(secret, 0)
+        try:
+            refused("fingerprint")
+        finally:
+            os.remove(secret)
+        os.chmod(evidence, 0o300)
+        try:
+            refused(evidence)
+        finally:
+            os.chmod(evidence, 0o700)
+        for text in ("", "# only a comment\n\n   \n"):
+            with open(SUITE_OVERLAY, "w") as fh:
+                fh.write(text)
+            refused("~/.agents/repos/repo/suite", "no command")
+        with open(SUITE_OVERLAY, "w") as fh:
+            fh.write("tests/run.sh\nmake check && npm test\nCI=1 make\n")
+        refused("aren't one plain command", "make check && npm test", "CI=1 make")
+        with open(SUITE_OVERLAY, "w") as fh:  # quoted, `|` and two spaces are the argument's own
+            fh.write("tests/run.sh --sep '|' -k 'a  b'\n")
+        assert run("S9", "tests/run.sh", "--sep", "|", "-k", "a b").returncode == 0
+        refused("suite tests/run.sh --sep")
+        assert run("S9", "tests/run.sh", "--sep", "|", "-k", "a  b").returncode == 0
+        written()
+        os.remove(os.path.join(evidence, "S9.txt"))
+        with open(SUITE_OVERLAY, "wb") as fh:
+            fh.write(b"tests/run.sh\xff\n")
+        refused("Can't read the suite overlay")
+        os.remove(SUITE_OVERLAY)
+        os.symlink(os.path.join(base, "gone"), SUITE_OVERLAY)
+        refused("~/.agents/repos/repo/suite", "doesn't exist")
+        os.remove(SUITE_OVERLAY)
+        os.mkdir(SUITE_OVERLAY)
+        refused("~/.agents/repos/repo/suite", "Is a directory")
+        os.rmdir(SUITE_OVERLAY)
+        written()  # no overlay: the stamp is as before
+    finally:
+        remove_suite_overlay()
 
 
 def unrun_checks_never_hold_the_pr(base):
@@ -4327,7 +4574,8 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
-         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups,
+         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
+         validate_stamp_refuses_a_suite_run_that_doesnt_count, validate_stamp_suite_overlay_edge_cases,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
