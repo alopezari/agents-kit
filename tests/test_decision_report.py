@@ -20,7 +20,7 @@ for entry in set(os.listdir(KIT)) - {"approvals", "logs", "repos"}:
 os.makedirs(os.path.expanduser("~/.agents/repos"))  # a ship.md written here must not land in the kit's own overlays
 REPORTS = os.path.join(KIT, "bin", "reports")
 RESULTS = []
-CSP = ("default-src 'none'; img-src file: data:; media-src file: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+CSP = ("default-src 'none'; img-src file: data:; media-src file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
 HEADINGS = ["Coverage", "Tests", "Review", "Merge and ship", "Reports"]
 PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
        b"\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82")
@@ -302,7 +302,7 @@ def summary(page):
 
 
 def summary_row(page, name):
-    found = re.search(rf'<div class="row" id="sum-{name}">(.*?)(?=<div class="row" id="sum-|</dl>)', summary(page), re.S)
+    found = re.search(rf'<div class="row"><dt id="sum-{name}">(.*?)(?=<div class="row">|</dl>)', summary(page), re.S)
     assert found, f"no {name} row in the summary"
     return text(found.group(1))
 
@@ -905,7 +905,7 @@ def the_summary_comes_first_in_order(base):
     _, markup = generate(repo, base)
     main = markup[markup.index('<main id="main">'):]
     assert main.index('<section id="summary"') < main.index('<details class="sec"'), "AC1: a section comes before the summary"
-    labels = re.findall(r'<div class="row" id="sum-(\w+)"><dt>([^<]+)</dt>', summary(markup))
+    labels = re.findall(r'<div class="row"><dt id="sum-(\w+)">([^<]+)</dt>', summary(markup))
     assert [l for _, l in labels] == ["Task", "Solution", "Review", "Tests", "Gates"], labels
     lists = re.findall(r'<ol class="items" id="(\w+)-items">', summary(markup))
     assert lists == ["decisions", "blockers", "warnings"], lists
@@ -1002,7 +1002,7 @@ def the_review_line_names_a_skipped_reviewer(base):
     write(repo, "review", REVIEW + LENSES)
     _, markup = generate(repo, base)
     line = summary_row(markup, "review")
-    for part in ("3 lenses", "codex on correctness", "Fixed 2", "Open 1", "not run:", "codex Maintainability", "exit 1",
+    for part in ("2 lenses", "codex on correctness", "Fixed 2", "Open 1", "not run:", "codex Maintainability", "exit 1",
                  "security lens"):
         assert part in line, (part, line)
 
@@ -1305,6 +1305,179 @@ def the_skills_ask_for_the_new_formats(base):
     assert "folded" in read("docs", "framework.md").split("**`bin/decision-report`**", 1)[1][:2000]
 
 
+# v2 review fixes
+
+def runner_lines_take_linear_time(base):
+    repo, evidence = full_branch(base)
+    output(evidence, "R1.txt", "tests/run.sh", "== cart\n" + ("ok a" + " " * 30_000 + "b\n") * 4, repo, working_tree(repo))
+    add_rows(repo, f"| R1 | AC1 | spaces | + | ok | PASS | [output]({evidence}/R1.txt) |\n")
+    before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
+    generate(repo, base)
+    spent = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime - before
+    assert spent < 5, f"{spent:.1f} s of CPU for runner lines of 30,000 spaces"
+
+
+def hostile_text_in_the_new_parts_renders_inert(base):
+    repo, evidence = full_branch(base)
+    evil = '"><script>alert(20)</script><img src=x onerror=alert(21)>'
+    output(evidence, "H1.txt", "make h", f"step: {evil}\n== {evil}\nok   {evil}\nFAIL {evil}\n", repo, working_tree(repo))
+    add_rows(repo, f"| H1 | AC1 | {evil} | hostile | + | none | PASS | [output]({evidence}/H1.txt) |\n",
+             header="| # | AC | Check | Level | Case | Expected | Result | Evidence |")
+    write(repo, "review", REVIEW + LENSES + f"| {evil} | {evil} | {evil} | 1 | {evil} |\n")
+    put(ship_path(repo), f"## Deploy\n\n1. {evil} (inferred: {evil})\n\n| a (inferred: x) | b |\n|---|---|\n| {evil} | c |\n")
+    _, markup = generate(repo, base)
+    assert "<script" not in markup.lower(), "a script tag reached the page"
+    for tag, attrs in tags(markup):
+        assert tag not in ("script", "img") or tag == "img" and dict(attrs).get("src", "").startswith("data:image/"), (tag, attrs)
+        for name, value in attrs:
+            assert not name.startswith("on"), (tag, name, value)
+    words = text(markup)
+    assert words.count("<script>alert(20)</script>") >= 5, words.count("<script>alert(20)</script>")
+
+
+def a_ship_md_marker_in_a_table_header_keeps_its_tags(base):
+    repo, _ = full_branch(base)
+    put(ship_path(repo), "## Deploy\n\n| Step (inferred: Makefile) | Who |\n|---|---|\n| make deploy | you |\n\n"
+                         "```\n## Build\nmake build\n```\n\n2. Run `(inferred: package.json)` once.\n\n"
+                         "## Smoke checks\n\n`unknown`\n")
+    _, markup = generate(repo, base)
+    four = section(markup, 4)
+    deploy = re.search(r'id="ship-deploy".*?(?=id="ship-smoke)', four, re.S).group(0)
+    for _, attrs in tags(deploy):
+        for _, value in attrs:
+            assert "<" not in (value or ""), value
+    assert text(deploy).count("unconfirmed") == 2, text(deploy)
+    assert "make build" in text(deploy), "a fenced ## Build ended the Deploy section"
+    smoke = text(re.search(r'id="ship-smoke.*?(?=id="ship-rollback")', four, re.S).group(0))
+    assert "unconfirmed" in smoke, smoke
+
+
+def unrun_optional_steps_are_decisions(base):
+    repo, _ = full_branch(base)
+    write(repo, "checks-guide", GUIDE.replace("## After the merge", "### M0. Setup\n- **Where:** you\n\n### M3. Try it in Safari\n"
+                                              "- **Where:** you, on a Mac\n\n### S0. Staging access\n- **Where:** you\n\n"
+                                              "### S1. Load staging\n- **Where:** you, on staging\n\n## After the merge"))
+    _, markup = generate(repo, base)
+    items = " | ".join(listed(markup, "decisions"))
+    assert "M3 Try it in Safari" in items and "S1 Load staging" in items, items
+    assert "M0" not in items and "S0" not in items, items
+
+
+def a_failed_step_after_the_merge_is_a_blocker(base):
+    repo, _ = full_branch(base)
+    write(repo, "checks-guide", GUIDE.replace("| M2 | PASS | refund seen |", "| M2 | PASS | refund seen |\n| P1 | FAIL | 3 errors |"))
+    _, markup = generate(repo, base)
+    assert any("P1" in b and "FAIL" in b for b in listed(markup, "blockers")), listed(markup, "blockers")
+    assert is_open(markup, 5), "a FAIL step of the guide leaves its section closed"
+
+
+def test_types_heading_and_ran_in_any_form(base):
+    repo, evidence = full_branch(base)
+    with open(path_of(repo, "validation")) as fh:
+        report = fh.read()
+    write(repo, "validation", report.replace("## Test types", "## Test Types").replace(
+        f"| unit | yes | [A1]({evidence}/A1.txt) |", f"| unit | yes | [A1]({evidence}/A1.txt) |\n| a11y | `no` | no screen reader |"))
+    _, markup = generate(repo, base)
+    line = summary_row(markup, "tests")
+    assert "unit 1/1" in line and "a11y not run: no screen reader" in line, line
+
+
+def levels_map_aliases_and_stay_bounded(base):
+    repo, evidence = full_branch(base)
+    rows = "".join(f"| X{n} | AC1 | lvl{n} | many | + | ok | PASS | none |\n" for n in range(500))
+    add_rows(repo, "| Y1 | AC1 | Accessibility | axe | + | ok | PASS | none |\n| Y2 | AC1 | visual | shots | + | ok | PASS | none |\n"
+                   "| Y3 | AC1 | **Query budget** | queries | + | ok | PASS | none |\n" + rows,
+             header="| # | AC | Level | Check | Case | Expected | Result | Evidence |")
+    _, markup = generate(repo, base)
+    groups = re.findall(r'<h3 id="level-([^"]+)">', section(markup, 2))
+    assert len(groups) <= 14 and "other" in groups, groups
+    two = section(markup, 2)
+    for check, level in (("Y1", "a11y"), ("Y2", "design"), ("Y3", "query-budget"), ("X7", "other")):
+        after = two[two.index(f'id="level-{level}"'):]
+        assert f'id="check-{check}"' in after[:after.find('<h3 id="level-', 10) if '<h3 id="level-' in after[10:] else None], (check, level)
+
+
+def a_shared_suite_output_counts_once(base):
+    repo, evidence = full_branch(base)
+    output(evidence, "U1.txt", "tests/run.sh", "== cart\nok   coupon_once\nFAIL tampered_total\nok   refund_issued\n",
+           repo, working_tree(repo), exit_code=1)
+    add_rows(repo, f"| U1 | AC1 | unit | the suite | + | all ok | FAIL | [output]({evidence}/U1.txt) |\n"
+                   f"| U2 | AC2 | unit | the suite again | + | all ok | FAIL | [output]({evidence}/U1.txt) |\n",
+             header="| # | AC | Level | Check | Case | Expected | Result | Evidence |")
+    _, markup = generate(repo, base)
+    assert "(3 tests in the runner output, 1 FAIL)" in summary_row(markup, "tests"), summary_row(markup, "tests")
+    second = check_block(markup, "U2")
+    assert 'class="runner"' not in second and 'href="#check-U1"' in second, second[:800]
+
+
+def steps_past_the_total_are_linked(base):
+    repo, evidence = full_branch(base)
+    rows = ""
+    for n in range(11):
+        put(os.path.join(evidence, f"img{n:02d}.png"), PNG + bytes([n]) * (1900 * 1024))
+        rows += f"| B{n} | AC1 | image {n} | + | an image | PASS | [img]({evidence}/img{n:02d}.png) |\n"
+    for n in range(20):
+        output(evidence, f"st{n}.txt", "make st", "".join(f"step: s{n} {k:06d} {'w' * 60}\n" for k in range(2500)),
+               repo, working_tree(repo))
+        rows += f"| T{n} | AC1 | steps {n} | + | ok | PASS | [output]({evidence}/st{n}.txt) |\n"
+    add_rows(repo, rows)
+    _, markup = generate(repo, base)
+    steps = text(re.search(r"<dt>Steps</dt><dd>(.*?)</dd>", check_block(markup, "T19"), re.S).group(1))
+    assert "past the 20 MB" in steps, steps[:300]
+
+
+def the_notes_count_toward_the_total(base):
+    repo, evidence = full_branch(base)
+    write(repo, "decision-notes", NOTES + "\n" + "n" * (1900 * 1024) + "\n")
+    rows = ""
+    for n in range(11):
+        put(os.path.join(evidence, f"img{n:02d}.png"), PNG + bytes([n]) * (1900 * 1024))
+        rows += f"| B{n} | AC1 | image {n} | + | an image | PASS | [img]({evidence}/img{n:02d}.png) |\n"
+    add_rows(repo, rows)
+    _, markup = generate(repo, base)
+    embedded = [n for n in range(11) if "data:image/png" in check_block(markup, f"B{n}")]
+    assert len(embedded) <= 8, embedded
+
+
+def a_comment_before_the_first_paragraph_is_skipped(base):
+    repo, _ = full_branch(base)
+    write(repo, "decision-notes", NOTES.replace("## What the task must do\n",
+                                                "## What the task must do\n<!-- one paragraph\nthat works alone -->\n"))
+    _, markup = generate(repo, base)
+    task = summary_row(markup, "task")
+    assert task.startswith("Task The task must stop a second discount"), task
+
+
+def triage_lens_names_get_their_brief(base):
+    repo, _ = full_branch(base)
+    write(repo, "review", REVIEW.replace("lenses: correctness, tests", "lenses: correctness, ux-a11y-i18n (added: forms, labels)"))
+    _, markup = generate(repo, base)
+    rows = [[text(c) for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.S)]
+            for r in re.findall(r"<tr>(.*?)</tr>", re.search(r'aria-label="Table: Lens, What it checks[^"]*"><table>.*?<tbody>(.*?)</tbody>',
+                                                              section(markup, 3), re.S).group(1), re.S)]
+    assert [r[0] for r in rows] == ["correctness", "ux-a11y-i18n (added: forms, labels)"], rows
+    write(repo, "review", REVIEW.replace("lenses: correctness, tests", "lenses: correctness, ux-a11y-i18n"))
+    _, markup = generate(repo, base)
+    rows = re.findall(r'<tr><th scope="row">ux-a11y-i18n</th><td>(.*?)</td>', section(markup, 3))
+    assert rows and rows[0] == "Use only when the diff changes user-facing UI or copy.", rows
+
+
+def coverage_without_an_ac_column_is_not_recorded(base):
+    repo, evidence = full_branch(base)
+    write(repo, "validation", f"# Validation\n\n| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n"
+                              f"| A1 | Coupon applied once | + | one line | PASS | [output]({evidence}/A1.txt) |\n")
+    _, markup = generate(repo, base)
+    meta = text(re.search(r'id="s01".*?<span class="meta">(.*?)</span>', markup, re.S).group(1))
+    assert meta == "3 criteria · coverage not recorded", meta
+
+
+def a_merge_order_item_is_not_the_merge_note(base):
+    repo, _ = full_branch(base)
+    write(repo, "decision-notes", NOTES.replace("Decide if one FAIL", "- Merge order: #6 before this one.\n- Decide if one FAIL"))
+    _, markup = generate(repo, base)
+    items = listed(markup, "decisions")
+    assert "recommendation not recorded" in items[0] and any("Merge order" in i for i in items[1:]), items
+
 for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
              reads_nothing_outside_the_evidence_directory, a_long_last_line_keeps_its_tail,
              unmatched_brackets_take_linear_time, a_long_check_table_takes_linear_time, a_failed_generation_leaves_no_page, the_older_page_is_gone_while_it_builds,
@@ -1323,7 +1496,13 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
              levels_come_from_the_level_column, levels_fall_back_to_test_types, a_check_opens_to_steps_expected_actual_evidence,
              a_long_log_shows_its_tail, a_video_plays_inline, a_suite_output_lists_its_tests, the_review_shows_each_lens,
              a_review_without_lenses_says_not_recorded, merge_and_ship_reads_ship_md, a_partial_or_missing_ship_md,
-             reports_are_annexes_without_built_from, the_skills_ask_for_the_new_formats):
+             reports_are_annexes_without_built_from, the_skills_ask_for_the_new_formats,
+             runner_lines_take_linear_time, hostile_text_in_the_new_parts_renders_inert,
+             a_ship_md_marker_in_a_table_header_keeps_its_tags, unrun_optional_steps_are_decisions,
+             a_failed_step_after_the_merge_is_a_blocker, test_types_heading_and_ran_in_any_form, levels_map_aliases_and_stay_bounded,
+             a_shared_suite_output_counts_once, steps_past_the_total_are_linked, the_notes_count_toward_the_total,
+             a_comment_before_the_first_paragraph_is_skipped, triage_lens_names_get_their_brief,
+             coverage_without_an_ac_column_is_not_recorded, a_merge_order_item_is_not_the_merge_note):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
         test(os.path.realpath(base))
