@@ -474,7 +474,7 @@ def run_phpunit(root, changes, php, phpunit, args, candidates, report):
     with tempfile.TemporaryDirectory() as tmp:
         junit = os.path.join(tmp, "junit.xml")
         command = [phpunit, *args, "--log-junit", junit]
-        env = php_coverage_env(root, php, report) if candidates else None
+        env = php_coverage_env(root, php, candidates, tmp, report) if candidates else None
         if env is None:
             proc = execute(command, root, TEST_TIMEOUT)
             return proc, junit_cases(junit)
@@ -498,8 +498,8 @@ def run_phpunit(root, changes, php, phpunit, args, candidates, report):
         return proc, cases
 
 
-def php_coverage_env(root, php, report):
-    """The environment a PHPUnit run collects coverage in, or None, skipped with the reason."""
+def php_coverage_env(root, php, candidates, ini_dir, report):
+    """The environment a PHPUnit run collects coverage of `candidates` in, or None, skipped with the reason."""
     if not php:
         report.skip("diff coverage", "phpunit: php not on PATH")
         return None
@@ -513,7 +513,13 @@ def php_coverage_env(root, php, report):
         return None
     pcov, pcov_enabled, xdebug = facts
     if pcov and pcov_enabled:
-        return dict(os.environ)
+        # Unset, pcov.directory is src/, lib/ or app/ when the root has one, and files outside it are never collected.
+        directory = os.path.commonpath([os.path.realpath(os.path.join(root, f)) for f in candidates])
+        directory = directory if os.path.isdir(directory) else os.path.dirname(directory)
+        with open(os.path.join(ini_dir, "agents-pcov.ini"), "w") as fh:
+            fh.write(f"pcov.directory={directory}\n")
+        # The empty element keeps PHP's own scan directory, where PCOV is usually loaded from.
+        return {**os.environ, "PHP_INI_SCAN_DIR": os.environ.get("PHP_INI_SCAN_DIR", "") + os.pathsep + ini_dir}
     if xdebug:
         return {**os.environ, "XDEBUG_MODE": "coverage"}
     report.skip("diff coverage", "phpunit: PCOV is loaded but pcov.enabled is off" if pcov else

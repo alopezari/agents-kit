@@ -1099,6 +1099,36 @@ def phpunit_diff_coverage_through_xdebug(base):
     assert xdebug == "coverage" and "--coverage-clover" in args, (args, xdebug)
 
 
+# PCOV collects only under pcov.directory, src/ by default here: lib/Bar.php would never be in the report.
+PCOV_DIRECTORY = 'echo "${{PHP_INI_SCAN_DIR:-unset}}" >> "{base}/scan-dirs"; ' \
+                 'cat "${{PHP_INI_SCAN_DIR##*:}}/agents-pcov.ini" >> "{base}/pcov-ini" 2>/dev/null; ' + WRITE_CLOVER
+
+
+def phpunit_pcov_directory_covers_the_changed_files(base):
+    repo, path = php_coverage_change(base, body=PCOV_DIRECTORY.format(base=base))
+    code, out = verify(repo, path, PHP_INI_SCAN_DIR="/etc/php-extra")
+    assert code == 0 and lines(out, "ran: diff coverage (phpunit): 1 of 2 "), out
+    [scan] = read_lines(os.path.join(base, "scan-dirs"))
+    assert scan.startswith("/etc/php-extra:") and scan.count(":") == 1, "the caller's scan directory is kept: " + scan
+    assert read_lines(os.path.join(base, "pcov-ini")) == [f"pcov.directory={os.path.realpath(repo)}"], "src/ and lib/"
+    shutil.rmtree(repo)
+    for name in ("scan-dirs", "pcov-ini"):
+        os.remove(os.path.join(base, name))
+    repo, path = php_coverage_change(base, body=PCOV_DIRECTORY.format(base=base))
+    git(repo, "checkout", "--", "lib/Bar.php", "src/Gone.php")
+    code, out = verify(repo, path)
+    assert code == 0 and lines(out, "ran: diff coverage (phpunit): 1 of 2 "), out
+    [scan] = read_lines(os.path.join(base, "scan-dirs"))
+    assert scan.startswith(":"), "PHP's own scan directory, where PCOV is loaded from, stays first: " + scan
+    assert read_lines(os.path.join(base, "pcov-ini")) == [f"pcov.directory={os.path.realpath(repo)}/src"], "src/ only"
+    shutil.rmtree(repo)
+    for name in ("scan-dirs", "pcov-ini"):
+        os.remove(os.path.join(base, name))
+    repo, path = php_coverage_change(base, probe="echo '[false,false,true]'", body=PCOV_DIRECTORY.format(base=base))
+    verify(repo, path)
+    assert read_lines(os.path.join(base, "scan-dirs")) == ["unset"], "Xdebug needs no pcov.directory"
+
+
 def phpunit_diff_coverage_skips_say_why(base):
     cases = [
         ("no driver", {"probe": "echo '[false,false,false]'"}, {}, ["phpunit: no coverage driver, install pcov or xdebug"]),
@@ -1179,7 +1209,7 @@ for t in [no_changes_is_nothing_to_check, unsupported_files_only, eslint_reports
           phpunit_red_check_errors_when_tests_pass_on_the_base, phpunit_red_check_needs_tests_and_code,
           phpunit_red_check_skips_an_inconclusive_working_tree_run, phpunit_red_check_without_a_verdict_is_skipped,
           phpunit_red_check_copy_build_error_is_skipped, phpunit_red_check_leaves_the_result_cache_alone,
-          phpunit_red_check_loads_the_base_code, phpunit_diff_coverage_reports_changed_lines,
+          phpunit_red_check_loads_the_base_code, phpunit_diff_coverage_reports_changed_lines, phpunit_pcov_directory_covers_the_changed_files,
           phpunit_diff_coverage_through_xdebug, phpunit_diff_coverage_skips_say_why,
           phpunit_diff_coverage_keeps_the_related_run_verdict,
           phpunit_that_rejects_the_coverage_flags_runs_again_without_them]:
