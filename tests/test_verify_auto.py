@@ -1259,6 +1259,14 @@ def phpunit_coverage_leaves_out_directories_it_would_parse_in_full(base):
     shutil.rmtree(repo)
     os.remove(os.path.join(base, "phpunit-calls"))
     repo, path = php_coverage_change(base)
+    write(repo, "lib/vendor/dep.php", "<?php\n")  # a plugin's own ignored vendor/ below a changed file
+    verify(repo, path)
+    args = phpunit_calls(base)[0][1].split()
+    assert [args[i + 1] for i, a in enumerate(args) if a == "--coverage-filter"] == [
+        os.path.join(os.path.realpath(repo), "src")], args
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "phpunit-calls"))
+    repo, path = php_coverage_change(base)
     git(repo, "checkout", "--", ".")
     write(repo, "boot.php", "<?php\n$boot = 1;\n")
     write(repo, "tests/unit/FooTest.php", "<?php\n// boots\n")
@@ -1286,6 +1294,11 @@ def phpunit_failure_only_under_coverage_takes_the_bare_verdict(base):
     assert lines(out, "ran: diff coverage (phpunit): 1 of 2 "), out
     runs = [args for _, args, _, _ in phpunit_calls(base)]
     assert len(runs) == 2 and "--coverage-clover" in runs[0] and "--coverage" not in runs[1], runs
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "phpunit-calls"))
+    repo, path = php_coverage_change(base, body=body + "; exit 255")
+    code, out = verify(repo, path)  # a bare rerun with no report keeps the failure of the run with coverage
+    assert code == 1 and r"error: [phpunit] App\Tests\FooTest::testA fails" in out, out
 
 
 def phpunit_reruns_share_the_test_timeout(base):
@@ -1294,7 +1307,8 @@ def phpunit_reruns_share_the_test_timeout(base):
     started = time.monotonic()
     code, out = verify(repo, path, timeouts={"TEST_TIMEOUT": 6})
     assert time.monotonic() - started < 9, "the rerun got a TEST_TIMEOUT of its own"
-    assert code == 0 and [l for l in lines(out, "skipped: phpunit (") if "timed out after" in l], out
+    assert code == 0 and [l for l in lines(out, "skipped: phpunit (")
+                          if "timed out after" in l and "did not start" not in l], out
     assert len(phpunit_calls(base)) == 2, phpunit_calls(base)
 
 
