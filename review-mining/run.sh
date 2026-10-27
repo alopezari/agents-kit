@@ -71,7 +71,7 @@ Inputs (read them from disk):
 - $HOME/.agents/AGENTS.md: the current global instructions.
 - $HOME/.agents/research/review-findings.md: the previous analysis, when a profile provides one.
 - $HOME/.agents/logs/hooks.jsonl: every hook block/nudge (hook, decision, session, cwd, detail).
-- $HOME/.agents/logs/quality.jsonl: one line per review lens or test type run (tier, findings/confirmed or issues, secs, model, for a lens the outcomes of its findings, and for a test "flake": true when it hit a flake), per escape follow-pr logged, and per branch rename (kind "rename": name is the old branch, to the new one; not a perspective).
+- $HOME/.agents/logs/quality.jsonl: one line per review lens or test type run (tier, findings/confirmed or issues, secs, model, for a lens the outcomes of its findings, and for a test "flake": true when it hit a flake), per escape follow-pr logged, per branch rename (kind "rename": name is the old branch, to the new one; not a perspective), and per push to an open PR (kind "pr": name is the PR number, with that change's size, tests touched and deleted, verify verdict, red check, diff coverage and weakened tests; outcomes.json joins the last one before the merge to each PR as its signals).
 - $HOME/.agents/logs/build-ab.jsonl: A/B test of the build's model (one assign event per branch: repo, branch, tier, model, harness).
 - $RUN/sessions.json: my last 200 agent sessions (harness, model, effort, tokens, advisor_calls, prompts, correction_signals).
 - $RUN/sessions-all.json: the same for every session, read for the A/B's builds.
@@ -122,6 +122,13 @@ Steps:
    overnight wait skews a mean. Name the PRs and phases that took the most
    prompts and wait, and what in them asked for the user (a question, a correction, a report to read). Hours to PR
    and to merge are the cycle time to set it against. Few complete PRs make this evidence, not proof.
+   Add a "Signals" section from since_kit.signals in outcomes.json: per split (size band by lines added plus deleted,
+   tier, red check, diff coverage, weakened tests, tests deleted, tests touched), each bucket's settled PRs and its fix
+   candidates, revert candidates and confirmed escapes with their rates, and the PRs without signals apart, never as
+   clean ones. It covers signals_window, which starts FOLLOW_UP_DAYS before window to take in the PRs still pending at
+   the previous run. Judge fix and revert candidates as the Escapes section does before reading a rate as trouble. A
+   bucket under ~10 PRs proves nothing: give its counts and say so instead of drawing a conclusion; name a signal as
+   predicting trouble only when the gap holds across buckets with enough PRs, and say which signal to watch next.
    Add an "Escapes" section from outcomes.json, set against its baseline:
    - At the PR stage: the escapes follow-pr logged (CI failures the change caused, review comments by people and bots)
      per merged PR, by category and verdict. For each confirmed escape, name the lens that should have caught it and

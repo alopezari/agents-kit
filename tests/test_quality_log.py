@@ -280,11 +280,153 @@ def marks_a_flaky_run(base):
     assert "flake" not in plain, "no --flake writes no field, as the rows before it"
 
 
+def pr_repo(base):
+    """A HOME linking the kit, and a repo whose branch edits a code file, edits a test (one assertion removed, one skip
+    added) and deletes another test, against main."""
+    home, repo = os.path.join(base, "home"), os.path.join(base, "shop")
+    os.makedirs(os.path.join(home, ".agents"))
+    for part in ("bin", "hooks", "skills", "review-mining"):
+        os.symlink(os.path.join(KIT, part), os.path.join(home, ".agents", part))
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", repo]
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    os.makedirs(os.path.join(repo, "tests"))
+    files = {"app.py": "def total(n):\n    return n * 2\n",
+             "tests/test_app.py": "def test_total():\n    assert total(2) == 4\n    assert total(0) == 0\n",
+             "tests/test_old.py": "def test_old():\n    assert 1\n    assert 2\n"}
+    for path, text in files.items():
+        open(os.path.join(repo, path), "w").write(text)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+    subprocess.run([*git, "checkout", "-q", "-b", "feature"], check=True)
+    open(os.path.join(repo, "app.py"), "w").write("def total(n):\n    if n < 0:\n        raise ValueError(n)\n    return n + n\n")
+    open(os.path.join(repo, "tests/test_app.py"), "w").write(
+        "@pytest.mark.skip\ndef test_total():\n    assert total(0) == 0\n")
+    os.remove(os.path.join(repo, "tests/test_old.py"))
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "change"], check=True)
+    subprocess.run([*git, "remote", "add", "origin", "git@github.com:Owner/Shop.git"], check=True)
+    return home, repo
+
+
+def log_pr(home, repo, *args):
+    return subprocess.run([os.path.join(home, ".agents", "bin", "quality-log"), "pr", *args], cwd=repo,
+                          env={**os.environ, "HOME": home}, capture_output=True, text=True)
+
+
+def records_a_prs_size_and_origin(base):
+    home, repo = pr_repo(base)
+    out = log_pr(home, repo, "42")
+    assert out.returncode == 0, out.stderr
+    row = entries(home)[-1]
+    assert (row["kind"], row["name"], row["repo"], row["branch"]) == ("pr", 42, "shop", "feature"), row
+    assert {"ts", "harness", "tier", "spec_tier", "diff_tier"} <= row.keys(), row
+    # app.py: 3 added, 1 deleted; test_app.py: 1 added, 1 deleted; test_old.py: 3 deleted.
+    assert {key: row.get(key) for key in ("added", "deleted", "files", "test_files", "tests_deleted")} == \
+        {"added": 4, "deleted": 5, "files": 3, "test_files": 1, "tests_deleted": 1}, row
+    assert (row["host"], row["remote"]) == ("github.com", "Owner/Shop"), row
+    for url, expected in (("https://ghe.example.com/owner/shop.git", ("ghe.example.com", "owner/shop")),
+                          ("https://github.com/owner/shop", ("github.com", "owner/shop")),
+                          ("ssh://git@ghe.example.com:2222/team/app.git", ("ghe.example.com", "team/app"))):
+        subprocess.run(["git", "-C", repo, "remote", "set-url", "origin", url], check=True)
+        assert log_pr(home, repo, "42").returncode == 0
+        assert (entries(home)[-1]["host"], entries(home)[-1]["remote"]) == expected, (url, entries(home)[-1])
+
+
+def records_the_verify_signals(base):
+    home, repo = pr_repo(base)
+    env = {**os.environ, "HOME": home}
+    report = subprocess.run([os.path.join(home, ".agents", "bin", "reports"), "path", "verify"], cwd=repo, env=env,
+                            capture_output=True, text=True, check=True).stdout.strip()
+
+    def signals(text):
+        if text is None:
+            if os.path.exists(report):
+                os.remove(report)
+        else:
+            open(report, "w").write(text)
+        out = log_pr(home, repo, "7")
+        assert out.returncode == 0, out.stderr
+        row = entries(home)[-1]
+        return row["verify"], row["red_check"], row["coverage"]
+
+    def verify_report(verdict, *lines):
+        return f"# Verify: {verdict}\n\n2026-10-27 10:00:00 · `verify` in `{repo}`\n\n```\n" + "\n".join(lines) + "\n```\n"
+
+    failed = "error: [red check] The changed tests (tests/test_app.py) all pass without your change (on the merge-base), so"
+    passed = "ran: red check: pytest on 1 changed test files: 1 of 2 cases fail on the merge-base, pass with the change"
+    skipped = "skipped: red check (npm test: package.json has no test script)"
+    not_run = "error: red check did not run: phpunit not found"
+    assert signals(None) == ("none", None, None), "no report"
+    assert signals(verify_report("FAIL (exit 1)", passed, failed)) == ("fail", "failed", None)
+    assert signals(verify_report("PASS", skipped, passed)) == ("pass", "passed", None), "a mixed report: one stack ran it"
+    assert signals(verify_report("PASS", skipped)) == ("pass", "skipped", None)
+    assert signals(verify_report("FAIL (exit 1)", not_run)) == ("fail", "not_run", None)
+    assert signals(verify_report("PASS, but nothing was checked", "ran: nothing to check: no changed files")) == \
+        ("empty", None, None)
+    assert signals(verify_report(
+        "PASS", "ran: pytest tests/test_app.py",
+        "ran: diff coverage (coverage.py): 8 of 10 changed lines covered by the related tests (80%); uncovered: app.py:3-4",
+        "skipped: diff coverage (c8 not installed in node_modules/.bin)",
+        "ran: diff coverage (phpunit): 1 of 5 changed lines covered by the related tests (20%)")) == \
+        ("pass", None, {"covered": 9, "measured": 15})
+
+    fingerprint = subprocess.run(["python3", os.path.join(KIT, "hooks", "review_stamp.py"), "fingerprint"], cwd=repo,
+                                 env=env, capture_output=True, text=True, check=True).stdout.strip()
+    stamps = os.path.join(repo, ".git", "agents", "stamps", "feature")
+    os.makedirs(stamps, exist_ok=True)
+    open(os.path.join(stamps, "verify.stamp"), "w").write(fingerprint)
+    assert log_pr(home, repo, "7").returncode == 0
+    assert entries(home)[-1]["verify_current"] is True, entries(home)[-1]
+    open(os.path.join(repo, "app.py"), "a").write("# edited after verify\n")
+    assert log_pr(home, repo, "7").returncode == 0
+    assert entries(home)[-1]["verify_current"] is False, "the stamp no longer covers the change"
+
+
+def records_weakened_tests(base):
+    home, repo = pr_repo(base)
+    assert log_pr(home, repo, "7").returncode == 0
+    assert entries(home)[-1]["tampered"] == {"removed": 1, "loosened": 0, "changed": 0, "skipped_or_focused": 1}, \
+        entries(home)[-1]
+
+
+def a_signal_it_cant_compute_is_null(base):
+    home, repo = pr_repo(base)
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", repo]
+    subprocess.run([*git, "checkout", "-q", "--orphan", "unrelated"], check=True)  # shares no commit with main
+    subprocess.run([*git, "commit", "-q", "-m", "orphan"], check=True)
+    report = subprocess.run([os.path.join(home, ".agents", "bin", "reports"), "path", "verify"], cwd=repo,
+                            env={**os.environ, "HOME": home}, capture_output=True, text=True, check=True).stdout.strip()
+    os.makedirs(report)  # a report that can't be read
+    out = log_pr(home, repo, "9")
+    assert out.returncode == 0, out.stderr
+    row = entries(home)[-1]
+    for key in ("added", "deleted", "files", "test_files", "tests_deleted", "tampered", "verify", "verify_current",
+                "red_check", "coverage"):
+        assert key in row and row[key] is None, (key, row)
+    assert (row["name"], row["remote"]) == (9, "Owner/Shop"), row
+    outside = os.path.join(base, "nowhere")
+    os.makedirs(outside)
+    out = log_pr(home, outside, "9")
+    assert out.returncode == 0, out.stderr
+    row = entries(home)[-1]
+    assert (row["kind"], row["host"], row["remote"], row["added"]) == ("pr", None, None, None), row
+
+
+def refuses_a_pr_number_that_isnt_one(base):
+    home, repo = pr_repo(base)
+    for args in (["0"], ["-3"], ["abc"], ["1.5"], [""], ["#12"], [], ["12", "--added", "5"], ["12", "13"]):
+        out = log_pr(home, repo, *args)
+        assert out.returncode == 2 and out.stderr, (args, out)
+    assert entries(home) == [], "nothing was written"
+
+
 for test in (writes_well_formed_entries, records_the_findings_the_other_model_shared, keeps_lens_names_to_the_lenses_there_are,
              refuses_malformed_entries, a_session_on_a_worktree_logs_to_the_main_checkout,
              other_kit_layouts_keep_their_rows_in_the_kit, records_each_findings_outcome,
              refuses_malformed_outcomes, a_lens_with_no_findings_logs_without_outcomes, records_the_spec_and_diff_tiers,
-             accepts_each_canonical_test_type, refuses_other_test_type_spellings, marks_a_flaky_run):
+             accepts_each_canonical_test_type, refuses_other_test_type_spellings, marks_a_flaky_run,
+             records_a_prs_size_and_origin, records_the_verify_signals, records_weakened_tests,
+             a_signal_it_cant_compute_is_null, refuses_a_pr_number_that_isnt_one):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)

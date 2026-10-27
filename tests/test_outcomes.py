@@ -2,7 +2,9 @@
 """review-mining/outcomes.py and the escape log it reads: per-PR metrics, follow-up candidates, and the joins
 to follow-pr's escapes and to agent sessions. GitHub is replaced by canned GraphQL answers."""
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -230,11 +232,123 @@ def a_share_never_measured_is_not_zero(base):
     assert joined["prs_with_phases"] == 1, f"a PR that spent no tokens leaves the cost per phase alone: {joined}"
 
 
+def signals_join_by_host_repo_and_number(base):
+    outcomes.QUALITY_LOG = os.path.join(base, "quality.jsonl")
+    line = {"kind": "pr", "host": "github.com", "remote": "O/Shop", "name": 7, "repo": ".agents", "branch": "feature/cart"}
+    entries = [
+        {**line, "ts": "2026-10-01T09:00:00+0000", "added": 10},
+        {**line, "ts": "2026-10-01T12:00:00+0200", "added": 20},  # 10:00 UTC: the latest before the merge
+        {**line, "ts": "2026-10-01T10:00:00-0100", "added": 99},  # 11:00 UTC: after the merge
+        {**line, "ts": "2026-10-01T09:30:00+0000", "remote": "o/blog", "added": 98},
+        {**line, "ts": "2026-10-01T09:30:00+0000", "host": "ghe.example.com", "added": 97},
+        {**line, "ts": "2026-10-01T09:30:00+0000", "name": 8, "added": 96},  # same branch, another PR
+        {"kind": "lens", "name": "tests", "repo": ".agents", "branch": "feature/cart", "ts": "2026-10-01T09:45:00+0000"},
+    ]
+    open(outcomes.QUALITY_LOG, "w").write("".join(json.dumps(e) + "\n" for e in entries))
+    prs = [{"host": "github.com", "repo": "o/shop", "number": 7, "branch": "feature/cart", "merged": "2026-10-01T10:30:00Z"},
+           {"host": "github.com", "repo": "o/shop", "number": 9, "branch": "feature/cart", "merged": "2026-10-01T10:30:00Z"}]
+    outcomes.attach_signals(prs)
+    assert (prs[0]["signals"] or {}).get("added") == 20, prs[0]["signals"]
+    assert prs[1]["signals"] is None, f"never matched by branch: {prs[1]['signals']}"
+
+
+def signal_cells(base):
+    counts = dict.fromkeys(("review_threads", "changes_requested", "red_pushes", "commits_after_first_review"), 0)
+    fix = {"kind": "fix", "url": "u", "title": "Fix", "shared_files": ["a"]}
+    revert = {**fix, "kind": "revert"}
+    confirmed = {"source": "bot", "verdict": "confirmed", "lens": "tests", "lens_ran": True, "category": "P4.5"}
+
+    def signals(size, **fields):
+        return {"added": size, "deleted": 0, "tier": "standard", "red_check": "passed", "verify": "pass",
+                "coverage": {"covered": 8, "measured": 10}, "tampered": {"removed": 0, "loosened": 0, "changed": 0,
+                "skipped_or_focused": 0}, "tests_deleted": 0, "test_files": 1, **fields}
+
+    prs = [
+        {"signals": signals(49), "follow_ups": [fix, fix], "escapes": [confirmed, confirmed]},
+        {"signals": signals(50, red_check="failed", tier="high", coverage={"covered": 7, "measured": 10}),
+         "follow_ups": [revert], "escapes": [{**confirmed, "verdict": "rejected"}]},
+        {"signals": signals(400, red_check="skipped", coverage=None, tampered={"removed": 1, "loosened": 0, "changed": 0,
+                                                                              "skipped_or_focused": 0}),
+         "follow_ups": [], "escapes": []},
+        {"signals": signals(401, red_check="not_run", tests_deleted=2, test_files=0), "follow_ups": [fix], "escapes": []},
+        {"signals": signals(None, red_check=None, verify="none", coverage=None, tampered=None, tests_deleted=None,
+                            test_files=None, tier=None),
+         "follow_ups": [], "escapes": [confirmed]},
+        {"signals": signals(10), "follow_ups": "pending", "escapes": [confirmed]},  # not settled: left out
+        {"signals": None, "follow_ups": [fix], "escapes": []},
+        {"follow_ups": [], "escapes": []},  # a PR the signals were never attached to
+    ]
+    got = outcomes.summarize([{**counts, **p} for p in prs])["signals"]
+
+    def cell(prs, fix=0, revert=0, escape=0):
+        def rate(n):
+            return round(n / prs, 2) if prs else None
+        return {"prs": prs, "fix": fix, "fix_rate": rate(fix), "revert": revert, "revert_rate": rate(revert),
+                "escape": escape, "escape_rate": rate(escape)}
+
+    assert got["settled_prs"] == 7 and got["without_signals"] == cell(2, fix=1), got
+    splits = got["splits"]
+    assert splits["size"] == {"<50": cell(1, fix=1, escape=1), "50-400": cell(2, revert=1), ">400": cell(1, fix=1),
+                              "unknown": cell(1, escape=1)}, splits["size"]
+    assert splits["tier"] == {"low": cell(0), "standard": cell(3, fix=2, escape=1), "high": cell(1, revert=1),
+                              "unknown": cell(1, escape=1)}, splits["tier"]
+    assert splits["red_check"] == {"failed": cell(1, revert=1), "passed": cell(1, fix=1, escape=1),
+                                   "skipped_or_not_run": cell(2, fix=1), "unknown": cell(1, escape=1)}, splits["red_check"]
+    assert splits["coverage"] == {"80_or_more": cell(2, fix=2, escape=1), "below_80": cell(1, revert=1),
+                                  "none": cell(1), "unknown": cell(1, escape=1)}, splits["coverage"]
+    assert splits["tampered"] == {"any": cell(1), "none": cell(3, fix=2, revert=1, escape=1),
+                                  "unknown": cell(1, escape=1)}, splits["tampered"]
+    assert splits["tests_deleted"] == {"any": cell(1, fix=1), "none": cell(3, fix=1, revert=1, escape=1),
+                                       "unknown": cell(1, escape=1)}, splits["tests_deleted"]
+    assert splits["test_files"] == {"any": cell(3, fix=1, revert=1, escape=1), "none": cell(1, fix=1),
+                                    "unknown": cell(1, escape=1)}, splits["test_files"]
+
+
+def signals_read_the_prs_settled_since_last_month(base):
+    """A PR merged in the FOLLOW_UP_DAYS before SINCE was pending at last month's run: its signals count now, while the
+    other summaries keep to PRs merged since SINCE."""
+    outcomes.QUALITY_LOG = os.path.join(base, "quality.jsonl")
+    outcomes.BASELINE_CACHE = os.path.join(base, "baseline.json")
+    sessions = os.path.join(base, "sessions.json")
+    open(sessions, "w").write("[]")
+    counts = dict.fromkeys(("review_threads", "changes_requested", "red_pushes", "commits_after_first_review"), 0)
+    pr = {**counts, "host": "github.com", "repo": "o/shop", "branch": "b", "opened": "2026-10-01T00:00:00Z",
+          "files": [], "follow_ups": []}
+    earlier = {**pr, "number": 1, "merged": "2026-10-10T10:00:00Z"}
+    later = {**pr, "number": 2, "merged": "2026-10-20T10:00:00Z", "follow_ups": "pending"}
+    windows = []
+
+    def fake_fetch(start, end, now, errors):
+        windows.append(start)
+        return [] if start < outcomes.KIT_START else [dict(earlier), dict(later)]
+
+    outcomes.fetch_window = fake_fetch
+    real_argv = sys.argv
+    try:
+        for since, kit_start in (("2026-10-20", "2026-10-06"), ("2026-09-30", outcomes.KIT_START)):
+            windows.clear()
+            output = os.path.join(base, "out.json")
+            sys.argv = ["outcomes.py", since, sessions, output]
+            with contextlib.redirect_stdout(io.StringIO()):
+                outcomes.main()
+            result = json.load(open(output))
+            assert windows[-1] == kit_start, (since, windows)
+            if since == "2026-10-20":
+                since_kit = result["summary"]["since_kit"]
+                assert since_kit["merged_prs"] == 1 and [p["number"] for p in result["prs"]] == [2], result
+                assert since_kit["follow_ups"]["settled_prs"] == 0, "the earlier PR stays out of the existing summaries"
+                assert since_kit["signals"]["settled_prs"] == 1, since_kit["signals"]
+                assert result["window"][0] == "2026-10-20" and result["signals_window"][0] == "2026-10-06", result
+    finally:
+        sys.argv = real_argv
+
+
 RESULTS = []
 for test in (pr_metrics_count_people_not_me_or_bots, follow_ups_need_a_shared_file_and_a_fix_title,
              escapes_join_to_their_branch_and_lens, sessions_join_by_repo_and_branch, a_checkout_named_unlike_its_repo,
              quality_log_names_the_repo_not_the_worktree, attention_per_pr_and_its_coverage,
-             a_share_never_measured_is_not_zero):
+             a_share_never_measured_is_not_zero, signals_join_by_host_repo_and_number, signal_cells,
+             signals_read_the_prs_settled_since_last_month):
     base = tempfile.mkdtemp(prefix="agents-test-outcomes-")
     try:
         test(base)

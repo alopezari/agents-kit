@@ -14,7 +14,7 @@ gh pr view <number or head branch> --json number,url,state,mergedAt,mergeCommit,
 Otherwise run it without an argument, from the checkout that has the branch.
 
 - **No pull request** (`no pull requests found`): part 1, the whole of it, but only on a branch of its own. On the default branch or a detached HEAD there is nothing to open: ask which PR the user means.
-- **Open:** part 1 without opening a second one, from a checkout of its `headRefName`: the main checkout once the user has switched to it, otherwise add a worktree (`git worktree add <path> <headRefName>`), since everything below reads the branch checked out where it runs. First record the PR's `baseRefName` as the base (step 4's last paragraph), so the evidence is measured against what GitHub shows. Then check the evidence (step 1), push the commits GitHub doesn't have yet (step 2), refresh the description when it no longer matches the change (step 3, then `gh pr edit <n> --body-file <body file>` as a command of its own), write the decision page (step 5's last part), wait for CI (step 5), write it again, free the branch (step 6) and report.
+- **Open:** part 1 without opening a second one, from a checkout of its `headRefName`: the main checkout once the user has switched to it, otherwise add a worktree (`git worktree add <path> <headRefName>`), since everything below reads the branch checked out where it runs. First record the PR's `baseRefName` as the base (step 4's last paragraph), so the evidence is measured against what GitHub shows. Then check the evidence (step 1), push the commits GitHub doesn't have yet (step 2) and record the PR's signals (step 4's `quality-log pr`), refresh the description when it no longer matches the change (step 3, then `gh pr edit <n> --body-file <body file>` as a command of its own), write the decision page (step 5's last part), wait for CI (step 5), write it again, free the branch (step 6) and report.
 - **Merged:** part 2, only when the user asked for it ("ship", "install", a deploy guide, a production check). When they only say it's merged or deployed, report its status and list what part 2 would do as optional, without running any of it or asking.
 - **Closed without a merge:** say so and stop.
 
@@ -69,6 +69,14 @@ A normal pull request, ready for review: not a draft. `<base>` is the branch `re
 If the guard or GitHub refuses it, the branch is pushed with no pull request: say which step the refusal names and run that step, then this one again. Otherwise print the PR URL.
 
 Then record the PR's target as the branch's base, `git config branch.<head branch>.agentsBase <base>`, even when `review_stamp.py base` found it on its own: a parent found by detection is lost once its pushed tip moves past this branch, and later fixes (kit-follow-pr) measure against this base.
+
+Then, measured against that base, record the change's quality signals for the monthly job, with the number from that URL, as a command of its own:
+
+```bash
+~/.agents/bin/quality-log pr <number>
+```
+
+It measures the change itself (size, tests, the verify report and stamp, weakened tests) and writes one line; the last one before the merge is what the monthly job sets against the PR's outcome. A failure there never blocks the PR: say it failed and carry on.
 
 Then write the decision page (below), before the CI wait, so the user has it even when the wait is skipped or cut short.
 

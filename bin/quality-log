@@ -5,12 +5,20 @@ only perspectives that pay off.
   quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--shared N] [--criteria N] [--map-items N] [--outcomes fixed=N,wrong=N,...]
   quality-log test <type> --issues N [--flake] [--secs S] [--notes "..."]
   quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
+  quality-log pr <number>
 
 A lens is named by its key or heading in bin/triage, `correctness-recheck` or `spec`; --shared counts the confirmed findings the other model
 family's run of the same lens also reported, and leaving it out means the overlap is unknown.
 
 A test type is one of TEST_TYPES below (the error lists them). --issues counts the real issues a test run found, never a flake;
 --flake marks a run that hit one: a test that failed, then passed on a rerun without a code change (any type, mostly unit).
+
+A pr line records the open pull request's quality signals, run from its checkout after each push, so the last line
+before the merge describes what merged; review-mining/outcomes.py joins it to the merged PR by host, owner/repo
+(from the origin URL) and number. Every value is computed, never passed: the size against `review_stamp.py base`
+(added, deleted, files, test_files added or modified, tests_deleted), the verify report's verdict (pass, fail, empty,
+none) and whether its stamp covers the change now, its red check (failed, passed, skipped, not_run) and summed diff
+coverage, and the assertions the branch weakens. A value it can't compute is null; the line is still written.
 
 Refuses malformed input (exit 2) without writing: a flag left without its value once took the next flag as one.
 Appends to logs/quality.jsonl in the kit's main checkout with the repo, branch and the triage tier. hooks/review_stamp.py appends
@@ -32,10 +40,20 @@ TAXONOMY = os.path.join(KIT, "review-mining", "taxonomy.md")
 OUTCOMES = ("fixed", "wrong", "intentional", "minor", "pre-existing", "open", "uncertain")
 CONFIRMED_OUTCOMES = ("fixed", "minor", "pre-existing", "open")
 # One name per test family: review-mining/test_types.py folds the older spellings (regex, property, ...) into these.
+# The origin URL's host and owner/repo: git@host:o/r.git, ssh://git@host:22/o/r.git, https://host/o/r.
+ORIGIN = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?(?P<host>[^/:]+)(?::\d+)?[:/](?P<remote>[^/]+/[^/]+?)(?:\.git)?/?$")
+VERIFY_VERDICTS = (("PASS, but nothing was checked", "empty"), ("PASS", "pass"), ("FAIL", "fail"))
+# Matched at a line's start: the report keeps verify's last 6,000 characters, so its first line can be a fragment.
+RED_CHECK_FAILED = re.compile(r"^error: \[red check\] The changed tests .* all pass without your change", re.M)
+RED_CHECK_PASSED = re.compile(r"^ran: red check: ", re.M)
+RED_CHECK_SKIPPED = re.compile(r"^skipped: red check \(", re.M)
+RED_CHECK_NOT_RUN = re.compile(r"^error: red check did not run\b", re.M)
+DIFF_COVERAGE = re.compile(r"^ran: diff coverage \(.*?\): (\d+) of (\d+) changed lines covered", re.M)
 TEST_TYPES = ("unit", "e2e", "integration", "browser", "query-budget", "accessibility", "property-based", "mutation",
               "migration-round-trip", "visual", "design", "regex-worst-case")
 sys.path.insert(0, os.path.join(KIT, "hooks"))
 from hooklog import session_harness  # noqa: E402
+import review_stamp  # noqa: E402
 from review_stamp import quality_log  # noqa: E402
 
 
@@ -74,6 +92,11 @@ def parse(argv):
             raise argparse.ArgumentTypeError(f"{value!r} isn't a whole number")
         return int(value)
 
+    def pr_number(value):
+        if not re.fullmatch(r"[1-9]\d*", value):
+            raise argparse.ArgumentTypeError(f"{value!r} isn't a pull request number")
+        return int(value)
+
     def outcomes(value):
         counts, seen = dict.fromkeys(OUTCOMES, 0), set()
         for key, sep, number in (pair.partition("=") for pair in value.split(",")):
@@ -110,6 +133,8 @@ def parse(argv):
     escape.add_argument("--category", type=category, required=True)
     escape.add_argument("--lens", type=lens_name, required=True)
     escape.add_argument("--pr", type=count, required=True)
+    pr = kinds.add_parser("pr", allow_abbrev=False)
+    pr.add_argument("name", type=pr_number)
     parsed = parser.parse_args(argv)  # exits 2 on anything malformed, before the log is opened
     if getattr(parsed, "shared", None) is not None:
         if parsed.model is None:
@@ -130,8 +155,82 @@ def parse(argv):
     return args.pop("kind"), args.pop("name"), {k: v for k, v in args.items() if v is not None}
 
 
+def size_signals():
+    """The branch's diff against where it left its base, as the stamps measure it; every field None when git can't."""
+    try:
+        base = review_stamp.merge_base()
+        numstat = review_stamp.git_checked("diff", "--no-renames", "--numstat", base, "HEAD").decode().splitlines()
+        tests = {status: [path for path in review_stamp.git_paths("diff", "--no-renames", "--name-only",
+                                                                  f"--diff-filter={status}", base, "HEAD")
+                          if review_stamp.TEST_FILE.search(path)] for status in ("AM", "D")}
+    except RuntimeError:
+        return dict.fromkeys(("added", "deleted", "files", "test_files", "tests_deleted"))
+    counts = [line.split("\t")[:2] for line in numstat]
+    return {"added": sum(int(added) for added, _ in counts if added != "-"),  # "-" is a binary file
+            "deleted": sum(int(deleted) for _, deleted in counts if deleted != "-"),
+            "files": len(counts), "test_files": len(tests["AM"]), "tests_deleted": len(tests["D"])}
+
+
+def verify_signals():
+    """The last verify report's verdict, red check and diff coverage, and whether its stamp covers the change now."""
+    signals = {"verify": None, "verify_current": None, "red_check": None, "coverage": None}
+    stamp = os.path.join(KIT, "hooks", "review_stamp.py")
+    checks = [subprocess.run([sys.executable, stamp, "check", "--kind", kind], capture_output=True).returncode
+              for kind in review_stamp.VERIFY_KINDS]
+    if 0 in checks or set(checks) == {1}:  # 2: git failed, so the stamp couldn't be matched
+        signals["verify_current"] = 0 in checks
+    path = review_stamp.report_paths("verify")[0]
+    if not path:
+        return signals
+    try:
+        with open(path) as fh:
+            report = fh.read()
+    except FileNotFoundError:
+        return {**signals, "verify": "none"}
+    except OSError:
+        return signals
+    header = report.partition("\n")[0].removeprefix("# Verify: ")
+    signals["verify"] = next((verdict for prefix, verdict in VERIFY_VERDICTS if header.startswith(prefix)), None)
+    for pattern, verdict in ((RED_CHECK_FAILED, "failed"), (RED_CHECK_PASSED, "passed"), (RED_CHECK_SKIPPED, "skipped"),
+                             (RED_CHECK_NOT_RUN, "not_run")):
+        if pattern.search(report):
+            signals["red_check"] = verdict
+            break
+    measured = [(int(covered), int(lines)) for covered, lines in DIFF_COVERAGE.findall(report)]
+    if measured:
+        signals["coverage"] = {"covered": sum(c for c, _ in measured), "measured": sum(m for _, m in measured)}
+    return signals
+
+
+def tamper_signals(root):
+    """How many assertions the branch removes, loosens or changes, and how many skipped or focused tests it adds, as
+    the stop hook finds them; None when git can't say."""
+    import stop_checks  # here, not at the top: it loads most of the hooks, which the other kinds don't need
+    try:
+        hunks = stop_checks.branch_hunks(root)
+        weakened = [kind for _, (_, kind, _) in stop_checks.weakened_assertions(root, hunks)]
+    except RuntimeError:
+        return None
+    return {**{kind: weakened.count(kind) for kind in ("removed", "loosened", "changed")},
+            "skipped_or_focused": sum(1 for path, _, added in hunks for line in added
+                                      if stop_checks.TEST_FILE.search(path) and stop_checks.WEAKENED_TEST.search(line))}
+
+
+def pr_signals():
+    origin = ORIGIN.match(git("remote", "get-url", "origin"))
+    fields = {"host": origin and origin["host"].lower(), "remote": origin and origin["remote"]}
+    root = git("rev-parse", "--show-toplevel")
+    if not root:  # not in a repository: nothing to measure
+        return {**fields, **dict.fromkeys(("added", "deleted", "files", "test_files", "tests_deleted", "verify",
+                                           "verify_current", "red_check", "coverage", "tampered"))}
+    os.chdir(root)  # review_stamp reads paths relative to the checkout's top
+    return {**fields, **size_signals(), **verify_signals(), "tampered": tamper_signals(root)}
+
+
 def main():
     kind, name, fields = parse(sys.argv[1:])
+    if kind == "pr":
+        fields = pr_signals()
     try:
         triage = json.loads(subprocess.run([os.path.expanduser("~/.agents/bin/triage"), "--json"],
                                            capture_output=True, text=True, timeout=60).stdout)
