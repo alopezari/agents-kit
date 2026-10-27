@@ -7,7 +7,9 @@ default branch, or the branch it is stacked on; committed or not) and asks
 the agent to continue, once, for a skipped or focused test, a deleted test file, a debug
 leftover, a conflict marker, a possible secret, a new option read near a cache, a
 temporary compose override left behind, or a changed code file the spec's Change map
-doesn't name. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify
+doesn't name. It also asks the agent to justify, once per session each, every assertion the branch removes from a test
+file without adding it back, swaps from a strict matcher to a loose one, or changes the expected literal of while it
+also changes code. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify
 when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even
 one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read. Once a
 branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change
@@ -18,7 +20,8 @@ for a checkout whose user switched off the spec, verify or ci phase (phase_switc
 
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
 the hook has seen, for the weekly health check. `stop_checks.py verify` runs verify on the current checkout now,
-saving its report and stamping a pass, which is the only way a verify stamp gets written.
+saving its report and stamping a pass, which is the only way a verify stamp gets written; it prints the weakened
+assertions as `warning:` lines, which change neither.
 """
 import glob
 import hashlib
@@ -62,6 +65,20 @@ WEAKENED_TEST = re.compile(
     r"\b(it|test|describe)\.(skip|only)\(|\bx(it|describe|test)\(|markTest(Skipped|Incomplete)\("
     r"|@pytest\.mark\.skip|\bt\.Skip\(|@Disabled\b|@group\s+(skip|ignore)"
 )
+# Matched on an assertion's first line: PHPUnit, Jest/Vitest, pytest and unittest.
+ASSERTION = re.compile(r"\bassert[A-Z_]\w*\s*\(|^\s*assert\b|\bexpect(Exception\w*)?\s*\(|\bpytest\.raises\(")
+STRICT_ASSERTION = re.compile(
+    r"\bassert(Same|Equals?|Count|Contains|StringContainsString)\s*\(|\bexpectException\s*\("
+    r"|\.(toBe|toEqual|toStrictEqual|toHaveLength|toContain|toThrow|toHaveBeenCalledWith|toMatchObject)\("
+    r"|^\s*assert\s.*[^=!<>]==[^=]|\bpytest\.raises\("
+)
+LOOSE_ASSERTION = re.compile(
+    r"\bassert(NotNull|NotEmpty|IsArray|IsString|IsNotNone)\s*\(|\bassertTrue\(\s*true\s*\)|\bself\.assertTrue\("
+    r"|\.(toBeDefined|toBeTruthy)\(|\.not\.(toBeNull|toBeUndefined)\(|\.toHaveBeenCalled\(\s*\)"
+    r"|^\s*assert\s+[\w.()\[\]'\"]+(\s+is\s+not\s+None)?\s*(,.*)?$"
+)
+LITERAL = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\b\d+(?:\.\d+)?\b")
+HUNK_HEADER = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 DEBUG_LEFTOVER = re.compile(r"\bvar_dump\(|\bdebugger;|^\s*dd\(|\bbinding\.pry\b|\bbreakpoint\(\)")
 CONFLICT_MARKER = re.compile(r"^(<{7}|>{7})( |$)")
 # Generated, never written by hand: lock files, and bytecode that imports and test runs leave next to the source.
@@ -73,23 +90,79 @@ def git(args, cwd):
     return review_stamp.run_git(args, cwd=cwd).stdout
 
 
-def added_lines(root):
-    """Yield (path, line) for lines added since the branch left its base (committed or not),
-    including untracked files: a leftover committed mid-session still reaches the pull request."""
+def branch_hunks(root):
+    """(path, removed lines, added lines) for each hunk the branch changes since it left its base (committed or not),
+    and each untracked file as one hunk of added lines: a leftover committed mid-session still reaches the pull
+    request. A deleted file's hunks are under its old path."""
     diff = git(["diff", review_stamp.merge_base(root), "--unified=0", "--no-color"], root)
-    path = None
+    hunks, path, left = [], None, 0
     for line in diff.splitlines():
-        if line.startswith("+++ "):
-            path = line[6:] if line.startswith("+++ b/") else None
-        elif path and line.startswith("+") and not line.startswith("+++"):
-            yield path, line[1:]
+        if left:  # counted from the hunk header: a removed `-- x` reads as `--- x`, an added `++ x` as `+++ x`
+            if line.startswith(("-", "+")):
+                hunks[-1][1 if line[0] == "-" else 2].append(line[1:])
+                left -= 1
+        elif line.startswith("--- "):
+            path = line[6:] if line.startswith("--- a/") else None
+        elif line.startswith("+++ b/"):
+            path = line[6:]
+        elif header := HUNK_HEADER.match(line):
+            hunks.append((path, [], []))
+            left = sum(1 if count is None else int(count) for count in header.groups())
     for path in git(["ls-files", "--others", "--exclude-standard"], root).splitlines():
         try:
             with open(os.path.join(root, path), encoding="utf-8", errors="ignore") as fh:
-                for line in fh:
-                    yield path, line.rstrip("\n")
+                hunks.append((path, [], [line.rstrip("\n") for line in fh]))
         except OSError:
             continue
+    return [hunk for hunk in hunks if hunk[0]]
+
+
+def normalized(line):
+    return " ".join(line.split())
+
+
+def weakened_assertions(root, hunks):
+    """(asked-store key, question) for each assertion the branch weakens in a test file it keeps: one removed and not
+    added back anywhere, a strict one swapped for a loose one in the same hunk, or one whose literals alone change
+    while the branch also changes code. A rewrite from one strict assertion to another is none."""
+    added_back = {normalized(line) for _, _, added in hunks for line in added}
+    removed = {normalized(line) for _, gone, _ in hunks for line in gone}
+    changes_code = any(not review_stamp.NOT_BEHAVIOR.search(path) and not GENERATED_FILE.search(path)
+                       for path, _, _ in hunks)
+    found = []
+    for path, gone, added in hunks:
+        if not TEST_FILE.search(path) or not os.path.exists(os.path.join(root, path)):
+            continue  # a deleted test file is asked about as a deletion
+        lost = [line.strip() for line in gone if ASSERTION.search(line) and normalized(line) not in added_back]
+        new = [line.strip() for line in added if ASSERTION.search(line) and normalized(line) not in removed]
+
+        def replacement(old, fits):
+            line = next((line for line in new if fits(line)), None)
+            if line is not None:
+                new.remove(line)
+            return line
+
+        rewritten = []
+        for old in lost:  # paired first, so a looser pairing below can't take the line that only changes a value
+            shape = LITERAL.sub("0", normalized(old))
+            changed_value = replacement(old, lambda line: LITERAL.sub("0", normalized(line)) == shape)
+            if changed_value is None:
+                rewritten.append(old)
+            elif changes_code:
+                found.append((path, old, f"Expected value changed in {path} while the branch also changes code: `{old}` "
+                                         f"became `{changed_value}`. Confirm the spec asks for the new value, or put the "
+                                         "old one back."))
+        for old in rewritten:
+            strict = STRICT_ASSERTION.search(old)
+            loose = strict and replacement(old, lambda line: LOOSE_ASSERTION.search(line)
+                                           and not STRICT_ASSERTION.search(line))
+            if loose:
+                found.append((path, old, f"Assertion loosened in {path}: `{old}` became `{loose}`. Say why the looser check "
+                                         "is enough, or put the strict one back."))
+            elif not (strict and replacement(old, STRICT_ASSERTION.search)):
+                found.append((path, old, f"Assertion removed from {path}, not added back anywhere: `{old}`. Say why the "
+                                         "check is no longer needed, or put it back."))
+    return list({f"{root}\t{path}\t{normalized(old)}": question for path, old, question in found}.items())
 
 
 OPTION_NAME = re.compile(r"\b(?:get_option|update_option|add_option|register_setting)\(\s*['\"]([\w-]+)['\"]")
@@ -191,11 +264,11 @@ def main():
         except RuntimeError as error:
             unfinished[path] = error
     roots = list(dict.fromkeys(root for root in root_of.values() if root))
-    questions, others, asked = list(problems), [], []
+    questions, others, asked, tamper_asked = list(problems), [], [], []
     any_verify_failed = False
     for root in roots:
         try:
-            unmapped, found, failed_verify = check_checkout(root, session, payload)
+            unmapped, tampered, found, failed_verify = check_checkout(root, session, payload)
             name = f"[{review_stamp.repo_name(root)}] " if len(roots) > 1 else ""
         except FileNotFoundError:
             if os.path.isdir(root):
@@ -208,7 +281,9 @@ def main():
             continue
         if unmapped:
             questions.append(name + unmapped_question(unmapped))
-            asked += [(root, path) for path in unmapped]
+            asked += [f"{root}\t{path}" for path in unmapped]
+        questions += [name + question for _, question in tampered]
+        tamper_asked += [key for key, _ in tampered]
         others += [name + p for p in found]
         any_verify_failed = any_verify_failed or failed_verify
     questions += [f"Couldn't finish checking {where}: {error}. Its edits are checked again at the next stop."
@@ -221,7 +296,8 @@ def main():
     streak = record_verify_streak(session, any_verify_failed)
     block(payload, listed, streak, notice)
     sys.stdout.flush()  # the block is out before its questions are recorded as asked
-    mark_asked(session, asked)
+    mark_asked(session, "map-asked", asked)
+    mark_asked(session, "tamper-asked", tamper_asked)
     clear_checked(marker, read, [path for path in edited if path in unfinished or root_of.get(path) in unfinished])
     return 0
 
@@ -463,11 +539,7 @@ def unmapped_files(root, session):
     # A path, not a bare file name: `app.py` in the map doesn't cover `other/app.py`, nor does `app.py.bak`.
     unmapped = sorted(p for p in changed if p and not review_stamp.NOT_BEHAVIOR.search(p) and not GENERATED_FILE.search(p)
                       and not re.search(rf"(?<![\w./-])(\./)?{re.escape(p)}(?![\w/-]|\.\w)", change_map.group(1)))
-    asked_path = os.path.join(MARKER_DIR, f"{session}.map-asked")
-    try:
-        asked = set(open(asked_path).read().splitlines())
-    except OSError:
-        asked = set()
+    asked = asked_before(session, "map-asked")
     return [p for p in unmapped if f"{root}\t{p}" not in asked]
 
 
@@ -476,13 +548,21 @@ def unmapped_question(unmapped):
             + ". Add each to the map with what it changes, or split it into another branch.")
 
 
-def mark_asked(session, asked):
-    """Record the (checkout, file) Change-map questions a block showed, so each is asked once per session. Written
-    after the block: a stop that fails before showing one asks it again."""
+def asked_before(session, store):
+    try:
+        return set(open(os.path.join(MARKER_DIR, f"{session}.{store}")).read().splitlines())
+    except OSError:
+        return set()
+
+
+def mark_asked(session, store, asked):
+    """Record the questions a block showed, so each is asked once per session: Change-map ones as checkout and file
+    in `map-asked`, weakened tests as checkout, file and assertion in `tamper-asked`. Written after the block: a stop
+    that fails before showing one asks it again."""
     try:
         os.makedirs(MARKER_DIR, exist_ok=True)
-        with open(os.path.join(MARKER_DIR, f"{session}.map-asked"), "a") as fh:
-            fh.writelines(f"{root}\t{path}\n" for root, path in asked)
+        with open(os.path.join(MARKER_DIR, f"{session}.{store}"), "a") as fh:
+            fh.writelines(line + "\n" for line in asked)
     except OSError:
         pass  # asking again next stop beats not asking
 
@@ -650,13 +730,17 @@ def leftover_overrides():
 
 
 def check_checkout(root, session, payload):
-    """Return (changed files the Change map doesn't name, other problems, verify_failed) for one checkout."""
+    """Return (changed files the Change map doesn't name, (key, question) for each weakened test not asked about yet,
+    other problems, verify_failed) for one checkout."""
     off, unreadable = phase_switches.phases_off_or_error(root)
     if unreadable:  # not a problem to block on: the agent can't fix the user's store; the gates and status line say it
         log("stop_checks", "phase-switches", payload, unreadable)
     problems = []
     unmapped = [] if "spec" in off else unmapped_files(root, session)
-    lines = list(added_lines(root))
+    hunks = branch_hunks(root)
+    lines = [(path, line) for path, _, added in hunks for line in added]
+    asked = asked_before(session, "tamper-asked")
+    tampered = [(key, question) for key, question in weakened_assertions(root, hunks) if key not in asked]
     problems += new_options_near_caches(root, lines)
     problems += leaked_secrets(lines)
     for path, line in lines:
@@ -675,12 +759,12 @@ def check_checkout(root, session, payload):
     problems += [f"Test file deleted: {p}" for p in deleted if TEST_FILE.search(p)]
 
     if "verify" in off:
-        return unmapped, problems, False
+        return unmapped, tampered, problems, False
     verify_problems, verify_failed, _, _, stamp_error = run_verify(root)
     problems += verify_problems
     if stamp_error:  # logged, not blocking: a missing stamp only makes a skill run verify again
         log("stop_checks", "verify-stamp", payload, f"{root}: {stamp_error}")
-    return unmapped, problems, verify_failed
+    return unmapped, tampered, problems, verify_failed
 
 
 def run_snapshot(overlay, root):
@@ -780,13 +864,21 @@ def verify_here():
         if toplevel.returncode != 0:
             print(f"stop_checks.py verify: verify runs on a repository's changes; {toplevel.stderr.strip()}", file=sys.stderr)
             return 1
-        problems, failed, output, checked, stamp_error = run_verify(toplevel.stdout.strip())
+        root = toplevel.stdout.strip()
+        problems, failed, output, checked, stamp_error = run_verify(root)
     except RuntimeError as error:  # a git call timed out or failed
         print(f"stop_checks.py verify: {error}", file=sys.stderr)
         return 1
     print(output, end="")
     for problem in problems + [stamp_error] * bool(stamp_error):
         print(problem.splitlines()[0], file=sys.stderr)
+    # Warnings, not problems: the stop hook asks each once, and verify's verdict and stamp stay its own.
+    try:
+        tampered = [question for _, question in weakened_assertions(root, branch_hunks(root))]
+    except RuntimeError as error:
+        tampered = [f"couldn't look for weakened tests: {error}"]
+    for question in tampered:
+        print(f"warning: {question}", file=sys.stderr)
     if not failed and not checked:
         print("verify passed, but it checked nothing: no check printed a ran: line", file=sys.stderr)
     return 1 if problems or stamp_error else 0
