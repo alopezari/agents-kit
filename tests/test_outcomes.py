@@ -287,9 +287,14 @@ def signal_cells(base):
                 "escape": escape, "escape_rate": rate(escape)}
 
     assert got["settled_prs"] == 7 and got["without_signals"] == cell(2, fix=1), got
+    assert got["size"] == {"<50": cell(1, fix=1, escape=1), "50-400": cell(2, revert=1), ">400": cell(1, fix=1),
+                           "unknown": cell(1, escape=1)}, got["size"]
+    # Within a band, a signal is set only against PRs of that band: the 400-line PR alone shows its weakened test.
+    assert got["by_size"]["50-400"]["tampered"] == {"any": cell(1), "none": cell(1, revert=1), "unknown": cell(0)}, \
+        got["by_size"]["50-400"]["tampered"]
+    assert got["by_size"]["<50"]["red_check"]["passed"] == cell(1, fix=1, escape=1), got["by_size"]["<50"]
+    assert "size" not in got["splits"] and set(got["by_size"]) == {"<50", "50-400", ">400", "unknown"}, got
     splits = got["splits"]
-    assert splits["size"] == {"<50": cell(1, fix=1, escape=1), "50-400": cell(2, revert=1), ">400": cell(1, fix=1),
-                              "unknown": cell(1, escape=1)}, splits["size"]
     assert splits["tier"] == {"low": cell(0), "standard": cell(3, fix=2, escape=1), "high": cell(1, revert=1),
                               "unknown": cell(1, escape=1)}, splits["tier"]
     assert splits["red_check"] == {"failed": cell(1, revert=1), "passed": cell(1, fix=1, escape=1),

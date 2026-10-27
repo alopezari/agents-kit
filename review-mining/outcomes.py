@@ -27,8 +27,9 @@ Since the kit, also:
                       when kit-ship and follow-pr never recorded one
 
 Each summary's "signals" block sets those signals against the PRs' settled outcomes (fix and revert candidates,
-confirmed escapes), counted once per PR, per bucket of each split (size band, tier, red check, coverage, weakened
-tests, tests deleted, tests touched), with PRs without signals apart. Since the
+confirmed escapes), counted once per PR, per size band and per bucket of each other split (tier, red check,
+coverage, weakened tests, tests deleted, tests touched), over all PRs and within each size band (by_size), with PRs
+without signals apart. Since the
 kit it reads PRs merged from FOLLOW_UP_DAYS before SINCE (signals_window), so a PR still pending at last month's run
 is settled in this one; every other summary and the PR list keep to PRs merged since SINCE (window).
 
@@ -322,11 +323,19 @@ def summarize_signals(prs):
             result.update({key: count, f"{key}_rate": round(count / len(group), 2) if group else None})
         return result
 
+    def splits(group):
+        return {split: {bucket: cell([p for p, buckets in group if buckets[split] == bucket]) for bucket in buckets}
+                for split, buckets in SIGNAL_SPLITS.items() if split != "size"}
+
     settled = [p for p in prs if isinstance(p.get("follow_ups"), list)]
     with_signals = [(p, signal_buckets(p["signals"])) for p in settled if p.get("signals")]
+    # Bigger PRs draw more fixes whatever their signals: by_size sets each signal against PRs of a like size.
     return {"settled_prs": len(settled), "without_signals": cell([p for p in settled if not p.get("signals")]),
-            "splits": {split: {bucket: cell([p for p, buckets in with_signals if buckets[split] == bucket])
-                               for bucket in buckets} for split, buckets in SIGNAL_SPLITS.items()}}
+            "size": {band: cell([p for p, buckets in with_signals if buckets["size"] == band])
+                     for band in SIGNAL_SPLITS["size"]},
+            "splits": splits(with_signals),
+            "by_size": {band: splits([(p, buckets) for p, buckets in with_signals if buckets["size"] == band])
+                        for band in SIGNAL_SPLITS["size"]}}
 
 
 def attach_sessions(prs, sessions):
