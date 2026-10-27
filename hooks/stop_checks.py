@@ -8,8 +8,8 @@ the agent to continue, once, for a skipped or focused test, a deleted test file,
 leftover, a conflict marker, a possible secret, a new option read near a cache, a
 temporary compose override left behind, or a changed code file the spec's Change map
 doesn't name. It also asks the agent to justify, once per session each, every assertion the branch removes from a test
-file without adding it back, swaps from a strict matcher to a loose one, or changes the expected literal of while it
-also changes code. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify
+file without adding it back, swaps from a strict matcher to a loose one, or whose expected literal it changes while
+also changing code. Then runs the repo's verify: the overlay in ~/.agents/repos/<repo-name>/verify
 when it exists, else repos/_shared/verify_auto.py. After a turn that pushed (the shell guard records it), even
 one that edited nothing, asks about the pushed commit's CI when it failed, is still running or can't be read. Once a
 branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change
