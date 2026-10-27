@@ -320,12 +320,13 @@ pr-validation    verify's verdict and what it ran, the review's findings, each v
 prune-merged [--dry-run]
 ```
 
-**`bin/quality-log`**: Record what a review lens or test type produced, and what got past them, so the monthly job can keep only perspectives that pay off.
+**`bin/quality-log`**: Record what a review lens or test type produced, what got past them, and each pull request's quality signals, so the monthly job can keep only perspectives that pay off and learn which signals predict trouble.
 
 ```
 quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--shared N] [--criteria N] [--map-items N] [--outcomes fixed=N,wrong=N,...]
 quality-log test <type> --issues N [--flake] [--secs S] [--notes "..."]
 quality-log escape <ci|review|bot> --verdict confirmed|rejected|uncertain --category <taxonomy code> --lens <lens> --pr N
+quality-log pr <number>
 ```
 
 **`bin/repo-name`**: Print the repository's name as the kit knows it: the main checkout's directory name, the same from any worktree (Xirp, Orca, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.
