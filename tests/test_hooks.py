@@ -3674,12 +3674,14 @@ def stop_asks_about_each_weakened_test_once(base):
 
 
 def stop_asks_about_assertions_their_rewrite_hides(base):
-    names = "  expect(expected).toBe(3);\n  /* total */ expect(total).toBe(3);\n  expect(1..toString()).toBe(\"1\");\n"
+    names = ("  expect(expected).toBe(3);\n  /* total */ expect(total).toBe(3);\n  expect(1..toString()).toBe(\"1\");\n"
+             "  expect(ready).toBeTruthy();\n")
     repo = tamper_repo(base, "zz-tamper-hidden", {"src/names.test.js": names})
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     edited = edit_tests(repo, {
         "tests/FooTest.php": ("\t\t$this->assertEquals( 3, $count );", "\t\t// $this->assertEquals( 3, $count );"),
-        "src/sum.test.js": ("expect(total).toBe(3);", "expect(other).toBe(3);"),
+        # Neither a strict nor a loose check on something else replaces it.
+        "src/sum.test.js": ("expect(total).toBe(3);", "expect(other).toBe(3);\n  expect(other).toBeDefined();"),
         # Loosened in parentheses, and its neighbour moved to another test file.
         "tests/test_total.py": ("    assert result == 3\n    assert total([]) == 0\n", "    assert (result is not None)\n"),
         # A strict rewrite on a variable named like a matcher; a check behind an inline comment, and one on another method
@@ -3693,7 +3695,7 @@ def stop_asks_about_assertions_their_rewrite_hides(base):
                 ("Assertion removed from src/sum.test.js", "`expect(total).toBe(3);`"),
                 ("Assertion loosened in tests/test_total.py", "`assert result == 3` became `assert (result is not None)`"),
                 ("Assertions removed from src/names.test.js", "`/* total */ expect(total).toBe(3);`; "
-                 "`expect(1..toString()).toBe(\"1\");`")]
+                 "`expect(1..toString()).toBe(\"1\");`; `expect(ready).toBeTruthy();`")]
     assert len(questions) == 4 and all(any(q.startswith(start) and quote in q for q in questions)
                                        for start, quote in expected), \
         f"commenting a check out or asserting on something else loses it; moving it to another file doesn't: {questions}"
