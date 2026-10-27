@@ -473,16 +473,17 @@ def junit_cases(junit):
 
 
 def junit_case_files(junit):
-    """(<testcase>, its test file) per case of a PHPUnit JUnit report, or None when there is no readable report. A
-    data provider that throws gives a case with no file of its own: it takes the file of its class's <testsuite>."""
-    def walk(suite, file):
+    """(<testcase>, the files it belongs to) per case of a PHPUnit JUnit report, or None when there is no readable
+    report: its own `file` and those of its enclosing <testsuite>s. A data provider that throws gives a case with no
+    file of its own, and from PHPUnit 10 an inherited test method's `file` is its parent class's or trait's."""
+    def walk(suite, files):
         for child in suite:
             if child.tag == "testcase":
-                yield child, child.get("file") or file
+                yield child, [child.get("file"), *files]
             elif child.tag == "testsuite":
-                yield from walk(child, child.get("file") or file)
+                yield from walk(child, [child.get("file"), *files])
     try:
-        return list(walk(ET.parse(junit).getroot(), None))
+        return list(walk(ET.parse(junit).getroot(), []))
     except (ET.ParseError, OSError):
         return None
 
@@ -513,9 +514,10 @@ def run_phpunit(root, changes, php, phpunit, args, candidates, report):
                                          f"so the tests ran again without them: {tail(proc, 300)}")
         else:
             php_clover_report(root, changes, clover, candidates, proc, report)
-        if cases is None or any(failed_case(c) for c in cases):
+        if cases is None or proc.returncode or any(failed_case(c) for c in cases):
             # Coverage fails tests of its own: a missing @covers under forceCoversAnnotation, unintentionally covered
-            # code under strict covers. The verdict is the run without it.
+            # code under strict covers, a risky test JUnit leaves out that stops the run. The verdict is the run
+            # without it.
             if os.path.exists(junit):
                 os.remove(junit)
             bare = execute(command, root, remaining(deadline))
@@ -535,13 +537,30 @@ def php_coverage_dirs(root, candidates, report):
         report.skip("diff coverage", "phpunit: every changed file is beside an ignored directory such as vendor/, "
                                      "which coverage would parse in full")
         return None
-    prefixes = tuple(d + "/" for d in dirs)
+    # PHPUnit adds the directories phpunit.xml includes in coverage to the ones given on the command line.
+    prefixes = tuple("" if d == "." else d + "/" for d in [*dirs, *phpunit_configured_coverage_dirs(root)])
     parsed = sum(1 for p in tracked_files(root) if p.endswith(".php") and p.startswith(prefixes))
     if parsed > MAX_COVERAGE_PARSED_FILES:
-        report.skip("diff coverage", f"phpunit: {parsed} PHP files under the changed files' directories, "
-                                     f"more than {MAX_COVERAGE_PARSED_FILES}")
+        report.skip("diff coverage", f"phpunit: {parsed} PHP files in the coverage scope, with the directories "
+                                     f"phpunit.xml includes, more than {MAX_COVERAGE_PARSED_FILES}")
         return None
     return dirs
+
+
+def phpunit_configured_coverage_dirs(root):
+    """The directories PHPUnit's configuration includes in coverage (PHPUnit 8's whitelist, 9's coverage, 10's source),
+    relative to the root."""
+    for name in ("phpunit.xml", "phpunit.xml.dist", "phpunit.dist.xml"):
+        path = os.path.join(root, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            config = ET.parse(path).getroot()
+        except ET.ParseError:
+            return []  # PHPUnit stops on it too
+        return [os.path.normpath(d.text.strip()) for scope in ("filter/whitelist", "coverage/include", "source/include")
+                for d in config.iterfind(f"{scope}/directory") if d.text and d.text.strip()]
+    return []
 
 
 def php_coverage_env(root, php, dirs, ini_dir, report):
@@ -591,21 +610,35 @@ def php_clover_report(root, changes, clover, candidates, proc, report):
     report_diff_coverage(changes, "phpunit", candidates, lines_by_file, report)
 
 
-def vendor_link_into_the_change(root, files):
+def phpunit_version(root):
+    """PHPUnit's version as a tuple of ints, from its source, or None when it can't be read."""
+    try:
+        with open(os.path.join(root, "vendor/phpunit/phpunit/src/Runner/Version.php")) as fh:
+            found = re.search(r"VersionId\('(\d+)\.(\d+)\.(\d+)'", fh.read())
+    except OSError:
+        return None
+    return tuple(int(n) for n in found.groups()) if found else None
+
+
+def vendor_link_into_the_change(root, files, version):
     """Why PHPUnit in the pristine copy would load the working tree's code through its symlinked vendor/, or None."""
     if os.path.islink(os.path.join(root, "vendor/bin/phpunit")):
         return "vendor/bin/phpunit is a symlink (Composer before 2.2), which PHP resolves into the working tree"
+    if version < (8, 5, 22) or (9, 0, 0) <= version < (9, 5, 11):
+        # The Composer proxy resolves vendor/phpunit's symlink, and PHPUnit then loads the autoloader beside it.
+        return (f"PHPUnit {'.'.join(map(str, version))} loads the working tree's autoloader from the copy "
+                f"(fixed in 8.5.22 and 9.5.11)")
     changed = [os.path.realpath(os.path.join(root, f)) for f in files]
     vendor = os.path.join(root, "vendor")
     for owner in sorted(os.listdir(vendor)):
-        if os.path.islink(os.path.join(vendor, owner)) or not os.path.isdir(os.path.join(vendor, owner)):
-            continue
-        for package in sorted(os.listdir(os.path.join(vendor, owner))):
-            link = os.path.join(vendor, owner, package)
+        links = [owner]
+        if os.path.isdir(os.path.join(vendor, owner)):
+            links += [os.path.join(owner, package) for package in sorted(os.listdir(os.path.join(vendor, owner)))]
+        for link in links:
             # A Composer path repository: the package's code is the working tree's.
-            target = os.path.realpath(link) + os.sep
-            if os.path.islink(link) and any(c.startswith(target) for c in changed):
-                return f"vendor/{owner}/{package} links to {os.path.relpath(target, root)}, which the change edits"
+            target = os.path.realpath(os.path.join(vendor, link)) + os.sep
+            if os.path.islink(os.path.join(vendor, link)) and any(c.startswith(target) for c in changed):
+                return f"vendor/{link} links to {os.path.relpath(target, root)}, which the change edits"
     return None
 
 
@@ -613,21 +646,27 @@ def phpunit_red_check(root, tests, copied, files, report):
     """The changed test classes on the merge-base, through the copy's own vendor/bin/phpunit so Composer autoloads the
     copy: at least one case of the changed test files must fail or error there. Any other case says nothing."""
     classes = sorted({os.path.splitext(os.path.basename(t))[0] for t in tests})
-    linked = vendor_link_into_the_change(root, files)
-    if linked:
-        report.skip("red check", f"phpunit: {linked}")
+    version = phpunit_version(root)
+    if version is None:
+        report.skip("red check", "phpunit: no version in vendor/phpunit/phpunit/src/Runner/Version.php")
         return
     try:
+        linked = vendor_link_into_the_change(root, files, version)
+        if linked:
+            report.skip("red check", f"phpunit: {linked}")
+            return
         with verify_changed.pristine_copy(root, copied) as copy:
             junit = os.path.join(copy, ".agents-red-junit.xml")
             # Ignored files and directories are symlinks into the working tree: the base run writes no result cache,
-            # and none of the coverage reports and logs phpunit.xml configures.
+            # and none of the coverage reports and logs phpunit.xml configures. Before 9.5.11, --no-logging also
+            # drops --log-junit.
+            no_logging = ["--no-logging"] if version >= (9, 5, 11) else []
             proc = execute([os.path.join(copy, "vendor/bin/phpunit"), *phpunit_filter(classes), "--log-junit", junit,
-                            "--do-not-cache-result", "--no-coverage", "--no-logging"], copy, RED_CHECK_TIMEOUT)
+                            "--do-not-cache-result", "--no-coverage", *no_logging], copy, RED_CHECK_TIMEOUT)
             pairs = junit_case_files(junit)
             wanted = {os.path.realpath(os.path.join(copy, t)) for t in tests}
             cases = None if pairs is None else [c for c, _ in pairs]
-            own = [c for c, file in pairs or [] if file and os.path.realpath(file) in wanted]
+            own = [c for c, owners in pairs or [] if any(f and os.path.realpath(f) in wanted for f in owners)]
     except (OSError, subprocess.SubprocessError, RuntimeError) as err:
         report.skip("red check", f"phpunit: could not build or run in the pristine copy: {err}")
         return
@@ -645,8 +684,9 @@ def phpunit_red_check(root, tests, copied, files, report):
                                  f"({len(cases)} other cases)")
     elif not failed and all(c.find("skipped") is not None for c in own):
         report.skip("red check", f"phpunit: every case of {names} was skipped on the merge-base")
-    elif not failed and proc.returncode and not any(failed_case(c) for c in cases):
-        # PHPUnit 10 reports a data provider that throws as a runner error, with no case.
+    elif not failed and proc.returncode > 1 and not any(failed_case(c) for c in cases):
+        # PHPUnit 10 reports a data provider that throws as a runner error, exit 2, with no case. Exit 1 with none is a
+        # failOn* setting (a risky test, a deprecation), which the working tree's run had too.
         report.skip("red check", f"phpunit: exit {proc.returncode} on the merge-base with no failing case: "
                                  f"{tail(proc, 300)}")
     elif not failed:
