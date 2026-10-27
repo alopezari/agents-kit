@@ -77,11 +77,12 @@ LOOSE_ASSERTION = re.compile(
     r"|\.(toBeDefined|toBeTruthy)\(|\.not\.(toBeNull|toBeUndefined)\(|\.toHaveBeenCalled\(\s*\)"
     r"|^\s*assert\s+\(?[\w.()\[\]'\"]+(\s+is\s+not\s+None)?\)?\s*(,.*)?$"
 )
-COMMENTED_OUT = re.compile(r"^\s*(//|#|/?\*)")
+COMMENTED_OUT = re.compile(r"^\s*(//|#|\*(?!/)|/\*(?!.*\*/))")  # a `/* note */` before an assertion still runs it
 # Strings, and numbers in any notation with their sign: 0x10, 1e3, .5, -1.
-LITERAL = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|(?<![\w.])-?\.?\d[\w.]*")
+LITERAL = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`"
+                     r"|(?<![\w.])-?(?:0[xX][\da-fA-F]+|(?:\d[\d_]*\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?![\w.])")
 # What an assertion checks: the words left once its literals, its matcher and the test's own object are taken out.
-NOT_SUBJECT = re.compile(r"(assert|expect)\w*|to[A-Z]\w*|this|self|not|is|None|null|true|false|True|False|pytest|raises|class")
+NOT_SUBJECT = re.compile(r"assert([A-Z_]\w*)?|expect(Exception\w*)?|to[A-Z]\w*|this|self|not|is|None|null|true|false|True|False|pytest|raises|class")
 HUNK_HEADER = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 DEBUG_LEFTOVER = re.compile(r"\bvar_dump\(|\bdebugger;|^\s*dd\(|\bbinding\.pry\b|\bbreakpoint\(\)")
 CONFLICT_MARKER = re.compile(r"^(<{7}|>{7})( |$)")
@@ -98,8 +99,9 @@ def branch_hunks(root):
     """(path, removed lines, added lines) for each hunk the branch changes since it left its base (committed or not),
     and each untracked file as one hunk of added lines: a leftover committed mid-session still reaches the pull
     request. A deleted file's hunks are under its old path."""
+    # Pinned against the user's diff settings (interHunkContext, noprefix, an external diff), which change the format.
     diff = git(["-c", "core.quotePath=off", "diff", review_stamp.merge_base(root), "--unified=0", "--inter-hunk-context=0",
-                "--no-color"], root)
+                "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/"], root)
     hunks, path, left = [], None, 0
     for line in diff.splitlines():
         if left:  # counted from the hunk header: a removed `-- x` reads as `--- x`, an added `++ x` as `+++ x`
@@ -153,13 +155,12 @@ def weakened_assertions(root, hunks):
             continue  # a deleted test file is asked about as a deletion
         lost = [line.strip() for line in gone if is_assertion(line) and normalized(line) not in added_back]
         # Each added line pairs with one removed line at most; its shape and subject are worked out once.
-        new = {line.strip(): (masked(line), subject(line)) for line in added
-               if is_assertion(line) and normalized(line) not in removed}
+        new = [(line.strip(), masked(line), subject(line)) for line in added
+               if is_assertion(line) and normalized(line) not in removed]
 
         def take(fits):
-            line = next((line for line, (shape, about) in new.items() if fits(line, shape, about)), None)
-            new.pop(line, None)
-            return line
+            at = next((at for at, candidate in enumerate(new) if fits(*candidate)), None)
+            return None if at is None else new.pop(at)[0]
 
         rewritten = []
         for old in lost:  # paired first, so a looser pairing below can't take the line that only changes a value

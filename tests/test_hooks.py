@@ -3674,20 +3674,27 @@ def stop_asks_about_each_weakened_test_once(base):
 
 
 def stop_asks_about_assertions_their_rewrite_hides(base):
-    repo = tamper_repo(base, "zz-tamper-hidden")
+    names = "  expect(expected).toBe(3);\n  /* total */ expect(total).toBe(3);\n  expect(1..toString()).toBe(\"1\");\n"
+    repo = tamper_repo(base, "zz-tamper-hidden", {"src/names.test.js": names})
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
     edited = edit_tests(repo, {
         "tests/FooTest.php": ("\t\t$this->assertEquals( 3, $count );", "\t\t// $this->assertEquals( 3, $count );"),
         "src/sum.test.js": ("expect(total).toBe(3);", "expect(other).toBe(3);"),
         # Loosened in parentheses, and its neighbour moved to another test file.
         "tests/test_total.py": ("    assert result == 3\n    assert total([]) == 0\n", "    assert (result is not None)\n"),
+        # A strict rewrite on a variable named like a matcher; a check behind an inline comment, and one on another method
+    # of a number, are lost rather than changed values.
+        "src/names.test.js": (names, "  expect(expected).toEqual(3);\n  expect(1..toFixed()).toBe(\"1\");\n"),
     })
     open(os.path.join(repo, "tests/test_empty.py"), "w").write("def test_empty():\n    assert total([]) == 0\n")
-    questions = tamper_questions(stop(RUN + "th1", repo, edited + [os.path.join(repo, "tests/test_empty.py")])
+    questions = tamper_questions(stop(RUN + "th1", repo, edited + [os.path.join(repo, p) for p in ("tests/test_empty.py", "app.py")])
                                  .get("reason", ""))
     expected = [("Assertion removed from tests/FooTest.php", "`$this->assertEquals( 3, $count );`"),
                 ("Assertion removed from src/sum.test.js", "`expect(total).toBe(3);`"),
-                ("Assertion loosened in tests/test_total.py", "`assert result == 3` became `assert (result is not None)`")]
-    assert len(questions) == 3 and all(any(q.startswith(start) and quote in q for q in questions)
+                ("Assertion loosened in tests/test_total.py", "`assert result == 3` became `assert (result is not None)`"),
+                ("Assertions removed from src/names.test.js", "`/* total */ expect(total).toBe(3);`; "
+                 "`expect(1..toString()).toBe(\"1\");`")]
+    assert len(questions) == 4 and all(any(q.startswith(start) and quote in q for q in questions)
                                        for start, quote in expected), \
         f"commenting a check out or asserting on something else loses it; moving it to another file doesn't: {questions}"
 
@@ -3695,7 +3702,8 @@ def stop_asks_about_assertions_their_rewrite_hides(base):
 def stop_reads_every_hunk_of_the_branch(base):
     odd = "tests/test caf\u00e9.py"
     repo = tamper_repo(base, "zz-tamper-hunks", {odd: "def test_odd():\n    assert odd() == 1\n"})
-    git(repo, "config", "diff.interHunkContext", "5")
+    for key, value in (("diff.interHunkContext", "5"), ("diff.noprefix", "true")):
+        git(repo, "config", key, value)
     # Two hunks close enough for git to fuse them with the lines between.
     edited = edit_tests(repo, {
         "src/sum.test.js": ("  const total = sum([1, 2]);\n  expect(total).toBe(3);\n  expect(sum([])).toEqual(0);\n});\n",
@@ -3706,7 +3714,7 @@ def stop_reads_every_hunk_of_the_branch(base):
     questions = tamper_questions(stop(RUN + "tk1", repo, edited).get("reason", ""))
     assert any(q.startswith("Assertion removed from tests/test_total.py") for q in questions) and any(
         q.startswith(f"Assertion removed from {odd}") for q in questions), \
-        f"a fused hunk doesn't swallow the next file, and a path with a space or accent is read: {questions}"
+        f"the user's diff settings and a path with a space or accent don't hide a hunk: {questions}"
 
 
 def verify_by_hand_warns_about_weakened_tests(base):
