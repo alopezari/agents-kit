@@ -122,7 +122,7 @@ def normalized(line):
 
 
 def weakened_assertions(root, hunks):
-    """(asked-store key, question) for each assertion the branch weakens in a test file it keeps: one removed and not
+    """(asked-store key, (path, kind, quote)) for each assertion the branch weakens in a test file it keeps: one removed and not
     added back anywhere, a strict one swapped for a loose one in the same hunk, or one whose literals alone change
     while the branch also changes code. A rewrite from one strict assertion to another is none."""
     added_back = {normalized(line) for _, _, added in hunks for line in added}
@@ -149,20 +149,39 @@ def weakened_assertions(root, hunks):
             if changed_value is None:
                 rewritten.append(old)
             elif changes_code:
-                found.append((path, old, f"Expected value changed in {path} while the branch also changes code: `{old}` "
-                                         f"became `{changed_value}`. Confirm the spec asks for the new value, or put the "
-                                         "old one back."))
+                found.append((path, old, "changed", f"`{old}` became `{changed_value}`"))
         for old in rewritten:
             strict = STRICT_ASSERTION.search(old)
             loose = strict and replacement(old, lambda line: LOOSE_ASSERTION.search(line)
                                            and not STRICT_ASSERTION.search(line))
             if loose:
-                found.append((path, old, f"Assertion loosened in {path}: `{old}` became `{loose}`. Say why the looser check "
-                                         "is enough, or put the strict one back."))
+                found.append((path, old, "loosened", f"`{old}` became `{loose}`"))
             elif not (strict and replacement(old, STRICT_ASSERTION.search)):
-                found.append((path, old, f"Assertion removed from {path}, not added back anywhere: `{old}`. Say why the "
-                                         "check is no longer needed, or put it back."))
-    return list({f"{root}\t{path}\t{normalized(old)}": question for path, old, question in found}.items())
+                found.append((path, old, "removed", f"`{old}`"))
+    return list({f"{root}\t{path}\t{normalized(old)}": (path, kind, quote) for path, old, kind, quote in found}.items())
+
+
+# Kind: (singular, plural, what to do); a refactor can weaken dozens in one file, so each file and kind is one line.
+TAMPER_QUESTIONS = {
+    "removed": ("Assertion removed from {path}, not added back anywhere", "Assertions removed from {path}, not added "
+                "back anywhere", "Say why each check is no longer needed, or put it back."),
+    "loosened": ("Assertion loosened in {path}", "Assertions loosened in {path}",
+                 "Say why the looser check is enough, or put the strict one back."),
+    "changed": ("Expected value changed in {path} while the branch also changes code", "Expected values changed in "
+                "{path} while the branch also changes code", "Confirm the spec asks for the new value, or put the old one back."),
+}
+
+
+def tamper_questions(findings):
+    """One question per file and kind, listing every finding of `weakened_assertions` in it."""
+    grouped = {}
+    for path, kind, quote in findings:
+        grouped.setdefault((path, kind), []).append(quote)
+    questions = []
+    for (path, kind), quotes in grouped.items():
+        one, many, ask = TAMPER_QUESTIONS[kind]
+        questions.append(f"{(one if len(quotes) == 1 else many).format(path=path)}: {'; '.join(quotes)}. {ask}")
+    return questions
 
 
 OPTION_NAME = re.compile(r"\b(?:get_option|update_option|add_option|register_setting)\(\s*['\"]([\w-]+)['\"]")
@@ -282,7 +301,7 @@ def main():
         if unmapped:
             questions.append(name + unmapped_question(unmapped))
             asked += [f"{root}\t{path}" for path in unmapped]
-        questions += [name + question for _, question in tampered]
+        questions += [name + question for question in tamper_questions(finding for _, finding in tampered)]
         tamper_asked += [key for key, _ in tampered]
         others += [name + p for p in found]
         any_verify_failed = any_verify_failed or failed_verify
@@ -740,7 +759,7 @@ def check_checkout(root, session, payload):
     hunks = branch_hunks(root)
     lines = [(path, line) for path, _, added in hunks for line in added]
     asked = asked_before(session, "tamper-asked")
-    tampered = [(key, question) for key, question in weakened_assertions(root, hunks) if key not in asked]
+    tampered = [(key, finding) for key, finding in weakened_assertions(root, hunks) if key not in asked]
     problems += new_options_near_caches(root, lines)
     problems += leaked_secrets(lines)
     for path, line in lines:
@@ -874,7 +893,7 @@ def verify_here():
         print(problem.splitlines()[0], file=sys.stderr)
     # Warnings, not problems: the stop hook asks each once, and verify's verdict and stamp stay its own.
     try:
-        tampered = [question for _, question in weakened_assertions(root, branch_hunks(root))]
+        tampered = tamper_questions(finding for _, finding in weakened_assertions(root, branch_hunks(root)))
     except RuntimeError as error:
         tampered = [f"couldn't look for weakened tests: {error}"]
     for question in tampered:

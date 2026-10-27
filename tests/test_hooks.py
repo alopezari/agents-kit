@@ -3541,7 +3541,8 @@ TAMPER_BASE = {
                            "    assert total([]) == 0\n",
     "tests/test_gone.py": "def test_gone():\n    assert gone() == 1\n",
 }
-TAMPER_KINDS = ("Assertion removed from ", "Assertion loosened in ", "Expected value changed in ")
+TAMPER_KINDS = ("Assertion removed from ", "Assertions removed from ", "Assertion loosened in ", "Assertions loosened in ",
+                "Expected value changed in ", "Expected values changed in ")
 
 
 def tamper_repo(base, name, extra=None):
@@ -3650,8 +3651,11 @@ def stop_asks_about_each_weakened_test_once(base):
                                "tests/test_many.py": (many, many.replace("    assert", "    pass  #"))})
     edited.append(os.path.join(repo, "app.py"))
     first = tamper_questions(stop(session, repo, edited).get("reason", ""))
-    assert len(first) == 26 and any("assertEquals( 3, $count )" in q for q in first), \
-        f"asked past the limit and despite the map's record: {len(first)} {first[:2]}"
+    assert len(first) == 2 and any("assertEquals( 3, $count )" in q for q in first), \
+        f"asked past the limit and despite the map's record, one line per file and kind: {len(first)} {first[:2]}"
+    grouped = next(q for q in first if "tests/test_many.py" in q)
+    assert grouped.startswith("Assertions removed from tests/test_many.py") and all(
+        f"`assert value({i}) == {i}`" in grouped for i in range(25)), f"every finding is listed in its line: {grouped}"
     assert tamper_questions(stop(session, repo, edited).get("reason", "")) == [], "the same diff isn't asked again"
     edit_tests(repo, {"tests/FooTest.php": ("\t\t$this->assertCount( 2, $items );\n", "")})
     third = tamper_questions(stop(session, repo, edited).get("reason", ""))
