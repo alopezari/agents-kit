@@ -51,7 +51,8 @@ def new_repo(base, files):
 
 def verify(repo, path=None, red_check_timeout=None, timeouts=None, **env):
     """`timeouts` lowers verify_auto's timeout constants by name, e.g. {"LINT_TIMEOUT": 1}."""
-    env = {**os.environ, **({"PATH": path} if path else {}), **env}
+    inherited = {k: v for k, v in os.environ.items() if k not in ("XDEBUG_MODE", "PHP_INI_SCAN_DIR")}
+    env = {**inherited, **({"PATH": path} if path else {}), **env}
     args = [sys.executable, SCRIPT]
     timeouts = {**(timeouts or {}), **({"RED_CHECK_TIMEOUT": red_check_timeout} if red_check_timeout else {})}
     if timeouts:
@@ -556,6 +557,285 @@ def red_check_needs_tests_and_code_of_the_stack(base):
     assert red_run(repo) is None and npm_calls(base) == [], (red_run(repo), npm_calls(base))
 
 
+# vendor/bin is copied into the pristine copy, so the fake records each call outside the repo: cwd, args, XDEBUG_MODE
+# and the test class's last line. Like PHPUnit, it writes an existing result cache unless --do-not-cache-result, and
+# the file attributes of its JUnit report are absolute (@ROOT@ is the directory it runs in).
+FAKE_PHPUNIT = """#!/bin/sh
+all="$*"
+echo "$(pwd -P)|$all|${{XDEBUG_MODE:-}}|$(tail -1 tests/unit/FooTest.php)" >> "{calls}"
+case "$all" in *--do-not-cache-result*) ;; *) [ -e .phpunit.result.cache ] && echo "results from $(pwd -P)" >> .phpunit.result.cache;; esac
+while [ $# -gt 0 ]; do case "$1" in --log-junit) junit="$2";; --coverage-clover) clover="$2";; esac; shift; done
+{body}
+if grep -q fixed src/Foo.php; then cases='{fixed}'; else cases='{on_base}'; fi
+cases=$(printf '%s' "$cases" | sed "s|@ROOT@|$(pwd -P)|g")
+printf '%s\\n' "<testsuites><testsuite>$cases</testsuite></testsuites>" > "$junit"
+case "$cases" in *"<!--exit 2-->"*) exit 2;; *"<!--exit 1-->"*|*"<failure"*|*"<error"*) exit 1;; esac
+"""
+FOO_TEST = r'class="App\Tests\FooTest" classname="App.Tests.FooTest" file="@ROOT@/tests/unit/FooTest.php"'
+PHP_PASSING = f'<testcase {FOO_TEST} name="testA"/>'
+PHP_FAILING = f'<testcase {FOO_TEST} name="testA"><failure>boom</failure></testcase>'
+PHP_ERROR = f'<testcase {FOO_TEST} name="testB"><error>Class "App\\Bar" not found</error></testcase>'
+PHP_SKIPPED = f'<testcase {FOO_TEST} name="testC"><skipped/></testcase>'
+# A data provider that throws: PHPUnit 9.6 reports a case named Error with no class or file, under a suite per method.
+PHPUNIT_VERSION = "vendor/phpunit/phpunit/src/Runner/Version.php"
+INHERITED_FAILING = (r'<testsuite name="App\Tests\FooTest" file="@ROOT@/tests/unit/FooTest.php"><testcase '
+                     r'class="App\Tests\FooTest" file="@ROOT@/tests/unit/FooTestCase.php" name="testInherited">'
+                     r'<failure>boom</failure></testcase></testsuite>')  # PHPUnit 10: the method's declaring file
+PROVIDER_ERROR = (r'<testsuite name="App\Tests\FooTest" file="@ROOT@/tests/unit/FooTest.php">' + PHP_PASSING +
+                  r'<testsuite name="App\Tests\FooTest::testNew"><testcase name="Error">'
+                  r'<error>Class "App\NewThing" not found</error></testcase></testsuite></testsuite>')
+OTHER_FAILING = (r'<testcase class="App\Tests\OtherFooTest" file="@ROOT@/tests/unit/OtherFooTest.php" name="testB">'
+                 r'<error>Class "App\Bar" not found</error></testcase>')
+# Another FooTest in another namespace: its class name ends like the changed one's.
+INTEGRATION_FAILING = (r'<testcase class="App\Tests\Integration\FooTest" file="@ROOT@/tests/integration/FooTest.php" '
+                       r'name="testD"><failure>needs a database</failure></testcase>')
+PHP_BASE = {".gitignore": "vendor/\n.phpunit.result.cache\n", "composer.json": "{}\n", "src/Foo.php": "<?php\n",
+            "tests/unit/FooTest.php": "<?php\n"}
+
+
+def php_change(base, on_base=PHP_FAILING, fixed=PHP_PASSING, body=":", files=PHP_BASE):
+    """A fix in src/Foo.php with an edited tests/unit/FooTest.php, and a fake vendor/bin/phpunit."""
+    repo = new_repo(base, files)
+    write(repo, "src/Foo.php", "<?php\n// fixed\n")
+    write(repo, "tests/unit/FooTest.php", "<?php\n// asserts the fix\n")
+    write(repo, "vendor/bin/phpunit", FAKE_PHPUNIT.format(calls=f"{base}/phpunit-calls", body=body, fixed=fixed,
+                                                          on_base=on_base), executable=True)
+    write(repo, PHPUNIT_VERSION, "<?php new VersionId('9.6.34', dirname(__DIR__, 2));\n")
+    return repo
+
+
+def phpunit_calls(base):
+    """(cwd, args, XDEBUG_MODE, the test class's last line) per PHPUnit run, in order."""
+    calls = [l.split("|", 1) for l in read_lines(os.path.join(base, "phpunit-calls"))]
+    return [(cwd, *rest.rsplit("|", 2)) for cwd, rest in calls]  # a --filter holds "|"
+
+
+def phpunit_red_check_runs_changed_classes_on_the_base(base):
+    repo = php_change(base)
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and not lines(out, "error: "), out
+    assert lines(out, "ran: red check: ") == [
+        "ran: red check: phpunit on 1 changed test classes: 1 of 1 cases fail on the merge-base, pass with the change"], out
+    (tree, _, _, _), (copy, args, xdebug, test_class) = phpunit_calls(base)
+    assert tree == os.path.realpath(repo) and "agents-red-" in copy and not os.path.exists(copy), (tree, copy)
+    assert args.split()[:3] == ["--filter", "/(FooTest)/", "--log-junit"] and "--do-not-cache-result" in args, args
+    assert "--no-coverage" in args and "--no-logging" in args, "phpunit.xml's reports and logs would land in the tree"
+    assert "--coverage-" not in args and xdebug == "", "the merge-base run collects no coverage:\n" + args
+    assert test_class == "// asserts the fix", "the edited test ran in its base version"
+
+
+def phpunit_red_check_counts_errors_and_any_failing_case(base):
+    for why, on_base, counts in (("an error", PHP_ERROR, "1 of 1"), ("one failing case of two", PHP_PASSING + PHP_ERROR, "1 of 2"),
+                                 ("a data provider's error", PROVIDER_ERROR, "1 of 2"),
+                                 ("an inherited test method", INHERITED_FAILING, "1 of 1")):
+        repo = php_change(base, on_base=on_base)
+        code, out = verify(repo, MINIMAL_PATH)
+        assert code == 0 and not lines(out, "error: "), f"{why}:\n{out}"
+        assert lines(out, "ran: red check: ") == [f"ran: red check: phpunit on 1 changed test classes: {counts} cases fail "
+                                                  "on the merge-base, pass with the change"], f"{why}:\n{out}"
+        shutil.rmtree(repo)
+
+
+def phpunit_red_check_errors_when_tests_pass_on_the_base(base):
+    # OtherFooTest matches the filter too, and Integration\FooTest shares the class name: their failures on the base
+    # say nothing about the changed tests/unit/FooTest.php.
+    for on_base in (PHP_PASSING, PHP_PASSING + PHP_SKIPPED, PHP_PASSING + OTHER_FAILING, PHP_PASSING + INTEGRATION_FAILING,
+                    PHP_PASSING + "<!--exit 1-->"):  # exit 1: a failOn* setting, which the working tree's run had too
+        repo = php_change(base, on_base=on_base)
+        code, out = verify(repo, MINIMAL_PATH)
+        assert code == 1, out
+        errors = [l for l in lines(out, "error: ") if "[red check]" in l]
+        assert len(errors) == 1 and "tests/unit/FooTest.php" in errors[0] and "pass without your change" in errors[0], out
+        assert not lines(out, "ran: red check"), out
+        shutil.rmtree(repo)
+        os.remove(os.path.join(base, "phpunit-calls"))
+
+
+def phpunit_red_check_needs_tests_and_code(base):
+    repo = php_change(base)
+    git(repo, "checkout", "--", "src/Foo.php")
+    code, out = verify(repo, MINIMAL_PATH)
+    assert "red check" not in out, "tests-only change:\n" + out
+    git(repo, "checkout", "--", ".")
+    write(repo, "src/Foo.php", "<?php\n// fixed\n")
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and "red check" not in out, "code-only change:\n" + out
+    assert len(phpunit_calls(base)) == 2, "a merge-base run happened without a red check"
+
+
+def phpunit_red_check_runs_only_the_changed_classes_on_the_base(base):
+    repo = php_change(base, files={**PHP_BASE, "tests/unit/BarTest.php": "<?php\n", "src/Bar.php": "<?php\n"})
+    write(repo, "src/Bar.php", "<?php\n// changed\n")  # BarTest is related to the change, not changed by it
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and lines(out, "ran: red check: phpunit"), out
+    (_, tree_args, _, _), (_, base_args, _, _) = phpunit_calls(base)
+    assert tree_args.split()[:2] == ["--filter", "/(BarTest|FooTest)/"], tree_args
+    assert base_args.split()[:2] == ["--filter", "/(FooTest)/"], base_args
+
+
+def phpunit_red_check_keeps_the_junit_report_of_phpunit_8(base):
+    # Before 9.5.11, --no-logging also drops --log-junit, and the red check would never have a report.
+    repo = php_change(base)
+    write(repo, PHPUNIT_VERSION, "<?php new VersionId('8.5.41', dirname(__DIR__, 2));\n")
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and lines(out, "ran: red check: phpunit"), out
+    base_args = phpunit_calls(base)[1][1].split()
+    assert "--no-logging" not in base_args and "--no-coverage" in base_args, base_args
+
+
+def phpunit_red_check_runs_after_a_passing_run_with_skips(base):
+    repo = php_change(base, fixed=PHP_PASSING + PHP_SKIPPED)
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and lines(out, "ran: red check: phpunit"), out
+
+
+def phpunit_red_check_skips_an_inconclusive_working_tree_run(base):
+    for fixed, failing in ((PHP_FAILING, True), (PHP_SKIPPED, False), ("", False)):
+        repo = php_change(base, fixed=fixed)
+        code, out = verify(repo, MINIMAL_PATH)
+        assert code == (1 if failing else 0), out
+        assert [l for l in lines(out, "skipped: red check (phpunit: ") if "working tree" in l], out
+        assert len(phpunit_calls(base)) == 1, "the red check ran although the related run didn't pass"
+        shutil.rmtree(repo)
+        os.remove(os.path.join(base, "phpunit-calls"))
+    repo = php_change(base, body='echo "Error establishing a database connection"; exit 1')
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and "skipped: phpunit (no JUnit report" in out, out
+    assert [l for l in lines(out, "skipped: red check (phpunit: ") if "working tree" in l], out
+
+
+def phpunit_red_check_without_a_verdict_is_skipped(base):
+    in_copy = "pwd -P | grep -q agents-red- && "
+    cases = [
+        ("no JUnit report", {"body": in_copy + "{ echo 'PHP Fatal error: Cannot boot'; exit 255; }"}, {},
+         ["no JUnit report", "Cannot boot"]),
+        ("no case of the changed classes", {"on_base": OTHER_FAILING}, {}, ["no case of FooTest"]),
+        ("no case of the changed file", {"on_base": INTEGRATION_FAILING}, {}, ["no case of FooTest"]),
+        ("a failing exit with no failing case", {"on_base": PHP_PASSING + "<!--exit 2-->"}, {}, ["exit 2", "no failing case"]),
+        ("every case skipped", {"on_base": PHP_SKIPPED}, {}, ["every case of FooTest"]),
+        ("a hanging run", {"body": in_copy + "{ sleep 30 & wait; }"}, {"RED_CHECK_TIMEOUT": 1}, ["timed out after 1s"]),
+    ]
+    for why, fake, timeouts, reasons in cases:
+        repo = php_change(base, **fake)
+        code, out = verify(repo, MINIMAL_PATH, timeouts=timeouts)
+        assert code == 0 and not lines(out, "error: ") and not lines(out, "ran: red check"), f"{why}:\n{out}"
+        assert [l for l in lines(out, "skipped: red check (phpunit: ") if all(r in l for r in reasons)], f"{why}:\n{out}"
+        assert len(phpunit_calls(base)) == 2, f"{why}: no merge-base run"
+        shutil.rmtree(repo)
+        os.remove(os.path.join(base, "phpunit-calls"))
+    for version, reason in (("9.5.10", "loads the working tree's autoloader"), ("8.5.21", "fixed in 8.5.22"),
+                            (None, "no version in vendor/phpunit")):
+        repo = php_change(base)
+        if version:
+            write(repo, PHPUNIT_VERSION, f"<?php new VersionId('{version}', dirname(__DIR__, 2));\n")
+        else:
+            os.remove(os.path.join(repo, PHPUNIT_VERSION))
+        code, out = verify(repo, MINIMAL_PATH)
+        assert code == 0 and [l for l in lines(out, "skipped: red check (phpunit: ") if reason in l], f"{version}:\n{out}"
+        assert len(phpunit_calls(base)) == 1, f"{version}: the merge-base run ran"
+        shutil.rmtree(repo)
+        os.remove(os.path.join(base, "phpunit-calls"))
+    repo = php_change(base)
+    os.makedirs(os.path.join(repo, "vendor/private"))
+    os.chmod(os.path.join(repo, "vendor/private"), 0)
+    try:
+        code, out = verify(repo, MINIMAL_PATH)
+    finally:
+        os.chmod(os.path.join(repo, "vendor/private"), 0o755)
+    assert code == 0 and [l for l in lines(out, "skipped: red check (phpunit: ") if "vendor/private" in l], out
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "phpunit-calls"))
+    repo = php_change(base)
+    os.remove(os.path.join(repo, "vendor/bin/phpunit"))
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and "skipped: red check (phpunit: not installed in vendor/bin)" in out, out
+    assert "skipped: diff coverage (no related PHPUnit run in the working tree)" in out, out
+
+
+def phpunit_red_check_skips_links_into_the_working_tree(base):
+    # Composer before 2.2 links vendor/bin/phpunit, and PHP resolves the link: PHPUnit would load the tree's autoloader.
+    repo = php_change(base)
+    os.rename(os.path.join(repo, "vendor/bin/phpunit"), os.path.join(repo, "vendor/phpunit-launcher"))
+    os.symlink("../phpunit-launcher", os.path.join(repo, "vendor/bin/phpunit"))
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and [l for l in lines(out, "skipped: red check (phpunit: ") if "symlink" in l], out
+    assert len(phpunit_calls(base)) == 1, "the merge-base run ran through the link"
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "phpunit-calls"))
+    # A Composer path repository: vendor/acme/foo links to packages/foo, which the change edits.
+    repo = php_change(base, files={**PHP_BASE, "packages/foo/src/Bar.php": "<?php\n"})
+    os.makedirs(os.path.join(repo, "vendor/acme"))
+    os.symlink("../../packages/foo", os.path.join(repo, "vendor/acme/foo"))
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and lines(out, "ran: red check: phpunit"), "the package is not changed:\n" + out
+    write(repo, "packages/foo/src/Bar.php", "<?php\n// changed\n")
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and [l for l in lines(out, "skipped: red check (phpunit: ") if "vendor/acme/foo" in l], out
+    shutil.rmtree(os.path.join(repo, "vendor/acme"))
+    os.symlink("../packages", os.path.join(repo, "vendor/acme"))  # the owner directory itself links into the tree
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and [l for l in lines(out, "skipped: red check (phpunit: ") if "vendor/acme links" in l], out
+
+
+def phpunit_red_check_copy_build_error_is_skipped(base):
+    repo = php_change(base)
+    unreadable = write(repo, "tests/fixtures/data.php", "<?php\n")  # test support: copied into the copy
+    os.chmod(unreadable, 0)
+    try:
+        code, out = verify(repo, MINIMAL_PATH)
+    finally:
+        os.chmod(unreadable, 0o644)
+    assert code == 0 and [l for l in lines(out, "skipped: red check (phpunit: ") if "pristine copy" in l], out
+    assert len(phpunit_calls(base)) == 1 and not lines(out, "ran: red check"), out
+
+
+def phpunit_red_check_leaves_the_result_cache_alone(base):
+    repo = php_change(base)
+    write(repo, ".phpunit.result.cache", "the project's own results\n")
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and lines(out, "ran: red check: phpunit"), out
+    cache = read_lines(os.path.join(repo, ".phpunit.result.cache"))
+    assert cache[0] == "the project's own results" and not [l for l in cache if "agents-red-" in l], \
+        "the merge-base run wrote its results into the working tree's cache:\n" + "\n".join(cache)
+
+
+def phpunit_red_check_loads_the_base_code(base):
+    php = shutil.which("php")
+    if not php:
+        raise AssertionError("php not installed; this test needs a real php binary")
+    repo = new_repo(base, {**PHP_BASE, "src/Foo.php": "<?php\nnamespace App;\nclass Foo {}\n"})
+    write(repo, "src/Foo.php", "<?php\nnamespace App;\nclass Foo { /* fixed */ }\n")
+    write(repo, "tests/unit/FooTest.php", "<?php\n// asserts the fix\n")
+    # Composer's PSR-4 autoloader, which resolves the project from its own location.
+    write(repo, "vendor/autoload.php", "<?php\nrequire_once __DIR__ . '/composer/autoload_real.php';\n")
+    write(repo, "vendor/composer/autoload_real.php", """<?php
+spl_autoload_register(function ($class) {
+    $file = dirname(__DIR__, 2) . '/src/' . substr($class, strlen('App\\\\')) . '.php';
+    if (is_file($file)) require $file;
+});
+""")
+    write(repo, PHPUNIT_VERSION, "<?php new VersionId('9.6.34', dirname(__DIR__, 2));\n")
+    write(repo, "vendor/bin/phpunit", f"""#!{php}
+<?php
+require __DIR__ . '/../autoload.php';
+$junit = $argv[array_search('--log-junit', $argv) + 1];
+$file = (new ReflectionClass('App\\Foo'))->getFileName();
+file_put_contents('{base}/loaded', $file . "\\n", FILE_APPEND);
+$fixed = strpos(file_get_contents($file), 'fixed') !== false;
+$test = getcwd() . '/tests/unit/FooTest.php';
+$case = $fixed ? '<testcase class="FooTest" file="' . $test . '" name="testA"/>'
+               : '<testcase class="FooTest" file="' . $test . '" name="testA"><failure>old Foo</failure></testcase>';
+file_put_contents($junit, "<testsuites><testsuite>$case</testsuite></testsuites>");
+exit($fixed ? 0 : 1);
+""", executable=True)
+    code, out = verify(repo, MINIMAL_PATH)
+    assert code == 0 and lines(out, "ran: red check: phpunit"), out
+    tree, copy = read_lines(os.path.join(base, "loaded"))
+    assert tree == os.path.join(os.path.realpath(repo), "src/Foo.php"), tree
+    assert "agents-red-" in copy and not copy.startswith(os.path.realpath(repo)), \
+        "the merge-base run loaded the working tree's class:\n" + copy
+
+
 # --- diff coverage: the related run under coverage.py or c8, a summary of the changed lines it executed ----------
 # The fake interpreter runs the launcher with sh, so the related run's verdict is the fake pytest's own.
 FAKE_COVERAGE_PYTHON = """#!/bin/sh
@@ -862,6 +1142,245 @@ def c8_skips_vitest_projects_and_tests_only_changes(base):
     assert not os.path.exists(os.path.join(repo, "node_modules/.bin/c8-calls")) and \
         all(d == "none" for d in v8_dirs(base)), "a tests-only change was measured"
 
+
+# php -r prints what the probe asks: [pcov loaded, pcov.enabled, xdebug loaded], as PHP's json_encode does.
+FAKE_PHP = """#!/bin/sh
+echo "$*" >> "{base}/php-calls"
+[ "$1" = -l ] && exit 0
+[ "$1" = -r ] && {{ {probe}; exit; }}
+exit 9
+"""
+PHP_COVERAGE_BASE = {**PHP_BASE, "src/Foo.php": "<?php\n$a = 1;\n$b = 2;\n", "src/Gone.php": "<?php\n$g = 1;\n",
+                     "lib/Bar.php": "<?php\n"}
+# src/Foo.php: lines 2-4 changed, 4 a method line; src/Gone.php and lib/Bar.php changed, absent from the report.
+PHP_CLOVER = """<?xml version="1.0"?>
+<coverage><project><package name="App"><file name="{root}/src/Foo.php">
+<line num="2" type="stmt" count="3"/><line num="3" type="stmt" count="0"/><line num="4" type="method" name="f" count="0"/>
+</file></package><file name="{root}/src/Other.php"><line num="1" type="stmt" count="1"/></file></project></coverage>
+"""
+WRITE_CLOVER = '[ -n "$clover" ] && cp "{base}/clover.xml" "$clover"'
+
+
+def php_coverage_change(base, probe="echo '[true,true,false]'", body=None, clover=PHP_CLOVER, fixed=PHP_PASSING):
+    """A change to src/Foo.php, src/Gone.php and lib/Bar.php with a fake phpunit writing `clover`, and a fake php
+    whose coverage probe prints what `probe` does; returns (repo, PATH)."""
+    repo = new_repo(base, PHP_COVERAGE_BASE)
+    write(repo, "src/Foo.php", "<?php\n$a = 10;\n$b = 20;\nfunction f() {} // fixed\n")
+    write(repo, "src/Gone.php", "<?php\n$g = 2;\n")
+    write(repo, "lib/Bar.php", "<?php\n$c = 1;\n")
+    write(repo, "vendor/bin/phpunit", FAKE_PHPUNIT.format(calls=f"{base}/phpunit-calls", body=body or WRITE_CLOVER.format(base=base),
+                                                          fixed=fixed, on_base=PHP_FAILING), executable=True)
+    write(repo, PHPUNIT_VERSION, "<?php new VersionId('9.6.34', dirname(__DIR__, 2));\n")
+    write(base, "clover.xml", clover.format(root=os.path.realpath(repo)))
+    write(base, "bin/php", FAKE_PHP.format(base=base, probe=probe), executable=True)
+    return repo, f"{base}/bin:{MINIMAL_PATH}"
+
+
+def phpunit_diff_coverage_reports_changed_lines(base):
+    repo, path = php_coverage_change(base)
+    code, out = verify(repo, path)
+    assert code == 0 and not lines(out, "error: ") and not lines(out, "warning: "), out
+    assert lines(out, "ran: diff coverage") == [
+        "ran: diff coverage (phpunit): 1 of 2 changed lines covered by the related tests (50%); "
+        "uncovered: src/Foo.php:3; not in the report: lib/Bar.php, src/Gone.php"], out
+    assert "ran: phpunit --filter FooTest: 1 tests, 0 failing" in out, out
+    [(_, args, xdebug, _)] = phpunit_calls(base)  # the related run itself, not an extra one
+    args = args.split()
+    assert args[:3] == ["--filter", "/(FooTest)/", "--log-junit"] and xdebug == "", args
+    clover = args[args.index("--coverage-clover") + 1]
+    assert os.path.dirname(clover) == os.path.dirname(args[3]) and not os.path.exists(os.path.dirname(clover)), \
+        "the Clover report's temp dir was left behind"
+    filters = [os.path.realpath(args[i + 1]) for i, a in enumerate(args) if a == "--coverage-filter"]
+    real = os.path.realpath(repo)
+    assert filters == [os.path.join(real, "lib"), os.path.join(real, "src")], "a filter per changed directory:\n" + str(args)
+    probe = [c for c in read_lines(os.path.join(base, "php-calls")) if c.startswith("-r ")]
+    assert len(probe) == 1 and "pcov.enabled" in probe[0] and "xdebug" in probe[0], probe
+
+
+def phpunit_diff_coverage_through_xdebug(base):
+    repo, path = php_coverage_change(base, probe="echo '[false,false,true]'")
+    code, out = verify(repo, path)
+    assert code == 0 and lines(out, "ran: diff coverage (phpunit): 1 of 2 "), out
+    [(_, args, xdebug, _)] = phpunit_calls(base)
+    assert xdebug == "coverage" and "--coverage-clover" in args, (args, xdebug)
+
+
+# PCOV collects only under pcov.directory, src/ by default here: lib/Bar.php would never be in the report.
+PCOV_DIRECTORY = 'echo "${{PHP_INI_SCAN_DIR:-unset}}" >> "{base}/scan-dirs"; ' \
+                 'cat "${{PHP_INI_SCAN_DIR##*:}}/agents-pcov.ini" >> "{base}/pcov-ini" 2>/dev/null; ' + WRITE_CLOVER
+
+
+def phpunit_pcov_directory_covers_the_changed_files(base):
+    repo, path = php_coverage_change(base, body=PCOV_DIRECTORY.format(base=base))
+    code, out = verify(repo, path, PHP_INI_SCAN_DIR="/etc/php-extra")
+    assert code == 0 and lines(out, "ran: diff coverage (phpunit): 1 of 2 "), out
+    [scan] = read_lines(os.path.join(base, "scan-dirs"))
+    assert scan.startswith("/etc/php-extra:") and scan.count(":") == 1, "the caller's scan directory is kept: " + scan
+    assert read_lines(os.path.join(base, "pcov-ini")) == [f'pcov.directory="{os.path.realpath(repo)}"'], "src/ and lib/"
+    shutil.rmtree(repo)
+    for name in ("scan-dirs", "pcov-ini"):
+        os.remove(os.path.join(base, name))
+    repo, path = php_coverage_change(base, body=PCOV_DIRECTORY.format(base=base))
+    git(repo, "checkout", "--", "lib/Bar.php", "src/Gone.php")
+    code, out = verify(repo, path)
+    assert code == 0 and lines(out, "ran: diff coverage (phpunit): 1 of 2 "), out
+    [scan] = read_lines(os.path.join(base, "scan-dirs"))
+    assert scan.startswith(":"), "PHP's own scan directory, where PCOV is loaded from, stays first: " + scan
+    assert read_lines(os.path.join(base, "pcov-ini")) == [f'pcov.directory="{os.path.realpath(repo)}/src"'], "src/ only"
+    shutil.rmtree(repo)
+    for name in ("scan-dirs", "pcov-ini"):
+        os.remove(os.path.join(base, name))
+    repo, path = php_coverage_change(base, body=PCOV_DIRECTORY.format(base=base))
+    verify(repo, path, PHP_INI_SCAN_DIR="")
+    [scan] = read_lines(os.path.join(base, "scan-dirs"))
+    assert ":" not in scan, "an empty scan directory keeps PHP's own off: " + scan
+    shutil.rmtree(repo)
+    for name in ("scan-dirs", "pcov-ini"):
+        os.remove(os.path.join(base, name))
+    repo, path = php_coverage_change(base, probe="echo '[false,false,true]'", body=PCOV_DIRECTORY.format(base=base))
+    verify(repo, path)
+    assert read_lines(os.path.join(base, "scan-dirs")) == ["unset"], "Xdebug needs no pcov.directory"
+
+
+def phpunit_diff_coverage_skips_say_why(base):
+    cases = [
+        ("no driver", {"probe": "echo '[false,false,false]'"}, {}, ["phpunit: no coverage driver, install pcov or xdebug"]),
+        ("PCOV disabled", {"probe": "echo '[true,false,false]'"}, {}, ["PCOV is loaded but pcov.enabled is off"]),
+        ("a probe that prints no answer", {"probe": "echo 'PHP Warning: cannot load module'; exit 1"}, {},
+         ["coverage driver probe", "cannot load module"]),
+        ("no Clover report", {"body": ":"}, {}, ["no Clover report"]),
+        ("an unreadable Clover report", {"body": '[ -n "$clover" ] && echo "<coverage" > "$clover"'}, {}, ["unreadable"]),
+        ("no executable changed line", {"clover": PHP_CLOVER.replace('num="2"', 'num="1"').replace('num="3"', 'num="5"')},
+         {}, ["no changed line is executable", "not in the report: lib/Bar.php, src/Gone.php"]),
+        ("a hanging run", {"body": '[ -n "$clover" ] && { sleep 30 & wait; }'}, {"TEST_TIMEOUT": 1}, ["timed out after 1s"]),
+    ]
+    for why, fake, timeouts, reasons in cases:
+        repo, path = php_coverage_change(base, **fake)
+        code, out = verify(repo, path, timeouts=timeouts)
+        assert [l for l in lines(out, "skipped: diff coverage (") if all(r in l for r in reasons)], f"{why}:\n{out}"
+        assert not lines(out, "ran: diff coverage") and not lines(out, "error: ") and code == 0, f"{why}:\n{out}"
+        runs = phpunit_calls(base)
+        assert len(runs) == 1, f"{why}: phpunit ran {len(runs)} times"
+        measured = "--coverage-clover" in runs[0][1]
+        assert measured == (why not in ("no driver", "PCOV disabled", "a probe that prints no answer")), f"{why}: {runs}"
+        shutil.rmtree(repo)
+        os.remove(os.path.join(base, "phpunit-calls"))
+    repo, path = php_coverage_change(base)
+    git(repo, "checkout", "--", ".")
+    os.remove(os.path.join(base, "php-calls"))
+    write(repo, "tests/unit/FooTest.php", "<?php\n// tests only\n")
+    code, out = verify(repo, path)
+    assert [l for l in lines(out, "skipped: diff coverage (") if "non-test PHP" in l], "tests only:\n" + out
+    assert not [c for c in read_lines(os.path.join(base, "php-calls")) if c.startswith("-r ")], "a tests-only change was probed"
+    git(repo, "checkout", "--", ".")
+    write(repo, "src/Gone.php", "<?php\n$g = 3;\n")  # no GoneTest.php: no related run
+    code, out = verify(repo, path)
+    assert code == 0 and "skipped: diff coverage (no related PHPUnit run in the working tree)" in out, out
+
+
+def phpunit_diff_coverage_keeps_the_related_run_verdict(base):
+    repo, path = php_coverage_change(base, fixed=PHP_FAILING)
+    code, out = verify(repo, path)
+    os.remove(os.path.join(base, "bin/php"))
+    bare_code, bare_out = verify(repo, MINIMAL_PATH)
+    assert (code, lines(out, "error: ")) == (bare_code, lines(bare_out, "error: ")) == (
+        1, [r"error: [phpunit] App\Tests\FooTest::testA fails"]), out + bare_out
+    assert lines(out, "ran: diff coverage (phpunit): 1 of 2 "), "a failing run's coverage is reported too:\n" + out
+
+
+def phpunit_coverage_leaves_out_directories_it_would_parse_in_full(base):
+    # The root holds vendor/: a --coverage-filter there makes PHPUnit parse every dependency file.
+    repo, path = php_coverage_change(base)
+    write(repo, "boot.php", "<?php\n$boot = 1;\n")
+    code, out = verify(repo, path)
+    assert code == 0 and lines(out, "ran: diff coverage (phpunit): 1 of 2 "), out
+    assert "not in the report: boot.php, lib/Bar.php, src/Gone.php" in out, out
+    [(_, args, _, _)] = phpunit_calls(base)
+    args = args.split()
+    real = os.path.realpath(repo)
+    assert [args[i + 1] for i, a in enumerate(args) if a == "--coverage-filter"] == [
+        os.path.join(real, "lib"), os.path.join(real, "src")], args
+    assert "--no-coverage" in args, "phpunit.xml's own coverage reports would be written on every turn"
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "phpunit-calls"))
+    repo, path = php_coverage_change(base)
+    write(repo, "lib/vendor/dep.php", "<?php\n")  # a plugin's own ignored vendor/ below a changed file
+    verify(repo, path)
+    args = phpunit_calls(base)[0][1].split()
+    assert [args[i + 1] for i, a in enumerate(args) if a == "--coverage-filter"] == [
+        os.path.join(os.path.realpath(repo), "src")], args
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "phpunit-calls"))
+    repo, path = php_coverage_change(base)
+    git(repo, "checkout", "--", ".")
+    write(repo, "boot.php", "<?php\n$boot = 1;\n")
+    write(repo, "tests/unit/FooTest.php", "<?php\n// boots\n")
+    _, out = verify(repo, path)  # src/Foo.php is back to its failing base
+    assert [l for l in lines(out, "skipped: diff coverage (phpunit: ") if "vendor/" in l], out
+    assert "--coverage" not in phpunit_calls(base)[0][1], phpunit_calls(base)
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "phpunit-calls"))
+    repo, path = php_coverage_change(base)
+    code, out = verify(repo, path, timeouts={"MAX_COVERAGE_PARSED_FILES": 2})
+    assert code == 0 and "skipped: diff coverage (phpunit: 3 PHP files in the coverage scope, with the directories " \
+                         "phpunit.xml includes, more than 2)" in out, out
+    assert "--coverage" not in phpunit_calls(base)[0][1], phpunit_calls(base)
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "phpunit-calls"))
+    repo, path = php_coverage_change(base)
+    write(repo, "phpunit.xml.dist", "<phpunit><coverage><include><directory suffix='.php'>./</directory></include>"
+                                    "</coverage></phpunit>\n")
+    code, out = verify(repo, path, timeouts={"MAX_COVERAGE_PARSED_FILES": 3})
+    assert code == 0 and [l for l in lines(out, "skipped: diff coverage (phpunit: ") if "more than 3" in l], out
+
+
+def phpunit_failure_only_under_coverage_takes_the_bare_verdict(base):
+    # A missing @covers under forceCoversAnnotation, or unintentionally covered code, fails only when coverage runs.
+    risky = f'<testcase {FOO_TEST} name="testA"><error type="UnintentionallyCoveredCodeError">risky</error></testcase>'
+    body = (WRITE_CLOVER.format(base=base) + "; [ -n \"$clover\" ] && { printf '%s' '<testsuites><testsuite>"
+            + risky + "</testsuite></testsuites>' > \"$junit\"; exit 1; }")
+    repo, path = php_coverage_change(base, body=body)
+    code, out = verify(repo, path)
+    assert code == 0 and not lines(out, "error: "), out
+    assert "ran: phpunit --filter FooTest: 1 tests, 0 failing" in out, out
+    assert lines(out, "ran: diff coverage (phpunit): 1 of 2 "), out
+    runs = [args for _, args, _, _ in phpunit_calls(base)]
+    assert len(runs) == 2 and "--coverage-clover" in runs[0] and "--coverage" not in runs[1], runs
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "phpunit-calls"))
+    repo, path = php_coverage_change(base, body=WRITE_CLOVER.format(base=base) + "; [ -n \"$clover\" ] && { printf '%s' "
+                                     "'<testsuites><testsuite>" + PHP_PASSING + "</testsuite></testsuites>' > \"$junit\"; exit 1; }",
+                                     fixed=PHP_FAILING)
+    code, out = verify(repo, path)  # stopOnRisky ended the run with coverage early, at a risky case JUnit leaves out
+    assert code == 1 and r"error: [phpunit] App\Tests\FooTest::testA fails" in out, out
+    shutil.rmtree(repo)
+    os.remove(os.path.join(base, "phpunit-calls"))
+    repo, path = php_coverage_change(base, body=body + "; exit 255")
+    code, out = verify(repo, path)  # a bare rerun with no report keeps the failure of the run with coverage
+    assert code == 1 and r"error: [phpunit] App\Tests\FooTest::testA fails" in out, out
+
+
+def phpunit_reruns_share_the_test_timeout(base):
+    slow = '{ sleep 4 & wait; }; case "$all" in *--coverage-clover*) exit 2;; esac'
+    repo, path = php_coverage_change(base, body=slow)
+    started = time.monotonic()
+    code, out = verify(repo, path, timeouts={"TEST_TIMEOUT": 6})
+    assert time.monotonic() - started < 9, "the rerun got a TEST_TIMEOUT of its own"
+    assert code == 0 and [l for l in lines(out, "skipped: phpunit (")
+                          if "timed out after" in l and "did not start" not in l], out
+    assert len(phpunit_calls(base)) == 2, phpunit_calls(base)
+
+
+def phpunit_that_rejects_the_coverage_flags_runs_again_without_them(base):
+    reject = 'case "$all" in *--coverage-clover*) echo "Unknown option --coverage-filter"; exit 2;; esac'
+    repo, path = php_coverage_change(base, body=reject)
+    code, out = verify(repo, path)
+    assert code == 0 and "ran: phpunit --filter FooTest: 1 tests, 0 failing" in out, out
+    assert [l for l in lines(out, "skipped: diff coverage (phpunit: ") if "Unknown option" in l], out
+    runs = [args for _, args, _, _ in phpunit_calls(base)]
+    assert len(runs) == 2 and "--coverage-clover" in runs[0] and "--coverage" not in runs[1], runs
+
+
 for t in [no_changes_is_nothing_to_check, unsupported_files_only, eslint_reports_only_changed_lines,
           eslint_missing_is_skipped, vitest_failure_is_error, vitest_dependency_not_installed_is_skipped,
           ruff_reports_only_changed_lines, committed_branch_work_is_checked, pytest_runs_related_tests, php_lint_catches_syntax_error,
@@ -882,7 +1401,18 @@ for t in [no_changes_is_nothing_to_check, unsupported_files_only, eslint_reports
           diff_coverage_skips_say_why, diff_coverage_keeps_the_related_run_verdict,
           coverage_that_fails_before_the_tests_reruns_them_without_it, c8_measures_the_red_checks_working_tree_run,
           c8_leaves_out_blank_and_line_comment_lines, c8_reports_a_failing_working_tree_run, c8_report_failures_are_skipped,
-          c8_skips_vitest_projects_and_tests_only_changes]:
+          c8_skips_vitest_projects_and_tests_only_changes, phpunit_red_check_runs_changed_classes_on_the_base,
+          phpunit_red_check_counts_errors_and_any_failing_case,
+          phpunit_red_check_runs_only_the_changed_classes_on_the_base, phpunit_red_check_runs_after_a_passing_run_with_skips,
+          phpunit_red_check_skips_links_into_the_working_tree, phpunit_red_check_keeps_the_junit_report_of_phpunit_8,
+          phpunit_red_check_errors_when_tests_pass_on_the_base, phpunit_red_check_needs_tests_and_code,
+          phpunit_red_check_skips_an_inconclusive_working_tree_run, phpunit_red_check_without_a_verdict_is_skipped,
+          phpunit_red_check_copy_build_error_is_skipped, phpunit_red_check_leaves_the_result_cache_alone,
+          phpunit_red_check_loads_the_base_code, phpunit_diff_coverage_reports_changed_lines, phpunit_pcov_directory_covers_the_changed_files,
+          phpunit_diff_coverage_through_xdebug, phpunit_diff_coverage_skips_say_why,
+          phpunit_diff_coverage_keeps_the_related_run_verdict, phpunit_coverage_leaves_out_directories_it_would_parse_in_full,
+          phpunit_failure_only_under_coverage_takes_the_bare_verdict, phpunit_reruns_share_the_test_timeout,
+          phpunit_that_rejects_the_coverage_flags_runs_again_without_them]:
     test(t)
 
 failed = [(n, e) for n, e in RESULTS if e]
