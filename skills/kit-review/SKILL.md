@@ -41,7 +41,7 @@ A repository can have a review guide, `~/.agents/repos/$(~/.agents/bin/repo-name
 
 In Claude Code with the kit plugin, each lens is an agent type, on Opus at high effort: spawn `kit:review-<lens>`, with triage's name for the lens (`kit:review-correctness`, `kit:review-ux-a11y-i18n`). It already holds the lens text, has no edit tools and leaves out CLAUDE.md, so give it the rest of the list above. `bundle.sh` below takes the lens's heading instead (`Correctness`, `"Performance and scale"`). Where that type isn't listed (Codex, or the plugin off), give a general subagent the lens text too.
 
-The Correctness lens always runs, at every risk level, and its tables go into the final report. Also run the repo's personal checks when they exist, with `python3 ~/.agents/hooks/stop_checks.py verify`, which runs `~/.agents/repos/<repo>/verify` and stamps a pass.
+The Correctness lens always runs, at every risk level, and its tables go into the final report. Also run the repo's personal checks when they exist, with `python3 ~/.agents/hooks/stop_checks.py verify`, which runs `~/.agents/repos/<repo>/verify` and stamps a pass. Run it whenever the change edits tests, even without personal checks: it also prints a `warning:` line for each assertion the change removes, loosens or gives a new expected value, and each is a Tests-lens finding to verify.
 
 ### Cross-model reviewer
 
