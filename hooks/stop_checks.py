@@ -21,7 +21,7 @@ for a checkout whose user switched off the spec, verify or ci phase (phase_switc
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
 the hook has seen, for the weekly health check. `stop_checks.py verify` runs verify on the current checkout now,
 saving its report and stamping a pass, which is the only way a verify stamp gets written; it prints the weakened
-assertions as `warning:` lines, which change neither.
+assertions as `warning:` lines, which change neither its exit status nor its stamp.
 """
 import glob
 import hashlib
@@ -75,9 +75,13 @@ STRICT_ASSERTION = re.compile(
 LOOSE_ASSERTION = re.compile(
     r"\bassert(NotNull|NotEmpty|IsArray|IsString|IsNotNone)\s*\(|\bassertTrue\(\s*true\s*\)|\bself\.assertTrue\("
     r"|\.(toBeDefined|toBeTruthy)\(|\.not\.(toBeNull|toBeUndefined)\(|\.toHaveBeenCalled\(\s*\)"
-    r"|^\s*assert\s+[\w.()\[\]'\"]+(\s+is\s+not\s+None)?\s*(,.*)?$"
+    r"|^\s*assert\s+\(?[\w.()\[\]'\"]+(\s+is\s+not\s+None)?\)?\s*(,.*)?$"
 )
-LITERAL = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\b\d+(?:\.\d+)?\b")
+COMMENTED_OUT = re.compile(r"^\s*(//|#|/?\*)")
+# Strings, and numbers in any notation with their sign: 0x10, 1e3, .5, -1.
+LITERAL = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|(?<![\w.])-?\.?\d[\w.]*")
+# What an assertion checks: the words left once its literals, its matcher and the test's own object are taken out.
+NOT_SUBJECT = re.compile(r"(assert|expect)\w*|to[A-Z]\w*|this|self|not|is|None|null|true|false|True|False|pytest|raises|class")
 HUNK_HEADER = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 DEBUG_LEFTOVER = re.compile(r"\bvar_dump\(|\bdebugger;|^\s*dd\(|\bbinding\.pry\b|\bbreakpoint\(\)")
 CONFLICT_MARKER = re.compile(r"^(<{7}|>{7})( |$)")
@@ -94,7 +98,8 @@ def branch_hunks(root):
     """(path, removed lines, added lines) for each hunk the branch changes since it left its base (committed or not),
     and each untracked file as one hunk of added lines: a leftover committed mid-session still reaches the pull
     request. A deleted file's hunks are under its old path."""
-    diff = git(["diff", review_stamp.merge_base(root), "--unified=0", "--no-color"], root)
+    diff = git(["-c", "core.quotePath=off", "diff", review_stamp.merge_base(root), "--unified=0", "--inter-hunk-context=0",
+                "--no-color"], root)
     hunks, path, left = [], None, 0
     for line in diff.splitlines():
         if left:  # counted from the hunk header: a removed `-- x` reads as `--- x`, an added `++ x` as `+++ x`
@@ -102,13 +107,13 @@ def branch_hunks(root):
                 hunks[-1][1 if line[0] == "-" else 2].append(line[1:])
                 left -= 1
         elif line.startswith("--- "):
-            path = line[6:] if line.startswith("--- a/") else None
+            path = line[6:].rstrip("\t") if line.startswith("--- a/") else None  # git ends a name holding a space with a tab
         elif line.startswith("+++ b/"):
-            path = line[6:]
+            path = line[6:].rstrip("\t")
         elif header := HUNK_HEADER.match(line):
             hunks.append((path, [], []))
             left = sum(1 if count is None else int(count) for count in header.groups())
-    for path in git(["ls-files", "--others", "--exclude-standard"], root).splitlines():
+    for path in git(["-c", "core.quotePath=off", "ls-files", "--others", "--exclude-standard"], root).splitlines():
         try:
             with open(os.path.join(root, path), encoding="utf-8", errors="ignore") as fh:
                 hunks.append((path, [], [line.rstrip("\n") for line in fh]))
@@ -121,10 +126,23 @@ def normalized(line):
     return " ".join(line.split())
 
 
+def masked(line):
+    return LITERAL.sub("0", normalized(line))
+
+
+def subject(line):
+    return {word for word in re.findall(r"[A-Za-z_]\w*", masked(line)) if not NOT_SUBJECT.fullmatch(word)}
+
+
+def is_assertion(line):
+    return ASSERTION.search(line) and not COMMENTED_OUT.match(line)
+
+
 def weakened_assertions(root, hunks):
     """(asked-store key, (path, kind, quote)) for each assertion the branch weakens in a test file it keeps: one removed and not
-    added back anywhere, a strict one swapped for a loose one in the same hunk, or one whose literals alone change
-    while the branch also changes code. A rewrite from one strict assertion to another is none."""
+    added back anywhere, a strict one swapped for a loose one on the same subject in its hunk, or one whose literals
+    alone change while the branch also changes code. A rewrite from one strict assertion to another on the same
+    subject is none."""
     added_back = {normalized(line) for _, _, added in hunks for line in added}
     removed = {normalized(line) for _, gone, _ in hunks for line in gone}
     changes_code = any(not review_stamp.NOT_BEHAVIOR.search(path) and not GENERATED_FILE.search(path)
@@ -133,30 +151,33 @@ def weakened_assertions(root, hunks):
     for path, gone, added in hunks:
         if not TEST_FILE.search(path) or not os.path.exists(os.path.join(root, path)):
             continue  # a deleted test file is asked about as a deletion
-        lost = [line.strip() for line in gone if ASSERTION.search(line) and normalized(line) not in added_back]
-        new = [line.strip() for line in added if ASSERTION.search(line) and normalized(line) not in removed]
+        lost = [line.strip() for line in gone if is_assertion(line) and normalized(line) not in added_back]
+        # Each added line pairs with one removed line at most; its shape and subject are worked out once.
+        new = {line.strip(): (masked(line), subject(line)) for line in added
+               if is_assertion(line) and normalized(line) not in removed}
 
-        def replacement(old, fits):
-            line = next((line for line in new if fits(line)), None)
-            if line is not None:
-                new.remove(line)
+        def take(fits):
+            line = next((line for line, (shape, about) in new.items() if fits(line, shape, about)), None)
+            new.pop(line, None)
             return line
 
         rewritten = []
         for old in lost:  # paired first, so a looser pairing below can't take the line that only changes a value
-            shape = LITERAL.sub("0", normalized(old))
-            changed_value = replacement(old, lambda line: LITERAL.sub("0", normalized(line)) == shape)
+            changed_value = take(lambda line, shape, about, old_shape=masked(old): shape == old_shape)
             if changed_value is None:
                 rewritten.append(old)
             elif changes_code:
                 found.append((path, old, "changed", f"`{old}` became `{changed_value}`"))
         for old in rewritten:
-            strict = STRICT_ASSERTION.search(old)
-            loose = strict and replacement(old, lambda line: LOOSE_ASSERTION.search(line)
-                                           and not STRICT_ASSERTION.search(line))
+            if not STRICT_ASSERTION.search(old):
+                found.append((path, old, "removed", f"`{old}`"))
+                continue
+            old_subject = subject(old)
+            loose = take(lambda line, shape, about: about & old_subject and LOOSE_ASSERTION.search(line)
+                         and not STRICT_ASSERTION.search(line))
             if loose:
                 found.append((path, old, "loosened", f"`{old}` became `{loose}`"))
-            elif not (strict and replacement(old, STRICT_ASSERTION.search)):
+            elif take(lambda line, shape, about: about & old_subject and STRICT_ASSERTION.search(line)) is None:
                 found.append((path, old, "removed", f"`{old}`"))
     return list({f"{root}\t{path}\t{normalized(old)}": (path, kind, quote) for path, old, kind, quote in found}.items())
 
@@ -749,8 +770,8 @@ def leftover_overrides():
 
 
 def check_checkout(root, session, payload):
-    """Return (changed files the Change map doesn't name, (key, question) for each weakened test not asked about yet,
-    other problems, verify_failed) for one checkout."""
+    """Return (changed files the Change map doesn't name, (key, (path, kind, quote)) for each weakened test not asked
+    about yet, other problems, verify_failed) for one checkout."""
     off, unreadable = phase_switches.phases_off_or_error(root)
     if unreadable:  # not a problem to block on: the agent can't fix the user's store; the gates and status line say it
         log("stop_checks", "phase-switches", payload, unreadable)

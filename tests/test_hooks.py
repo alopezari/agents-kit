@@ -3576,10 +3576,10 @@ def tamper_questions(reason):
 def stop_asks_about_removed_assertions(base):
     repo = tamper_repo(base, "zz-tamper-removed")
     edited = edit_tests(repo, {
-        # Lost, while the file adds another assertion elsewhere and only re-indents its neighbour.
+        # Lost, while the file adds another strict assertion on something else and only re-indents its neighbour.
         "tests/FooTest.php": ("\t\t$this->assertEquals( 3, $count );\n\t\t$this->assertCount( 2, $items );\n\t}\n}\n",
                               "    $this->assertCount( 2, $items );\n\t}\n\tpublic function test_ok() {\n"
-                              "\t\t$this->assertTrue( $ok );\n\t}\n}\n"),
+                              "\t\t$this->assertSame( true, $ok );\n\t}\n}\n"),
         # Lost, and its neighbour moved up.
         "src/sum.test.js": ("  const total = sum([1, 2]);\n  expect(total).toBe(3);\n  expect(sum([])).toEqual(0);\n",
                             "  expect(sum([])).toEqual(0);\n  const total = sum([1, 2]);\n"),
@@ -3618,11 +3618,13 @@ def stop_asks_about_loosened_assertions(base):
 
 
 def stop_asks_about_changed_expected_values_only_beside_code(base):
-    repo = tamper_repo(base, "zz-tamper-literal")
+    units = "def test_units():\n    assert size() == 1e3\n    assert mask() == 0x10\n    assert offset() == -1\n"
+    repo = tamper_repo(base, "zz-tamper-literal", {"tests/test_units.py": units})
     edited = edit_tests(repo, {
         "tests/FooTest.php": ("assertEquals( 3, $count )", "assertEquals( 4, $count )"),
         "src/sum.test.js": ("toBe(3)", "toBe(4)"),
         "tests/test_total.py": ("assert result == 3", "assert result == 4"),
+        "tests/test_units.py": (units, units.replace("1e3", "1e4").replace("0x10", "0x20").replace("-1", "1")),
     })
     reason = stop(RUN + "tv1", repo, edited).get("reason", "")
     assert tamper_questions(reason) == [], f"a tests-only branch may change what it expects: {reason}"
@@ -3630,28 +3632,35 @@ def stop_asks_about_changed_expected_values_only_beside_code(base):
     questions = tamper_questions(stop(RUN + "tv2", repo, edited + [os.path.join(repo, "app.py")]).get("reason", ""))
     expected = [("tests/FooTest.php", "$this->assertEquals( 3, $count );", "$this->assertEquals( 4, $count );"),
                 ("src/sum.test.js", "expect(total).toBe(3);", "expect(total).toBe(4);"),
-                ("tests/test_total.py", "assert result == 3", "assert result == 4")]
-    assert len(questions) == 3, questions
+                ("tests/test_total.py", "assert result == 3", "assert result == 4"),
+                ("tests/test_units.py", "assert size() == 1e3", "assert size() == 1e4"),
+                ("tests/test_units.py", "assert mask() == 0x10", "assert mask() == 0x20"),
+                ("tests/test_units.py", "assert offset() == -1", "assert offset() == 1")]
+    assert len(questions) == 4, questions
     for path, old, new in expected:
-        assert any(q.startswith(f"Expected value changed in {path}") and f"`{old}` became `{new}`" in q
+        assert any(q.startswith(f"Expected value{'s' * (path == 'tests/test_units.py')} changed in {path}")
+                   and f"`{old}` became `{new}`" in q
                    and "spec" in q for q in questions), (path, questions)
 
 
 def stop_asks_about_each_weakened_test_once(base):
     many = "".join(f"def test_{i}():\n    assert value({i}) == {i}\n" for i in range(25))
-    repo = tamper_repo(base, "zz-tamper-once", {"tests/test_many.py": many})
+    singles = {f"tests/test_single_{i}.py": f"def test_single():\n    assert single() == {i}\n" for i in range(20)}
+    repo = tamper_repo(base, "zz-tamper-once", {"tests/test_many.py": many, **singles})
     root = git(repo, "rev-parse", "--show-toplevel").stdout.strip()
     session = RUN + "to1"
     # The Change map's store already holds the file: its record must not silence a tampering question.
     os.makedirs(os.path.dirname(edit_marker(session)), exist_ok=True)
     open(edit_marker(session).replace(".edited", ".map-asked"), "w").write(f"{root}\ttests/FooTest.php\n")
-    # More questions, and more problems, than the limit: a question is never cut.
+    # More question lines, and more problems, than the limit: a question is never cut.
     open(os.path.join(repo, "app.py"), "a").write("".join(f"def f{i}(): breakpoint()\n" for i in range(25)))
     edited = edit_tests(repo, {"tests/FooTest.php": ("\t\t$this->assertEquals( 3, $count );\n", ""),
-                               "tests/test_many.py": (many, many.replace("    assert", "    pass  #"))})
+                               "tests/test_many.py": (many, many.replace("    assert", "    pass  #")),
+                               **{path: ("    assert", "    pass  #") for path in singles}})
     edited.append(os.path.join(repo, "app.py"))
     first = tamper_questions(stop(session, repo, edited).get("reason", ""))
-    assert len(first) == 2 and any("assertEquals( 3, $count )" in q for q in first), \
+    assert len(first) == 22 and any("assertEquals( 3, $count )" in q for q in first) and all(
+        any(q.startswith(f"Assertion removed from {path}") for q in first) for path in singles), \
         f"asked past the limit and despite the map's record, one line per file and kind: {len(first)} {first[:2]}"
     grouped = next(q for q in first if "tests/test_many.py" in q)
     assert grouped.startswith("Assertions removed from tests/test_many.py") and all(
@@ -3659,8 +3668,45 @@ def stop_asks_about_each_weakened_test_once(base):
     assert tamper_questions(stop(session, repo, edited).get("reason", "")) == [], "the same diff isn't asked again"
     edit_tests(repo, {"tests/FooTest.php": ("\t\t$this->assertCount( 2, $items );\n", "")})
     third = tamper_questions(stop(session, repo, edited).get("reason", ""))
-    assert len(third) == 1 and "assertCount( 2, $items )" in third[0], f"only the new weakening is asked: {third}"
+    assert len(third) == 1 and "assertCount( 2, $items )" in third[0] and "assertEquals" not in third[0], \
+        f"only the new weakening is asked: {third}"
     assert tamper_questions(stop(RUN + "to2", repo, edited).get("reason", "")) != [], "asked once per session"
+
+
+def stop_asks_about_assertions_their_rewrite_hides(base):
+    repo = tamper_repo(base, "zz-tamper-hidden")
+    edited = edit_tests(repo, {
+        "tests/FooTest.php": ("\t\t$this->assertEquals( 3, $count );", "\t\t// $this->assertEquals( 3, $count );"),
+        "src/sum.test.js": ("expect(total).toBe(3);", "expect(other).toBe(3);"),
+        # Loosened in parentheses, and its neighbour moved to another test file.
+        "tests/test_total.py": ("    assert result == 3\n    assert total([]) == 0\n", "    assert (result is not None)\n"),
+    })
+    open(os.path.join(repo, "tests/test_empty.py"), "w").write("def test_empty():\n    assert total([]) == 0\n")
+    questions = tamper_questions(stop(RUN + "th1", repo, edited + [os.path.join(repo, "tests/test_empty.py")])
+                                 .get("reason", ""))
+    expected = [("Assertion removed from tests/FooTest.php", "`$this->assertEquals( 3, $count );`"),
+                ("Assertion removed from src/sum.test.js", "`expect(total).toBe(3);`"),
+                ("Assertion loosened in tests/test_total.py", "`assert result == 3` became `assert (result is not None)`")]
+    assert len(questions) == 3 and all(any(q.startswith(start) and quote in q for q in questions)
+                                       for start, quote in expected), \
+        f"commenting a check out or asserting on something else loses it; moving it to another file doesn't: {questions}"
+
+
+def stop_reads_every_hunk_of_the_branch(base):
+    odd = "tests/test caf\u00e9.py"
+    repo = tamper_repo(base, "zz-tamper-hunks", {odd: "def test_odd():\n    assert odd() == 1\n"})
+    git(repo, "config", "diff.interHunkContext", "5")
+    # Two hunks close enough for git to fuse them with the lines between.
+    edited = edit_tests(repo, {
+        "src/sum.test.js": ("  const total = sum([1, 2]);\n  expect(total).toBe(3);\n  expect(sum([])).toEqual(0);\n});\n",
+                            "  const total = sum([1, 3]);\n  expect(total).toBe(3);\n  expect(sum([])).toEqual(0);\n}, 5);\n"),
+        "tests/test_total.py": ("    assert result == 3\n", ""),
+        odd: ("    assert odd() == 1\n", ""),
+    })
+    questions = tamper_questions(stop(RUN + "tk1", repo, edited).get("reason", ""))
+    assert any(q.startswith("Assertion removed from tests/test_total.py") for q in questions) and any(
+        q.startswith(f"Assertion removed from {odd}") for q in questions), \
+        f"a fused hunk doesn't swallow the next file, and a path with a space or accent is read: {questions}"
 
 
 def verify_by_hand_warns_about_weakened_tests(base):
@@ -4954,7 +5000,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
           stop_asks_once_about_files_outside_the_change_map, stop_asks_about_removed_assertions,
           stop_asks_about_loosened_assertions, stop_asks_about_changed_expected_values_only_beside_code,
-          stop_asks_about_each_weakened_test_once, verify_by_hand_warns_about_weakened_tests, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, stop_suggests_a_fresh_session_for_the_next_change, guard_records_the_pushed_checkout,
+          stop_asks_about_each_weakened_test_once, stop_asks_about_assertions_their_rewrite_hides, stop_reads_every_hunk_of_the_branch, verify_by_hand_warns_about_weakened_tests, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, stop_suggests_a_fresh_session_for_the_next_change, guard_records_the_pushed_checkout,
           post_edit_syntax_feedback, a_git_call_that_hangs_times_out_and_keeps_the_edits, stop_clears_only_the_edits_it_checked,
           a_delete_only_patch_is_checked, stamp_flags_take_an_equals_sign, a_verify_report_that_cant_be_written_is_said,
           a_base_with_no_common_commit_fails_the_stamps, the_problem_cap_never_hides_a_question, impeccable_files_in_a_shared_repo_need_the_user_first, impeccable_guard_edge_cases, impeccable_guard_reads_prose_as_text]
