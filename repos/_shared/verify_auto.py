@@ -8,14 +8,15 @@ checks that don't apply or whose tool is missing. Exit 1 only for findings on ch
 lines, failing related tests, or changed tests that pass without the change; a skipped
 check never fails the run.
 
-The red check: when a change edits both tests and code of a stack (pytest, or the
+The red check: when a change edits both tests and code of a stack (pytest, PHPUnit, or the
 package.json `test` script), the changed tests also run on a pristine copy of the
-merge-base, where at least one must fail.
+merge-base, where at least one must fail (for PHPUnit, a case of a changed test class).
 
 Diff coverage: the related pytest run goes through coverage.py when the Python behind pytest
-is known and imports it (and not pytest-cov), and, in a project without Vitest or Jest, the
+is known and imports it (and not pytest-cov), the related PHPUnit run writes a Clover report
+when php loads PCOV with pcov.enabled on or Xdebug, and, in a project without Vitest or Jest, the
 red check's working-tree `npm test` collects V8 coverage for node_modules/.bin/c8 to report,
-in both cases only for the changed non-test files. `ran: diff coverage` gives how many changed
+in every case only for the changed non-test files. `ran: diff coverage` gives how many changed
 executable lines the tests ran and which they didn't (for c8, every line of a loaded file but blank
 and `//` lines); it is report-only, and what keeps it from measuring is a `skipped:` line.
 """
@@ -387,7 +388,8 @@ def related_php_tests(root, files):
 
 
 def check_php(root, changes, files, report):
-    """php -l; PHPCS and PHPStan on changed lines when the project configures them; PHPUnit on related test classes."""
+    """php -l; PHPCS and PHPStan on changed lines when the project configures them; PHPUnit on related test classes,
+    then the red check on the changed ones; diff coverage of that PHPUnit run through PCOV or Xdebug."""
     php = shutil.which("php")
     if not php:
         report.skip("php -l", "php not on PATH")
@@ -420,26 +422,158 @@ def check_php(root, changes, files, report):
         report.ran.append(f"{tool} on {len(files)} changed files (changed lines only)")
 
     phpunit = os.path.join(root, "vendor/bin/phpunit")
+    scope = red_check_scope(root, changes, files, TEST_FILE)
     classes = related_php_tests(root, files)
     if not classes:
         report.skip("phpunit", "no related FooTest.php under tests/ or test/")
+        report.skip("diff coverage", "no related PHPUnit run in the working tree")
         return
     if not os.access(phpunit, os.X_OK):
         report.skip("phpunit", "phpunit not installed in vendor/bin")
+        report.skip("diff coverage", "no related PHPUnit run in the working tree")
+        if scope:
+            report.skip("red check", "phpunit: not installed in vendor/bin")
         return
-    with tempfile.TemporaryDirectory() as tmp:
-        junit = os.path.join(tmp, "junit.xml")
-        proc = execute([phpunit, "--filter", "/(" + "|".join(classes) + ")/", "--log-junit", junit], root, TEST_TIMEOUT)
-        try:
-            cases = list(ET.parse(junit).getroot().iter("testcase"))
-        except (ET.ParseError, OSError):
-            # Suites that need a database or WordPress often can't start here; that's setup, not a failure.
-            report.skip("phpunit", f"no JUnit report, PHPUnit did not start (exit {proc.returncode}): {tail(proc, 300)}")
-            return
-    failed = [f"{c.get('class') or c.get('classname')}::{c.get('name')}" for c in cases
-              if c.find("failure") is not None or c.find("error") is not None]
+    proc, cases = run_phpunit(root, changes, php, phpunit, phpunit_filter(classes),
+                              coverage_candidates(files, TEST_FILE, "PHP", report), report)
+    if cases is None:
+        # Suites that need a database or WordPress often can't start here; that's setup, not a failure.
+        report.skip("phpunit", f"no JUnit report, PHPUnit did not start (exit {proc.returncode}): {tail(proc, 300)}")
+        if scope:
+            report.skip("red check", "phpunit: the related run in the working tree did not start")
+        return
+    failed = [f"{c.get('class') or c.get('classname')}::{c.get('name')}" for c in cases if failed_case(c)]
     report.ran.append(f"phpunit --filter {', '.join(classes)}: {len(cases)} tests, {len(failed)} failing")
     report.add([f"[phpunit] {t} fails" for t in failed])
+    if scope and (failed or all(c.find("skipped") is not None for c in cases)):
+        report.skip("red check", f"phpunit: the related run in the working tree didn't pass conclusively "
+                                 f"({len(cases)} tests, {len(failed)} failing)")
+    elif scope:
+        phpunit_red_check(root, *scope, report)
+
+
+def phpunit_filter(classes):
+    return ["--filter", "/(" + "|".join(classes) + ")/"]
+
+
+def failed_case(case):
+    return case.find("failure") is not None or case.find("error") is not None
+
+
+def junit_cases(junit):
+    """The <testcase> elements of a JUnit report, or None when there is no readable report."""
+    try:
+        return list(ET.parse(junit).getroot().iter("testcase"))
+    except (ET.ParseError, OSError):
+        return None
+
+
+def run_phpunit(root, changes, php, phpunit, args, candidates, report):
+    """PHPUnit `args` in the working tree with a JUnit report, also writing a Clover report of the changed `candidates`
+    when php can collect coverage (None: not measured); returns (the run whose verdict counts, its cases or None)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        junit = os.path.join(tmp, "junit.xml")
+        command = [phpunit, *args, "--log-junit", junit]
+        env = php_coverage_env(root, php, report) if candidates else None
+        if env is None:
+            proc = execute(command, root, TEST_TIMEOUT)
+            return proc, junit_cases(junit)
+        deadline = time.monotonic() + TEST_TIMEOUT
+        clover = os.path.join(tmp, "clover.xml")
+        # PHPUnit 9.6 takes only directories here.
+        filters = [a for d in sorted({os.path.dirname(f) for f in candidates})
+                   for a in ("--coverage-filter", os.path.join(root, d))]
+        proc = execute([*command, "--coverage-clover", clover, *filters], root, TEST_TIMEOUT, env)
+        cases = junit_cases(junit)
+        if proc.returncode == 124:
+            report.skip("diff coverage", f"phpunit: {tail(proc, 300)}")
+        elif cases is None:
+            # A PHPUnit that rejects a coverage flag stops before running any test.
+            report.skip("diff coverage", f"phpunit: no JUnit report with the coverage flags (exit {proc.returncode}), "
+                                         f"so the tests ran again without them: {tail(proc, 300)}")
+            proc = execute(command, root, remaining(deadline))
+            cases = junit_cases(junit)
+        else:
+            php_clover_report(root, changes, clover, candidates, proc, report)
+        return proc, cases
+
+
+def php_coverage_env(root, php, report):
+    """The environment a PHPUnit run collects coverage in, or None, skipped with the reason."""
+    if not php:
+        report.skip("diff coverage", "phpunit: php not on PATH")
+        return None
+    probe = execute([php, "-r", "echo json_encode([extension_loaded('pcov'), "
+                                "filter_var(ini_get('pcov.enabled'), FILTER_VALIDATE_BOOLEAN), "
+                                "extension_loaded('xdebug')]);"], root, COVERAGE_PROBE_TIMEOUT)
+    facts = decode_json(probe.stdout or "", "[")
+    if not (isinstance(facts, list) and len(facts) == 3):
+        report.skip("diff coverage", f"phpunit: the coverage driver probe gave no answer (exit {probe.returncode}): "
+                                     f"{tail(probe, 300)}")
+        return None
+    pcov, pcov_enabled, xdebug = facts
+    if pcov and pcov_enabled:
+        return dict(os.environ)
+    if xdebug:
+        return {**os.environ, "XDEBUG_MODE": "coverage"}
+    report.skip("diff coverage", "phpunit: PCOV is loaded but pcov.enabled is off" if pcov else
+                                 "phpunit: no coverage driver, install pcov or xdebug")
+    return None
+
+
+def php_clover_report(root, changes, clover, candidates, proc, report):
+    if not os.path.exists(clover):
+        report.skip("diff coverage", f"phpunit wrote no Clover report (exit {proc.returncode}): {tail(proc, 300)}")
+        return
+    try:
+        lines_by_file = {}
+        for entry in ET.parse(clover).getroot().iter("file"):
+            statements = [(int(line.get("num")), int(line.get("count")))
+                          for line in entry.iter("line") if line.get("type") == "stmt"]
+            lines_by_file[repo_path(root, entry.get("name"))] = (
+                {num for num, count in statements if count > 0}, {num for num, _ in statements})
+    except (OSError, ET.ParseError, TypeError, ValueError) as err:
+        report.skip("diff coverage", f"phpunit: the Clover report is unreadable: {err!r}")
+        return
+    report_diff_coverage(changes, "phpunit", candidates, lines_by_file, report)
+
+
+def phpunit_red_check(root, tests, copied, report):
+    """The changed test classes on the merge-base, through the copy's own vendor/bin/phpunit so Composer autoloads the
+    copy: at least one of their cases must fail or error there. Another class the filter matches says nothing."""
+    classes = sorted({os.path.splitext(os.path.basename(t))[0] for t in tests})
+    try:
+        with verify_changed.pristine_copy(root, copied) as copy:
+            junit = os.path.join(copy, ".agents-red-junit.xml")
+            # .phpunit.result.cache is a symlink into the working tree: don't write the base's results into it.
+            proc = execute([os.path.join(copy, "vendor/bin/phpunit"), *phpunit_filter(classes), "--log-junit", junit,
+                            "--do-not-cache-result"], copy, RED_CHECK_TIMEOUT)
+            cases = junit_cases(junit)
+    except (OSError, subprocess.SubprocessError, RuntimeError) as err:
+        report.skip("red check", f"phpunit: could not build or run in the pristine copy: {err}")
+        return
+    if proc.returncode in NOT_STARTED:
+        report.skip("red check", f"phpunit: {tail(proc, 300)}")
+        return
+    if cases is None:
+        report.skip("red check", f"phpunit: no JUnit report, PHPUnit did not start in the pristine copy "
+                                 f"(exit {proc.returncode}): {tail(proc, 300)}")
+        return
+    names = ", ".join(classes)
+    own = [c for c in cases if re.split(r"[\\.]", c.get("class") or c.get("classname") or "")[-1] in classes]
+    failed = [c for c in own if failed_case(c)]
+    if not own:
+        report.skip("red check", f"phpunit: no case of {names} in the JUnit report on the merge-base "
+                                 f"({len(cases)} other cases)")
+    elif not failed and all(c.find("skipped") is not None for c in own):
+        report.skip("red check", f"phpunit: every case of {names} was skipped on the merge-base")
+    elif not failed:
+        report.add([tests_pass_without_change(tests)])
+    else:
+        report.ran.append(f"red check: phpunit on {len(classes)} changed test classes: {len(failed)} of {len(own)} "
+                          f"cases fail on the merge-base, pass with the change")
+
+
 
 
 # --- Python -----------------------------------------------------------------------------------
