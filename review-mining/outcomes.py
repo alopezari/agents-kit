@@ -26,12 +26,12 @@ Since the kit, also:
                       verify, red check, diff coverage, weakened tests), matched by host, owner/repo and number; null
                       when kit-ship and follow-pr never recorded one
 
-Each summary's "signals" block sets those signals against the PRs' settled outcomes (fix and revert candidates,
+The top-level "signals" block sets those signals against the PRs' settled outcomes (fix and revert candidates,
 confirmed escapes), counted once per PR, per size band and per bucket of each other split (tier, red check,
 coverage, weakened tests, tests deleted, tests touched), over all PRs and within each size band (by_size), with PRs
-without signals apart. Since the
-kit it reads PRs merged from FOLLOW_UP_DAYS before SINCE (signals_window), so a PR still pending at last month's run
-is settled in this one; every other summary and the PR list keep to PRs merged since SINCE (window).
+without signals apart. Since the kit it reads PRs merged from FOLLOW_UP_DAYS before SINCE (signals_window, those before
+SINCE listed in earlier_prs), so a PR still pending at last month's run is settled in this one; the summaries and the
+PR list keep to PRs merged since SINCE (window).
 
 The baseline window (BASELINE_MONTHS before KIT_START) never changes once its follow-up windows have
 passed, so it is cached in baseline.json and fetched again only while any of its PRs is pending.
@@ -254,7 +254,7 @@ def attach_escapes(prs, local):
         mine = [e for e in entries if e.get("repo") in repos and e.get("branch") in names]
         lenses_run = {e["name"] for e in mine if e.get("kind") == "lens"}
         pr["escapes"] = [{"source": e["name"], "category": e.get("category"), "verdict": e.get("verdict"),
-                          "lens": e.get("lens"), "lens_ran": e.get("lens") in lenses_run}
+                          "lens": e.get("lens"), "lens_ran": e.get("lens") in lenses_run, "pr": e.get("pr")}
                          for e in mine if e.get("kind") == "escape"]
 
 
@@ -262,17 +262,18 @@ def attach_signals(prs):
     """Each PR's latest "pr" line logged before its merge, by host, owner/repo and number: never by branch, which a later
     PR can reuse and whose checkout name (.agents) differs from the repository's."""
     lines = {}
-    for e in quality_log():
+    for appended, e in enumerate(quality_log()):
         if e.get("kind") == "pr" and e.get("host") and e.get("remote"):
-            try:
+            try:  # strptime, not fromisoformat: Python 3.9's rejects the log's +0200 offsets
                 logged = datetime.strptime(e["ts"], "%Y-%m-%dT%H:%M:%S%z")
             except (KeyError, TypeError, ValueError):
                 continue
-            lines.setdefault((e["host"].lower(), e["remote"].lower(), e.get("name")), []).append((logged, e))
+            key = (e["host"].lower(), e["remote"].lower(), e.get("name"))
+            lines.setdefault(key, []).append(((logged, appended), e))  # two pushes in one second: the later append
     for pr in prs:
         merged = parse_time(pr["merged"])
         before = [(logged, e) for logged, e in lines.get((pr["host"].lower(), pr["repo"].lower(), pr["number"]), [])
-                  if logged < merged]
+                  if logged[0] < merged]
         pr["signals"] = max(before, key=lambda pair: pair[0])[1] if before else None
 
 
@@ -286,18 +287,21 @@ def signal_buckets(signals):
 
     def coverage():
         measured = signals.get("coverage")
-        if measured:
+        if measured and not stale:
             return "80_or_more" if measured["covered"] * 100 >= 80 * measured["measured"] else "below_80"
-        return "unknown" if signals.get("verify") in (None, "none") else "none"  # no report read, or none measured
+        # No report read, or one the change has outgrown, says nothing; a current one without coverage measured none.
+        return "unknown" if signals.get("verify") in (None, "none") or stale else "none"
 
     def count(value):
         return "unknown" if value is None else "any" if value else "none"
 
+    stale = signals.get("verify_current") is False
     red_check = signals.get("red_check")
     tampered = signals.get("tampered")
     return {"size": size(),
             "tier": signals.get("tier") if signals.get("tier") in ("low", "standard", "high") else "unknown",
-            "red_check": "unknown" if red_check is None else "skipped_or_not_run" if red_check in ("skipped", "not_run")
+            "red_check": "not_applicable" if red_check is None and signals.get("test_files") == 0
+            else "unknown" if red_check is None or stale else "skipped_or_not_run" if red_check in ("skipped", "not_run")
             else red_check,
             "coverage": coverage(),
             "tampered": count(None if tampered is None else sum(tampered.values())),
@@ -306,7 +310,7 @@ def signal_buckets(signals):
 
 
 SIGNAL_SPLITS = {"size": ("<50", "50-400", ">400", "unknown"), "tier": ("low", "standard", "high", "unknown"),
-                 "red_check": ("failed", "passed", "skipped_or_not_run", "unknown"),
+                 "red_check": ("failed", "passed", "skipped_or_not_run", "not_applicable", "unknown"),
                  "coverage": ("80_or_more", "below_80", "none", "unknown"), "tampered": ("any", "none", "unknown"),
                  "tests_deleted": ("any", "none", "unknown"), "test_files": ("any", "none", "unknown")}
 
@@ -317,7 +321,9 @@ def summarize_signals(prs):
     def cell(group):
         outcome = {"fix": sum(any(f["kind"] == "fix" for f in p["follow_ups"]) for p in group),
                    "revert": sum(any(f["kind"] == "revert" for f in p["follow_ups"]) for p in group),
-                   "escape": sum(any(e["verdict"] == "confirmed" for e in p.get("escapes", [])) for p in group)}
+                   # Escapes are joined by branch, which a later PR can reuse: only this PR's number counts here.
+                   "escape": sum(any(e["verdict"] == "confirmed" and e.get("pr") == p["number"]
+                                     for e in p.get("escapes", [])) for p in group)}
         result = {"prs": len(group)}
         for key, count in outcome.items():
             result.update({key: count, f"{key}_rate": round(count / len(group), 2) if group else None})
@@ -382,8 +388,7 @@ def phases_on_branches(sessions, branches):
     return total
 
 
-def summarize(prs, signal_prs=None):
-    """signal_prs, when given, is the wider list the signals block reads instead of prs."""
+def summarize(prs):
     def mean(values):
         values = list(values)
         return round(sum(values) / len(values), 2) if values else None
@@ -422,7 +427,6 @@ def summarize(prs, signal_prs=None):
                                           # An overnight wait dwarfs a day of quick replies: the mean alone misleads.
                                           "median_per_pr": {key: median(p["sessions"]["attention"][key] for p in complete)
                                                             for key in USER_SHARE}}},
-        "signals": summarize_signals(prs if signal_prs is None else signal_prs),
     }
 
 
@@ -464,10 +468,13 @@ def main():
 
     result = {"generated": now.isoformat(timespec="seconds"), "kit_start": KIT_START,
               "follow_up_days": FOLLOW_UP_DAYS, "errors": errors,
-              "summary": {"baseline": summarize(baseline["prs"]), "since_kit": summarize(kit, with_earlier)},
+              "summary": {"baseline": summarize(baseline["prs"]), "since_kit": summarize(kit)},
+              "signals": summarize_signals(with_earlier),
               "baseline_window": baseline["window"], "window": [window_start, tomorrow],
               "signals_window": [signals_start, tomorrow],
-              "prs": [{k: v for k, v in p.items() if k != "files"} for p in kit]}
+              "prs": [{k: v for k, v in p.items() if k != "files"} for p in kit],
+              # Merged before SINCE: the signals block reads them, so the monthly prompt can judge their candidates.
+              "earlier_prs": [{k: v for k, v in p.items() if k != "files"} for p in with_earlier if p not in kit]}
     with open(output, "w") as fh:
         json.dump(result, fh, indent=1)
     print(json.dumps(result["summary"], indent=1))

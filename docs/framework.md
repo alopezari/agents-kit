@@ -320,7 +320,7 @@ pr-validation    verify's verdict and what it ran, the review's findings, each v
 prune-merged [--dry-run]
 ```
 
-**`bin/quality-log`**: Record what a review lens or test type produced, and what got past them, so the monthly job can keep only perspectives that pay off.
+**`bin/quality-log`**: Record what a review lens or test type produced, what got past them, and each pull request's quality signals, so the monthly job can keep only perspectives that pay off and learn which signals predict trouble.
 
 ```
 quality-log lens <name> --findings N --confirmed M [--secs S] [--model claude|codex] [--shared N] [--criteria N] [--map-items N] [--outcomes fixed=N,wrong=N,...]

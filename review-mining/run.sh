@@ -122,12 +122,13 @@ Steps:
    overnight wait skews a mean. Name the PRs and phases that took the most
    prompts and wait, and what in them asked for the user (a question, a correction, a report to read). Hours to PR
    and to merge are the cycle time to set it against. Few complete PRs make this evidence, not proof.
-   Add a "Signals" section from since_kit.signals in outcomes.json: per size band (lines added plus deleted), then per
+   Add a "Signals" section from signals in outcomes.json: per size band (lines added plus deleted), then per
    split (tier, red check, diff coverage, weakened tests, tests deleted, tests touched) over all PRs (splits) and within
    each size band (by_size), each bucket's settled PRs and its fix candidates, revert candidates and confirmed escapes
    with their rates, and the PRs without signals apart, never as clean ones. Bigger PRs draw more fixes whatever their
-   signals: prefer by_size, and read a gap in splits alone as possibly size. It covers signals_window, which starts FOLLOW_UP_DAYS before window to take in the PRs still pending at
-   the previous run. Judge fix and revert candidates as the Escapes section does before reading a rate as trouble. A
+   signals: prefer by_size, and read a gap in splits alone as possibly size. It covers signals_window, which starts
+   FOLLOW_UP_DAYS before window to take in the PRs still pending at the previous run (earlier_prs lists those). Judge
+   fix and revert candidates as the Escapes section does, from prs and earlier_prs, before reading a rate as trouble. A
    bucket under ~10 PRs proves nothing: give its counts and say so instead of drawing a conclusion; name a signal as
    predicting trouble only when the gap holds across buckets with enough PRs, and say which signal to watch next.
    Add an "Escapes" section from outcomes.json, set against its baseline:

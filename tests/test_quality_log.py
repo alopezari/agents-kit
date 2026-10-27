@@ -291,7 +291,8 @@ def pr_repo(base):
     subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
     os.makedirs(os.path.join(repo, "tests"))
     files = {"app.py": "def total(n):\n    return n * 2\n",
-             "tests/test_app.py": "def test_total():\n    assert total(2) == 4\n    assert total(0) == 0\n",
+             "tests/test_app.py": "def test_total():\n    assert total(2) == 4\n    assert total(0) == 0\n"
+                                  "    assert total(3) == 6\n",
              "tests/test_old.py": "def test_old():\n    assert 1\n    assert 2\n"}
     for path, text in files.items():
         open(os.path.join(repo, path), "w").write(text)
@@ -300,17 +301,29 @@ def pr_repo(base):
     subprocess.run([*git, "checkout", "-q", "-b", "feature"], check=True)
     open(os.path.join(repo, "app.py"), "w").write("def total(n):\n    if n < 0:\n        raise ValueError(n)\n    return n + n\n")
     open(os.path.join(repo, "tests/test_app.py"), "w").write(
-        "@pytest.mark.skip\ndef test_total():\n    assert total(0) == 0\n")
+        "@pytest.mark.skip\ndef test_total():\n    assert total(0) == 1\n    assert total(3)\n")
+    open(os.path.join(repo, "tests/test_neg.py"), "w").write("def test_neg():\n    assert total(-1) == -2\n")
     os.remove(os.path.join(repo, "tests/test_old.py"))
     subprocess.run([*git, "add", "-A"], check=True)
     subprocess.run([*git, "commit", "-q", "-m", "change"], check=True)
     subprocess.run([*git, "remote", "add", "origin", "git@github.com:Owner/Shop.git"], check=True)
+    # gh answers from gh.json when the test writes one, else fails as a logged-out gh does: no test reaches GitHub.
+    os.makedirs(os.path.join(home, "shim"))
+    shim = os.path.join(home, "shim", "gh")
+    open(shim, "w").write(f"#!/bin/sh\ncat {os.path.join(home, 'gh.json')} 2>/dev/null || exit 1\n")
+    os.chmod(shim, 0o755)
     return home, repo
 
 
 def log_pr(home, repo, *args):
-    return subprocess.run([os.path.join(home, ".agents", "bin", "quality-log"), "pr", *args], cwd=repo,
-                          env={**os.environ, "HOME": home}, capture_output=True, text=True)
+    env = {**os.environ, "HOME": home, "PATH": os.path.join(home, "shim") + os.pathsep + os.environ["PATH"]}
+    return subprocess.run([os.path.join(home, ".agents", "bin", "quality-log"), "pr", *args], cwd=repo, env=env,
+                          capture_output=True, text=True)
+
+
+def gh_answers(home, url, head="feature"):
+    with open(os.path.join(home, "gh.json"), "w") as fh:
+        json.dump({"url": url, "headRefName": head}, fh)
 
 
 def records_a_prs_size_and_origin(base):
@@ -320,9 +333,9 @@ def records_a_prs_size_and_origin(base):
     row = entries(home)[-1]
     assert (row["kind"], row["name"], row["repo"], row["branch"]) == ("pr", 42, "shop", "feature"), row
     assert {"ts", "harness", "tier", "spec_tier", "diff_tier"} <= row.keys(), row
-    # app.py: 3 added, 1 deleted; test_app.py: 1 added, 1 deleted; test_old.py: 3 deleted.
+    # app.py: +3 -1; test_app.py: +3 -3; test_neg.py (added): +2; test_old.py (deleted): -3.
     assert {key: row.get(key) for key in ("added", "deleted", "files", "test_files", "tests_deleted")} == \
-        {"added": 4, "deleted": 5, "files": 3, "test_files": 1, "tests_deleted": 1}, row
+        {"added": 8, "deleted": 7, "files": 4, "test_files": 2, "tests_deleted": 1}, row
     assert (row["host"], row["remote"]) == ("github.com", "Owner/Shop"), row
     for url, expected in (("https://ghe.example.com/owner/shop.git", ("ghe.example.com", "owner/shop")),
                           ("https://github.com/owner/shop", ("github.com", "owner/shop")),
@@ -330,6 +343,19 @@ def records_a_prs_size_and_origin(base):
         subprocess.run(["git", "-C", repo, "remote", "set-url", "origin", url], check=True)
         assert log_pr(home, repo, "42").returncode == 0
         assert (entries(home)[-1]["host"], entries(home)[-1]["remote"]) == expected, (url, entries(home)[-1])
+    # An SSH host alias names no real host: the PR's own URL from gh wins over the origin.
+    subprocess.run(["git", "-C", repo, "remote", "set-url", "origin", "git@github-work:Owner/Shop.git"], check=True)
+    gh_answers(home, "https://github.com/Owner/Shop/pull/42")
+    assert log_pr(home, repo, "42").returncode == 0
+    assert (entries(home)[-1]["host"], entries(home)[-1]["remote"]) == ("github.com", "Owner/Shop"), entries(home)[-1]
+
+
+def refuses_a_pr_from_another_branch(base):
+    home, repo = pr_repo(base)
+    gh_answers(home, "https://github.com/Owner/Shop/pull/42", head="other")
+    out = log_pr(home, repo, "42")
+    assert out.returncode == 2 and "other" in out.stderr, out
+    assert entries(home) == [], "nothing was written"
 
 
 def records_the_verify_signals(base):
@@ -378,6 +404,7 @@ def records_the_verify_signals(base):
     assert log_pr(home, repo, "7").returncode == 0
     assert entries(home)[-1]["verify_current"] is True, entries(home)[-1]
     open(os.path.join(repo, "app.py"), "a").write("# edited after verify\n")
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", repo, "commit", "-qam", "edit"], check=True)
     assert log_pr(home, repo, "7").returncode == 0
     assert entries(home)[-1]["verify_current"] is False, "the stamp no longer covers the change"
 
@@ -385,8 +412,33 @@ def records_the_verify_signals(base):
 def records_weakened_tests(base):
     home, repo = pr_repo(base)
     assert log_pr(home, repo, "7").returncode == 0
-    assert entries(home)[-1]["tampered"] == {"removed": 1, "loosened": 0, "changed": 0, "skipped_or_focused": 1}, \
+    assert entries(home)[-1]["tampered"] == {"removed": 1, "loosened": 1, "changed": 1, "skipped_or_focused": 1}, \
         entries(home)[-1]
+
+
+def a_renamed_test_is_not_a_deleted_one(base):
+    home, repo = pr_repo(base)
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", repo]
+    subprocess.run([*git, "checkout", "-q", "main", "--", "tests/test_app.py"], check=True)  # similar enough to follow
+    subprocess.run([*git, "mv", "tests/test_app.py", "tests/test_cart.py"], check=True)
+    subprocess.run([*git, "commit", "-qm", "rename"], check=True)
+    assert log_pr(home, repo, "7").returncode == 0
+    assert (entries(home)[-1]["test_files"], entries(home)[-1]["tests_deleted"]) == (2, 1), entries(home)[-1]
+
+
+def a_dirty_tree_nulls_what_it_would_misread(base):
+    home, repo = pr_repo(base)
+    clean = log_pr(home, repo, "7")
+    assert clean.returncode == 0, clean.stderr
+    committed = entries(home)[-1]
+    open(os.path.join(repo, "tests", "test_app.py"), "w").write("def test_total():\n    pass\n")
+    open(os.path.join(repo, "scratch.py"), "w").write("x = 1\n")
+    assert log_pr(home, repo, "7").returncode == 0
+    row = entries(home)[-1]
+    for key in ("tampered", "verify_current", "tier", "spec_tier", "diff_tier"):
+        assert row[key] is None, (key, row)
+    for key in ("added", "deleted", "files", "test_files", "tests_deleted"):
+        assert row[key] == committed[key], (key, "sizes count the committed change", row)
 
 
 def a_signal_it_cant_compute_is_null(base):
@@ -412,6 +464,18 @@ def a_signal_it_cant_compute_is_null(base):
     assert (row["kind"], row["host"], row["remote"], row["added"]) == ("pr", None, None, None), row
 
 
+def undecodable_output_nulls_the_signal(base):
+    home, repo = pr_repo(base)
+    with open(os.path.join(repo, "tests", "test_bytes.py"), "wb") as fh:
+        fh.write(b"def test_bytes():\n    assert name() == '\xff'\n")  # Latin-1, not UTF-8
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", repo, "add", "-A"], check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", repo, "commit", "-qm", "bytes"], check=True)
+    out = log_pr(home, repo, "9")
+    assert out.returncode == 0, out.stderr
+    row = entries(home)[-1]
+    assert row["tampered"] is None and row["added"] is not None, row
+
+
 def refuses_a_pr_number_that_isnt_one(base):
     home, repo = pr_repo(base)
     for args in (["0"], ["-3"], ["abc"], ["1.5"], [""], ["#12"], [], ["12", "--added", "5"], ["12", "13"]):
@@ -426,7 +490,8 @@ for test in (writes_well_formed_entries, records_the_findings_the_other_model_sh
              refuses_malformed_outcomes, a_lens_with_no_findings_logs_without_outcomes, records_the_spec_and_diff_tiers,
              accepts_each_canonical_test_type, refuses_other_test_type_spellings, marks_a_flaky_run,
              records_a_prs_size_and_origin, records_the_verify_signals, records_weakened_tests,
-             a_signal_it_cant_compute_is_null, refuses_a_pr_number_that_isnt_one):
+             a_signal_it_cant_compute_is_null, refuses_a_pr_number_that_isnt_one, refuses_a_pr_from_another_branch,
+             a_dirty_tree_nulls_what_it_would_misread, a_renamed_test_is_not_a_deleted_one, undecodable_output_nulls_the_signal):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)

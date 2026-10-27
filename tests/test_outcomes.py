@@ -239,9 +239,12 @@ def signals_join_by_host_repo_and_number(base):
         {**line, "ts": "2026-10-01T09:00:00+0000", "added": 10},
         {**line, "ts": "2026-10-01T12:00:00+0200", "added": 20},  # 10:00 UTC: the latest before the merge
         {**line, "ts": "2026-10-01T10:00:00-0100", "added": 99},  # 11:00 UTC: after the merge
-        {**line, "ts": "2026-10-01T09:30:00+0000", "remote": "o/blog", "added": 98},
-        {**line, "ts": "2026-10-01T09:30:00+0000", "host": "ghe.example.com", "added": 97},
-        {**line, "ts": "2026-10-01T09:30:00+0000", "name": 8, "added": 96},  # same branch, another PR
+        # Later than the right line and still before the merge, so only the key keeps them out.
+        {**line, "ts": "2026-10-01T10:15:00+0000", "remote": "o/blog", "added": 98},
+        {**line, "ts": "2026-10-01T10:15:00+0000", "host": "ghe.example.com", "added": 97},
+        {**line, "ts": "2026-10-01T10:15:00+0000", "name": 8, "added": 96},  # same branch, another PR
+        {**line, "ts": "2026-10-01T09:00:00+0000", "name": 9, "added": 1},
+        {**line, "ts": "2026-10-01T09:00:00+0000", "name": 9, "added": 2},  # same second: the later append wins
         {"kind": "lens", "name": "tests", "repo": ".agents", "branch": "feature/cart", "ts": "2026-10-01T09:45:00+0000"},
     ]
     open(outcomes.QUALITY_LOG, "w").write("".join(json.dumps(e) + "\n" for e in entries))
@@ -249,6 +252,9 @@ def signals_join_by_host_repo_and_number(base):
            {"host": "github.com", "repo": "o/shop", "number": 9, "branch": "feature/cart", "merged": "2026-10-01T10:30:00Z"}]
     outcomes.attach_signals(prs)
     assert (prs[0]["signals"] or {}).get("added") == 20, prs[0]["signals"]
+    assert (prs[1]["signals"] or {}).get("added") == 2, prs[1]["signals"]
+    prs[1]["number"] = 10
+    outcomes.attach_signals(prs)
     assert prs[1]["signals"] is None, f"never matched by branch: {prs[1]['signals']}"
 
 
@@ -256,7 +262,7 @@ def signal_cells(base):
     counts = dict.fromkeys(("review_threads", "changes_requested", "red_pushes", "commits_after_first_review"), 0)
     fix = {"kind": "fix", "url": "u", "title": "Fix", "shared_files": ["a"]}
     revert = {**fix, "kind": "revert"}
-    confirmed = {"source": "bot", "verdict": "confirmed", "lens": "tests", "lens_ran": True, "category": "P4.5"}
+    confirmed = {"source": "bot", "verdict": "confirmed", "lens": "tests", "lens_ran": True, "category": "P4.5", "pr": 1}
 
     def signals(size, **fields):
         return {"added": size, "deleted": 0, "tier": "standard", "red_check": "passed", "verify": "pass",
@@ -270,7 +276,10 @@ def signal_cells(base):
         {"signals": signals(400, red_check="skipped", coverage=None, tampered={"removed": 1, "loosened": 0, "changed": 0,
                                                                               "skipped_or_focused": 0}),
          "follow_ups": [], "escapes": []},
-        {"signals": signals(401, red_check="not_run", tests_deleted=2, test_files=0), "follow_ups": [fix], "escapes": []},
+        {"signals": signals(401, red_check="not_run", tests_deleted=2, test_files=0), "follow_ups": [fix],
+         "escapes": [{**confirmed, "pr": 99}]},  # an earlier PR's escape on a reused branch: not this one's
+        {"signals": signals(401, red_check=None, test_files=0), "follow_ups": [], "escapes": []},
+        {"signals": signals(401, red_check="failed", verify_current=False), "follow_ups": [], "escapes": []},
         {"signals": signals(None, red_check=None, verify="none", coverage=None, tampered=None, tests_deleted=None,
                             test_files=None, tier=None),
          "follow_ups": [], "escapes": [confirmed]},
@@ -278,7 +287,7 @@ def signal_cells(base):
         {"signals": None, "follow_ups": [fix], "escapes": []},
         {"follow_ups": [], "escapes": []},  # a PR the signals were never attached to
     ]
-    got = outcomes.summarize([{**counts, **p} for p in prs])["signals"]
+    got = outcomes.summarize_signals([{**counts, "number": 1, **p} for p in prs])
 
     def cell(prs, fix=0, revert=0, escape=0):
         def rate(n):
@@ -286,8 +295,8 @@ def signal_cells(base):
         return {"prs": prs, "fix": fix, "fix_rate": rate(fix), "revert": revert, "revert_rate": rate(revert),
                 "escape": escape, "escape_rate": rate(escape)}
 
-    assert got["settled_prs"] == 7 and got["without_signals"] == cell(2, fix=1), got
-    assert got["size"] == {"<50": cell(1, fix=1, escape=1), "50-400": cell(2, revert=1), ">400": cell(1, fix=1),
+    assert got["settled_prs"] == 9 and got["without_signals"] == cell(2, fix=1), got
+    assert got["size"] == {"<50": cell(1, fix=1, escape=1), "50-400": cell(2, revert=1), ">400": cell(3, fix=1),
                            "unknown": cell(1, escape=1)}, got["size"]
     # Within a band, a signal is set only against PRs of that band: the 400-line PR alone shows its weakened test.
     assert got["by_size"]["50-400"]["tampered"] == {"any": cell(1), "none": cell(1, revert=1), "unknown": cell(0)}, \
@@ -295,25 +304,33 @@ def signal_cells(base):
     assert got["by_size"]["<50"]["red_check"]["passed"] == cell(1, fix=1, escape=1), got["by_size"]["<50"]
     assert "size" not in got["splits"] and set(got["by_size"]) == {"<50", "50-400", ">400", "unknown"}, got
     splits = got["splits"]
-    assert splits["tier"] == {"low": cell(0), "standard": cell(3, fix=2, escape=1), "high": cell(1, revert=1),
+    assert splits["tier"] == {"low": cell(0), "standard": cell(5, fix=2, escape=1), "high": cell(1, revert=1),
                               "unknown": cell(1, escape=1)}, splits["tier"]
+    # A red check from a verify the change has outgrown says nothing: unknown, and so is its coverage.
     assert splits["red_check"] == {"failed": cell(1, revert=1), "passed": cell(1, fix=1, escape=1),
-                                   "skipped_or_not_run": cell(2, fix=1), "unknown": cell(1, escape=1)}, splits["red_check"]
-    assert splits["coverage"] == {"80_or_more": cell(2, fix=2, escape=1), "below_80": cell(1, revert=1),
-                                  "none": cell(1), "unknown": cell(1, escape=1)}, splits["coverage"]
-    assert splits["tampered"] == {"any": cell(1), "none": cell(3, fix=2, revert=1, escape=1),
+                                   "skipped_or_not_run": cell(2, fix=1), "not_applicable": cell(1),
+                                   "unknown": cell(2, escape=1)}, splits["red_check"]
+    assert splits["coverage"] == {"80_or_more": cell(3, fix=2, escape=1), "below_80": cell(1, revert=1),
+                                  "none": cell(1), "unknown": cell(2, escape=1)}, splits["coverage"]
+    assert splits["tampered"] == {"any": cell(1), "none": cell(5, fix=2, revert=1, escape=1),
                                   "unknown": cell(1, escape=1)}, splits["tampered"]
-    assert splits["tests_deleted"] == {"any": cell(1, fix=1), "none": cell(3, fix=1, revert=1, escape=1),
+    assert splits["tests_deleted"] == {"any": cell(1, fix=1), "none": cell(5, fix=1, revert=1, escape=1),
                                        "unknown": cell(1, escape=1)}, splits["tests_deleted"]
-    assert splits["test_files"] == {"any": cell(3, fix=1, revert=1, escape=1), "none": cell(1, fix=1),
+    assert splits["test_files"] == {"any": cell(4, fix=1, revert=1, escape=1), "none": cell(2, fix=1),
                                     "unknown": cell(1, escape=1)}, splits["test_files"]
 
 
 def signals_read_the_prs_settled_since_last_month(base):
     """A PR merged in the FOLLOW_UP_DAYS before SINCE was pending at last month's run: its signals count now, while the
     other summaries keep to PRs merged since SINCE."""
+    real = (outcomes.fetch_window, outcomes.BASELINE_CACHE, outcomes.QUALITY_LOG, sys.argv)
     outcomes.QUALITY_LOG = os.path.join(base, "quality.jsonl")
     outcomes.BASELINE_CACHE = os.path.join(base, "baseline.json")
+    open(outcomes.QUALITY_LOG, "w").write("".join(json.dumps(e) + "\n" for e in (
+        {"kind": "pr", "ts": "2026-10-09T10:00:00+0000", "host": "github.com", "remote": "O/Shop", "name": 1,
+         "repo": "shop", "branch": "b", "added": 10, "deleted": 0},
+        {"kind": "escape", "ts": "2026-10-11T10:00:00+0000", "name": "bot", "repo": "shop", "branch": "b", "pr": 1,
+         "verdict": "confirmed", "lens": "tests", "category": "P4.5"})))
     sessions = os.path.join(base, "sessions.json")
     open(sessions, "w").write("[]")
     counts = dict.fromkeys(("review_threads", "changes_requested", "red_pushes", "commits_after_first_review"), 0)
@@ -328,7 +345,6 @@ def signals_read_the_prs_settled_since_last_month(base):
         return [] if start < outcomes.KIT_START else [dict(earlier), dict(later)]
 
     outcomes.fetch_window = fake_fetch
-    real_argv = sys.argv
     try:
         for since, kit_start in (("2026-10-20", "2026-10-06"), ("2026-09-30", outcomes.KIT_START)):
             windows.clear()
@@ -342,10 +358,14 @@ def signals_read_the_prs_settled_since_last_month(base):
                 since_kit = result["summary"]["since_kit"]
                 assert since_kit["merged_prs"] == 1 and [p["number"] for p in result["prs"]] == [2], result
                 assert since_kit["follow_ups"]["settled_prs"] == 0, "the earlier PR stays out of the existing summaries"
-                assert since_kit["signals"]["settled_prs"] == 1, since_kit["signals"]
+                assert "signals" not in since_kit and result["signals"]["settled_prs"] == 1, result["signals"]
+                assert result["signals"]["size"]["<50"] == {"prs": 1, "fix": 0, "fix_rate": 0.0, "revert": 0,
+                                                            "revert_rate": 0.0, "escape": 1, "escape_rate": 1.0}, \
+                    "its pr line and escape were joined"
+                assert [p["number"] for p in result["earlier_prs"]] == [1], "its evidence is exported"
                 assert result["window"][0] == "2026-10-20" and result["signals_window"][0] == "2026-10-06", result
     finally:
-        sys.argv = real_argv
+        outcomes.fetch_window, outcomes.BASELINE_CACHE, outcomes.QUALITY_LOG, sys.argv = real
 
 
 RESULTS = []
