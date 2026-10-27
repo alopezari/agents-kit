@@ -265,7 +265,7 @@ def signal_cells(base):
     confirmed = {"source": "bot", "verdict": "confirmed", "lens": "tests", "lens_ran": True, "category": "P4.5", "pr": 1}
 
     def signals(size, **fields):
-        return {"added": size, "deleted": 0, "tier": "standard", "red_check": "passed", "verify": "pass",
+        return {"added": size, "deleted": 0, "tier": "standard", "red_check": "passed", "verify": "pass", "verify_current": True,
                 "coverage": {"covered": 8, "measured": 10}, "tampered": {"removed": 0, "loosened": 0, "changed": 0,
                 "skipped_or_focused": 0}, "tests_deleted": 0, "test_files": 1, **fields}
 
@@ -280,6 +280,7 @@ def signal_cells(base):
          "escapes": [{**confirmed, "pr": 99}]},  # an earlier PR's escape on a reused branch: not this one's
         {"signals": signals(401, red_check=None, test_files=0), "follow_ups": [], "escapes": []},
         {"signals": signals(401, red_check="failed", verify_current=False), "follow_ups": [], "escapes": []},
+        {"signals": signals(401, verify_current=None), "follow_ups": [], "escapes": []},  # logged from a dirty tree
         {"signals": signals(None, red_check=None, verify="none", coverage=None, tampered=None, tests_deleted=None,
                             test_files=None, tier=None),
          "follow_ups": [], "escapes": [confirmed]},
@@ -295,8 +296,8 @@ def signal_cells(base):
         return {"prs": prs, "fix": fix, "fix_rate": rate(fix), "revert": revert, "revert_rate": rate(revert),
                 "escape": escape, "escape_rate": rate(escape)}
 
-    assert got["settled_prs"] == 9 and got["without_signals"] == cell(2, fix=1), got
-    assert got["size"] == {"<50": cell(1, fix=1, escape=1), "50-400": cell(2, revert=1), ">400": cell(3, fix=1),
+    assert got["settled_prs"] == 10 and got["without_signals"] == cell(2, fix=1), got
+    assert got["size"] == {"<50": cell(1, fix=1, escape=1), "50-400": cell(2, revert=1), ">400": cell(4, fix=1),
                            "unknown": cell(1, escape=1)}, got["size"]
     # Within a band, a signal is set only against PRs of that band: the 400-line PR alone shows its weakened test.
     assert got["by_size"]["50-400"]["tampered"] == {"any": cell(1), "none": cell(1, revert=1), "unknown": cell(0)}, \
@@ -304,19 +305,19 @@ def signal_cells(base):
     assert got["by_size"]["<50"]["red_check"]["passed"] == cell(1, fix=1, escape=1), got["by_size"]["<50"]
     assert "size" not in got["splits"] and set(got["by_size"]) == {"<50", "50-400", ">400", "unknown"}, got
     splits = got["splits"]
-    assert splits["tier"] == {"low": cell(0), "standard": cell(5, fix=2, escape=1), "high": cell(1, revert=1),
+    assert splits["tier"] == {"low": cell(0), "standard": cell(6, fix=2, escape=1), "high": cell(1, revert=1),
                               "unknown": cell(1, escape=1)}, splits["tier"]
-    # A red check from a verify the change has outgrown says nothing: unknown, and so is its coverage.
+    # A red check from a verify the change has outgrown, or not known to cover it, says nothing; nor does its coverage.
     assert splits["red_check"] == {"failed": cell(1, revert=1), "passed": cell(1, fix=1, escape=1),
                                    "skipped_or_not_run": cell(2, fix=1), "not_applicable": cell(1),
-                                   "unknown": cell(2, escape=1)}, splits["red_check"]
+                                   "unknown": cell(3, escape=1)}, splits["red_check"]
     assert splits["coverage"] == {"80_or_more": cell(3, fix=2, escape=1), "below_80": cell(1, revert=1),
-                                  "none": cell(1), "unknown": cell(2, escape=1)}, splits["coverage"]
-    assert splits["tampered"] == {"any": cell(1), "none": cell(5, fix=2, revert=1, escape=1),
+                                  "none": cell(1), "unknown": cell(3, escape=1)}, splits["coverage"]
+    assert splits["tampered"] == {"any": cell(1), "none": cell(6, fix=2, revert=1, escape=1),
                                   "unknown": cell(1, escape=1)}, splits["tampered"]
-    assert splits["tests_deleted"] == {"any": cell(1, fix=1), "none": cell(5, fix=1, revert=1, escape=1),
+    assert splits["tests_deleted"] == {"any": cell(1, fix=1), "none": cell(6, fix=1, revert=1, escape=1),
                                        "unknown": cell(1, escape=1)}, splits["tests_deleted"]
-    assert splits["test_files"] == {"any": cell(4, fix=1, revert=1, escape=1), "none": cell(2, fix=1),
+    assert splits["test_files"] == {"any": cell(5, fix=1, revert=1, escape=1), "none": cell(2, fix=1),
                                     "unknown": cell(1, escape=1)}, splits["test_files"]
 
 

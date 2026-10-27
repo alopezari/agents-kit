@@ -424,6 +424,10 @@ def a_renamed_test_is_not_a_deleted_one(base):
     subprocess.run([*git, "commit", "-qm", "rename"], check=True)
     assert log_pr(home, repo, "7").returncode == 0
     assert (entries(home)[-1]["test_files"], entries(home)[-1]["tests_deleted"]) == (2, 1), entries(home)[-1]
+    subprocess.run([*git, "mv", "tests/test_cart.py", "cart_notes.py"], check=True)  # out of the test paths: gone
+    subprocess.run([*git, "commit", "-qm", "move out"], check=True)
+    assert log_pr(home, repo, "7").returncode == 0
+    assert (entries(home)[-1]["test_files"], entries(home)[-1]["tests_deleted"]) == (1, 2), entries(home)[-1]
 
 
 def a_dirty_tree_nulls_what_it_would_misread(base):
@@ -439,6 +443,10 @@ def a_dirty_tree_nulls_what_it_would_misread(base):
         assert row[key] is None, (key, row)
     for key in ("added", "deleted", "files", "test_files", "tests_deleted"):
         assert row[key] == committed[key], (key, "sizes count the committed change", row)
+    subprocess.run(["git", "-C", repo, "checkout", "-q", "--", "tests/test_app.py"], check=True)
+    subprocess.run(["git", "-C", repo, "config", "status.showUntrackedFiles", "no"], check=True)
+    assert log_pr(home, repo, "7").returncode == 0
+    assert entries(home)[-1]["tampered"] is None, ("an untracked file the user's git config hides", entries(home)[-1])
 
 
 def a_signal_it_cant_compute_is_null(base):

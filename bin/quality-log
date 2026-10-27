@@ -163,16 +163,23 @@ def size_signals():
     try:
         base = review_stamp.merge_base()
         numstat = review_stamp.git_checked("diff", "--no-renames", "--numstat", base, "HEAD").decode().splitlines()
-        # Renames followed here, unlike in the sizes: a renamed test is a touched one, not a deleted one.
-        tests = {status: [path for path in review_stamp.git_paths("diff", "--find-renames", "--name-only",
-                                                                  f"--diff-filter={status}", base, "HEAD")
-                          if review_stamp.TEST_FILE.search(path)] for status in ("AMR", "D")}
+        # Renames followed here, unlike in the sizes: a test renamed is touched, one moved out of the test paths deleted.
+        fields = iter(review_stamp.git_paths("diff", "--find-renames", "--name-status", base, "HEAD"))
+        test_files = tests_deleted = 0
+        for status in fields:
+            old = next(fields)
+            new = next(fields) if status.startswith("R") else old
+            if status == "D" or (status.startswith("R") and review_stamp.TEST_FILE.search(old)
+                                 and not review_stamp.TEST_FILE.search(new)):
+                tests_deleted += bool(review_stamp.TEST_FILE.search(old))
+            elif status[0] in "AMR":
+                test_files += bool(review_stamp.TEST_FILE.search(new))
     except (RuntimeError, ValueError):  # ValueError: output that isn't UTF-8
         return dict.fromkeys(("added", "deleted", "files", "test_files", "tests_deleted"))
     counts = [line.split("\t")[:2] for line in numstat]
     return {"added": sum(int(added) for added, _ in counts if added != "-"),  # "-" is a binary file
             "deleted": sum(int(deleted) for _, deleted in counts if deleted != "-"),
-            "files": len(counts), "test_files": len(tests["AMR"]), "tests_deleted": len(tests["D"])}
+            "files": len(counts), "test_files": test_files, "tests_deleted": tests_deleted}
 
 
 def verify_signals():
@@ -211,7 +218,6 @@ def tamper_signals(root):
     the stop hook finds them; None when git can't say."""
     import stop_checks  # here, not at the top: it loads most of the hooks, which the other kinds don't need
     try:
-        review_stamp.merge_base(root)  # branch_hunks reads a failed diff as an empty one: zeros, not "unknown"
         hunks = stop_checks.branch_hunks(root)
         weakened = [kind for _, (_, kind, _) in stop_checks.weakened_assertions(root, hunks)]
     except (RuntimeError, ValueError, OSError):  # ValueError: a diff that isn't UTF-8
@@ -262,9 +268,12 @@ def main():
         tiers = {key: triage[key] for key in ("tier", "spec_tier", "diff_tier")}
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
         tiers = {"tier": None, "spec_tier": None, "diff_tier": None}
-    if kind == "pr" and git("status", "--porcelain"):  # read from the tree, these would describe what wasn't pushed
-        tiers = dict.fromkeys(tiers)
-        fields.update(verify_current=None, tampered=None)
+    if kind == "pr":
+        # Read from the tree, these would describe what wasn't pushed; a status that fails can't say the tree is clean.
+        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], capture_output=True)
+        if status.returncode or status.stdout:
+            tiers = dict.fromkeys(tiers)
+            fields.update(verify_current=None, tampered=None)
     log = quality_log()
     os.makedirs(os.path.dirname(log), exist_ok=True)
     with open(log, "a") as fh:

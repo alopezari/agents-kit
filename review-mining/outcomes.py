@@ -289,13 +289,13 @@ def signal_buckets(signals):
         measured = signals.get("coverage")
         if measured and not stale:
             return "80_or_more" if measured["covered"] * 100 >= 80 * measured["measured"] else "below_80"
-        # No report read, or one the change has outgrown, says nothing; a current one without coverage measured none.
+        # No report read, or one not known to cover the change, says nothing; a current one without coverage measured none.
         return "unknown" if signals.get("verify") in (None, "none") or stale else "none"
 
     def count(value):
         return "unknown" if value is None else "any" if value else "none"
 
-    stale = signals.get("verify_current") is False
+    stale = signals.get("verify_current") is not True  # null: logged from a dirty tree, or the stamp unreadable
     red_check = signals.get("red_check")
     tampered = signals.get("tampered")
     return {"size": size(),
