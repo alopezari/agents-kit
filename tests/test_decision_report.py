@@ -1923,6 +1923,10 @@ def signals_without_a_line_say_why(base):
     put_log(pr_line(ts=None))
     _, markup = generate(repo, base, signals_pr(repo))
     assert "recorded unknown" in summary_row(markup, "signals"), summary_row(markup, "signals")
+    put_log(pr_line(verify="\ud800", red_check="\ud800"))
+    _, markup = generate(repo, base, signals_pr(repo))
+    row = summary_row(markup, "signals")
+    assert "verify unknown" in row and "red check unknown" in row, row
 
 
 def red_checks_that_didnt_run_are_dim(base):

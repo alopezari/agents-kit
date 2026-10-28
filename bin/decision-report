@@ -750,12 +750,13 @@ def signals_line(pr, pr_error):
             if int(review_stamp.git("log", "-1", "--format=%ct", "HEAD")) > at.timestamp():
                 recorded += f' · {state("recorded before the last commit", "need")}'
     verify = found.get("verify")
-    verify_html = state(verify, "ok" if verify == "pass" else "need") if isinstance(verify, str) else unknown
+    verify_html = (state(verify, "ok" if verify == "pass" else "need")
+                   if verify in {verdict for _, verdict in quality_log_cli.VERIFY_VERDICTS} | {"none"} else unknown)
     fresh = found.get("verify_current")
     current = (state("current when recorded", "ok") if fresh is True else state("stale when recorded", "need") if fresh is False
                else unknown)
     red = found.get("red_check")
-    red_html = (state(red.replace("_", " "), {"failed": "need", "passed": "ok"}.get(red, "dim")) if isinstance(red, str)
+    red_html = (state(red.replace("_", " "), {"failed": "need", "passed": "ok"}.get(red, "dim")) if red in {verdict for _, verdict in quality_log_cli.RED_CHECKS}
                 else unknown)
     coverage = found.get("coverage")
     covered, measured = (coverage.get("covered"), coverage.get("measured")) if isinstance(coverage, dict) else (None, None)
@@ -1596,7 +1597,7 @@ h5,h6{font-size:.9375rem;margin:1.25rem 0 .5rem}
 .num{color:var(--lime);font-size:1.75rem;font-weight:400}
 .purpose{color:var(--muted);margin:0 0 1rem}
 .strip{font-family:var(--mono);font-size:.875rem;display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;margin:0;color:var(--muted);max-width:none}
-.gate{white-space:nowrap}
+.gate,#sum-signals+dd .st{white-space:nowrap}
 .todo{font-weight:600}
 .todo.need{color:var(--human)}.todo.ok{color:var(--lime)}
 #summary{padding:2rem 0 1rem;border-bottom:1px solid var(--line)}

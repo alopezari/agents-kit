@@ -53,6 +53,8 @@ RED_CHECK_FAILED = re.compile(r"^error: \[red check\] The changed tests .* all p
 RED_CHECK_PASSED = re.compile(r"^ran: red check: ", re.M)
 RED_CHECK_SKIPPED = re.compile(r"^skipped: red check \(", re.M)
 RED_CHECK_NOT_RUN = re.compile(r"^error: red check did not run\b", re.M)
+RED_CHECKS = ((RED_CHECK_FAILED, "failed"), (RED_CHECK_PASSED, "passed"), (RED_CHECK_SKIPPED, "skipped"),
+              (RED_CHECK_NOT_RUN, "not_run"))  # first match wins
 DIFF_COVERAGE = re.compile(r"^ran: diff coverage \(.*?\): (\d+) of (\d+) changed lines covered", re.M)
 # One name per test family: review-mining/test_types.py folds the older spellings (regex, property, ...) into these.
 TEST_TYPES = ("unit", "e2e", "integration", "browser", "query-budget", "accessibility", "property-based", "mutation",
@@ -205,8 +207,7 @@ def verify_signals():
         return signals
     header = report.partition("\n")[0].removeprefix("# Verify: ")
     signals["verify"] = next((verdict for prefix, verdict in VERIFY_VERDICTS if header.startswith(prefix)), None)
-    for pattern, verdict in ((RED_CHECK_FAILED, "failed"), (RED_CHECK_PASSED, "passed"), (RED_CHECK_SKIPPED, "skipped"),
-                             (RED_CHECK_NOT_RUN, "not_run")):
+    for pattern, verdict in RED_CHECKS:
         if pattern.search(report):
             signals["red_check"] = verdict
             break
