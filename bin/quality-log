@@ -15,7 +15,8 @@ A test type is one of TEST_TYPES below (the error lists them). --issues counts t
 
 A pr line records the open pull request's quality signals, run from its checkout after each push, so the last line
 before the merge describes what merged; review-mining/outcomes.py joins it to the merged PR by host, owner/repo
-(from the PR's URL as gh gives it, else from the origin URL) and number. A PR whose head is another branch is refused. Every value is computed, never passed: the size against `review_stamp.py base`
+(from the PR's URL as gh gives it, else from the origin URL) and number, and the decision page shows the branch's
+last one. A PR whose head is another branch is refused. Every value is computed, never passed: the size against `review_stamp.py base`
 (added, deleted, files, test_files added or modified, tests_deleted), the verify report's verdict (pass, fail, empty,
 none) and whether its stamp covers the change now, its red check (failed, passed, skipped, not_run) and summed diff
 coverage, and the assertions the branch weakens. A value it can't compute is null; the line is still written. Sizes
@@ -45,11 +46,15 @@ CONFIRMED_OUTCOMES = ("fixed", "minor", "pre-existing", "open")
 ORIGIN = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?(?P<host>[^/:]+)(?::\d+)?[:/](?P<remote>[^/]+/[^/]+?)(?:\.git)?/?$")
 PR_URL = re.compile(r"^https?://(?P<host>[^/]+)/(?P<remote>[^/]+/[^/]+)/pull/\d+$")
 VERIFY_VERDICTS = (("PASS, but nothing was checked", "empty"), ("PASS", "pass"), ("FAIL", "fail"))
+TS_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+TAMPER_KINDS = ("removed", "loosened", "changed", "skipped_or_focused")
 # Matched at a line's start: the report keeps verify's last 6,000 characters, so its first line can be a fragment.
 RED_CHECK_FAILED = re.compile(r"^error: \[red check\] The changed tests .* all pass without your change", re.M)
 RED_CHECK_PASSED = re.compile(r"^ran: red check: ", re.M)
 RED_CHECK_SKIPPED = re.compile(r"^skipped: red check \(", re.M)
 RED_CHECK_NOT_RUN = re.compile(r"^error: red check did not run\b", re.M)
+RED_CHECKS = ((RED_CHECK_FAILED, "failed"), (RED_CHECK_PASSED, "passed"), (RED_CHECK_SKIPPED, "skipped"),
+              (RED_CHECK_NOT_RUN, "not_run"))  # first match wins
 DIFF_COVERAGE = re.compile(r"^ran: diff coverage \(.*?\): (\d+) of (\d+) changed lines covered", re.M)
 # One name per test family: review-mining/test_types.py folds the older spellings (regex, property, ...) into these.
 TEST_TYPES = ("unit", "e2e", "integration", "browser", "query-budget", "accessibility", "property-based", "mutation",
@@ -202,8 +207,7 @@ def verify_signals():
         return signals
     header = report.partition("\n")[0].removeprefix("# Verify: ")
     signals["verify"] = next((verdict for prefix, verdict in VERIFY_VERDICTS if header.startswith(prefix)), None)
-    for pattern, verdict in ((RED_CHECK_FAILED, "failed"), (RED_CHECK_PASSED, "passed"), (RED_CHECK_SKIPPED, "skipped"),
-                             (RED_CHECK_NOT_RUN, "not_run")):
+    for pattern, verdict in RED_CHECKS:
         if pattern.search(report):
             signals["red_check"] = verdict
             break
@@ -222,7 +226,7 @@ def tamper_signals(root):
         weakened = [kind for _, (_, kind, _) in stop_checks.weakened_assertions(root, hunks)]
     except (RuntimeError, ValueError, OSError):  # ValueError: a diff that isn't UTF-8
         return None
-    return {**{kind: weakened.count(kind) for kind in ("removed", "loosened", "changed")},
+    return {**{kind: weakened.count(kind) for kind in TAMPER_KINDS[:3]},
             "skipped_or_focused": sum(1 for path, _, added in hunks for line in added
                                       if stop_checks.TEST_FILE.search(path) and stop_checks.WEAKENED_TEST.search(line))}
 
@@ -278,7 +282,7 @@ def main():
     os.makedirs(os.path.dirname(log), exist_ok=True)
     with open(log, "a") as fh:
         fh.write(json.dumps({
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "kind": kind, "name": name, **tiers,
+            "ts": time.strftime(TS_FORMAT), "kind": kind, "name": name, **tiers,
             "repo": subprocess.run([os.path.expanduser("~/.agents/bin/repo-name")], capture_output=True,
                                    text=True).stdout.strip() or os.path.basename(os.getcwd()),
             "branch": git("branch", "--show-current"), "harness": session_harness() or "unknown",

@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Write the branch's decision page: one local HTML page, built from the spec, the agent's decision notes, the reports,
-the evidence and the pull request's CI. A summary comes first: the task, the solution, the review, the tests and the
-gates, then your decisions, the blockers the agent owns and the warnings. Five folded sections follow (coverage, tests,
-review, merge and ship, and the reports as annexes), each open only while it holds a failure or a blocker, then a footer
-of identifiers. The tests follow the testing pyramid (e2e, integration, unit, then the other levels), and a drawn
-pyramid filters them by layer. References link: the PR, its commits and file:line to GitHub, https URLs, and local
-reports and evidence by file://.
+the evidence and the pull request's CI. A summary comes first: the task, the solution, the review, the tests, the gates
+and the pull request's quality signals from quality.jsonl, then your decisions, the blockers the agent owns and the
+warnings. Five folded sections follow (coverage, tests, review, merge and ship, and the reports as annexes), each open
+only while it holds a failure or a blocker, then a footer of identifiers. The tests follow the testing pyramid (e2e,
+integration, unit, then the other levels), and a drawn pyramid filters them by layer. References link: the PR, its
+commits and file:line to GitHub, https URLs, and local reports and evidence by file://.
 
   decision-report <page> <evidence dir>    run by `reports html`, which passes both paths; prints the page's path
 
 The page runs no script and loads nothing from the network. Of the files the reports name, it reads only those inside
 the evidence directory, and embeds text up to 200 KB (head and tail kept), images up to 2 MB, 20 MB in all; the rest is linked by file:// path.
-Besides the reports, it reads the repository's ship.md under ~/.agents/repos and the review's lenses.md, bounded as a report is.
+Besides the reports, it reads the repository's ship.md under ~/.agents/repos and the review's lenses.md, bounded as a report is,
+and the last 2 MB of the kit's logs/quality.jsonl for the signals `quality-log pr` recorded for the PR.
 It is written to a temporary file and renamed into place; when generation fails, the page is removed and the error
 printed (exit 1), so an older page is never taken for the current one.
 """
@@ -47,6 +48,7 @@ def load(name, path):
 pr_validation = load("pr_validation", os.path.join(HERE, "pr-validation"))
 ci_wait = load("ci_wait", os.path.join(HERE, "ci-wait"))
 triage = load("triage", os.path.join(HERE, "triage"))
+quality_log_cli = load("quality_log_cli", os.path.join(HERE, "quality-log"))
 ci_wait.GH_TIMEOUT = GH_TIMEOUT = 20
 
 CSP = "default-src 'none'; img-src file: data:; media-src file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
@@ -694,6 +696,83 @@ def ci_state(pr, pr_error, off):
     if running:
         return "pending", "need", f"on {head}: {names}"
     return "PASS", "ok", f"on {head}: {names}"
+
+
+def signals_line(pr, pr_error):
+    """The Signals row: the last usable `quality-log pr` line for the PR, from the last REPORT_LIMIT of quality.jsonl,
+    shown as a snapshot, so one recorded before HEAD's commit is flagged."""
+    if pr_error:
+        return f'{state("unknown", "need")} {esc(pr_error)}'
+    if not pr:
+        return state("no PR yet", "dim")
+    url = quality_log_cli.PR_URL.match(pr.get("url") or "")
+    if not url:
+        return f'{state("unknown", "dim")} the PR URL {esc(pr.get("url") or "")} names no repository'
+    host, remote = url["host"].lower(), url["remote"].lower()
+    try:
+        with open(review_stamp.quality_log(), "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            start = max(size - REPORT_LIMIT - 1, 0)  # one byte early: a window starting on a line's first byte keeps it
+            fh.seek(start)
+            window = fh.read(REPORT_LIMIT + 1)
+    except FileNotFoundError:
+        return state("not recorded", "dim")
+    except (OSError, RuntimeError) as error:  # RuntimeError: git timing out while quality_log() finds the main checkout
+        return f'{state("unavailable", "need")} {esc(getattr(error, "strerror", None) or str(error))}'
+    if start:
+        window = window.partition(b"\n")[2]  # the window starts inside a line
+    found = None
+    for raw in reversed(window.split(b"\n")):
+        try:
+            line = json.loads(raw)
+        except (ValueError, RecursionError):  # not JSON, not UTF-8, or a truncated last append
+            continue
+        if (isinstance(line, dict) and line.get("kind") == "pr" and type(line.get("name")) is int
+                and line["name"] == pr["number"] and isinstance(line.get("host"), str) and isinstance(line.get("remote"), str)
+                and line["host"].lower() == host and line["remote"].lower() == remote):
+            found = line
+            break
+    if not found:
+        return state(f"not in the last {REPORT_LIMIT // 1024 // 1024} MB of the log" if start else "not recorded", "dim")
+
+    unknown = state("unknown", "dim")
+
+    def count(value, words, warn=False):
+        if type(value) is not int or value < 0:
+            return f"{unknown} {words}"
+        return state(f"{value} {words}", "need" if value else "ok") if warn else f"{value} {words}"
+
+    recorded = f"recorded {unknown}"
+    with contextlib.suppress(ValueError, TypeError):
+        at = datetime.datetime.strptime(found.get("ts"), quality_log_cli.TS_FORMAT)
+        recorded = f'recorded {esc(found["ts"])}'
+        with contextlib.suppress(ValueError, RuntimeError, OSError):  # no age warning when git can't say
+            if int(review_stamp.git("log", "-1", "--format=%ct", "HEAD")) > at.timestamp():
+                recorded += f' · {state("recorded before the last commit", "need")}'
+    verify = found.get("verify")
+    verify_html = (state(verify, "ok" if verify == "pass" else "need")
+                   if verify in {verdict for _, verdict in quality_log_cli.VERIFY_VERDICTS} | {"none"} else unknown)
+    fresh = found.get("verify_current")
+    current = (state("current when recorded", "ok") if fresh is True else state("stale when recorded", "need") if fresh is False
+               else unknown)
+    red = found.get("red_check")
+    red_html = (state(red.replace("_", " "), {"failed": "need", "passed": "ok"}.get(red, "dim")) if red in {verdict for _, verdict in quality_log_cli.RED_CHECKS}
+                else unknown)
+    coverage = found.get("coverage")
+    covered, measured = (coverage.get("covered"), coverage.get("measured")) if isinstance(coverage, dict) else (None, None)
+    if type(covered) is not int or type(measured) is not int or not 0 <= covered <= measured:
+        coverage_html = unknown
+    elif measured:
+        coverage_html = state(f"{covered}/{measured} lines ({covered * 100 // measured}%)", "ok")
+    else:
+        coverage_html = state("0 lines measured", "dim")
+    tampered = found.get("tampered")
+    tampered_html = (", ".join(count(tampered.get(kind), kind.replace("_", " "), warn=True)
+                               for kind in quality_log_cli.TAMPER_KINDS) if isinstance(tampered, dict) else unknown)
+    return (f'{recorded} · {count(found.get("added"), "lines added")}, {count(found.get("deleted"), "deleted")}, '
+            f'{count(found.get("files"), "files")} · {count(found.get("test_files"), "test files touched")} · '
+            f'{count(found.get("tests_deleted"), "test files deleted", warn=True)} · verify {verify_html}, {current} · '
+            f'red check {red_html} · coverage {coverage_html} · weakened tests: {tampered_html}')
 
 
 # "Merge: …", "Merge with …", "Merge once …": not "Merge order: …", which is a decision of its own
@@ -1427,7 +1506,7 @@ def build(page_path, evidence):
                + "".join(f'<div class="row"><dt id="sum-{key}">{label}</dt><dd>{body}</dd></div>'
                          for key, label, body in (("task", "Task", task), ("solution", "Solution", solution),
                                                   ("review", "Review", review_line), ("tests", "Tests", tests_line),
-                                                  ("gates", "Gates", gates)))
+                                                  ("gates", "Gates", gates), ("signals", "Signals", signals_line(pr, pr_error))))
                + "</dl>" + item_list("decisions", "Your decisions", decisions, "nothing to decide")
                + item_list("blockers", "Blockers the agent owns", blockers, "no blocker")
                + item_list("warnings", "Warnings", warnings, "no warning")
@@ -1518,7 +1597,7 @@ h5,h6{font-size:.9375rem;margin:1.25rem 0 .5rem}
 .num{color:var(--lime);font-size:1.75rem;font-weight:400}
 .purpose{color:var(--muted);margin:0 0 1rem}
 .strip{font-family:var(--mono);font-size:.875rem;display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;margin:0;color:var(--muted);max-width:none}
-.gate{white-space:nowrap}
+.gate,#sum-signals+dd .st{white-space:nowrap}
 .todo{font-weight:600}
 .todo.need{color:var(--human)}.todo.ok{color:var(--lime)}
 #summary{padding:2rem 0 1rem;border-bottom:1px solid var(--line)}
