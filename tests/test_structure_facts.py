@@ -862,16 +862,16 @@ def a_sigterm_while_a_tool_starts_still_kills_it(base):
     # SIGTERM between the launch and the registration once found no group to kill.
     probe = os.path.join(base, "probe.py")
     with open(probe, "w") as fh:
-        fh.write(f"""import importlib.machinery, os, signal, subprocess, sys
-facts = importlib.machinery.SourceFileLoader("facts", {FACTS!r}).load_module()
-signal.signal(signal.SIGTERM, facts.terminated)
+        fh.write(f"""import os, runpy, signal, subprocess
+facts = runpy.run_path({FACTS!r}, run_name="facts")
+signal.signal(signal.SIGTERM, facts["terminated"])
 launch = subprocess.Popen
 def launch_then_terminate(*args, **kwargs):
     process = launch(*args, **kwargs)
     os.kill(os.getpid(), signal.SIGTERM)
     return process
-facts.subprocess.Popen = launch_then_terminate
-facts.bounded(["sleep", "96.5"], {base!r}, 30)
+subprocess.Popen = launch_then_terminate
+facts["bounded"](["sleep", "96.5"], {base!r}, 30)
 """)
     done = subprocess.run([sys.executable, probe], capture_output=True, text=True, timeout=30)
     time.sleep(0.5)
