@@ -76,7 +76,7 @@ Then, measured against that base, record the change's quality signals for the mo
 ~/.agents/bin/quality-log pr <number>
 ```
 
-It measures the change itself (size, tests, the verify report and stamp, weakened tests) and writes one line; the last one before the merge is what the monthly job sets against the PR's outcome. A failure there never blocks the PR: say it failed and carry on.
+It measures the change itself (size, tests, the verify report and stamp, weakened tests, the complexity it adds and the new clones it brings) and writes one line, in up to five and a half minutes on a large repo, so give the command six; the last one before the merge is what the monthly job sets against the PR's outcome. A failure there never blocks the PR: say it failed and carry on.
 
 Then write the decision page (below), before the CI wait, so the user has it even when the wait is skipped or cut short.
 

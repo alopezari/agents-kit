@@ -3,7 +3,7 @@
 NLOC of each function the change touches moved from the merge-base to the working tree (lizard), and which new
 copy-pasted blocks it adds (jscpd). Facts for a reviewer to judge; nothing gates on a number.
 
-  structure-facts <base>
+  structure-facts [--json] <base>
 
 The change is the one the review sees: committed, staged, unstaged and untracked files against the merge-base with
 <base>. Python (extensionless scripts with a Python shebang too), PHP, JavaScript and TypeScript are measured. For each
@@ -18,6 +18,14 @@ neither tool reads) prints `not measured: <reason>` and the command still exits 
 isn't a git checkout, exits 2. Work is bounded and every cut is named: at most 100 changed files, none over 512 KB,
 lizard 30 s and jscpd 60 s per end, 20 function lines per file, and jscpd compares the changed files, then the other
 tracked files of their languages in path order, up to 2,000 files.
+
+--json prints only the totals, for bin/quality-log: {"complexity": {"added", "removed", "max_function", "functions",
+"complete"}, "new_clones": {"count", "complete"}}, a part not measured null and one with no file to measure 0. added
+and removed sum each increase and decrease, a new function's complexity counting as an increase and a removed one's
+as a decrease; max_function is the largest increase, and functions the count of functions touched, added or removed.
+They count past the display caps. complete is false when a changed file was left out for any reason but its language
+or being a link or submodule, or when lizard failed or ran out of time on a file (complexity), or when the comparison
+set was cut (new_clones).
 """
 import bisect
 import csv
@@ -34,6 +42,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
 import review_stamp  # noqa: E402
 
+NOT_REGULAR = "not a regular file (a link or a submodule)"
 LIMITS = {"MAX_FILES": 100, "MAX_BYTES": 512 * 1024, "MAX_COMPARED": 2000, "LIZARD_TIMEOUT": 30, "JSCPD_TIMEOUT": 60}
 if os.environ.get("AGENTS_KIT_UNDER_TEST"):  # only the suite lowers them
     LIMITS.update({key: int(os.environ["STRUCTURE_FACTS_" + key]) for key in LIMITS
@@ -96,14 +105,36 @@ def git(root, *args, binary=False, stdin=b""):
     return done.stdout if binary else done.stdout.decode(errors="replace")
 
 
+TOOL_GROUPS = set()  # the process groups of the tools running now, for terminated() to kill
+
+
+def terminated(signum, frame):
+    """A caller's SIGTERM, as quality-log sends at its timeout: the tools run in groups of their own, so it reaches
+    none of them; kill them, then exit through the temporary tree's cleanup."""
+    for group in TOOL_GROUPS:
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except OSError:
+            pass
+    sys.exit(128 + signum)
+
+
+def unblock_sigterm():
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+
+
 def bounded(command, cwd, timeout):
     """(exit code, stdout, stderr); ToolFailed when it can't start or runs past `timeout`. The whole process group is
     killed then: a wrapper's child would otherwise hold the pipes open and the wait would last as long as it does."""
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})  # held until the group is registered for terminated()
     try:
         process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   start_new_session=True)
+                                   start_new_session=True, preexec_fn=unblock_sigterm)
+        TOOL_GROUPS.add(process.pid)
     except OSError as err:
         raise ToolFailed(f"{command[0]} could not start: {err.strerror or err}") from None
+    finally:
+        unblock_sigterm()
     try:
         out, err = process.communicate(timeout=max(timeout, 0.1))
     except subprocess.TimeoutExpired:
@@ -113,6 +144,8 @@ def bounded(command, cwd, timeout):
             pass
         process.communicate()
         raise ToolFailed(f"{command[0]} timed out after {timeout:g} s") from None
+    finally:
+        TOOL_GROUPS.discard(process.pid)
     return process.returncode, out.decode(errors="replace"), err.decode(errors="replace")
 
 
@@ -144,7 +177,7 @@ def changed_files(root, merge_base):
             i += 2
         changed = Changed(None if status == "A" else old, None if status == "D" else new)
         modes = {mode for mode in (old_mode, new_mode) if mode != "000000"}
-        files.append((changed, None if modes <= REGULAR_MODES else "not a regular file (a link or a submodule)"))
+        files.append((changed, None if modes <= REGULAR_MODES else NOT_REGULAR))
     files = [(changed, NEWLINE if "\n" in (changed.old or "") + (changed.new or "") else problem)
              for changed, problem in files]
     for path in git(root, "ls-files", "--others", "--exclude-standard", "-z", binary=True).split(b"\0"):
@@ -152,7 +185,7 @@ def changed_files(root, merge_base):
             path = os.fsdecode(path)
             regular = os.path.isfile(os.path.join(root, path)) and not os.path.islink(os.path.join(root, path))
             files.append((Changed(None, path), NEWLINE if "\n" in path else
-                          None if regular else "not a regular file (a link or a submodule)"))
+                          None if regular else NOT_REGULAR))
     files.sort(key=lambda item: item[0].path)
     return files
 
@@ -210,9 +243,10 @@ def language_of(changed, first_bytes):
 
 
 def select(root, merge_base, files, notes):
-    """The files to measure, with both ends read: those a tool reads, under the size cap, readable, the first
-    MAX_FILES of them in path order. Those left out are named in `notes`, one line per reason. Contents are read only
-    for the files measured, and a deleted extensionless file's base only until the cap is full."""
+    """(files to measure, whether a file a tool reads was left out). The files are those a tool reads, under the size
+    cap, readable, the first MAX_FILES of them in path order, with both ends read. Those left out are named in `notes`,
+    one line per reason. Contents are read only for the files measured, and a deleted extensionless file's base only
+    until the cap is full."""
     skipped, candidates = {}, []  # reason: paths
     unread = "a language neither tool reads"
     for changed, problem in files:
@@ -244,6 +278,12 @@ def select(root, merge_base, files, notes):
                 problem = "can't read it at the head"
         elif not extension(changed.old):  # deleted: only its base blob says what it is
             first_bytes = read_blobs(root, merge_base, [changed.old])[changed.old][:256]
+        if problem and problem.startswith("larger") and changed.new and not extension(changed.new):
+            try:  # too large to measure, but a file no tool reads was never in scope
+                with open(os.path.join(root, changed.new), "rb") as fh:
+                    problem = problem if language_of(changed, fh.read(256)) else unread
+            except OSError:
+                pass
         if problem:
             skipped.setdefault(problem, []).append(changed.path)
             continue
@@ -272,7 +312,7 @@ def select(root, merge_base, files, notes):
     if past_cap:
         notes.append(f"not measured: {plural(len(past_cap), 'more changed file')}, past the cap of "
                      f"{LIMITS['MAX_FILES']}: {named(past_cap)}")
-    return read
+    return read, bool(past_cap) or any(reason not in (unread, NOT_REGULAR) for reason in skipped)
 
 
 def read_hunks(root, merge_base, changed):
@@ -401,21 +441,22 @@ def overlaps(function, ranges):
 
 
 def complexity(root, merge_base, tree, files, notes):
-    """The complexity part's lines."""
-    if not files:
-        return []
+    """The complexity part's lines, and its totals over every function listed or not (None when not measured)."""
+    if not files:  # nothing to measure: none added, so a docs-only change reads as clean, not unknown
+        return [], {"added": 0, "removed": 0, "max_function": 0, "functions": 0, "complete": True}
     if not shutil.which("lizard"):
-        return [f"not measured: complexity: lizard is not installed ({INSTALL['lizard']})"]
+        return [f"not measured: complexity: lizard is not installed ({INSTALL['lizard']})"], None
     ends, failed = {}, []
     for end in ("base", "head"):
         placed = write_tree(tree, end, files)
         try:
             functions = lizard_functions(tree, placed, end, failed)
         except ToolFailed as problem:
-            return [f"not measured: complexity: {problem} at the {end}"]
+            return [f"not measured: complexity: {problem} at the {end}"], None
         ends[end] = {changed: functions[rel] for rel, changed in placed.items() if rel in functions}
     lines = ["Complexity (lizard -Ecognitive): cognitive complexity and NLOC of each function the change touches, "
              "adds or removes", *failed]
+    totals = {"added": 0, "removed": 0, "max_function": 0, "functions": 0}
     for changed in files:
         if any(end in changed.content and changed not in ends[end] for end in ("base", "head")):
             continue  # named in `failed`
@@ -424,16 +465,24 @@ def complexity(root, merge_base, tree, files, notes):
         lines += [changed.heading(), f"  base: {summary(base)}", f"  head: {summary(head)}"]
         base, head = by_name(base or []), by_name(head or [])
         by_line = lambda items: sorted(items, key=lambda item: item[1][1])  # noqa: E731
-        facts = [f"  changed {name}: cognitive {before[4]} → {after[4]}, NLOC {before[3]} → {after[3]}"
-                 for name, after in by_line(head.items()) for before in [base.get(name)]
+        moved = [(name, before, after) for name, after in by_line(head.items()) for before in [base.get(name)]
                  if before and (overlaps(after, changed.added) or overlaps(before, changed.deleted))]
-        facts += [f"  new {name}: cognitive {f[4]}, NLOC {f[3]}" for name, f in by_line(head.items()) if name not in base]
-        facts += [f"  removed {name}: cognitive {f[4]}, NLOC {f[3]}"
-                  for name, f in by_line(base.items()) if name not in head]
+        new = [(name, f) for name, f in by_line(head.items()) if name not in base]
+        gone = [(name, f) for name, f in by_line(base.items()) if name not in head]
+        facts = [f"  changed {name}: cognitive {before[4]} → {after[4]}, NLOC {before[3]} → {after[3]}"
+                 for name, before, after in moved]
+        facts += [f"  new {name}: cognitive {f[4]}, NLOC {f[3]}" for name, f in new]
+        facts += [f"  removed {name}: cognitive {f[4]}, NLOC {f[3]}" for name, f in gone]
+        increases = [after[4] - before[4] for _, before, after in moved] + [f[4] for _, f in new]
+        decreases = [before[4] - after[4] for _, before, after in moved] + [f[4] for _, f in gone]
+        totals["added"] += sum(n for n in increases if n > 0)
+        totals["removed"] += sum(n for n in decreases if n > 0)
+        totals["max_function"] = max(totals["max_function"], *increases, 0)
+        totals["functions"] += len(facts)
         lines += facts[:MAX_FUNCTION_LINES]
         if len(facts) > MAX_FUNCTION_LINES:
             lines.append(f"  and {plural(len(facts) - MAX_FUNCTION_LINES, 'more function')}")
-    return lines
+    return lines, {**totals, "complete": not failed}
 
 
 # --- clones ---------------------------------------------------------------------------------------------------------
@@ -447,13 +496,20 @@ def compared_files(root, files, all_changed, tree):
     touched = {path for changed in all_changed for path in (changed.old, changed.new) if path}
     room = LIMITS["MAX_COMPARED"] - len(files)
     same, comparable = {}, 0
-    for path in sorted(os.fsdecode(p) for p in git(root, "ls-files", "-z", binary=True).split(b"\0") if p):
-        if path in touched:
+    for entry in git(root, "ls-files", "-s", "-z", binary=True).split(b"\0"):
+        if not entry:
+            continue
+        info, path = entry.split(b"\t", 1)
+        path = os.fsdecode(path)
+        if path in touched or info.split()[0].decode() not in REGULAR_MODES:
             continue
         source = os.path.join(root, path)
+        language = LANGUAGES.get(extension(path))
+        if not os.path.lexists(source):  # a sparse checkout: an original the comparison can't read
+            comparable += language in languages
+            continue
         if os.path.islink(source) or not os.path.isfile(source):  # a pipe behind a link would block the read
             continue
-        language = LANGUAGES.get(extension(path))
         if language is None and not extension(path) and "python" in languages:
             try:
                 with open(source, "rb") as fh:
@@ -504,11 +560,11 @@ def jscpd_clones(tree, end, paths):
 
 
 def new_clones(root, tree, files, all_changed):
-    """The clones part's lines."""
+    """The clones part's lines, and its count of every new clone listed or not (None when not measured)."""
     if not files:
-        return []
+        return [], {"count": 0, "complete": True}
     if not shutil.which("jscpd"):
-        return [f"not measured: new clones: jscpd is not installed ({INSTALL['jscpd']})"]
+        return [f"not measured: new clones: jscpd is not installed ({INSTALL['jscpd']})"], None
     same, compared, comparable = compared_files(root, files, all_changed, tree)
     found = {}
     for end in ("base", "head"):
@@ -517,7 +573,7 @@ def new_clones(root, tree, files, all_changed):
         try:
             found[end] = jscpd_clones(tree, end, {**paths, **same})
         except ToolFailed as problem:
-            return [f"not measured: new clones: {problem} at the {end}"]
+            return [f"not measured: new clones: {problem} at the {end}"], None
     changed_paths = {changed.path for changed in files}
     base_text = {}  # path: the text of the base clones it is part of, without whitespace
     for lines, a, b in found["base"]:
@@ -546,14 +602,17 @@ def new_clones(root, tree, files, all_changed):
     if compared < comparable:
         lines.append(f"  compared against {compared} of {comparable} files (the rest past the cut, over the size cap "
                      "or unreadable): a clone whose original is among them is not seen")
-    return lines
+    return lines, {"count": len(listed), "complete": compared == comparable}
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1].startswith("-"):
-        print("usage: structure-facts <base>", file=sys.stderr)
+    signal.signal(signal.SIGTERM, terminated)
+    as_json = sys.argv[1:2] == ["--json"]
+    args = sys.argv[2:] if as_json else sys.argv[1:]
+    if len(args) != 1 or args[0].startswith("-"):
+        print("usage: structure-facts [--json] <base>", file=sys.stderr)
         return 2
-    base = sys.argv[1]
+    base = args[0]
     try:
         root = git(os.getcwd(), "rev-parse", "--show-toplevel").strip()
     except GitError as err:
@@ -567,27 +626,39 @@ def main():
     try:
         files = changed_files(root, merge_base)
     except GitError as err:
-        print(f"structure-facts: against {base} (merge-base {merge_base[:12]})\nnot measured: the change: {err}")
+        print(json.dumps({"complexity": None, "new_clones": None}) if as_json else
+              f"structure-facts: against {base} (merge-base {merge_base[:12]})\nnot measured: the change: {err}")
         return 0
-    print(f"structure-facts: {plural(len(files), 'changed file')} against {base} "
-          f"(merge-base {merge_base[:12]}): committed, staged, unstaged and untracked")
-    print("Measured facts for the reviewer to judge; no number here is a threshold.")
+    if not as_json:
+        print(f"structure-facts: {plural(len(files), 'changed file')} against {base} "
+              f"(merge-base {merge_base[:12]}): committed, staged, unstaged and untracked")
+        print("Measured facts for the reviewer to judge; no number here is a threshold.")
     notes = []
     try:
-        measured = select(root, merge_base, files, notes)
+        measured, left_out = select(root, merge_base, files, notes)
     except GitError as err:
-        measured = []
+        if as_json:
+            print(json.dumps({"complexity": None, "new_clones": None}))
+            return 0
+        measured, left_out = [], True
         notes.append(f"not measured: the change's files: {err}")
     all_changed = [changed for changed, _ in files]
-    parts = [notes]
+    parts, totals = [notes], {}
     with tempfile.TemporaryDirectory(prefix="structure-facts-") as tree:
-        for name, part in (("complexity", lambda: complexity(root, merge_base, os.path.join(tree, "lizard"), measured,
-                                                              notes)),
-                           ("new clones", lambda: new_clones(root, os.path.join(tree, "jscpd"), measured, all_changed))):
+        for name, key, part in (("complexity", "complexity",
+                                 lambda: complexity(root, merge_base, os.path.join(tree, "lizard"), measured, notes)),
+                                ("new clones", "new_clones",
+                                 lambda: new_clones(root, os.path.join(tree, "jscpd"), measured, all_changed))):
             try:
-                parts.append(part())
+                lines, totals[key] = part()
             except GitError as err:
-                parts.append([f"not measured: {name}: {err}"])
+                lines, totals[key] = [f"not measured: {name}: {err}"], None
+            parts.append(lines)
+            if totals[key]:
+                totals[key]["complete"] = totals[key]["complete"] and not left_out
+    if as_json:
+        print(json.dumps(totals))
+        return 0
     for part in parts:
         if part:
             print()

@@ -23,15 +23,15 @@ Since the kit, also:
                       each with whether the lens that should have caught it ran on that branch, under any of the
                       earlier names its "rename" entries record
   signals             the PR's last "pr" line in logs/quality.jsonl before the merge (bin/quality-log pr: size, tests,
-                      verify, red check, diff coverage, weakened tests), matched by host, owner/repo and number; null
-                      when kit-ship and follow-pr never recorded one
+                      verify, red check, diff coverage, weakened tests, structure), matched by host, owner/repo and
+                      number; null when kit-ship and follow-pr never recorded one
 
 The top-level "signals" block sets those signals against the PRs' settled outcomes (fix and revert candidates,
 confirmed escapes), counted once per PR, per size band and per bucket of each other split (tier, red check,
-coverage, weakened tests, tests deleted, tests touched), over all PRs and within each size band (by_size), with PRs
-without signals apart. Since the kit it reads PRs merged from FOLLOW_UP_DAYS before SINCE (signals_window, those before
-SINCE listed in earlier_prs), so a PR still pending at last month's run is settled in this one; the summaries and the
-PR list keep to PRs merged since SINCE (window).
+coverage, weakened tests, tests deleted, tests touched, complexity added, new clones), over all PRs and within each
+size band (by_size), with PRs without signals apart. Since the kit it reads PRs merged from FOLLOW_UP_DAYS before
+SINCE (signals_window, those before SINCE listed in earlier_prs), so a PR still pending at last month's run is settled
+in this one; the summaries and the PR list keep to PRs merged since SINCE (window).
 
 The baseline window (BASELINE_MONTHS before KIT_START) never changes once its follow-up windows have
 passed, so it is cached in baseline.json and fetched again only while any of its PRs is pending.
@@ -295,6 +295,15 @@ def signal_buckets(signals):
     def count(value):
         return "unknown" if value is None else "any" if value else "none"
 
+    def measured(part, key):
+        # A part cut short counts at least what it read: 0 from it says nothing, more is still more.
+        facts = (signals.get("structure") or {}).get(part)
+        return None if facts is None or not (facts[key] or facts["complete"]) else facts[key]
+
+    def complexity_added():
+        added = measured("complexity", "added")
+        return "unknown" if added is None else "none" if added == 0 else "1-9" if added < 10 else "10_or_more"
+
     stale = signals.get("verify_current") is not True  # null: logged from a dirty tree, or the stamp unreadable
     red_check = signals.get("red_check")
     tampered = signals.get("tampered")
@@ -306,13 +315,16 @@ def signal_buckets(signals):
             "coverage": coverage(),
             "tampered": count(None if tampered is None else sum(tampered.values())),
             "tests_deleted": count(signals.get("tests_deleted")),
-            "test_files": count(signals.get("test_files"))}
+            "test_files": count(signals.get("test_files")),
+            "complexity_added": complexity_added(),
+            "new_clones": count(measured("new_clones", "count"))}
 
 
 SIGNAL_SPLITS = {"size": ("<50", "50-400", ">400", "unknown"), "tier": ("low", "standard", "high", "unknown"),
                  "red_check": ("failed", "passed", "skipped_or_not_run", "not_applicable", "unknown"),
                  "coverage": ("80_or_more", "below_80", "none", "unknown"), "tampered": ("any", "none", "unknown"),
-                 "tests_deleted": ("any", "none", "unknown"), "test_files": ("any", "none", "unknown")}
+                 "tests_deleted": ("any", "none", "unknown"), "test_files": ("any", "none", "unknown"),
+                 "complexity_added": ("none", "1-9", "10_or_more", "unknown"), "new_clones": ("any", "none", "unknown")}
 
 
 def summarize_signals(prs):

@@ -71,7 +71,7 @@ Inputs (read them from disk):
 - $HOME/.agents/AGENTS.md: the current global instructions.
 - $HOME/.agents/research/review-findings.md: the previous analysis, when a profile provides one.
 - $HOME/.agents/logs/hooks.jsonl: every hook block/nudge (hook, decision, session, cwd, detail).
-- $HOME/.agents/logs/quality.jsonl: one line per review lens or test type run (tier, findings/confirmed or issues, secs, model, for a lens the outcomes of its findings, and for a test "flake": true when it hit a flake), per escape follow-pr logged, per branch rename (kind "rename": name is the old branch, to the new one; not a perspective), and per push to an open PR (kind "pr": name is the PR number, with that change's size, tests touched and deleted, verify verdict, red check, diff coverage and weakened tests; outcomes.json joins the last one before the merge to each PR as its signals).
+- $HOME/.agents/logs/quality.jsonl: one line per review lens or test type run (tier, findings/confirmed or issues, secs, model, for a lens the outcomes of its findings, and for a test "flake": true when it hit a flake), per escape follow-pr logged, per branch rename (kind "rename": name is the old branch, to the new one; not a perspective), and per push to an open PR (kind "pr": name is the PR number, with that change's size, tests touched and deleted, verify verdict, red check, diff coverage, weakened tests and structure: complexity added and removed, new clones; outcomes.json joins the last one before the merge to each PR as its signals).
 - $HOME/.agents/logs/build-ab.jsonl: A/B test of the build's model (one assign event per branch: repo, branch, tier, model, harness).
 - $RUN/sessions.json: my last 200 agent sessions (harness, model, effort, tokens, advisor_calls, prompts, correction_signals).
 - $RUN/sessions-all.json: the same for every session, read for the A/B's builds.
@@ -123,7 +123,8 @@ Steps:
    prompts and wait, and what in them asked for the user (a question, a correction, a report to read). Hours to PR
    and to merge are the cycle time to set it against. Few complete PRs make this evidence, not proof.
    Add a "Signals" section from signals in outcomes.json: per size band (lines added plus deleted), then per
-   split (tier, red check, diff coverage, weakened tests, tests deleted, tests touched) over all PRs (splits) and within
+   split (tier, red_check, coverage: diff coverage, tampered: weakened tests, tests_deleted, test_files: tests touched,
+   complexity_added: cognitive complexity added, new_clones: duplicated blocks brought in) over all PRs (splits) and within
    each size band (by_size), each bucket's settled PRs and its fix candidates, revert candidates and confirmed escapes
    with their rates, and the PRs without signals apart, never as clean ones. Bigger PRs draw more fixes whatever their
    signals: prefer by_size, and read a gap in splits alone as possibly size. It covers signals_window, which starts

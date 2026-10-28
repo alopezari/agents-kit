@@ -769,10 +769,23 @@ def signals_line(pr, pr_error):
     tampered = found.get("tampered")
     tampered_html = (", ".join(count(tampered.get(kind), kind.replace("_", " "), warn=True)
                                for kind in quality_log_cli.TAMPER_KINDS) if isinstance(tampered, dict) else unknown)
+    structure = found.get("structure")
+    if isinstance(structure, dict):
+        # Facts, not warnings: structure-facts sets no threshold, so neither tone nor "unknown" belongs here.
+        complexity = quality_log_cli.structure_part(structure, "complexity")
+        clones = quality_log_cli.structure_part(structure, "new_clones")
+        partial = " (partial)"
+        structure_html = (
+            (f'complexity +{complexity["added"]} \u2212{complexity["removed"]} (largest +{complexity["max_function"]})'
+             f'{"" if complexity["complete"] else partial}' if complexity else state("complexity not measured", "dim"))
+            + " · " + (f'{clones["count"]} new clones{"" if clones["complete"] else partial}' if clones
+                       else state("clones not measured", "dim")))
+    else:
+        structure_html = state("structure not measured", "dim")
     return (f'{recorded} · {count(found.get("added"), "lines added")}, {count(found.get("deleted"), "deleted")}, '
             f'{count(found.get("files"), "files")} · {count(found.get("test_files"), "test files touched")} · '
             f'{count(found.get("tests_deleted"), "test files deleted", warn=True)} · verify {verify_html}, {current} · '
-            f'red check {red_html} · coverage {coverage_html} · weakened tests: {tampered_html}')
+            f'red check {red_html} · coverage {coverage_html} · weakened tests: {tampered_html} · {structure_html}')
 
 
 # "Merge: …", "Merge with …", "Merge once …": not "Merge order: …", which is a decision of its own
