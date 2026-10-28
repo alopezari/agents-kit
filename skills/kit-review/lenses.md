@@ -51,6 +51,7 @@ You are reviewing how easy this code will be to change a year from now.
 - Dead code, debug leftovers, unrelated changes that belong in another PR.
 - New dependencies (triage names each one): what in the repo or the standard library already does this, what code does it replace, what is its licence, is it maintained (recent releases, open issues answered), and how much does it add to the install or bundle? Does the spec's Decisions record why it beats writing the code?
 - Does it follow the conventions of neighbouring files?
+- Structure facts, when you're given structure-facts output: read each function's numbers against the code, and a file's total and function count next to its largest function, since a lower maximum or total is not an improvement by itself (splitting a function into many can raise the total). For each new clone, should the copy reuse its original? No number is a threshold: report what the code shows, not a number.
 
 ## Security
 

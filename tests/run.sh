@@ -46,7 +46,7 @@ sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wra
   "semgrep|semgrep rules" "phase|flow phase" "quality-log|quality log input" "test-types|test type summary"
   "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree" "prune-merged|remove merged worktrees and branches"
   "pr-validation|pull request validation section" "decision-report|decision page" "approve|approvals from a dialog" "spec|spec lint and second reading" "build-ab|build-model A/B"
-  "verify-changed|verify on changed lines" "deps|dependencies" "outcomes|outcomes and escapes" "review-eval|review evals"
+  "verify-changed|verify on changed lines" "structure-facts|structure facts for review" "deps|dependencies" "outcomes|outcomes and escapes" "review-eval|review evals"
   "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
   "doctor|install doctor" "kit-home|every test refuses another checkout")
@@ -75,6 +75,7 @@ section_approve() { python3 test_approve.py; }
 section_spec() { python3 test_spec.py; }
 section_build_ab() { python3 test_build_ab.py; }
 section_verify_changed() { python3 test_verify_changed.py; }
+section_structure_facts() { python3 test_structure_facts.py; }
 section_deps() { python3 test_deps.py; }
 section_outcomes() { python3 test_outcomes.py; }
 section_review_eval() { python3 test_review_eval.py; }
