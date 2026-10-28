@@ -1841,6 +1841,36 @@ def signals_show_the_latest_usable_matching_line(base):
         assert words in row, (words, row)
 
 
+
+def signals_show_the_structure_facts(base):
+    """Each part of structure-facts' numbers on its own, a measured 0 as 0, and one not measured said in words: never
+    unknown, never a warning, as these are facts with no threshold."""
+    repo, _ = full_branch(base)
+    complexity = {"added": 12, "removed": 4, "max_function": 7, "functions": 3, "complete": True}
+    clones = {"count": 2, "complete": True}
+    zeros = {"complexity": {"added": 0, "removed": 0, "max_function": 0, "functions": 0, "complete": True},
+             "new_clones": {"count": 0, "complete": True}}
+    for line, shown in (
+            (pr_line(structure={"complexity": complexity, "new_clones": clones}), "complexity +12 \u22124 (largest +7) · 2 new clones"),
+            (pr_line(structure=zeros), "complexity +0 \u22120 (largest +0) · 0 new clones"),
+            (pr_line(structure={"complexity": complexity, "new_clones": None}), "complexity +12 \u22124 (largest +7) · clones not measured"),
+            (pr_line(structure={"complexity": None, "new_clones": clones}), "complexity not measured · 2 new clones"),
+            (pr_line(structure={"complexity": None, "new_clones": None}), "complexity not measured · clones not measured"),
+            (pr_line(structure=None), "structure not measured"),
+            (pr_line(), "structure not measured"),  # a line from before the kit recorded structure
+            (pr_line(structure={"complexity": {**complexity, "complete": False}, "new_clones": {"count": 0, "complete": False}}),
+             "complexity +12 \u22124 (largest +7) (partial) · 0 new clones (partial)"),
+            (pr_line(structure={"complexity": {**complexity, "added": "12"}, "new_clones": clones}),
+             "complexity not measured · 2 new clones")):  # hand-edited: read as not measured, never a crash
+        put_log(line)
+        _, markup = generate(repo, base, signals_pr(repo))
+        row = signals_text(markup)
+        assert row.endswith(f"0 skipped or focused · {shown}"), f"AC5: expected {shown!r} at the end: {row}"
+        markup_row = summary_row_markup(markup, "signals")
+        assert "st need" not in markup_row and markup_row.count('<span class="st dim">unknown</span>') == 0, markup_row
+        for words in ("complexity not measured", "clones not measured", "structure not measured"):
+            assert words not in shown or tone(markup_row, words) == "dim", f"AC5: {words!r} isn't dim: {markup_row}"
+
 def signal_warnings_carry_the_need_tone(base):
     repo, _ = full_branch(base)
     put_log(pr_line(ts="2020-01-01T00:00:00+0000", tests_deleted=2, verify="fail", verify_current=False, red_check="failed",
@@ -1991,7 +2021,7 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
              several_nits_show_one_per_line, references_link_only_what_the_pr_head_holds,
              switching_verify_off_raises_no_verify_blocker, the_summary_parsers_take_linear_time,
              open_findings_hold_no_link_inside_a_link, a_filename_git_holds_in_any_bytes_keeps_the_page,
-             signals_show_the_latest_usable_matching_line, signal_warnings_carry_the_need_tone,
+             signals_show_the_latest_usable_matching_line, signals_show_the_structure_facts, signal_warnings_carry_the_need_tone,
              coverage_shows_a_percentage_only_when_measured, signals_without_a_line_say_why, red_checks_that_didnt_run_are_dim,
              signals_read_only_the_last_2_mb):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")

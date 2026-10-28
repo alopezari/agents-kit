@@ -347,7 +347,7 @@ reports --branch <name> …                        the same for another branch o
 **`bin/structure-facts`**: Measured facts about the current change for the review's Maintainability lens: how the cognitive complexity and NLOC of each function the change touches moved from the merge-base to the working tree (lizard), and which new copy-pasted blocks it adds (jscpd). Facts for a reviewer to judge; nothing gates on a number.
 
 ```
-structure-facts <base>
+structure-facts [--json] <base>
 ```
 
 **`bin/triage`**: Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.

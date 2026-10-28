@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 RESULTS = []
@@ -435,11 +436,12 @@ def a_dirty_tree_nulls_what_it_would_misread(base):
     clean = log_pr(home, repo, "7")
     assert clean.returncode == 0, clean.stderr
     committed = entries(home)[-1]
+    assert isinstance(committed["structure"], dict), committed
     open(os.path.join(repo, "tests", "test_app.py"), "w").write("def test_total():\n    pass\n")
     open(os.path.join(repo, "scratch.py"), "w").write("x = 1\n")
     assert log_pr(home, repo, "7").returncode == 0
     row = entries(home)[-1]
-    for key in ("tampered", "verify_current", "tier", "spec_tier", "diff_tier"):
+    for key in ("tampered", "verify_current", "tier", "spec_tier", "diff_tier", "structure"):
         assert row[key] is None, (key, row)
     for key in ("added", "deleted", "files", "test_files", "tests_deleted"):
         assert row[key] == committed[key], (key, "sizes count the committed change", row)
@@ -461,7 +463,7 @@ def a_signal_it_cant_compute_is_null(base):
     assert out.returncode == 0, out.stderr
     row = entries(home)[-1]
     for key in ("added", "deleted", "files", "test_files", "tests_deleted", "tampered", "verify", "verify_current",
-                "red_check", "coverage"):
+                "red_check", "coverage", "structure"):
         assert key in row and row[key] is None, (key, row)
     assert (row["name"], row["remote"]) == (9, "Owner/Shop"), row
     outside = os.path.join(base, "nowhere")
@@ -469,7 +471,7 @@ def a_signal_it_cant_compute_is_null(base):
     out = log_pr(home, outside, "9")
     assert out.returncode == 0, out.stderr
     row = entries(home)[-1]
-    assert (row["kind"], row["host"], row["remote"], row["added"]) == ("pr", None, None, None), row
+    assert (row["kind"], row["host"], row["remote"], row["added"], row["structure"]) == ("pr", None, None, None, None), row
 
 
 def undecodable_output_nulls_the_signal(base):
@@ -482,6 +484,81 @@ def undecodable_output_nulls_the_signal(base):
     assert out.returncode == 0, out.stderr
     row = entries(home)[-1]
     assert row["tampered"] is None and row["added"] is not None, row
+
+
+def records_the_structure_facts(base):
+    if not (shutil.which("lizard") and shutil.which("jscpd")) and not os.environ.get("CI"):
+        print("skip records_the_structure_facts: lizard or jscpd not installed")
+        return
+    home, repo = pr_repo(base)
+    assert log_pr(home, repo, "7").returncode == 0
+    # total gains its `if` (0 → 1); test_total changes, test_neg is new and test_old removed, none of them branching.
+    assert entries(home)[-1]["structure"] == {
+        "complexity": {"added": 1, "removed": 0, "max_function": 1, "functions": 4, "complete": True},
+        "new_clones": {"count": 0, "complete": True}}, entries(home)[-1]
+
+
+def stand_in_structure_facts(home, script):
+    """The kit's structure-facts replaced by this bash script, in a bin of its own linking every other tool."""
+    bin_dir = os.path.join(home, ".agents", "bin")
+    if os.path.islink(bin_dir):
+        os.remove(bin_dir)
+        os.makedirs(bin_dir)
+        for name in os.listdir(os.path.join(KIT, "bin")):
+            if name != "structure-facts":
+                os.symlink(os.path.join(KIT, "bin", name), os.path.join(bin_dir, name))
+    path = os.path.join(bin_dir, "structure-facts")
+    with open(path, "w") as fh:
+        fh.write("#!/bin/bash\n" + script)
+    os.chmod(path, 0o755)
+
+
+def keeps_only_structure_facts_of_the_right_shape(base):
+    home, repo = pr_repo(base)
+    complexity = {"added": 3, "removed": 2, "max_function": 3, "functions": 4, "complete": False}
+    clones = {"count": 2, "complete": True}
+
+    def structure(script, **env):
+        stand_in_structure_facts(home, script)
+        out = subprocess.run([os.path.join(home, ".agents", "bin", "quality-log"), "pr", "7"], cwd=repo,
+                             env={**os.environ, "HOME": home, **env,
+                                  "PATH": os.path.join(home, "shim") + os.pathsep + os.environ["PATH"]},
+                             capture_output=True, text=True)
+        assert out.returncode == 0, out.stderr
+        return entries(home)[-1]["structure"]
+
+    def prints(value, code=0):
+        return f"echo \"$@\" > {os.path.join(base, 'args')}\ncat <<'EOF'\n{json.dumps(value)}\nEOF\nexit {code}\n"
+
+    assert structure(prints({"complexity": complexity, "new_clones": clones})) == \
+        {"complexity": complexity, "new_clones": clones}
+    assert open(os.path.join(base, "args")).read() == "--json main\n", "run against review_stamp.py base"
+    assert structure(prints({"complexity": None, "new_clones": clones})) == {"complexity": None, "new_clones": clones}
+    for value, code, expected, why in (
+            ({"complexity": complexity, "new_clones": clones}, 1, None, "a nonzero exit"),
+            ({}, 0, None, "an empty object"),
+            ([], 0, None, "a list"),
+            ({"complexity": complexity}, 0, None, "a part missing"),
+            ({"complexity": {**complexity, "removed": -1}, "new_clones": clones}, 0,
+             {"complexity": None, "new_clones": clones}, "a negative count"),
+            ({"complexity": complexity, "new_clones": {**clones, "count": "2"}}, 0,
+             {"complexity": complexity, "new_clones": None}, "a string count"),
+            ({"complexity": {**complexity, "functions": True}, "new_clones": clones}, 0,
+             {"complexity": None, "new_clones": clones}, "a boolean count"),
+            ({"complexity": {**complexity, "complete": 1}, "new_clones": clones}, 0,
+             {"complexity": None, "new_clones": clones}, "a non-boolean complete"),
+            ({"complexity": complexity, "new_clones": {**clones, "lines": 9}}, 0,
+             {"complexity": complexity, "new_clones": None}, "a key the shape lacks")):
+        assert structure(prints(value, code)) == expected, why
+    assert structure("echo 'not json'\n") is None, "garbage"
+    started = time.monotonic()
+    # A child of the stand-in holds the pipe: only killing the process group ends the wait.
+    assert structure("sleep 60\necho '{}'\n", QUALITY_LOG_STRUCTURE_TIMEOUT="1") is None, "a timeout"
+    assert time.monotonic() - started < 45, "the timeout didn't stop the wait"
+    open(os.path.join(repo, "scratch.py"), "w").write("x = 1\n")
+    os.remove(os.path.join(base, "args"))
+    assert structure(prints({"complexity": complexity, "new_clones": clones})) is None, "a dirty tree"
+    assert not os.path.exists(os.path.join(base, "args")), "a dirty tree still ran structure-facts"
 
 
 def refuses_a_pr_number_that_isnt_one(base):
@@ -499,7 +576,8 @@ for test in (writes_well_formed_entries, records_the_findings_the_other_model_sh
              accepts_each_canonical_test_type, refuses_other_test_type_spellings, marks_a_flaky_run,
              records_a_prs_size_and_origin, records_the_verify_signals, records_weakened_tests,
              a_signal_it_cant_compute_is_null, refuses_a_pr_number_that_isnt_one, refuses_a_pr_from_another_branch,
-             a_dirty_tree_nulls_what_it_would_misread, a_renamed_test_is_not_a_deleted_one, undecodable_output_nulls_the_signal):
+             a_dirty_tree_nulls_what_it_would_misread, a_renamed_test_is_not_a_deleted_one, undecodable_output_nulls_the_signal,
+             records_the_structure_facts, keeps_only_structure_facts_of_the_right_shape):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)
