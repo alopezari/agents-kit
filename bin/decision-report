@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Write the branch's decision page: one local HTML page, built from the spec, the agent's decision notes, the reports,
-the evidence and the pull request's CI. A summary comes first: the task, the solution, the review, the tests and the
-gates, then your decisions, the blockers the agent owns and the warnings. Five folded sections follow (coverage, tests,
-review, merge and ship, and the reports as annexes), each open only while it holds a failure or a blocker, then a footer
-of identifiers. The tests follow the testing pyramid (e2e, integration, unit, then the other levels), and a drawn
-pyramid filters them by layer. References link: the PR, its commits and file:line to GitHub, https URLs, and local
-reports and evidence by file://.
+the evidence and the pull request's CI. A summary comes first: the task, the solution, the review, the tests, the gates
+and the pull request's quality signals from quality.jsonl, then your decisions, the blockers the agent owns and the
+warnings. Five folded sections follow (coverage, tests, review, merge and ship, and the reports as annexes), each open
+only while it holds a failure or a blocker, then a footer of identifiers. The tests follow the testing pyramid (e2e,
+integration, unit, then the other levels), and a drawn pyramid filters them by layer. References link: the PR, its
+commits and file:line to GitHub, https URLs, and local reports and evidence by file://.
 
   decision-report <page> <evidence dir>    run by `reports html`, which passes both paths; prints the page's path
 
@@ -48,6 +48,7 @@ def load(name, path):
 pr_validation = load("pr_validation", os.path.join(HERE, "pr-validation"))
 ci_wait = load("ci_wait", os.path.join(HERE, "ci-wait"))
 triage = load("triage", os.path.join(HERE, "triage"))
+quality_log_cli = load("quality_log_cli", os.path.join(HERE, "quality-log"))
 ci_wait.GH_TIMEOUT = GH_TIMEOUT = 20
 
 CSP = "default-src 'none'; img-src file: data:; media-src file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
@@ -698,30 +699,30 @@ def ci_state(pr, pr_error, off):
 
 
 def signals_line(pr, pr_error):
-    """The last usable `quality-log pr` line for the PR, from the last REPORT_LIMIT of quality.jsonl: a snapshot, so one
-    recorded before HEAD's commit is flagged."""
+    """The Signals row: the last usable `quality-log pr` line for the PR, from the last REPORT_LIMIT of quality.jsonl,
+    shown as a snapshot, so one recorded before HEAD's commit is flagged."""
     if pr_error:
         return f'{state("unknown", "need")} {esc(pr_error)}'
     if not pr:
         return state("no PR yet", "dim")
-    url = urllib.parse.urlsplit(pr.get("url") or "")
-    parts = url.path.strip("/").split("/")
-    if not url.netloc or len(parts) != 4 or parts[2] != "pull":
+    url = quality_log_cli.PR_URL.match(pr.get("url") or "")
+    if not url:
         return f'{state("unknown", "dim")} the PR URL {esc(pr.get("url") or "")} names no repository'
-    host, remote = url.netloc.lower(), "/".join(parts[:2]).lower()
+    host, remote = url["host"].lower(), url["remote"].lower()
     try:
         with open(review_stamp.quality_log(), "rb") as fh:
             size = fh.seek(0, os.SEEK_END)
-            fh.seek(max(size - REPORT_LIMIT, 0))
-            lines = fh.read(REPORT_LIMIT).split(b"\n")
+            start = max(size - REPORT_LIMIT - 1, 0)  # one byte early: a window starting on a line's first byte keeps it
+            fh.seek(start)
+            window = fh.read(REPORT_LIMIT + 1)
     except FileNotFoundError:
         return state("not recorded", "dim")
-    except OSError as error:
-        return f'{state("unavailable", "need")} {esc(error.strerror or str(error))}'
-    if size > REPORT_LIMIT:
-        lines = lines[1:]  # the window starts inside a line
+    except (OSError, RuntimeError) as error:  # RuntimeError: git timing out while quality_log() finds the main checkout
+        return f'{state("unavailable", "need")} {esc(getattr(error, "strerror", None) or str(error))}'
+    if start:
+        window = window.partition(b"\n")[2]  # the window starts inside a line
     found = None
-    for raw in lines:
+    for raw in reversed(window.split(b"\n")):
         try:
             line = json.loads(raw)
         except (ValueError, RecursionError):  # not JSON, not UTF-8, or a truncated last append
@@ -730,30 +731,32 @@ def signals_line(pr, pr_error):
                 and line["name"] == pr["number"] and isinstance(line.get("host"), str) and isinstance(line.get("remote"), str)
                 and line["host"].lower() == host and line["remote"].lower() == remote):
             found = line
+            break
     if not found:
-        return state("not in the last 2 MB of the log" if size > REPORT_LIMIT else "not recorded", "dim")
+        return state(f"not in the last {REPORT_LIMIT // 1024 // 1024} MB of the log" if start else "not recorded", "dim")
 
     unknown = state("unknown", "dim")
 
-    def count(value, words="", warn=False):
+    def count(value, words, warn=False):
         if type(value) is not int or value < 0:
-            return f"{unknown} {words}".rstrip()
-        return state(f"{value} {words}", "need" if value else "ok") if warn else f"{value} {words}".rstrip()
+            return f"{unknown} {words}"
+        return state(f"{value} {words}", "need" if value else "ok") if warn else f"{value} {words}"
 
-    ts = found.get("ts")
-    recorded = f"recorded {esc(ts)}" if isinstance(ts, str) else f"recorded {unknown}"
+    recorded = f"recorded {unknown}"
     with contextlib.suppress(ValueError, TypeError):
-        if int(review_stamp.git("log", "-1", "--format=%ct", "HEAD")) > datetime.datetime.strptime(
-                ts, "%Y-%m-%dT%H:%M:%S%z").timestamp():
-            recorded += f' · {state("recorded before the last commit", "need")}'
+        at = datetime.datetime.strptime(found.get("ts"), quality_log_cli.TS_FORMAT)
+        recorded = f'recorded {esc(found["ts"])}'
+        with contextlib.suppress(ValueError, RuntimeError, OSError):  # no age warning when git can't say
+            if int(review_stamp.git("log", "-1", "--format=%ct", "HEAD")) > at.timestamp():
+                recorded += f' · {state("recorded before the last commit", "need")}'
     verify = found.get("verify")
-    verify_html = state(verify, "ok" if verify == "pass" else "need") if verify in ("pass", "fail", "empty", "none") else unknown
+    verify_html = state(verify, "ok" if verify == "pass" else "need") if isinstance(verify, str) else unknown
     fresh = found.get("verify_current")
     current = (state("current when recorded", "ok") if fresh is True else state("stale when recorded", "need") if fresh is False
                else unknown)
     red = found.get("red_check")
-    red_html = (state(red.replace("_", " "), {"failed": "need", "passed": "ok"}.get(red, "dim"))
-                if red in ("failed", "passed", "skipped", "not_run") else unknown)
+    red_html = (state(red.replace("_", " "), {"failed": "need", "passed": "ok"}.get(red, "dim")) if isinstance(red, str)
+                else unknown)
     coverage = found.get("coverage")
     covered, measured = (coverage.get("covered"), coverage.get("measured")) if isinstance(coverage, dict) else (None, None)
     if type(covered) is not int or type(measured) is not int or not 0 <= covered <= measured:
@@ -763,10 +766,8 @@ def signals_line(pr, pr_error):
     else:
         coverage_html = state("0 lines measured", "dim")
     tampered = found.get("tampered")
-    tampered_html = (", ".join(count(tampered.get(key), words, warn=True) for key, words in
-                               (("removed", "removed"), ("loosened", "loosened"), ("changed", "changed"),
-                                ("skipped_or_focused", "skipped or focused")))
-                     if isinstance(tampered, dict) else unknown)
+    tampered_html = (", ".join(count(tampered.get(kind), kind.replace("_", " "), warn=True)
+                               for kind in quality_log_cli.TAMPER_KINDS) if isinstance(tampered, dict) else unknown)
     return (f'{recorded} · {count(found.get("added"), "lines added")}, {count(found.get("deleted"), "deleted")}, '
             f'{count(found.get("files"), "files")} · {count(found.get("test_files"), "test files touched")} · '
             f'{count(found.get("tests_deleted"), "test files deleted", warn=True)} · verify {verify_html}, {current} · '

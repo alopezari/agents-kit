@@ -303,10 +303,14 @@ def summary(page):
     return found.group(0)
 
 
-def summary_row(page, name):
+def summary_row_markup(page, name):
     found = re.search(rf'<div class="row"><dt id="sum-{name}">(.*?)(?=<div class="row">|</dl>)', summary(page), re.S)
     assert found, f"no {name} row in the summary"
-    return text(found.group(1))
+    return found.group(1)
+
+
+def summary_row(page, name):
+    return text(summary_row_markup(page, name))
 
 
 def listed(page, name):
@@ -1800,12 +1804,6 @@ def put_log(*lines, tail="\n"):
     put(QUALITY_LOG, "\n".join(lines) + tail)
 
 
-def summary_row_markup(page, name):
-    found = re.search(rf'<div class="row"><dt id="sum-{name}">(.*?)(?=<div class="row">|</dl>)', summary(page), re.S)
-    assert found, f"no {name} row in the summary"
-    return found.group(1)
-
-
 def signals_text(markup):
     """The Signals row as text, without the space text() leaves where a state span closed before a comma."""
     return text(summary_row_markup(markup, "signals")).replace(" ,", ",")
@@ -1819,8 +1817,11 @@ def tone(row, words):
 
 def signals_show_the_latest_usable_matching_line(base):
     repo, _ = full_branch(base)
-    put_log(pr_line(added=1, ts="2030-01-01T09:00:00+0000"),
-            pr_line(added=40, ts="2030-01-02T10:00:00+0000"),
+    # The later line in the file wins even with the earlier ts; quality-log keeps the remote's case as GitHub gives it.
+    put_log(pr_line(added=1, ts="2030-01-02T10:00:00+0000"),
+            pr_line(added=40, ts="2030-01-01T09:00:00+0000", host="GitHub.com", remote="O/Shop"),
+            pr_line(added=444, name=8),
+            json.dumps({"kind": "lens", "name": 7, "host": "github.com", "remote": "o/shop", "added": 333}),
             pr_line(added=999, remote="o/other"),
             pr_line(added=888, host="github.example.com"),
             json.dumps({"kind": "lens", "name": "tests", "findings": 1}),
@@ -1831,9 +1832,9 @@ def signals_show_the_latest_usable_matching_line(base):
     assert re.search(r'id="sum-gates".*?</div><div class="row"><dt id="sum-signals">Signals</dt>', summary(markup), re.S), \
         "AC1: no Signals row right after Gates"
     row = signals_text(markup)
-    assert "recorded 2030-01-02T10:00:00+0000" in row, row
+    assert "recorded 2030-01-01T09:00:00+0000" in row, row
     assert "40 lines added, 3 deleted, 5 files" in row, f"AC1: the later matching line didn't win: {row}"
-    for decoy in ("999", "888", "777", "666", "555", " 1 lines"):
+    for decoy in ("999", "888", "777", "666", "555", "444", "333", " 1 lines"):
         assert decoy not in row, f"AC1: a decoy or unusable line ({decoy}) was read: {row}"
     for words in ("2 test files touched", "0 test files deleted", "verify pass, current when recorded", "red check passed",
                   "coverage 9/12 lines (75%)", "weakened tests: 0 removed, 0 loosened, 0 changed, 0 skipped or focused"):
@@ -1892,7 +1893,7 @@ def signals_without_a_line_say_why(base):
             pr_line(added=5)[:-20], tail="")
     _, markup = generate(repo, base, signals_pr(repo))
     assert summary_row(markup, "signals") == "Signals not recorded", f"AC4: an unusable line was read: {summary_row(markup, 'signals')}"
-    put_log(pr_line(added="40", files=None, test_files=-1, verify=3, red_check="maybe", verify_current="yes",
+    put_log(pr_line(added="40", files=None, test_files=-1, verify=3, red_check=3, verify_current="yes",
                     coverage={"covered": "9", "measured": 12}, tampered={"removed": 1.5}))
     _, markup = generate(repo, base, signals_pr(repo))
     row = summary_row_markup(markup, "signals")
@@ -1906,11 +1907,30 @@ def signals_without_a_line_say_why(base):
         _, markup = generate(repo, base, signals_pr(repo))
         row = summary_row_markup(markup, "signals")
         assert tone(row, "unavailable") == "need" and "Permission denied" in text(row), f"AC4: chmod 000: {text(row)}"
+    if os.path.lexists(QUALITY_LOG):
         os.remove(QUALITY_LOG)
     os.makedirs(QUALITY_LOG)
     _, markup = generate(repo, base, signals_pr(repo))
     row = summary_row_markup(markup, "signals")
     assert tone(row, "unavailable") == "need" and "directory" in text(row), f"AC4: a log that is a directory: {text(row)}"
+    os.rmdir(QUALITY_LOG)
+    _, markup = generate(repo, base, signals_pr(repo, url="https://github.com/O/shop/issues/7"))
+    assert "names no repository" in summary_row(markup, "signals"), summary_row(markup, "signals")
+    # json.loads turns "\ud800" into a lone surrogate, which once made the page's UTF-8 write fail
+    put_log(pr_line(ts="\ud800"))
+    _, markup = generate(repo, base, signals_pr(repo))
+    assert "recorded unknown" in summary_row(markup, "signals"), summary_row(markup, "signals")
+    put_log(pr_line(ts=None))
+    _, markup = generate(repo, base, signals_pr(repo))
+    assert "recorded unknown" in summary_row(markup, "signals"), summary_row(markup, "signals")
+
+
+def red_checks_that_didnt_run_are_dim(base):
+    repo, _ = full_branch(base)
+    for verdict, words in (("skipped", "skipped"), ("not_run", "not run")):
+        put_log(pr_line(red_check=verdict))
+        _, markup = generate(repo, base, signals_pr(repo))
+        assert tone(summary_row_markup(markup, "signals"), words) == "dim", (verdict, summary_row(markup, "signals"))
 
 
 def signals_read_only_the_last_2_mb(base):
@@ -1924,6 +1944,14 @@ def signals_read_only_the_last_2_mb(base):
     put_log(pr_line(added=40), *others, pr_line(added=41))
     _, markup = generate(repo, base, signals_pr(repo))
     assert "41 lines added" in summary_row(markup, "signals"), f"AC5: {summary_row(markup, 'signals')}"
+    # The window starts on the matching line's first byte: that line is whole and must be read.
+    match = pr_line(added=42)
+    empty = json.dumps({"kind": "lens", "name": "tests", "notes": ""})
+    big = json.dumps({"kind": "lens", "name": "tests", "notes": "x" * (2 * 1024 * 1024 - len(match) - 1 - len(empty) - 1)})
+    put_log(filler, match, big)
+    assert os.path.getsize(QUALITY_LOG) - 2 * 1024 * 1024 == len(filler) + 1
+    _, markup = generate(repo, base, signals_pr(repo))
+    assert "42 lines added" in summary_row(markup, "signals"), f"AC5: a whole first line was dropped: {summary_row(markup, 'signals')}"
 
 
 for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
@@ -1960,7 +1988,8 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
              switching_verify_off_raises_no_verify_blocker, the_summary_parsers_take_linear_time,
              open_findings_hold_no_link_inside_a_link, a_filename_git_holds_in_any_bytes_keeps_the_page,
              signals_show_the_latest_usable_matching_line, signal_warnings_carry_the_need_tone,
-             coverage_shows_a_percentage_only_when_measured, signals_without_a_line_say_why, signals_read_only_the_last_2_mb):
+             coverage_shows_a_percentage_only_when_measured, signals_without_a_line_say_why, red_checks_that_didnt_run_are_dim,
+             signals_read_only_the_last_2_mb):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
         test(os.path.realpath(base))
