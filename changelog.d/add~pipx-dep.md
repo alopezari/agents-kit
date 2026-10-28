@@ -1,1 +1,1 @@
-- `install.sh --doctor` and the docs list `pipx` as an optional dependency, with `brew install pipx`: it is what installs `lizard` for kit-review's structure facts.
+- `install.sh --doctor` and the docs list `pipx` as an optional dependency, with `brew install pipx`: it is what installs `lizard` for the structure facts.

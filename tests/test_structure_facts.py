@@ -4,6 +4,7 @@ throwaway repo; the ones that need the real lizard or jscpd skip without them, e
 Run: python3 ~/.agents/tests/test_structure_facts.py   (exit 1 on any failure)
 """
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
+import json
 import os
 import re
 import shutil
@@ -71,6 +72,16 @@ def facts(repo, base="main", path=None, **env):
     env = {**os.environ, **({"PATH": path} if path else {}), **env}
     done = subprocess.run([FACTS, base], cwd=repo, capture_output=True, text=True, env=env, timeout=120)
     return done.returncode, done.stdout + done.stderr
+
+
+def json_facts(repo, base="main", path=None, **env):
+    """(exit code, the parsed object, or the raw output when it isn't one)."""
+    env = {**os.environ, **({"PATH": path} if path else {}), **env}
+    done = subprocess.run([FACTS, "--json", base], cwd=repo, capture_output=True, text=True, env=env, timeout=120)
+    try:
+        return done.returncode, json.loads(done.stdout)
+    except ValueError:
+        return done.returncode, done.stdout + done.stderr
 
 
 def need(*programs):
@@ -709,6 +720,168 @@ def rewrapping_a_line_inside_an_old_clone_adds_none(base):
     assert out.split("New clones", 1)[1].splitlines()[1:] == ["  none"], out
 
 
+# --- --json: the totals quality-log records -------------------------------------------------------------------------
+
+def json_totals_of_the_change(base):
+    need("lizard", "jscpd")
+    code, got = json_facts(the_change_repo(base))
+    assert code == 0, got
+    # From the text: increases grow +5, cart_total +5, main +3, new keep_truthy 3, label 3 and pad_falsy 0; decreases
+    # split_me -6, removed legacy 1 and gone 0; 10 functions with scale's 0 → 0. README.md is a language no tool reads.
+    assert got == {"complexity": {"added": 19, "removed": 7, "max_function": 5, "functions": 10, "complete": True},
+                   "new_clones": {"count": 0, "complete": True}}, got
+
+
+def json_counts_past_the_display_caps(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"many.py": "".join(f"def f{i}(x):\n    return x\n\n\n" for i in range(25))})
+    nested = "    if x:\n        if x > 1:\n            if x > 2:\n                return 3\n    return x\n"
+    write(repo, "many.py", "".join(f"def f{i}(x):\n" + ("    if x:\n        return 1\n    return x\n" if i < 24 else nested)
+                                   + "\n\n" for i in range(25)))
+    code, got = json_facts(repo)
+    assert code == 0, got
+    assert got["complexity"] == {"added": 24 + 6, "removed": 0, "max_function": 6, "functions": 25, "complete": True}, got
+    assert "and 5 more functions" in facts(repo)[1], "the text still caps at 20 lines"
+
+
+def json_counts_every_new_clone(base):
+    need("lizard", "jscpd")
+    source = "".join(f"marker_src_{i} = {i}\n" + block(i) for i in range(60)) + "SRC = 1\n"
+    repo = new_repo(base, {"src.py": source})
+    write(repo, "copy.py", "".join(f"marker_copy_{i} = '{i}'\n" + block(i) for i in reversed(range(60))) + "COPY = 2\n")
+    code, got = json_facts(repo)
+    assert code == 0, got
+    assert got["new_clones"] == {"count": 60, "complete": True}, got
+
+
+def json_a_skipped_file_leaves_both_parts_incomplete(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"keep.txt": "x\n"})
+    write(repo, "big.py", "x = 1\n" * 50)
+    write(repo, "small.py", "def f(x):\n    if x:\n        return 1\n    return 0\n")
+    code, got = json_facts(repo, STRUCTURE_FACTS_MAX_BYTES="100")
+    assert code == 0, got
+    assert got == {"complexity": {"added": 1, "removed": 0, "max_function": 1, "functions": 1, "complete": False},
+                   "new_clones": {"count": 0, "complete": False}}, got
+
+
+def json_a_lizard_failure_on_one_file_is_incomplete(base):
+    rows = ('for f in "$@"; do [ -f "$f" ] && grep -q CRASH "$f" && exit 1; done\nfor f in "$@"; do case "$f" in -*) ;; *) '
+            'echo "2,1,9,0,2,\\"f@1-2@$f\\",\\"$f\\",\\"f\\",\\"f( )\\",1,2,4";; esac; done\n')
+    repo = new_repo(base, {"keep.txt": "x\n"})
+    write(repo, "good.py", "def f():\n    return 1\n")
+    write(repo, "bad.py", "def f():\n    return 'CRASH'\n")
+    code, got = json_facts(repo, path=fake(base, "lizard", rows))
+    assert code == 0, got
+    assert got == {"complexity": {"added": 4, "removed": 0, "max_function": 4, "functions": 1, "complete": False},
+                   "new_clones": None}, got
+
+
+def json_a_cut_comparison_leaves_clones_incomplete(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"a1.py": "x = 1\n", "a2.py": "x = 2\n", "notes.md": "# n\n", "zz_orig.py": block(1) + "ORIG = 1\n"})
+    write(repo, "new.py", block(1) + "NEW = 2\n")
+    code, got = json_facts(repo, STRUCTURE_FACTS_MAX_COMPARED="3")
+    assert code == 0, got
+    assert got["new_clones"] == {"count": 0, "complete": False} and got["complexity"]["complete"] is True, got
+
+
+def json_parts_not_measured_are_null(base):
+    repo = new_repo(base, {"a.py": "def f():\n    return 1\n"})
+    write(repo, "a.py", "def f():\n    return 2\n")
+    code, got = json_facts(repo, path=bare_path(base))
+    assert (code, got) == (0, {"complexity": None, "new_clones": None}), got
+    code, got = json_facts(repo, path=fake(base, "lizard", "sleep 30\n"), STRUCTURE_FACTS_LIZARD_TIMEOUT="1")
+    assert (code, got) == (0, {"complexity": None, "new_clones": None}), got
+    need("lizard", "jscpd")
+    docs = new_repo(os.path.join(base, "docs"), {"README.md": "# x\n"})
+    write(docs, "README.md", "# y\n")
+    code, got = json_facts(docs)
+    # Nothing to measure is a measured 0, so a docs-only change reads as one adding none, not as unknown.
+    assert (code, got) == (0, {"complexity": {"added": 0, "removed": 0, "max_function": 0, "functions": 0, "complete": True},
+                               "new_clones": {"count": 0, "complete": True}}), f"no file a tool reads: {got}"
+
+
+def json_exits_2_like_the_text(base):
+    repo = new_repo(base, {"a.py": "x = 1\n"})
+    code, out = json_facts(repo, base="no-such-branch")
+    assert code == 2 and "no-such-branch" in out, out
+    plain = os.path.join(base, "plain")
+    os.makedirs(plain)
+    code, out = json_facts(plain)
+    assert code == 2 and "git" in out, out
+
+
+def json_every_file_cut_is_incomplete_zeros(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"keep.txt": "x\n"})
+    write(repo, "big.py", "def f(x):\n    if x:\n        return 1\n" + "x = 1\n" * 50)
+    code, got = json_facts(repo, STRUCTURE_FACTS_MAX_BYTES="100")
+    # Unlike a docs-only change: the zeros say nothing about the file left out, so outcomes reads them as unknown.
+    assert (code, got) == (0, {"complexity": {"added": 0, "removed": 0, "max_function": 0, "functions": 0, "complete": False},
+                               "new_clones": {"count": 0, "complete": False}}), got
+
+
+def json_files_no_tool_reads_leave_it_complete(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"README.md": "# x\n"})
+    write(repo, "README.md", "# y\n")
+    os.symlink("README.md", os.path.join(repo, "LINK.md"))
+    write(repo, "tool", "#!/bin/sh\n" + "echo x\n" * 40, executable=True)
+    code, got = json_facts(repo, STRUCTURE_FACTS_MAX_BYTES="100")
+    assert (code, got) == (0, {"complexity": {"added": 0, "removed": 0, "max_function": 0, "functions": 0, "complete": True},
+                               "new_clones": {"count": 0, "complete": True}}), f"a link and an oversized shell script: {got}"
+
+
+def json_an_original_missing_from_a_sparse_checkout_cuts_the_comparison(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"orig.py": block(1) + "ORIG = 1\n"})
+    git(repo, "update-index", "--skip-worktree", "orig.py")
+    os.remove(os.path.join(repo, "orig.py"))
+    write(repo, "new.py", block(1) + "NEW = 2\n")
+    code, got = json_facts(repo)
+    assert code == 0 and got["new_clones"] == {"count": 0, "complete": False}, got
+
+
+def json_a_link_missing_from_a_sparse_checkout_leaves_it_complete(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"orig.py": block(1) + "ORIG = 1\n"})
+    git(repo, "checkout", "-q", "main")
+    os.symlink("orig.py", os.path.join(repo, "link.py"))
+    git(repo, "add", "link.py")
+    git(repo, "commit", "-qm", "link")
+    git(repo, "checkout", "-q", "-B", "feature")
+    git(repo, "update-index", "--skip-worktree", "link.py")
+    os.remove(os.path.join(repo, "link.py"))
+    write(repo, "new.py", block(2) + "NEW = 2\n")
+    code, got = json_facts(repo)
+    assert code == 0 and got["new_clones"] == {"count": 0, "complete": True}, got
+
+
+def a_sigterm_while_a_tool_starts_still_kills_it(base):
+    # SIGTERM between the launch and the registration once found no group to kill.
+    probe = os.path.join(base, "probe.py")
+    with open(probe, "w") as fh:
+        fh.write(f"""import os, runpy, signal, subprocess
+facts = runpy.run_path({FACTS!r}, run_name="facts")
+signal.signal(signal.SIGTERM, facts["terminated"])
+launch = subprocess.Popen
+def launch_then_terminate(*args, **kwargs):
+    process = launch(*args, **kwargs)
+    os.kill(os.getpid(), signal.SIGTERM)
+    return process
+subprocess.Popen = launch_then_terminate
+facts["bounded"](["sleep", "96.5"], {base!r}, 30)
+""")
+    done = subprocess.run([sys.executable, probe], capture_output=True, text=True, timeout=30)
+    time.sleep(0.5)
+    left = subprocess.run(["pgrep", "-f", "sleep 96.5"], capture_output=True, text=True).stdout.split()
+    for pid in left:
+        os.kill(int(pid), 9)
+    assert done.returncode == 128 + 15, done.stderr
+    assert not left, "the tool outlived the SIGTERM"
+
+
 # --- AC5: the review uses it ----------------------------------------------------------------------------------------
 
 def bundle(home, repo, lens):
@@ -761,7 +934,13 @@ for t in [touched_functions_at_both_ends, a_renamed_file_is_compared_with_its_ol
           an_edit_inside_an_old_clone_adds_none, a_renamed_files_old_clone_is_not_listed,
           an_extensionless_python_original_is_compared, a_clone_between_two_new_files_is_listed,
           comparison_skips_links_without_opening_them, lizard_stops_at_its_deadline, a_newline_in_a_name_is_not_measured,
-          skipped_files_share_one_capped_line, rewrapping_a_line_inside_an_old_clone_adds_none]:
+          skipped_files_share_one_capped_line, rewrapping_a_line_inside_an_old_clone_adds_none,
+          json_totals_of_the_change, json_counts_past_the_display_caps, json_counts_every_new_clone,
+          json_a_skipped_file_leaves_both_parts_incomplete, json_a_lizard_failure_on_one_file_is_incomplete,
+          json_a_cut_comparison_leaves_clones_incomplete, json_parts_not_measured_are_null, json_exits_2_like_the_text,
+          json_every_file_cut_is_incomplete_zeros, json_files_no_tool_reads_leave_it_complete,
+          json_an_original_missing_from_a_sparse_checkout_cuts_the_comparison,
+          json_a_link_missing_from_a_sparse_checkout_leaves_it_complete, a_sigterm_while_a_tool_starts_still_kills_it]:
     test(t)
 
 failed = [(n, e) for n, e, _ in RESULTS if e]

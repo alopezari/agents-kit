@@ -321,6 +321,58 @@ def signal_cells(base):
                                     "unknown": cell(1, escape=1)}, splits["test_files"]
 
 
+
+def structure_cells(base):
+    """The complexity a PR added and the clones it brought, as structure-facts measured them: a part not measured, or one
+    cut short at 0, is unknown; one cut short above 0 keeps its bucket, as it added at least that much."""
+    counts = dict.fromkeys(("review_threads", "changes_requested", "red_pushes", "commits_after_first_review"), 0)
+    fix = {"kind": "fix", "url": "u", "title": "Fix", "shared_files": ["a"]}
+    revert = {**fix, "kind": "revert"}
+
+    def structure(added, clones, complete=True):
+        return {"complexity": None if added is None else {"added": added, "removed": 3, "max_function": added,
+                                                          "functions": 2, "complete": complete},
+                "new_clones": None if clones is None else {"count": clones, "complete": complete}}
+
+    prs = [({"structure": structure(0, 0)}, [fix]),
+           ({"structure": structure(9, 3)}, [revert]),
+           ({"structure": structure(10, 0)}, []),
+           ({"structure": structure(0, 0, complete=False)}, []),
+           ({"structure": structure(12, 2, complete=False)}, [fix]),
+           ({"structure": structure(None, None)}, []),
+           ({"structure": None}, []),  # logged from a dirty tree, or structure-facts failed
+           ({}, []),  # a line from before the kit recorded structure
+           ({"added": 500, "structure": structure(1, 1)}, [fix]),
+           # Each part on its own: one not measured, or cut short at 0, leaves the other's bucket alone.
+           ({"structure": {**structure(5, 0), "new_clones": None}}, []),
+           ({"structure": {**structure(0, 2), "complexity": None}}, []),
+           ({"structure": {**structure(0, 4), "complexity": structure(0, 0, complete=False)["complexity"]}}, [fix])]
+    got = outcomes.summarize_signals([{**counts, "number": 1, "escapes": [], "follow_ups": follow_ups,
+                                       "signals": {"added": 10, "deleted": 0, **signals}} for signals, follow_ups in prs])
+
+    def cell(prs, fix=0, revert=0):
+        def rate(n):
+            return round(n / prs, 2) if prs else None
+        return {"prs": prs, "fix": fix, "fix_rate": rate(fix), "revert": revert, "revert_rate": rate(revert),
+                "escape": 0, "escape_rate": rate(0)}
+
+    splits = got["splits"]
+    assert splits["complexity_added"] == {"none": cell(1, fix=1), "1-9": cell(3, fix=1, revert=1),
+                                          "10_or_more": cell(2, fix=1), "unknown": cell(6, fix=1)}, splits["complexity_added"]
+    assert splits["new_clones"] == {"any": cell(5, fix=3, revert=1), "none": cell(2, fix=1), "unknown": cell(5)}, \
+        splits["new_clones"]
+    assert got["by_size"][">400"]["complexity_added"] == {"none": cell(0), "1-9": cell(1, fix=1), "10_or_more": cell(0),
+                                                          "unknown": cell(0)}, got["by_size"][">400"]
+    assert got["by_size"]["<50"]["new_clones"]["any"] == cell(4, fix=2, revert=1), got["by_size"]["<50"]
+
+
+def the_prompt_names_every_signal_split(base):
+    """run.sh's Signals section is the reader's only list of the splits: one it leaves out goes unread."""
+    prompt = open(os.path.join(KIT, "review-mining", "run.sh")).read()
+    section = prompt[prompt.index('Add a "Signals" section'):prompt.index('Add an "Escapes" section')]
+    missing = [split for split in outcomes.SIGNAL_SPLITS if split not in section]
+    assert not missing, f"the Signals section never names {missing}"
+
 def signals_read_the_prs_settled_since_last_month(base):
     """A PR merged in the FOLLOW_UP_DAYS before SINCE was pending at last month's run: its signals count now, while the
     other summaries keep to PRs merged since SINCE."""
@@ -374,7 +426,7 @@ for test in (pr_metrics_count_people_not_me_or_bots, follow_ups_need_a_shared_fi
              escapes_join_to_their_branch_and_lens, sessions_join_by_repo_and_branch, a_checkout_named_unlike_its_repo,
              quality_log_names_the_repo_not_the_worktree, attention_per_pr_and_its_coverage,
              a_share_never_measured_is_not_zero, signals_join_by_host_repo_and_number, signal_cells,
-             signals_read_the_prs_settled_since_last_month):
+             structure_cells, the_prompt_names_every_signal_split, signals_read_the_prs_settled_since_last_month):
     base = tempfile.mkdtemp(prefix="agents-test-outcomes-")
     try:
         test(base)

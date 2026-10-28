@@ -347,7 +347,7 @@ reports --branch <name> …                        the same for another branch o
 **`bin/structure-facts`**: Measured facts about the current change for the review's Maintainability lens: how the cognitive complexity and NLOC of each function the change touches moved from the merge-base to the working tree (lizard), and which new copy-pasted blocks it adds (jscpd). Facts for a reviewer to judge; nothing gates on a number.
 
 ```
-structure-facts <base>
+structure-facts [--json] <base>
 ```
 
 **`bin/triage`**: Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.
@@ -456,9 +456,9 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
 | optional | `impeccable` | https://github.com/pbakaus/impeccable/releases | the Design lens and validate's design check (the impeccable skill fetches it on first use) |
 | optional | `docker` | https://www.docker.com | repository verifies that run in containers |
-| optional | `pipx` | brew install pipx | installing lizard, for kit-review's structure facts |
-| optional | `lizard ≥ 1.24` | pipx install lizard | kit-review's structure facts (bin/structure-facts): complexity for the Maintainability lens |
-| optional | `jscpd ≥ 5.4` | npm install -g jscpd | kit-review's structure facts (bin/structure-facts): new clones for the Maintainability lens |
+| optional | `pipx` | brew install pipx | installing lizard, for the structure facts |
+| optional | `lizard ≥ 1.24` | pipx install lizard | structure facts (bin/structure-facts): complexity for the Maintainability lens and each PR's quality line |
+| optional | `jscpd ≥ 5.4` | npm install -g jscpd | structure facts (bin/structure-facts): new clones for the Maintainability lens and each PR's quality line |
 
 - `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, triage, a real install into an empty HOME, the install doctor, and this reference (up to date, and every diagram parses as GitHub renders it).
 - After changing the kit, commit as usual: the pre-commit hook regenerates this file.
