@@ -18,7 +18,7 @@ if [ $# -ge 4 ] && [ -z "$decided" ]; then echo "bundle.sh: no decided-findings 
 if [ -n "$decided" ]; then decided_text=$(cat "$decided") || { echo "bundle.sh: can't read the decided findings $decided" >&2; exit 1; }; fi
 facts=""
 if [ "$lens" = Maintainability ]; then
-  facts=$("$HOME/.agents/bin/structure-facts" "$base" 2>&1) || facts="not measured: structure facts: structure-facts failed: $facts"
+  facts=$("$here/../../bin/structure-facts" "$base" 2>&1) || facts="not measured: structure facts: structure-facts failed: $facts"
 fi
 
 echo "You are reviewing a code change. Goal of the change: $goal"

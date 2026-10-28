@@ -78,7 +78,7 @@ def need(*programs):
     if missing and os.environ.get("CI"):
         raise AssertionError(f"{', '.join(missing)} not installed: CI installs them pinned, so this test must run there")
     if missing:
-        raise Skip(f"{', '.join(missing)} not installed (pipx install lizard==1.24.3; npm install -g jscpd@5.4.2)")
+        raise Skip(f"{', '.join(missing)} not installed (pipx install lizard; npm install -g jscpd)")
 
 
 def test(fn):
@@ -444,17 +444,22 @@ def changed_files_past_the_cap_are_named(base):
     repo = new_repo(base, {"keep.txt": "x\n"})
     for name in ("a.py", "b.py", "c.py"):
         write(repo, name, "def f():\n    return 1\n")
-    code, out = facts(repo, path=bare_path(base), STRUCTURE_FACTS_MAX_FILES="2")
+    need("lizard", "jscpd")
+    code, out = facts(repo, STRUCTURE_FACTS_MAX_FILES="2")
     assert code == 0, out
     assert "not measured: 1 more changed file, past the cap of 2: c.py" in out, out
+    assert "b.py (new)" in out.splitlines() and "c.py (new)" not in out.splitlines(), out
 
 
 def a_file_over_the_size_cap_is_skipped(base):
     repo = new_repo(base, {"keep.txt": "x\n"})
     write(repo, "big.py", "x = 1\n" * 50)
-    code, out = facts(repo, path=bare_path(base), STRUCTURE_FACTS_MAX_BYTES="100")
+    write(repo, "small.py", "def f():\n    return 1\n")
+    need("lizard", "jscpd")
+    code, out = facts(repo, STRUCTURE_FACTS_MAX_BYTES="100")
     assert code == 0, out
     assert "not measured: big.py: larger than 100 bytes" in out, out
+    assert "small.py (new)" in out.splitlines() and "big.py (new)" not in out.splitlines(), out
 
 
 def caps_are_read_only_under_the_test_flag(base):
@@ -469,12 +474,165 @@ def caps_are_read_only_under_the_test_flag(base):
 
 def a_clone_past_the_comparison_cut_is_not_listed(base):
     need("jscpd")
-    repo = new_repo(base, {"a1.py": "x = 1\n", "a2.py": "x = 2\n", "zz_orig.py": block(1) + "ORIG = 1\n"})
+    repo = new_repo(base, {"a1.py": "x = 1\n", "a2.py": "x = 2\n", "notes.md": "# n\n", "zz_orig.py": block(1) + "ORIG = 1\n"})
     write(repo, "new.py", block(1) + "NEW = 2\n")
     code, out = facts(repo, STRUCTURE_FACTS_MAX_COMPARED="3")
     assert code == 0, out
     assert "zz_orig.py" not in out, out
     assert "compared against 3 of 4 files" in out, out
+
+
+# --- review round: paths the first build missed --------------------------------------------------------------------
+
+def a_function_losing_only_lines_is_changed(base):
+    need("lizard")
+    # The comment and the blank line count for the length, not for NLOC.
+    repo = new_repo(base, {"g.py": "def f(x):\n    # keep the sign\n    y = x\n\n    z = y + 1\n    return z\n\n\n"
+                                   "def other():\n    return 1\n"})
+    write(repo, "g.py", "def f(x):\n    # keep the sign\n    y = x\n\n    return z\n\n\ndef other():\n    return 1\n")
+    code, out = facts(repo)
+    assert code == 0, out
+    assert section(out, "g.py")[2:] == ["  changed f: cognitive 0 → 0, NLOC 4 → 3"], out
+
+
+def hunks_ignore_the_users_inter_hunk_context(base):
+    need("lizard")
+    three = "def first(a):\n    return a\n\n\ndef middle(b):\n    return b\n\n\ndef last(c):\n    return c\n"
+    repo = new_repo(base, {"m.py": three})
+    git(repo, "config", "diff.interHunkContext", "10")
+    write(repo, "m.py", three.replace("return a", "return a + 1").replace("return c", "return c + 1"))
+    code, out = facts(repo)
+    assert code == 0, out
+    assert [line.split(":")[0] for line in section(out, "m.py")[2:]] == ["  changed first", "  changed last"], out
+
+
+def the_merge_base_is_the_base(base):
+    repo = new_repo(base, {"a.py": "def f():\n    return 1\n", "b.py": "def g():\n    return 1\n"})
+    write(repo, "a.py", "def f():\n    return 2\n")
+    git(repo, "commit", "-qam", "feature")
+    git(repo, "checkout", "-q", "main")
+    write(repo, "b.py", "def g():\n    return 2\n")
+    git(repo, "commit", "-qam", "main moves on")
+    git(repo, "checkout", "-q", "feature")
+    code, out = facts(repo, path=bare_path(base))
+    assert code == 0 and "structure-facts: 1 changed file against main" in out, out
+
+
+def an_ignored_file_is_not_part_of_the_change(base):
+    repo = new_repo(base, {".gitignore": "build/\n"})
+    write(repo, "build/gen.py", "def f():\n    return 1\n")
+    write(repo, "a.py", "def f():\n    return 1\n")
+    code, out = facts(repo, path=bare_path(base))
+    assert code == 0 and "structure-facts: 1 changed file against main" in out and "gen.py" not in out, out
+
+
+def an_extensionless_shell_script_is_not_measured(base):
+    repo = new_repo(base, {"keep.txt": "x\n"})
+    write(repo, "run", "#!/bin/bash\necho hi\n", executable=True)
+    code, out = facts(repo, path=bare_path(base))
+    assert code == 0, out
+    assert "not measured: a language neither tool reads: run" in out, out
+
+
+def a_repeated_name_is_numbered(base):
+    need("lizard")
+    repo = new_repo(base, {"keep.txt": "x\n"})
+    write(repo, "view.js", "class A {\n  render(x) {\n    return x;\n  }\n}\nclass B {\n  render(y) {\n    if (y) {\n"
+                           "      return 1;\n    }\n    return 0;\n  }\n}\n")
+    code, out = facts(repo)
+    assert code == 0, out
+    assert section(out, "view.js (new)")[2:] == ["  new render: cognitive 0, NLOC 3", "  new render#2: cognitive 1, NLOC 6"], out
+
+
+def lizard_printing_nothing_is_not_measured(base):
+    repo = new_repo(base, {"a.py": "def f():\n    return 1\n"})
+    write(repo, "a.py", "def f():\n    return 2\n")
+    code, out = facts(repo, path=fake(base, "lizard", "exit 0\n"))
+    assert code == 0, out
+    assert "not measured: complexity: lizard exited 0 and printed no rows at the base" in out, out
+
+
+def a_file_lizard_chokes_on_costs_only_its_own_facts(base):
+    # Like lizard on a file it can't parse: the whole run prints no rows.
+    rows = ('for f in "$@"; do [ -f "$f" ] && grep -q CRASH "$f" && exit 1; done\nfor f in "$@"; do case "$f" in -*) ;; *) '
+            'echo "2,1,9,0,2,\\"f@1-2@$f\\",\\"$f\\",\\"f\\",\\"f( )\\",1,2,0";; esac; done\n')
+    repo = new_repo(base, {"keep.txt": "x\n"})
+    write(repo, "good.py", "def f():\n    return 1\n")
+    write(repo, "bad.py", "def f():\n    return 'CRASH'\n")
+    code, out = facts(repo, path=fake(base, "lizard", rows))
+    assert code == 0, out
+    assert "not measured: complexity of bad.py at the head: lizard exited 1 and printed no rows" in out, out
+    assert section(out, "good.py (new)")[2:] == ["  new f: cognitive 0, NLOC 2"], out
+    assert "bad.py (new)" not in out.splitlines(), out
+
+
+def a_link_in_place_of_a_file_is_not_measured(base):
+    repo = new_repo(base, {"a.py": "def f():\n    return 1\n", "b.py": "def g():\n    return 1\n"})
+    os.remove(os.path.join(repo, "a.py"))
+    os.symlink("b.py", os.path.join(repo, "a.py"))
+    write(repo, "b.py", "def g():\n    return 2\n")
+    code, out = facts(repo, path=fake(base, "lizard", 'for f in "$@"; do case "$f" in -*) ;; *) '
+                                       'echo "2,1,9,0,2,\\"g@1-2@$f\\",\\"$f\\",\\"g\\",\\"g( )\\",1,2,0";; esac; done\n'))
+    assert code == 0, out
+    assert "not measured: a.py: not a regular file (a link or a submodule)" in out, out
+    assert section(out, "b.py")[2:] == ["  changed g: cognitive 0 → 0, NLOC 2 → 2"], out
+
+
+def function_lines_are_capped_per_file(base):
+    need("lizard")
+    repo = new_repo(base, {"keep.txt": "x\n"})
+    write(repo, "many.py", "".join(f"def f{i}():\n    return {i}\n\n\n" for i in range(30)))
+    code, out = facts(repo)
+    assert code == 0, out
+    lines = section(out, "many.py (new)")
+    assert len(lines) == 2 + 20 + 1 and lines[-1] == "  and 10 more functions", out
+
+
+def a_block_copied_into_a_third_file_is_listed(base):
+    need("jscpd")
+    repo = new_repo(base, {"a.py": "a = 1\n" + block(1) + "A = 1\n", "b.py": "b = 1\n" + block(1) + "B = 1\n"})
+    write(repo, "c.py", "c = 1\n" + block(1) + "C = 1\n")
+    write(repo, "a.py", "a = 1\n" + block(1) + "A = 1\n" + block(2) + "A2 = 1\n")
+    write(repo, "b.py", "b = 1\n" + block(1) + "B = 1\n" + block(2) + "B2 = 1\n")
+    code, out = facts(repo)
+    assert code == 0, out
+    clones = out.split("New clones", 1)[1].splitlines()[1:]
+    assert any("c.py:" in line for line in clones), out
+    assert "  a.py:7-12 ↔ b.py:7-12 (6 lines)" in clones, out
+
+
+def an_edit_inside_an_old_clone_adds_none(base):
+    need("jscpd")
+    two = block(1) + block(2)
+    repo = new_repo(base, {"a.py": "a = 1\n" + two + "A = 1\n", "b.py": "b = 1\n" + two + "B = 1\n",
+                           "c.py": "c = 1\n" + two + "C = 1\n"})
+    write(repo, "b.py", "b = 1\n" + two.replace("alpha(a, b, 1)", "alpha(a,b,1)") + "B = 1\n")
+    middle = two.replace("    return kappa(third_1, second_1, first_1, 1, a, b)\n", "    return None\n")
+    write(repo, "c.py", "c = 1\n" + middle + "C = 1\n")
+    code, out = facts(repo)
+    assert code == 0, out
+    assert out.split("New clones", 1)[1].splitlines()[1:] == ["  none"], out
+
+
+def a_renamed_files_old_clone_is_not_listed(base):
+    need("jscpd")
+    repo = new_repo(base, {"a.py": "a = 1\n" + block(1) + "A = 1\n",
+                           "b.py": "b = 1\n" + block(1) + "B = 1\n" + block(3, "other") + "B3 = 1\n"})
+    git(repo, "mv", "b.py", "c.py")
+    write(repo, "c.py", "b = 2\n" + block(1) + "B = 1\n" + block(3, "other") + "B3 = 1\n")
+    code, out = facts(repo)
+    assert code == 0, out
+    assert "c.py (was b.py)" in out and out.split("New clones", 1)[1].splitlines()[1:] == ["  none"], out
+
+
+def an_extensionless_python_original_is_compared(base):
+    need("jscpd")
+    repo = new_repo(base, {"tool": "#!/usr/bin/env python3\n" + block(1) + "TOOL = 1\n"})
+    write(repo, "new.py", "x = 0\n" + block(1) + "NEW = 2\n")
+    code, out = facts(repo)
+    assert code == 0, out
+    assert any(line.startswith("  new.py:2-") and "↔ tool:2-" in line
+               for line in out.split("New clones", 1)[1].splitlines()), out
 
 
 # --- AC5: the review uses it ----------------------------------------------------------------------------------------
@@ -520,7 +678,14 @@ for t in [touched_functions_at_both_ends, a_renamed_file_is_compared_with_its_ol
           a_file_it_cannot_read_is_not_measured, a_change_no_tool_reads_is_not_measured, a_bad_base_exits_2,
           outside_a_checkout_exits_2, changed_files_past_the_cap_are_named, a_file_over_the_size_cap_is_skipped,
           caps_are_read_only_under_the_test_flag, a_clone_past_the_comparison_cut_is_not_listed,
-          only_the_maintainability_bundle_holds_the_facts, the_skill_and_the_brief_use_the_facts]:
+          only_the_maintainability_bundle_holds_the_facts, the_skill_and_the_brief_use_the_facts,
+          a_function_losing_only_lines_is_changed, hunks_ignore_the_users_inter_hunk_context, the_merge_base_is_the_base,
+          an_ignored_file_is_not_part_of_the_change, an_extensionless_shell_script_is_not_measured,
+          a_repeated_name_is_numbered, lizard_printing_nothing_is_not_measured,
+          a_file_lizard_chokes_on_costs_only_its_own_facts, a_link_in_place_of_a_file_is_not_measured,
+          function_lines_are_capped_per_file, a_block_copied_into_a_third_file_is_listed,
+          an_edit_inside_an_old_clone_adds_none, a_renamed_files_old_clone_is_not_listed,
+          an_extensionless_python_original_is_compared]:
     test(t)
 
 failed = [(n, e) for n, e, _ in RESULTS if e]
