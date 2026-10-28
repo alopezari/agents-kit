@@ -843,6 +843,45 @@ def json_an_original_missing_from_a_sparse_checkout_cuts_the_comparison(base):
     assert code == 0 and got["new_clones"] == {"count": 0, "complete": False}, got
 
 
+def json_a_link_missing_from_a_sparse_checkout_leaves_it_complete(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"orig.py": block(1) + "ORIG = 1\n"})
+    git(repo, "checkout", "-q", "main")
+    os.symlink("orig.py", os.path.join(repo, "link.py"))
+    git(repo, "add", "link.py")
+    git(repo, "commit", "-qm", "link")
+    git(repo, "checkout", "-q", "-B", "feature")
+    git(repo, "update-index", "--skip-worktree", "link.py")
+    os.remove(os.path.join(repo, "link.py"))
+    write(repo, "new.py", block(2) + "NEW = 2\n")
+    code, got = json_facts(repo)
+    assert code == 0 and got["new_clones"] == {"count": 0, "complete": True}, got
+
+
+def a_sigterm_while_a_tool_starts_still_kills_it(base):
+    # SIGTERM between the launch and the registration once found no group to kill.
+    probe = os.path.join(base, "probe.py")
+    with open(probe, "w") as fh:
+        fh.write(f"""import importlib.machinery, os, signal, subprocess, sys
+facts = importlib.machinery.SourceFileLoader("facts", {FACTS!r}).load_module()
+signal.signal(signal.SIGTERM, facts.terminated)
+launch = subprocess.Popen
+def launch_then_terminate(*args, **kwargs):
+    process = launch(*args, **kwargs)
+    os.kill(os.getpid(), signal.SIGTERM)
+    return process
+facts.subprocess.Popen = launch_then_terminate
+facts.bounded(["sleep", "96.5"], {base!r}, 30)
+""")
+    done = subprocess.run([sys.executable, probe], capture_output=True, text=True, timeout=30)
+    time.sleep(0.5)
+    left = subprocess.run(["pgrep", "-f", "sleep 96.5"], capture_output=True, text=True).stdout.split()
+    for pid in left:
+        os.kill(int(pid), 9)
+    assert done.returncode == 128 + 15, done.stderr
+    assert not left, "the tool outlived the SIGTERM"
+
+
 # --- AC5: the review uses it ----------------------------------------------------------------------------------------
 
 def bundle(home, repo, lens):
@@ -900,7 +939,8 @@ for t in [touched_functions_at_both_ends, a_renamed_file_is_compared_with_its_ol
           json_a_skipped_file_leaves_both_parts_incomplete, json_a_lizard_failure_on_one_file_is_incomplete,
           json_a_cut_comparison_leaves_clones_incomplete, json_parts_not_measured_are_null, json_exits_2_like_the_text,
           json_every_file_cut_is_incomplete_zeros, json_files_no_tool_reads_leave_it_complete,
-          json_an_original_missing_from_a_sparse_checkout_cuts_the_comparison]:
+          json_an_original_missing_from_a_sparse_checkout_cuts_the_comparison,
+          json_a_link_missing_from_a_sparse_checkout_leaves_it_complete, a_sigterm_while_a_tool_starts_still_kills_it]:
     test(t)
 
 failed = [(n, e) for n, e, _ in RESULTS if e]

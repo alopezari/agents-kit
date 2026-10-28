@@ -119,15 +119,22 @@ def terminated(signum, frame):
     sys.exit(128 + signum)
 
 
+def unblock_sigterm():
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+
+
 def bounded(command, cwd, timeout):
     """(exit code, stdout, stderr); ToolFailed when it can't start or runs past `timeout`. The whole process group is
     killed then: a wrapper's child would otherwise hold the pipes open and the wait would last as long as it does."""
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})  # held until the group is registered for terminated()
     try:
         process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   start_new_session=True)
+                                   start_new_session=True, preexec_fn=unblock_sigterm)
+        TOOL_GROUPS.add(process.pid)
     except OSError as err:
         raise ToolFailed(f"{command[0]} could not start: {err.strerror or err}") from None
-    TOOL_GROUPS.add(process.pid)
+    finally:
+        unblock_sigterm()
     try:
         out, err = process.communicate(timeout=max(timeout, 0.1))
     except subprocess.TimeoutExpired:
@@ -489,8 +496,12 @@ def compared_files(root, files, all_changed, tree):
     touched = {path for changed in all_changed for path in (changed.old, changed.new) if path}
     room = LIMITS["MAX_COMPARED"] - len(files)
     same, comparable = {}, 0
-    for path in sorted(os.fsdecode(p) for p in git(root, "ls-files", "-z", binary=True).split(b"\0") if p):
-        if path in touched:
+    for entry in git(root, "ls-files", "-s", "-z", binary=True).split(b"\0"):
+        if not entry:
+            continue
+        info, path = entry.split(b"\t", 1)
+        path = os.fsdecode(path)
+        if path in touched or info.split()[0].decode() not in REGULAR_MODES:
             continue
         source = os.path.join(root, path)
         language = LANGUAGES.get(extension(path))
