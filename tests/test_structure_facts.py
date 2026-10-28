@@ -414,7 +414,7 @@ def a_file_it_cannot_read_is_not_measured(base):
     finally:
         os.chmod(secret, 0o644)
     assert code == 0, out
-    assert "not measured: secret.py: can't read it at the head" in out, out
+    assert "not measured: can't read it at the head: secret.py" in out, out
 
 
 def a_change_no_tool_reads_is_not_measured(base):
@@ -458,7 +458,7 @@ def a_file_over_the_size_cap_is_skipped(base):
     need("lizard", "jscpd")
     code, out = facts(repo, STRUCTURE_FACTS_MAX_BYTES="100")
     assert code == 0, out
-    assert "not measured: big.py: larger than 100 bytes" in out, out
+    assert "not measured: larger than 100 bytes: big.py" in out, out
     assert "small.py (new)" in out.splitlines() and "big.py (new)" not in out.splitlines(), out
 
 
@@ -561,7 +561,8 @@ def a_file_lizard_chokes_on_costs_only_its_own_facts(base):
     write(repo, "bad.py", "def f():\n    return 'CRASH'\n")
     code, out = facts(repo, path=fake(base, "lizard", rows))
     assert code == 0, out
-    assert "not measured: complexity of bad.py at the head: lizard exited 1 and printed no rows" in out, out
+    assert ("not measured: complexity at the head, lizard failed on: bad.py (lizard exited 1 and printed no rows)"
+            in out), out
     assert section(out, "good.py (new)")[2:] == ["  new f: cognitive 0, NLOC 2"], out
     assert "bad.py (new)" not in out.splitlines(), out
 
@@ -574,7 +575,7 @@ def a_link_in_place_of_a_file_is_not_measured(base):
     code, out = facts(repo, path=fake(base, "lizard", 'for f in "$@"; do case "$f" in -*) ;; *) '
                                        'echo "2,1,9,0,2,\\"g@1-2@$f\\",\\"$f\\",\\"g\\",\\"g( )\\",1,2,0";; esac; done\n'))
     assert code == 0, out
-    assert "not measured: a.py: not a regular file (a link or a submodule)" in out, out
+    assert "not measured: not a regular file (a link or a submodule): a.py" in out, out
     assert section(out, "b.py")[2:] == ["  changed g: cognitive 0 → 0, NLOC 2 → 2"], out
 
 
@@ -635,6 +636,77 @@ def an_extensionless_python_original_is_compared(base):
                for line in out.split("New clones", 1)[1].splitlines()), out
 
 
+def a_clone_between_two_new_files_is_listed(base):
+    need("jscpd")
+    repo = new_repo(base, {"README.md": "# x\n"})
+    write(repo, "one.py", "a = 1\n" + block(1) + "A = 1\n")
+    write(repo, "two.py", "b = 1\n" + block(1) + "B = 1\n")
+    code, out = facts(repo)
+    assert code == 0, out
+    assert any(line.startswith("  one.py:") and "two.py:" in line
+               for line in out.split("New clones", 1)[1].splitlines()), out
+
+
+def comparison_skips_links_without_opening_them(base):
+    need("jscpd")
+    repo = new_repo(base, {"keep.py": "x = 1\n"})
+    os.mkfifo(os.path.join(repo, "pipe"))
+    os.symlink("pipe", os.path.join(repo, "tool"))
+    git(repo, "add", "tool")
+    git(repo, "commit", "-qm", "a link to a pipe")
+    git(repo, "branch", "-f", "main")
+    write(repo, "new.py", "def f():\n    return 1\n")
+    code, out = facts(repo)  # a read of the pipe would block until the 120 s test timeout
+    assert code == 0 and "New clones" in out, out
+
+
+def lizard_stops_at_its_deadline(base):
+    # The whole run fails (lizard also gets the sentinel), so each file gets a run of its own, and the first slow one uses up the time left.
+    rows = ('n=0; for f in "$@"; do case "$f" in -*) ;; *) n=$((n+1));; esac; done\n'
+            'for f in "$@"; do [ -f "$f" ] && grep -q CRASH "$f" && { [ $n = 2 ] && sleep 5; exit 1; }; done\n'
+            'for f in "$@"; do case "$f" in -*) ;; *) '
+            'echo "2,1,9,0,2,\\"f@1-2@$f\\",\\"$f\\",\\"f\\",\\"f( )\\",1,2,0";; esac; done\n')
+    repo = new_repo(base, {"keep.txt": "x\n"})
+    write(repo, "a_good.py", "def f():\n    return 1\n")
+    write(repo, "b_slow.py", "def f():\n    return 'CRASH'\n")
+    write(repo, "c_late.py", "def f():\n    return 3\n")
+    code, out = facts(repo, path=fake(base, "lizard", rows), STRUCTURE_FACTS_LIZARD_TIMEOUT="1")
+    assert code == 0, out
+    assert "not measured: complexity at the head, past lizard's 1 s: c_late.py" in out, out
+    assert section(out, "a_good.py (new)")[2:] == ["  new f: cognitive 0, NLOC 2"], out
+
+
+def a_newline_in_a_name_is_not_measured(base):
+    repo = new_repo(base, {"b.py": "def g():\n    return 1\n"})
+    write(repo, "a\nb.py", "def f():\n    return 1\n")
+    write(repo, "b.py", "def g():\n    return 2\n")
+    git(repo, "add", "-A")
+    code, out = facts(repo, path=fake(base, "lizard", 'for f in "$@"; do case "$f" in -*) ;; *) '
+                                       'echo "2,1,9,0,2,\\"g@1-2@$f\\",\\"$f\\",\\"g\\",\\"g( )\\",1,2,0";; esac; done\n'))
+    assert code == 0, out
+    assert "one name per line): a\\nb.py\n" in out, out
+    assert section(out, "b.py")[2:] == ["  changed g: cognitive 0 → 0, NLOC 2 → 2"], out
+
+
+def skipped_files_share_one_capped_line(base):
+    repo = new_repo(base, {"keep.txt": "x\n"})
+    for i in range(25):
+        os.symlink("keep.txt", os.path.join(repo, f"l{i:02}.py"))
+    code, out = facts(repo, path=bare_path(base))
+    assert code == 0, out
+    lines = [line for line in out.splitlines() if "not a regular file" in line]
+    assert len(lines) == 1 and lines[0].endswith(" and 5 more"), out
+
+
+def rewrapping_a_line_inside_an_old_clone_adds_none(base):
+    need("jscpd")
+    repo = new_repo(base, {"a.py": "a = 1\n" + block(1) + "A = 1\n", "b.py": "b = 1\n" + block(1) + "B = 1\n"})
+    write(repo, "b.py", "b = 1\n" + block(1).replace("delta(first_1, b)", "delta(first_1,\n        b)") + "B = 1\n")
+    code, out = facts(repo)
+    assert code == 0, out
+    assert out.split("New clones", 1)[1].splitlines()[1:] == ["  none"], out
+
+
 # --- AC5: the review uses it ----------------------------------------------------------------------------------------
 
 def bundle(home, repo, lens):
@@ -685,7 +757,9 @@ for t in [touched_functions_at_both_ends, a_renamed_file_is_compared_with_its_ol
           a_file_lizard_chokes_on_costs_only_its_own_facts, a_link_in_place_of_a_file_is_not_measured,
           function_lines_are_capped_per_file, a_block_copied_into_a_third_file_is_listed,
           an_edit_inside_an_old_clone_adds_none, a_renamed_files_old_clone_is_not_listed,
-          an_extensionless_python_original_is_compared]:
+          an_extensionless_python_original_is_compared, a_clone_between_two_new_files_is_listed,
+          comparison_skips_links_without_opening_them, lizard_stops_at_its_deadline, a_newline_in_a_name_is_not_measured,
+          skipped_files_share_one_capped_line, rewrapping_a_line_inside_an_old_clone_adds_none]:
     test(t)
 
 failed = [(n, e) for n, e, _ in RESULTS if e]

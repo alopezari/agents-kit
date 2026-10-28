@@ -45,6 +45,7 @@ LANGUAGES = {".py": "python", ".php": "php", ".js": "javascript", ".mjs": "javas
              ".jsx": "javascript", ".ts": "typescript", ".tsx": "typescript"}
 EXTENSION_OF = {"python": ".py", "php": ".php", "javascript": ".js", "typescript": ".ts"}
 REGULAR_MODES = {"100644", "100755"}
+NEWLINE = "a newline in its name (git cat-file reads one name per line)"
 JSCPD_SETTINGS = ["--min-lines", "5", "--min-tokens", "50"]
 # Pinned against the user's diff config: diff.interHunkContext merges -U0 hunks across untouched lines, and
 # diff.submodule=log|diff changes which `diff --git` sections the patch has.
@@ -144,11 +145,14 @@ def changed_files(root, merge_base):
         changed = Changed(None if status == "A" else old, None if status == "D" else new)
         modes = {mode for mode in (old_mode, new_mode) if mode != "000000"}
         files.append((changed, None if modes <= REGULAR_MODES else "not a regular file (a link or a submodule)"))
+    files = [(changed, NEWLINE if "\n" in (changed.old or "") + (changed.new or "") else problem)
+             for changed, problem in files]
     for path in git(root, "ls-files", "--others", "--exclude-standard", "-z", binary=True).split(b"\0"):
         if path:
             path = os.fsdecode(path)
             regular = os.path.isfile(os.path.join(root, path)) and not os.path.islink(os.path.join(root, path))
-            files.append((Changed(None, path), None if regular else "not a regular file (a link or a submodule)"))
+            files.append((Changed(None, path), NEWLINE if "\n" in path else
+                          None if regular else "not a regular file (a link or a submodule)"))
     files.sort(key=lambda item: item[0].path)
     return files
 
@@ -207,22 +211,24 @@ def language_of(changed, first_bytes):
 
 def select(root, merge_base, files, notes):
     """The files to measure, with both ends read: those a tool reads, under the size cap, readable, the first
-    MAX_FILES of them in path order. Each one left out is named in `notes`. Contents are read only for those."""
-    unread, candidates = [], []
+    MAX_FILES of them in path order. Those left out are named in `notes`, one line per reason. Contents are read only
+    for the files measured, and a deleted extensionless file's base only until the cap is full."""
+    skipped, candidates = {}, []  # reason: paths
+    unread = "a language neither tool reads"
     for changed, problem in files:
         if problem:
-            notes.append(f"not measured: {changed.path}: {problem}")
+            skipped.setdefault(problem, []).append(changed.path)
         elif any(path and (extension(path) in LANGUAGES or not extension(path)) for path in (changed.old, changed.new)):
             candidates.append(changed)
         else:
-            unread.append(changed.path)
+            skipped.setdefault(unread, []).append(changed.path)
     sizes = blob_sizes(root, merge_base, candidates)
-    # A deleted extensionless file says what it is only in its base blob.
-    scripts = read_blobs(root, merge_base, [c.old for c in candidates if c.new is None and not extension(c.old)
-                                            and sizes[c.old] is not None and sizes[c.old] <= LIMITS["MAX_BYTES"]])
-    measurable = []
+    measurable, past_cap = [], []
     for changed in candidates:
-        problem, first_bytes = None, scripts.get(changed.old, b"")
+        if len(measurable) == LIMITS["MAX_FILES"]:
+            past_cap.append(changed.path)
+            continue
+        problem, first_bytes = None, b""
         if changed.old and sizes[changed.old] is None:
             problem = "can't read it at the base"
         elif changed.old and sizes[changed.old] > LIMITS["MAX_BYTES"]:
@@ -234,14 +240,18 @@ def select(root, merge_base, files, notes):
                 elif not extension(changed.new):
                     with open(os.path.join(root, changed.new), "rb") as fh:
                         first_bytes = fh.read(256)
-            except OSError as err:
-                problem = f"can't read it at the head: {err.strerror or err}"
+            except OSError:
+                problem = "can't read it at the head"
+        elif not extension(changed.old):  # deleted: only its base blob says what it is
+            first_bytes = read_blobs(root, merge_base, [changed.old])[changed.old][:256]
         if problem:
-            notes.append(f"not measured: {changed.path}: {problem}")
+            skipped.setdefault(problem, []).append(changed.path)
             continue
         changed.language = language_of(changed, first_bytes)
-        (measurable if changed.language else unread).append(changed if changed.language else changed.path)
-    past_cap, measurable = measurable[LIMITS["MAX_FILES"]:], measurable[:LIMITS["MAX_FILES"]]
+        if changed.language:
+            measurable.append(changed)
+        else:
+            skipped.setdefault(unread, []).append(changed.path)
     bases = read_blobs(root, merge_base, [c.old for c in measurable if c.old])
     read = []
     for changed in measurable:
@@ -250,19 +260,18 @@ def select(root, merge_base, files, notes):
         if changed.new:
             try:
                 head = read_capped(os.path.join(root, changed.new))
-            except OSError as err:
-                notes.append(f"not measured: {changed.path}: can't read it at the head: {err.strerror or err}")
+            except OSError:
+                skipped.setdefault("can't read it at the head", []).append(changed.path)
                 continue
             if head is None:  # grew past the cap since the size check
-                notes.append(f"not measured: {changed.path}: larger than {cap_text()}")
+                skipped.setdefault(f"larger than {cap_text()}", []).append(changed.path)
                 continue
             changed.content["head"] = head
         read.append(changed)
+    notes += [f"not measured: {reason}: {named(sorted(paths))}" for reason, paths in skipped.items()]
     if past_cap:
         notes.append(f"not measured: {plural(len(past_cap), 'more changed file')}, past the cap of "
-                     f"{LIMITS['MAX_FILES']}: {named([changed.path for changed in past_cap])}")
-    if unread:
-        notes.append(f"not measured: a language neither tool reads: {named(sorted(unread))}")
+                     f"{LIMITS['MAX_FILES']}: {named(past_cap)}")
     return read
 
 
@@ -283,7 +292,7 @@ def read_hunks(root, merge_base, changed):
 
 
 def named(paths):
-    shown = ", ".join(paths[:MAX_NAMED])
+    shown = ", ".join(path.replace("\n", "\\n") for path in paths[:MAX_NAMED])
     return shown + (f" and {len(paths) - MAX_NAMED} more" if len(paths) > MAX_NAMED else "")
 
 
@@ -347,14 +356,21 @@ def lizard_functions(tree, placed, end, notes):
         if len(placed) == 1 or "timed out" in str(failed) or "could not start" in str(failed):
             raise
         first_failure = failed
-    functions = {}
+    functions, failed_on, out_of_time = {}, [], []
     for rel in sorted(placed):
+        if deadline - time.monotonic() <= 0:
+            out_of_time.append(placed[rel].path)
+            continue
         try:
             functions.update(lizard_run(tree, [rel], deadline - time.monotonic()))
-        except ToolFailed as failed:
-            notes.append(f"not measured: complexity of {placed[rel].path} at the {end}: {failed}")
+        except ToolFailed:
+            failed_on.append(placed[rel].path)
     if not functions:
         raise first_failure
+    if failed_on:
+        notes.append(f"not measured: complexity at the {end}, lizard failed on: {named(failed_on)} ({first_failure})")
+    if out_of_time:
+        notes.append(f"not measured: complexity at the {end}, past lizard's {timeout} s: {named(out_of_time)}")
     return functions
 
 
@@ -434,18 +450,20 @@ def compared_files(root, files, all_changed, tree):
     for path in sorted(os.fsdecode(p) for p in git(root, "ls-files", "-z", binary=True).split(b"\0") if p):
         if path in touched:
             continue
-        language = LANGUAGES.get(extension(path))
         source = os.path.join(root, path)
+        if os.path.islink(source) or not os.path.isfile(source):  # a pipe behind a link would block the read
+            continue
+        language = LANGUAGES.get(extension(path))
         if language is None and not extension(path) and "python" in languages:
             try:
                 with open(source, "rb") as fh:
-                    language = "python" if os.path.isfile(source) and python_script(fh.read(256)) else None
+                    language = "python" if python_script(fh.read(256)) else None
             except OSError:
                 pass
         if language not in languages:
             continue
         comparable += 1
-        if len(same) >= room or os.path.islink(source):
+        if len(same) >= room:
             continue
         try:
             content = read_capped(source)
@@ -463,6 +481,8 @@ def compared_files(root, files, all_changed, tree):
 
 def jscpd_clones(tree, end, paths):
     """[(fragment's lines without whitespace, (path, start, end), (path, start, end))]; ToolFailed when jscpd fails."""
+    if not paths:  # every compared file is new, or every one deleted
+        return []
     report_dir = os.path.join(tree, "report-" + end)
     # The report names a file by its basename unless --absolute is passed.
     by_absolute = {os.path.realpath(os.path.join(tree, rel)): path for rel, path in paths.items()}
@@ -499,18 +519,19 @@ def new_clones(root, tree, files, all_changed):
         except ToolFailed as problem:
             return [f"not measured: new clones: {problem} at the {end}"]
     changed_paths = {changed.path for changed in files}
-    base_text = {}  # path: the base clones it is part of, each as its lines joined
+    base_text = {}  # path: the text of the base clones it is part of, without whitespace
     for lines, a, b in found["base"]:
         for side in {a[0], b[0]}:
-            base_text.setdefault(side, []).append("\n" + "\n".join(lines) + "\n")
+            base_text.setdefault(side, []).append("".join(lines))
     listed = []
     for lines, a, b in found["head"]:
         if not (a[0] in changed_paths or b[0] in changed_paths):
             continue
         # jscpd's fragment can start or end partway into a neighbouring line, differently at each end, so only the
-        # lines inside it are compared. A head clone both of whose files held those lines in a base clone is old: an
-        # edit inside it, or one that splits it, and a third copy jscpd paired differently at the base.
-        inside = "\n" + "\n".join(lines[1:-1]) + "\n"
+        # lines inside it are compared, line breaks aside as jscpd's tokens ignore them. A head clone both of whose
+        # files held that text in a base clone is old: an edit inside it, or one that splits or re-wraps it, and a
+        # third copy jscpd paired differently at the base.
+        inside = "".join(lines[1:-1])
         if all(any(inside in text for text in base_text.get(side, [])) for side in (a[0], b[0])):
             continue
         a, b = sorted((a, b), key=lambda side: (side[0] not in changed_paths, side))
