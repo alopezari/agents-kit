@@ -59,12 +59,12 @@ RED_CHECK_NOT_RUN = re.compile(r"^error: red check did not run\b", re.M)
 RED_CHECKS = ((RED_CHECK_FAILED, "failed"), (RED_CHECK_PASSED, "passed"), (RED_CHECK_SKIPPED, "skipped"),
               (RED_CHECK_NOT_RUN, "not_run"))  # first match wins
 DIFF_COVERAGE = re.compile(r"^ran: diff coverage \(.*?\): (\d+) of (\d+) changed lines covered", re.M)
-# One name per test family: review-mining/test_types.py folds the older spellings (regex, property, ...) into these.
 # Above structure-facts' own budgets: lizard 30 s and jscpd 60 s, at each end.
 STRUCTURE_TIMEOUT = 240
 if os.environ.get("AGENTS_KIT_UNDER_TEST") and os.environ.get("QUALITY_LOG_STRUCTURE_TIMEOUT"):  # only the suite lowers it
     STRUCTURE_TIMEOUT = int(os.environ["QUALITY_LOG_STRUCTURE_TIMEOUT"])
 STRUCTURE_PARTS = {"complexity": ("added", "removed", "max_function", "functions"), "new_clones": ("count",)}
+# One name per test family: review-mining/test_types.py folds the older spellings (regex, property, ...) into these.
 TEST_TYPES = ("unit", "e2e", "integration", "browser", "query-budget", "accessibility", "property-based", "mutation",
               "migration-round-trip", "visual", "design", "regex-worst-case")
 sys.path.insert(0, os.path.join(KIT, "hooks"))
@@ -246,20 +246,26 @@ def structure_signals():
         base = review_stamp.branch_base()[0]
         process = subprocess.Popen([os.path.expanduser("~/.agents/bin/structure-facts"), "--json", base],
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
-    except (RuntimeError, OSError):
+    except (RuntimeError, OSError, ValueError):  # ValueError: a ref name git can't decode
         return None
     try:
         out, _ = process.communicate(timeout=STRUCTURE_TIMEOUT)
     except subprocess.TimeoutExpired:
-        try:  # the whole group: lizard or jscpd would otherwise hold the pipe open for as long as they run
-            os.killpg(process.pid, signal.SIGKILL)
-        except OSError:  # gone already, or macOS's EPERM for a group holding only its unreaped leader
-            pass
-        process.communicate()
+        # SIGTERM first: lizard and jscpd run in groups of their own, which only structure-facts can kill.
+        for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, None)):
+            try:
+                os.killpg(process.pid, sig)
+            except OSError:  # gone already, or macOS's EPERM for a group holding only its unreaped leader
+                pass
+            try:
+                process.communicate(timeout=wait)
+                break
+            except subprocess.TimeoutExpired:
+                continue
         return None
     try:
         facts = json.loads(out) if process.returncode == 0 else None
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if not isinstance(facts, dict) or set(facts) != set(STRUCTURE_PARTS):
         return None
@@ -306,12 +312,17 @@ def pr_signals(number, dirty):
             "structure": None if dirty else structure_signals()}
 
 
+def tree_dirty():
+    """Whether the checkout has uncommitted or untracked changes; a status that fails can't say the tree is clean."""
+    status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], capture_output=True)
+    return bool(status.returncode or status.stdout)
+
+
 def main():
     kind, name, fields = parse(sys.argv[1:])
     if kind == "pr":
-        # Read from the tree, these would describe what wasn't pushed; a status that fails can't say the tree is clean.
-        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], capture_output=True)
-        dirty = bool(status.returncode or status.stdout)
+        # Read from the tree, these would describe what wasn't pushed: checked before measuring and again after it.
+        dirty = tree_dirty()
         fields = pr_signals(name, dirty)
     try:
         triage = json.loads(subprocess.run([os.path.expanduser("~/.agents/bin/triage"), "--json"],
@@ -319,9 +330,9 @@ def main():
         tiers = {key: triage[key] for key in ("tier", "spec_tier", "diff_tier")}
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
         tiers = {"tier": None, "spec_tier": None, "diff_tier": None}
-    if kind == "pr" and dirty:
+    if kind == "pr" and (dirty or tree_dirty()):
         tiers = dict.fromkeys(tiers)
-        fields.update(verify_current=None, tampered=None)
+        fields.update(verify_current=None, tampered=None, structure=None)
     log = quality_log()
     os.makedirs(os.path.dirname(log), exist_ok=True)
     with open(log, "a") as fh:

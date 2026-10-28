@@ -1860,6 +1860,10 @@ def signals_show_the_structure_facts(base):
             (pr_line(), "structure not measured"),  # a line from before the kit recorded structure
             (pr_line(structure={"complexity": {**complexity, "complete": False}, "new_clones": {"count": 0, "complete": False}}),
              "complexity +12 \u22124 (largest +7) (partial) · 0 new clones (partial)"),
+            (pr_line(structure={"complexity": complexity, "new_clones": {"count": 0, "complete": False}}),
+             "complexity +12 \u22124 (largest +7) · 0 new clones (partial)"),
+            (pr_line(structure={"complexity": {**complexity, "complete": False}, "new_clones": clones}),
+             "complexity +12 \u22124 (largest +7) (partial) · 2 new clones"),
             (pr_line(structure={"complexity": {**complexity, "added": "12"}, "new_clones": clones}),
              "complexity not measured · 2 new clones")):  # hand-edited: read as not measured, never a crash
         put_log(line)

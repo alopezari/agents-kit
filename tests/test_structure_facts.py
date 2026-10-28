@@ -812,6 +812,37 @@ def json_exits_2_like_the_text(base):
     assert code == 2 and "git" in out, out
 
 
+def json_every_file_cut_is_incomplete_zeros(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"keep.txt": "x\n"})
+    write(repo, "big.py", "def f(x):\n    if x:\n        return 1\n" + "x = 1\n" * 50)
+    code, got = json_facts(repo, STRUCTURE_FACTS_MAX_BYTES="100")
+    # Unlike a docs-only change: the zeros say nothing about the file left out, so outcomes reads them as unknown.
+    assert (code, got) == (0, {"complexity": {"added": 0, "removed": 0, "max_function": 0, "functions": 0, "complete": False},
+                               "new_clones": {"count": 0, "complete": False}}), got
+
+
+def json_files_no_tool_reads_leave_it_complete(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"README.md": "# x\n"})
+    write(repo, "README.md", "# y\n")
+    os.symlink("README.md", os.path.join(repo, "LINK.md"))
+    write(repo, "tool", "#!/bin/sh\n" + "echo x\n" * 40, executable=True)
+    code, got = json_facts(repo, STRUCTURE_FACTS_MAX_BYTES="100")
+    assert (code, got) == (0, {"complexity": {"added": 0, "removed": 0, "max_function": 0, "functions": 0, "complete": True},
+                               "new_clones": {"count": 0, "complete": True}}), f"a link and an oversized shell script: {got}"
+
+
+def json_an_original_missing_from_a_sparse_checkout_cuts_the_comparison(base):
+    need("lizard", "jscpd")
+    repo = new_repo(base, {"orig.py": block(1) + "ORIG = 1\n"})
+    git(repo, "update-index", "--skip-worktree", "orig.py")
+    os.remove(os.path.join(repo, "orig.py"))
+    write(repo, "new.py", block(1) + "NEW = 2\n")
+    code, got = json_facts(repo)
+    assert code == 0 and got["new_clones"] == {"count": 0, "complete": False}, got
+
+
 # --- AC5: the review uses it ----------------------------------------------------------------------------------------
 
 def bundle(home, repo, lens):
@@ -867,7 +898,9 @@ for t in [touched_functions_at_both_ends, a_renamed_file_is_compared_with_its_ol
           skipped_files_share_one_capped_line, rewrapping_a_line_inside_an_old_clone_adds_none,
           json_totals_of_the_change, json_counts_past_the_display_caps, json_counts_every_new_clone,
           json_a_skipped_file_leaves_both_parts_incomplete, json_a_lizard_failure_on_one_file_is_incomplete,
-          json_a_cut_comparison_leaves_clones_incomplete, json_parts_not_measured_are_null, json_exits_2_like_the_text]:
+          json_a_cut_comparison_leaves_clones_incomplete, json_parts_not_measured_are_null, json_exits_2_like_the_text,
+          json_every_file_cut_is_incomplete_zeros, json_files_no_tool_reads_leave_it_complete,
+          json_an_original_missing_from_a_sparse_checkout_cuts_the_comparison]:
     test(t)
 
 failed = [(n, e) for n, e, _ in RESULTS if e]

@@ -456,8 +456,8 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
 | optional | `impeccable` | https://github.com/pbakaus/impeccable/releases | the Design lens and validate's design check (the impeccable skill fetches it on first use) |
 | optional | `docker` | https://www.docker.com | repository verifies that run in containers |
-| optional | `lizard ≥ 1.24` | pipx install lizard | kit-review's structure facts (bin/structure-facts): complexity for the Maintainability lens |
-| optional | `jscpd ≥ 5.4` | npm install -g jscpd | kit-review's structure facts (bin/structure-facts): new clones for the Maintainability lens |
+| optional | `lizard ≥ 1.24` | pipx install lizard | structure facts (bin/structure-facts): complexity for the Maintainability lens and each PR's quality line |
+| optional | `jscpd ≥ 5.4` | npm install -g jscpd | structure facts (bin/structure-facts): new clones for the Maintainability lens and each PR's quality line |
 
 - `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, triage, a real install into an empty HOME, the install doctor, and this reference (up to date, and every diagram parses as GitHub renders it).
 - After changing the kit, commit as usual: the pre-commit hook regenerates this file.

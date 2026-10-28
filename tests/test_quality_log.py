@@ -520,11 +520,13 @@ def keeps_only_structure_facts_of_the_right_shape(base):
 
     def structure(script, **env):
         stand_in_structure_facts(home, script)
+        before = len(entries(home))
         out = subprocess.run([os.path.join(home, ".agents", "bin", "quality-log"), "pr", "7"], cwd=repo,
                              env={**os.environ, "HOME": home, **env,
                                   "PATH": os.path.join(home, "shim") + os.pathsep + os.environ["PATH"]},
                              capture_output=True, text=True)
         assert out.returncode == 0, out.stderr
+        assert len(entries(home)) == before + 1 and entries(home)[-1]["added"] == 8, "the rest of the line is written"
         return entries(home)[-1]["structure"]
 
     def prints(value, code=0):
@@ -533,6 +535,11 @@ def keeps_only_structure_facts_of_the_right_shape(base):
     assert structure(prints({"complexity": complexity, "new_clones": clones})) == \
         {"complexity": complexity, "new_clones": clones}
     assert open(os.path.join(base, "args")).read() == "--json main\n", "run against review_stamp.py base"
+    subprocess.run(["git", "-C", repo, "branch", "-q", "parent", "main"], check=True)
+    subprocess.run(["git", "-C", repo, "config", "branch.feature.agentsBase", "parent"], check=True)
+    structure(prints({"complexity": complexity, "new_clones": clones}))
+    assert open(os.path.join(base, "args")).read() == "--json parent\n", "a recorded base, not main"
+    subprocess.run(["git", "-C", repo, "config", "--unset", "branch.feature.agentsBase"], check=True)
     assert structure(prints({"complexity": None, "new_clones": clones})) == {"complexity": None, "new_clones": clones}
     for value, code, expected, why in (
             ({"complexity": complexity, "new_clones": clones}, 1, None, "a nonzero exit"),
@@ -551,6 +558,12 @@ def keeps_only_structure_facts_of_the_right_shape(base):
              {"complexity": complexity, "new_clones": None}, "a key the shape lacks")):
         assert structure(prints(value, code)) == expected, why
     assert structure("echo 'not json'\n") is None, "garbage"
+    assert structure(f"echo '{'[' * 5000}{']' * 5000}'\n") is None, "nesting too deep for the parser"
+    # The tree changes while it measures: what it measured may not be what was pushed.
+    assert structure(f"touch {os.path.join(repo, 'late.py')}\n" + prints({"complexity": complexity, "new_clones": clones})) \
+        is None, "a tree dirtied while measuring"
+    assert entries(home)[-1]["verify_current"] is None and entries(home)[-1]["tier"] is None, entries(home)[-1]
+    os.remove(os.path.join(repo, "late.py"))
     started = time.monotonic()
     # A child of the stand-in holds the pipe: only killing the process group ends the wait.
     assert structure("sleep 60\necho '{}'\n", QUALITY_LOG_STRUCTURE_TIMEOUT="1") is None, "a timeout"
@@ -559,6 +572,26 @@ def keeps_only_structure_facts_of_the_right_shape(base):
     os.remove(os.path.join(base, "args"))
     assert structure(prints({"complexity": complexity, "new_clones": clones})) is None, "a dirty tree"
     assert not os.path.exists(os.path.join(base, "args")), "a dirty tree still ran structure-facts"
+
+
+def a_timeout_stops_the_tools_too(base):
+    """structure-facts runs lizard and jscpd in sessions of their own, which a kill of its group doesn't reach."""
+    home, repo = pr_repo(base)
+    tools = os.path.join(base, "tools")
+    os.makedirs(tools)
+    with open(os.path.join(tools, "lizard"), "w") as fh:
+        fh.write("#!/bin/bash\nsleep 97\n")
+    os.chmod(os.path.join(tools, "lizard"), 0o755)
+    env = {**os.environ, "HOME": home, "QUALITY_LOG_STRUCTURE_TIMEOUT": "3", "STRUCTURE_FACTS_LIZARD_TIMEOUT": "120",
+           "PATH": os.pathsep.join((tools, os.path.join(home, "shim"), os.environ["PATH"]))}
+    out = subprocess.run([os.path.join(home, ".agents", "bin", "quality-log"), "pr", "7"], cwd=repo, env=env,
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and entries(home)[-1]["structure"] is None, (out.stderr, entries(home)[-1])
+    time.sleep(0.5)
+    left = subprocess.run(["pgrep", "-f", "sleep 97"], capture_output=True, text=True).stdout.split()
+    for pid in left:
+        os.kill(int(pid), 9)
+    assert not left, "the tool outlived the timeout"
 
 
 def refuses_a_pr_number_that_isnt_one(base):
@@ -577,7 +610,7 @@ for test in (writes_well_formed_entries, records_the_findings_the_other_model_sh
              records_a_prs_size_and_origin, records_the_verify_signals, records_weakened_tests,
              a_signal_it_cant_compute_is_null, refuses_a_pr_number_that_isnt_one, refuses_a_pr_from_another_branch,
              a_dirty_tree_nulls_what_it_would_misread, a_renamed_test_is_not_a_deleted_one, undecodable_output_nulls_the_signal,
-             records_the_structure_facts, keeps_only_structure_facts_of_the_right_shape):
+             records_the_structure_facts, keeps_only_structure_facts_of_the_right_shape, a_timeout_stops_the_tools_too):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)

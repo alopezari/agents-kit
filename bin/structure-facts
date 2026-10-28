@@ -21,10 +21,11 @@ tracked files of their languages in path order, up to 2,000 files.
 
 --json prints only the totals, for bin/quality-log: {"complexity": {"added", "removed", "max_function", "functions",
 "complete"}, "new_clones": {"count", "complete"}}, a part not measured null and one with no file to measure 0. added
-and removed sum each increase and decrease, a new function's complexity counting as an increase and a removed one's as a decrease; max_function is the
-largest increase, and functions the count of functions touched, added or removed. They count past the display caps.
-complete is false when a changed file was left out for any reason but its language, or when lizard failed or ran out
-of time on one end (complexity), or when the comparison set was cut (new_clones).
+and removed sum each increase and decrease, a new function's complexity counting as an increase and a removed one's
+as a decrease; max_function is the largest increase, and functions the count of functions touched, added or removed.
+They count past the display caps. complete is false when a changed file was left out for any reason but its language
+or being a link or submodule, or when lizard failed or ran out of time on a file (complexity), or when the comparison
+set was cut (new_clones).
 """
 import bisect
 import csv
@@ -41,6 +42,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "hooks"))
 import review_stamp  # noqa: E402
 
+NOT_REGULAR = "not a regular file (a link or a submodule)"
 LIMITS = {"MAX_FILES": 100, "MAX_BYTES": 512 * 1024, "MAX_COMPARED": 2000, "LIZARD_TIMEOUT": 30, "JSCPD_TIMEOUT": 60}
 if os.environ.get("AGENTS_KIT_UNDER_TEST"):  # only the suite lowers them
     LIMITS.update({key: int(os.environ["STRUCTURE_FACTS_" + key]) for key in LIMITS
@@ -103,6 +105,20 @@ def git(root, *args, binary=False, stdin=b""):
     return done.stdout if binary else done.stdout.decode(errors="replace")
 
 
+TOOL_GROUPS = set()  # the process groups of the tools running now, for terminated() to kill
+
+
+def terminated(signum, frame):
+    """A caller's SIGTERM, as quality-log sends at its timeout: the tools run in groups of their own, so it reaches
+    none of them; kill them, then exit through the temporary tree's cleanup."""
+    for group in TOOL_GROUPS:
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except OSError:
+            pass
+    sys.exit(128 + signum)
+
+
 def bounded(command, cwd, timeout):
     """(exit code, stdout, stderr); ToolFailed when it can't start or runs past `timeout`. The whole process group is
     killed then: a wrapper's child would otherwise hold the pipes open and the wait would last as long as it does."""
@@ -111,6 +127,7 @@ def bounded(command, cwd, timeout):
                                    start_new_session=True)
     except OSError as err:
         raise ToolFailed(f"{command[0]} could not start: {err.strerror or err}") from None
+    TOOL_GROUPS.add(process.pid)
     try:
         out, err = process.communicate(timeout=max(timeout, 0.1))
     except subprocess.TimeoutExpired:
@@ -120,6 +137,8 @@ def bounded(command, cwd, timeout):
             pass
         process.communicate()
         raise ToolFailed(f"{command[0]} timed out after {timeout:g} s") from None
+    finally:
+        TOOL_GROUPS.discard(process.pid)
     return process.returncode, out.decode(errors="replace"), err.decode(errors="replace")
 
 
@@ -151,7 +170,7 @@ def changed_files(root, merge_base):
             i += 2
         changed = Changed(None if status == "A" else old, None if status == "D" else new)
         modes = {mode for mode in (old_mode, new_mode) if mode != "000000"}
-        files.append((changed, None if modes <= REGULAR_MODES else "not a regular file (a link or a submodule)"))
+        files.append((changed, None if modes <= REGULAR_MODES else NOT_REGULAR))
     files = [(changed, NEWLINE if "\n" in (changed.old or "") + (changed.new or "") else problem)
              for changed, problem in files]
     for path in git(root, "ls-files", "--others", "--exclude-standard", "-z", binary=True).split(b"\0"):
@@ -159,7 +178,7 @@ def changed_files(root, merge_base):
             path = os.fsdecode(path)
             regular = os.path.isfile(os.path.join(root, path)) and not os.path.islink(os.path.join(root, path))
             files.append((Changed(None, path), NEWLINE if "\n" in path else
-                          None if regular else "not a regular file (a link or a submodule)"))
+                          None if regular else NOT_REGULAR))
     files.sort(key=lambda item: item[0].path)
     return files
 
@@ -252,6 +271,12 @@ def select(root, merge_base, files, notes):
                 problem = "can't read it at the head"
         elif not extension(changed.old):  # deleted: only its base blob says what it is
             first_bytes = read_blobs(root, merge_base, [changed.old])[changed.old][:256]
+        if problem and problem.startswith("larger") and changed.new and not extension(changed.new):
+            try:  # too large to measure, but a file no tool reads was never in scope
+                with open(os.path.join(root, changed.new), "rb") as fh:
+                    problem = problem if language_of(changed, fh.read(256)) else unread
+            except OSError:
+                pass
         if problem:
             skipped.setdefault(problem, []).append(changed.path)
             continue
@@ -280,7 +305,7 @@ def select(root, merge_base, files, notes):
     if past_cap:
         notes.append(f"not measured: {plural(len(past_cap), 'more changed file')}, past the cap of "
                      f"{LIMITS['MAX_FILES']}: {named(past_cap)}")
-    return read, bool(past_cap) or any(reason != unread for reason in skipped)
+    return read, bool(past_cap) or any(reason not in (unread, NOT_REGULAR) for reason in skipped)
 
 
 def read_hunks(root, merge_base, changed):
@@ -468,9 +493,12 @@ def compared_files(root, files, all_changed, tree):
         if path in touched:
             continue
         source = os.path.join(root, path)
+        language = LANGUAGES.get(extension(path))
+        if not os.path.lexists(source):  # a sparse checkout: an original the comparison can't read
+            comparable += language in languages
+            continue
         if os.path.islink(source) or not os.path.isfile(source):  # a pipe behind a link would block the read
             continue
-        language = LANGUAGES.get(extension(path))
         if language is None and not extension(path) and "python" in languages:
             try:
                 with open(source, "rb") as fh:
@@ -567,6 +595,7 @@ def new_clones(root, tree, files, all_changed):
 
 
 def main():
+    signal.signal(signal.SIGTERM, terminated)
     as_json = sys.argv[1:2] == ["--json"]
     args = sys.argv[2:] if as_json else sys.argv[1:]
     if len(args) != 1 or args[0].startswith("-"):
@@ -597,6 +626,9 @@ def main():
     try:
         measured, left_out = select(root, merge_base, files, notes)
     except GitError as err:
+        if as_json:
+            print(json.dumps({"complexity": None, "new_clones": None}))
+            return 0
         measured, left_out = [], True
         notes.append(f"not measured: the change's files: {err}")
     all_changed = [changed for changed, _ in files]

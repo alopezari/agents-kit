@@ -342,7 +342,11 @@ def structure_cells(base):
            ({"structure": structure(None, None)}, []),
            ({"structure": None}, []),  # logged from a dirty tree, or structure-facts failed
            ({}, []),  # a line from before the kit recorded structure
-           ({"added": 500, "structure": structure(1, 1)}, [fix])]
+           ({"added": 500, "structure": structure(1, 1)}, [fix]),
+           # Each part on its own: one not measured, or cut short at 0, leaves the other's bucket alone.
+           ({"structure": {**structure(5, 0), "new_clones": None}}, []),
+           ({"structure": {**structure(0, 2), "complexity": None}}, []),
+           ({"structure": {**structure(0, 4), "complexity": structure(0, 0, complete=False)["complexity"]}}, [fix])]
     got = outcomes.summarize_signals([{**counts, "number": 1, "escapes": [], "follow_ups": follow_ups,
                                        "signals": {"added": 10, "deleted": 0, **signals}} for signals, follow_ups in prs])
 
@@ -353,13 +357,13 @@ def structure_cells(base):
                 "escape": 0, "escape_rate": rate(0)}
 
     splits = got["splits"]
-    assert splits["complexity_added"] == {"none": cell(1, fix=1), "1-9": cell(2, fix=1, revert=1),
-                                          "10_or_more": cell(2, fix=1), "unknown": cell(4)}, splits["complexity_added"]
-    assert splits["new_clones"] == {"any": cell(3, fix=2, revert=1), "none": cell(2, fix=1), "unknown": cell(4)}, \
+    assert splits["complexity_added"] == {"none": cell(1, fix=1), "1-9": cell(3, fix=1, revert=1),
+                                          "10_or_more": cell(2, fix=1), "unknown": cell(6, fix=1)}, splits["complexity_added"]
+    assert splits["new_clones"] == {"any": cell(5, fix=3, revert=1), "none": cell(2, fix=1), "unknown": cell(5)}, \
         splits["new_clones"]
     assert got["by_size"][">400"]["complexity_added"] == {"none": cell(0), "1-9": cell(1, fix=1), "10_or_more": cell(0),
                                                           "unknown": cell(0)}, got["by_size"][">400"]
-    assert got["by_size"]["<50"]["new_clones"]["any"] == cell(2, fix=1, revert=1), got["by_size"]["<50"]
+    assert got["by_size"]["<50"]["new_clones"]["any"] == cell(4, fix=2, revert=1), got["by_size"]["<50"]
 
 
 def the_prompt_names_every_signal_split(base):
