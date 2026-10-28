@@ -488,7 +488,7 @@ def render():
         if line.strip() and not line.lstrip().startswith("#"):
             tier, program, how, purpose = line.split(None, 3)
             kind, _, name = how.partition(":")
-            how = {"brew": f"brew install {name}", "npm": f"npm install -g {name}"}.get(kind, how)
+            how = {"brew": f"brew install {name}", "npm": f"npm install -g {name}", "pipx": f"pipx install {name}"}.get(kind, how)
             program = program.replace(">=", " ≥ ")
             w(f"| {tier} | `{program}` | {cell(how)} | {cell(purpose)} |")
     w("")

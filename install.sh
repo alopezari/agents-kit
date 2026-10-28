@@ -263,7 +263,7 @@ installed() {
     *) command -v "$1" >/dev/null ;;
   esac
 }
-install_hint() { case "$1" in brew:*) echo "brew install ${1#brew:}" ;; npm:*) echo "npm install -g ${1#npm:}" ;; *) echo "$1" ;; esac; }
+install_hint() { case "$1" in brew:*) echo "brew install ${1#brew:}" ;; npm:*) echo "npm install -g ${1#npm:}" ;; pipx:*) echo "pipx install ${1#pipx:}" ;; *) echo "$1" ;; esac; }
 missing=()
 older_than() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" != "$2" ]; }
 while read -r tier spec how purpose; do

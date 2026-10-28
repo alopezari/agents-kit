@@ -2,7 +2,8 @@
 # Print a self-contained review prompt: lens brief + goal + the full change (committed and
 # uncommitted vs the merge-base, plus untracked files), so a reviewer needs no tool access.
 # With the repo's review guide (~/.agents/repos/<repo>/review.md) when there is one, and, on a re-check, the findings
-# earlier rounds decided (the report's lines), so the reviewer doesn't raise them again.
+# earlier rounds decided (the report's lines), so the reviewer doesn't raise them again. The Maintainability prompt also
+# holds bin/structure-facts' output.
 # Usage: bundle.sh <base-ref> <lens-name> "<goal>" [<decided-file>]   e.g. bundle.sh origin/trunk Correctness "Require Compose v2"
 set -euo pipefail
 base=$1 lens=$2 goal=$3 decided=${4-}
@@ -15,6 +16,10 @@ if [ -e "$guide" ]; then guide_text=$(cat "$guide") || { echo "bundle.sh: can't 
 decided_text=""
 if [ $# -ge 4 ] && [ -z "$decided" ]; then echo "bundle.sh: no decided-findings file: the 4th argument is empty" >&2; exit 1; fi
 if [ -n "$decided" ]; then decided_text=$(cat "$decided") || { echo "bundle.sh: can't read the decided findings $decided" >&2; exit 1; }; fi
+facts=""
+if [ "$lens" = Maintainability ]; then
+  facts=$("$here/../../bin/structure-facts" "$base" 2>&1) || facts="not measured: structure facts: structure-facts failed: $facts"
+fi
 
 echo "You are reviewing a code change. Goal of the change: $goal"
 spec="$("$here/../kit-spec/path.sh")"
@@ -32,6 +37,12 @@ if [ -n "$decided_text" ]; then
   echo "These findings were already decided in an earlier round, each with its verdict and evidence. Don't report them again, nor a known finding that is still there. Report only a new instance at another location, or a regression a later fix introduced:"
   echo
   echo "$decided_text"
+fi
+if [ -n "$facts" ]; then
+  echo
+  echo "Measured structure facts for this change, from ~/.agents/bin/structure-facts. Read them as the Maintainability brief above says:"
+  echo
+  echo "$facts"
 fi
 echo
 echo "Report every issue you suspect, each with file:line, the failing scenario, a severity and a confidence (high/medium/low); low-confidence findings are welcome, because they are verified afterwards. Severity is one of: Important (a defect the change introduces, or makes reachable), Nit (a minor point; at most three), or Pre-existing (already on the base branch, and neither introduced nor newly reached by the change). Report a defect as a class: search the change for every other place with the same pattern and list each file:line under that one finding. If the diff lacks context you need, say which file and why instead of guessing. End with a final line reading exactly \"## Found\", then your tables and every finding below it: only that section is read."

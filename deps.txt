@@ -19,3 +19,5 @@ optional       playwright-cli  npm:@playwright/cli       agent-browser's fallbac
 optional       chrome          https://www.google.com/chrome    bin/a11y-check (or: npx playwright install chromium)
 optional       impeccable      https://github.com/pbakaus/impeccable/releases   the Design lens and validate's design check (the impeccable skill fetches it on first use)
 optional       docker          https://www.docker.com    repository verifies that run in containers
+optional       lizard>=1.24    pipx:lizard               kit-review's structure facts (bin/structure-facts): complexity for the Maintainability lens
+optional       jscpd>=5.4      npm:jscpd                 kit-review's structure facts (bin/structure-facts): new clones for the Maintainability lens

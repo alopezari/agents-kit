@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **20 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, decision-report, docs, evidence, evidence-env, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, triage, wp-query-profile.
+- **21 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, decision-report, docs, evidence, evidence-env, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, structure-facts, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -344,6 +344,12 @@ reports brief                                    the phase and one line per repo
 reports --branch <name> …                        the same for another branch of this repo, without phase and switches
 ```
 
+**`bin/structure-facts`**: Measured facts about the current change for the review's Maintainability lens: how the cognitive complexity and NLOC of each function the change touches moved from the merge-base to the working tree (lizard), and which new copy-pasted blocks it adds (jscpd). Facts for a reviewer to judge; nothing gates on a number.
+
+```
+structure-facts <base>
+```
+
 **`bin/triage`**: Deterministic triage of the current change: risk tier, review lenses and test types, with reasons.
 
 ```
@@ -450,6 +456,8 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
 | optional | `impeccable` | https://github.com/pbakaus/impeccable/releases | the Design lens and validate's design check (the impeccable skill fetches it on first use) |
 | optional | `docker` | https://www.docker.com | repository verifies that run in containers |
+| optional | `lizard ≥ 1.24` | pipx install lizard | kit-review's structure facts (bin/structure-facts): complexity for the Maintainability lens |
+| optional | `jscpd ≥ 5.4` | npm install -g jscpd | kit-review's structure facts (bin/structure-facts): new clones for the Maintainability lens |
 
 - `tests/run.sh` runs the regression suite: hooks, generic verify, semgrep fixtures, triage, a real install into an empty HOME, the install doctor, and this reference (up to date, and every diagram parses as GitHub renders it).
 - After changing the kit, commit as usual: the pre-commit hook regenerates this file.
