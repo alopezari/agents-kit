@@ -695,7 +695,9 @@ def skipped_files_share_one_capped_line(base):
     code, out = facts(repo, path=bare_path(base))
     assert code == 0, out
     lines = [line for line in out.splitlines() if "not a regular file" in line]
-    assert len(lines) == 1 and lines[0].endswith(" and 5 more"), out
+    assert len(lines) == 1 and lines[0].endswith(": l00.py, l01.py, l02.py, l03.py, l04.py, l05.py, l06.py, l07.py, "
+                                               "l08.py, l09.py, l10.py, l11.py, l12.py, l13.py, l14.py, l15.py, l16.py, "
+                                               "l17.py, l18.py, l19.py and 5 more"), out
 
 
 def rewrapping_a_line_inside_an_old_clone_adds_none(base):
