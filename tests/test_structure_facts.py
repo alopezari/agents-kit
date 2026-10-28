@@ -797,7 +797,9 @@ def json_parts_not_measured_are_null(base):
     docs = new_repo(os.path.join(base, "docs"), {"README.md": "# x\n"})
     write(docs, "README.md", "# y\n")
     code, got = json_facts(docs)
-    assert (code, got) == (0, {"complexity": None, "new_clones": None}), f"no file a tool reads: {got}"
+    # Nothing to measure is a measured 0, so a docs-only change reads as one adding none, not as unknown.
+    assert (code, got) == (0, {"complexity": {"added": 0, "removed": 0, "max_function": 0, "functions": 0, "complete": True},
+                               "new_clones": {"count": 0, "complete": True}}), f"no file a tool reads: {got}"
 
 
 def json_exits_2_like_the_text(base):

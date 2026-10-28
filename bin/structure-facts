@@ -20,8 +20,8 @@ lizard 30 s and jscpd 60 s per end, 20 function lines per file, and jscpd compar
 tracked files of their languages in path order, up to 2,000 files.
 
 --json prints only the totals, for bin/quality-log: {"complexity": {"added", "removed", "max_function", "functions",
-"complete"}, "new_clones": {"count", "complete"}}, a part not measured null. added and removed sum each increase and
-decrease, a new function's complexity counting as an increase and a removed one's as a decrease; max_function is the
+"complete"}, "new_clones": {"count", "complete"}}, a part not measured null and one with no file to measure 0. added
+and removed sum each increase and decrease, a new function's complexity counting as an increase and a removed one's as a decrease; max_function is the
 largest increase, and functions the count of functions touched, added or removed. They count past the display caps.
 complete is false when a changed file was left out for any reason but its language, or when lizard failed or ran out
 of time on one end (complexity), or when the comparison set was cut (new_clones).
@@ -410,8 +410,8 @@ def overlaps(function, ranges):
 
 def complexity(root, merge_base, tree, files, notes):
     """The complexity part's lines, and its totals over every function listed or not (None when not measured)."""
-    if not files:
-        return [], None
+    if not files:  # nothing to measure: none added, so a docs-only change reads as clean, not unknown
+        return [], {"added": 0, "removed": 0, "max_function": 0, "functions": 0, "complete": True}
     if not shutil.which("lizard"):
         return [f"not measured: complexity: lizard is not installed ({INSTALL['lizard']})"], None
     ends, failed = {}, []
@@ -523,7 +523,7 @@ def jscpd_clones(tree, end, paths):
 def new_clones(root, tree, files, all_changed):
     """The clones part's lines, and its count of every new clone listed or not (None when not measured)."""
     if not files:
-        return [], None
+        return [], {"count": 0, "complete": True}
     if not shutil.which("jscpd"):
         return [f"not measured: new clones: jscpd is not installed ({INSTALL['jscpd']})"], None
     same, compared, comparable = compared_files(root, files, all_changed, tree)
