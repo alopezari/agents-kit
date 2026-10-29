@@ -131,8 +131,8 @@ def run_sh_summarizes_before_the_prompt(base):
     assert f"line {FIXTURE.count(chr(10)) + 1}" in open(error_log.replace("$RUN", run)).read()
 
 
-for test in (counts_each_canonical_type, every_alias_lands_on_a_canonical_name, a_missing_log_is_an_empty_summary,
-             never_writes_the_summary_over_its_log, a_malformed_line_fails_and_writes_nothing, run_sh_summarizes_before_the_prompt):
+for test in kit_home.selected((counts_each_canonical_type, every_alias_lands_on_a_canonical_name, a_missing_log_is_an_empty_summary,
+                               never_writes_the_summary_over_its_log, a_malformed_line_fails_and_writes_nothing, run_sh_summarizes_before_the_prompt)):
     base = tempfile.mkdtemp(prefix="agents-test-test-types-")
     try:
         test(base)

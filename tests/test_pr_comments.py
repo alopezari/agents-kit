@@ -140,8 +140,8 @@ def no_follow_pr_report_path_is_not_a_first_run(base):
     assert out.returncode == 4 and "follow-pr report" in out.stderr and out.stdout == "", out
 
 
-for test in (lists_only_new_comments_from_others, none_new_says_so, github_unreadable_is_not_no_comments,
-             a_deleted_account_and_an_empty_body_still_print, no_follow_pr_report_path_is_not_a_first_run):
+for test in kit_home.selected((lists_only_new_comments_from_others, none_new_says_so, github_unreadable_is_not_no_comments,
+                               a_deleted_account_and_an_empty_body_still_print, no_follow_pr_report_path_is_not_a_first_run)):
     base = tempfile.mkdtemp(prefix="agents-test-pr-comments-")
     try:
         test(base)

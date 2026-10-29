@@ -300,12 +300,12 @@ def names_the_phases_the_user_switched_off(base):
     finally:  # the other tests share this HOME
         shutil.rmtree(os.path.join(os.path.expanduser("~/.agents"), "approvals"), ignore_errors=True)
 
-for test in (names_the_phases_the_user_switched_off, builds_the_section_from_every_report, counts_open_findings_and_skips_absent_reports,
-             lists_pre_existing_findings_only_when_there_are_some,
-             keeps_qualified_verdicts_and_bounded_sections,
-             a_guide_with_only_steps_after_the_merge_lists_them, says_when_the_guide_has_no_steps_or_cannot_be_read,
-             counts_findings_listed_under_their_label, a_missing_verify_or_review_fails_naming_it, turns_tabs_into_spaces,
-             a_long_unclosed_link_is_read_in_time, a_lenses_table_adds_no_entry):
+for test in kit_home.selected((names_the_phases_the_user_switched_off, builds_the_section_from_every_report, counts_open_findings_and_skips_absent_reports,
+                               lists_pre_existing_findings_only_when_there_are_some,
+                               keeps_qualified_verdicts_and_bounded_sections,
+                               a_guide_with_only_steps_after_the_merge_lists_them, says_when_the_guide_has_no_steps_or_cannot_be_read,
+                               counts_findings_listed_under_their_label, a_missing_verify_or_review_fails_naming_it, turns_tabs_into_spaces,
+                               a_long_unclosed_link_is_read_in_time, a_lenses_table_adds_no_entry)):
     base = tempfile.mkdtemp(prefix="agents-test-pr-validation-")
     try:
         test(base)

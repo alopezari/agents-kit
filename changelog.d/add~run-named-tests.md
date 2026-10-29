@@ -1,0 +1,1 @@
+- `tests/run.sh --only <test>[,<test>...] <section>...` runs only the named tests of those sections, so a change to one test is checked in seconds (one decision-report test: about 4 s, against about 300 s for the section). A name none of the sections ran fails the run; files whose checks aren't named functions still run whole.

@@ -176,10 +176,10 @@ def codex_is_logged_as_codex(base):
     assert events(home)[0]["harness"] == "codex", events(home)
 
 
-for test in (arms_alternate_per_tier, a_branch_keeps_its_arm, what_stays_out_of_the_test,
-             a_broken_line_is_skipped_and_counted, each_repo_has_its_own_branches, a_repo_without_a_name_is_refused,
-             a_broken_line_is_counted_for_a_known_branch_too, a_line_cut_short_keeps_the_next_event_whole,
-             the_arm_behind_goes_next_until_level, concurrent_assigns_split_the_arms, an_assign_waits_for_the_log_lock, codex_is_logged_as_codex):
+for test in kit_home.selected((arms_alternate_per_tier, a_branch_keeps_its_arm, what_stays_out_of_the_test,
+                               a_broken_line_is_skipped_and_counted, each_repo_has_its_own_branches, a_repo_without_a_name_is_refused,
+                               a_broken_line_is_counted_for_a_known_branch_too, a_line_cut_short_keeps_the_next_event_whole,
+                               the_arm_behind_goes_next_until_level, concurrent_assigns_split_the_arms, an_assign_waits_for_the_log_lock, codex_is_logged_as_codex)):
     base = tempfile.mkdtemp(prefix="agents-test-build-ab-")
     try:
         test(base)
