@@ -331,9 +331,10 @@ quality-log pr <number>
 
 **`bin/repo-name`**: Print the repository's name as the kit knows it: the main checkout's directory name, the same from any worktree (Xirp, Orca, Conductor and `git worktree add` all name theirs differently). ~/.agents/repos/<name> is its overlay.
 
-**`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). A branch with only a guide saved under its older name, staging-guide, reads it as its checks-guide.
+**`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). A branch with only a guide saved under its older name, staging-guide, reads it as its checks-guide. error on stderr and, among several kinds, an empty line, and the exit is 2 at the end
 
 ```
+reports path <kind>...                           one line per kind, in the order given; a kind that needs a branch and has none prints an
 reports path <verify|review|validation|checks-guide|follow-pr>   where the stop hook or a skill saves that report
 reports path pr-body                             where kit-ship and kit-follow-pr save the PR description; left out of the listings
 reports path decision-notes                      where kit-ship saves its decision notes for the decision page; left out of the listings

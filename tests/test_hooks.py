@@ -2681,6 +2681,48 @@ def evidence_needs_a_branch(base):
     assert on_branch.returncode == 0 and on_branch.stdout.strip() == named.stdout.strip(), on_branch
 
 
+def report_paths_asks_one_reports_process_for_all_kinds(base):
+    repo = new_repo(base, "shop")
+    reports = os.path.expanduser("~/.agents/bin/reports")
+    git(repo, "switch", "-q", "--detach")
+    code = f"""
+import json, sys, types
+sys.path.insert(0, {H!r})
+import review_stamp
+real_run, calls = review_stamp.subprocess.run, []
+def counting_run(*args, **kwargs):
+    calls.append(args[0])
+    return real_run(*args, **kwargs)
+review_stamp.subprocess.run = counting_run
+out = {{}}
+for kinds in json.loads(sys.argv[1]):
+    calls.clear()
+    out[" ".join(kinds)] = [review_stamp.report_paths(*kinds), len(calls)]
+canned = lambda stdout: (lambda *a, **k: types.SimpleNamespace(stdout=stdout))
+review_stamp.subprocess.run = canned("/r/a\\n")
+out["stopped early"] = review_stamp.report_paths("verify", "evidence", "review")
+review_stamp.subprocess.run = canned("\\n/r/b\\n")
+out["blank lines kept"] = review_stamp.report_paths("evidence", "review", "validation")
+print(json.dumps(out))
+"""
+    asked = [[], ["review"], ["verify", "review", "validation"], ["evidence", "review", "validation"],
+             ["review", "evidence", "validation"], ["review", "validation", "evidence"],
+             ["evidence", "pr-body", "decision-notes"]]
+    done = subprocess.run(["python3", "-c", code, json.dumps(asked)], cwd=repo, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    got = json.loads(done.stdout)
+    for kinds in asked:
+        # What one call per kind returns: a kind that needs a branch gives "" on a detached HEAD.
+        per_kind = [subprocess.run([reports, "path", kind], cwd=repo, capture_output=True, text=True).stdout.strip()
+                    for kind in kinds]
+        paths, processes = got[" ".join(kinds)]
+        assert paths == per_kind, (kinds, paths, per_kind)
+        assert processes == (1 if kinds else 0), f"{kinds} started {processes} reports processes"
+    assert got["evidence review validation"][0][0] == "" and got["evidence review validation"][0][1] != "", got
+    assert got["stopped early"] == ["/r/a", "", ""], "kinds after a call that stopped early are empty"
+    assert got["blank lines kept"] == ["", "/r/b", ""], "an empty line keeps the position of the kind that failed"
+
+
 def reports_reads_another_branch(base):
     main = new_repo(base, "main")
     reports = os.path.expanduser("~/.agents/bin/reports")
@@ -5004,7 +5046,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
          validate_stamp_refuses_a_suite_run_that_doesnt_count, validate_stamp_suite_overlay_edge_cases,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, evidence_env_keeps_its_bounds, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, evidence_env_keeps_its_bounds, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, report_paths_asks_one_reports_process_for_all_kinds, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
