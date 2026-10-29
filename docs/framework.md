@@ -339,9 +339,9 @@ reports path <verify|review|validation|checks-guide|follow-pr>   where the stop 
 reports path pr-body                             where kit-ship and kit-follow-pr save the PR description; left out of the listings
 reports path decision-notes                      where kit-ship saves its decision notes for the decision page; left out of the listings
 reports path evidence                            the directory (created) for validation evidence: outputs, screenshots; needs a branch, as pr-body does
-reports html                                     writes the branch's decision page (bin/decision-report) next to its reports and prints its path
+reports html                                     writes the branch's decision page (bin/decision-report) next to its reports and prints its path; the investigation page when the decision notes hold a `Mode: investigation` line
 reports                                          every report that exists, with its path, the evidence, the phases off
-reports brief                                    the phase and one line per report, to pick a branch up in a new session
+reports brief                                    the phase and one line per report, to pick a branch up in a new session; an investigation adds `mode: investigation` and counts its findings: `findings: <n> Supports, <n> Refutes, <n> Inconclusive, <n> NOT RUN`, then `<n> as expected, <n> not as expected` for PASS and FAIL rows
 reports --branch <name> …                        the same for another branch of this repo, without phase and switches
 ```
 

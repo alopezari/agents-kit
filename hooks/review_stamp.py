@@ -438,9 +438,26 @@ def has_reason(cell):
     return bool(cell.strip(" \t-\u2013\u2014*_`"))
 
 
-def result_table(lines):
-    """(index in lines, column names, cells, result) for each PASS, FAIL and NOT RUN row of the tables in lines that have
-    Result and Evidence columns."""
+RESULTS = ("PASS", "FAIL", "NOT RUN")
+FINDINGS = ("Supports", "Refutes", "Inconclusive")  # an investigation's results: what was found, never a failure
+INVESTIGATION_MARKER = re.compile(r"Mode:[ \t]*investigation[ \t]*", re.I)
+
+
+def is_investigation(notes):
+    """Whether the decision notes hold a `Mode: investigation` line outside fenced blocks."""
+    fenced = False
+    for line in notes.split("\n"):
+        if re.match(r"\s*(```|~~~)", line):
+            fenced = not fenced
+        elif not fenced and INVESTIGATION_MARKER.fullmatch(line):
+            return True
+    return False
+
+
+def result_table(lines, results=RESULTS):
+    """(index in lines, column names, cells, result) for each row whose Result is one of results, of the tables in lines
+    that have Result and Evidence columns."""
+    word = re.compile(r"[*_]*(?:(" + "|".join(map(re.escape, results)) + r")\b)?")
     names = None
     for index, line in enumerate(lines):
         cells = table_cells(line)
@@ -449,7 +466,7 @@ def result_table(lines):
         elif {"Result", "Evidence"} <= {c.strip("*_") for c in cells}:
             names = [c.strip("*_") for c in cells]
         elif names and len(cells) > names.index("Result"):
-            result = re.match(r"[*_]*(?:(PASS|FAIL|NOT RUN)\b)?", cells[names.index("Result")]).group(1)
+            result = word.match(cells[names.index("Result")]).group(1)
             if result:
                 yield index, names, cells, result
 
