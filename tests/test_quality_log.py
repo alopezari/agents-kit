@@ -580,7 +580,8 @@ def a_timeout_stops_the_tools_too(base):
     tools = os.path.join(base, "tools")
     os.makedirs(tools)
     with open(os.path.join(tools, "lizard"), "w") as fh:
-        fh.write("#!/bin/bash\nsleep 97\n")
+        # Unique per run: the verify overlay runs this file under two Pythons at once, each looking for its own tool.
+        fh.write(f"#!/bin/bash\nsleep 97.{os.getpid()}\n")
     os.chmod(os.path.join(tools, "lizard"), 0o755)
     env = {**os.environ, "HOME": home, "QUALITY_LOG_STRUCTURE_TIMEOUT": "3", "STRUCTURE_FACTS_LIZARD_TIMEOUT": "120",
            "PATH": os.pathsep.join((tools, os.path.join(home, "shim"), os.environ["PATH"]))}
@@ -588,7 +589,7 @@ def a_timeout_stops_the_tools_too(base):
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 0 and entries(home)[-1]["structure"] is None, (out.stderr, entries(home)[-1])
     time.sleep(0.5)
-    left = subprocess.run(["pgrep", "-f", "sleep 97"], capture_output=True, text=True).stdout.split()
+    left = subprocess.run(["pgrep", "-f", f"sleep 97.{os.getpid()}"], capture_output=True, text=True).stdout.split()
     for pid in left:
         os.kill(int(pid), 9)
     assert not left, "the tool outlived the timeout"
