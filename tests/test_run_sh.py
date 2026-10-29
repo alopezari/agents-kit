@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 RUN_SH = os.path.join(TESTS_DIR, "run.sh")
@@ -90,8 +91,10 @@ def the_helper_keeps_only_the_named_tests():
         for test in kit_home.selected((kept, dropped, also_kept)):
             test()
         assert called == ["kept", "also_kept"], called
+        os.environ["AGENTS_SUITE_ONLY"] = "also_kept"
+        assert kit_home.selected((kept, dropped, also_kept)) == [also_kept], "a name matched part of another"
         os.environ.pop("AGENTS_SUITE_ONLY")
-        assert list(kit_home.selected((kept, dropped))) == [kept, dropped]
+        assert kit_home.selected((kept, dropped)) == [kept, dropped]
     finally:
         if before is None:
             os.environ.pop("AGENTS_SUITE_ONLY", None)
@@ -130,7 +133,9 @@ def a_name_one_file_of_a_section_holds_is_enough():
 
 def usage_errors_stop_before_any_section():
     for args in (["--only", "a"], ["--only", "", "phase"], ["--only", "a,,b", "phase"], ["--only", ",", "phase"],
-                 ["--only", "a,", "phase"], ["--skip", "x", "--only", "a"], ["--only"]):
+                 ["--only", "a,", "phase"], ["--skip", "x", "--only", "a"], ["--only"],
+                 ["--skip", "--only", "a", "phase"], ["--only", "--skip", "phase"], ["--only", "a\nb", "phase"],
+                 ["--only", "a b", "phase"]):
         code, out = run_sh(*args)
         assert code == 2, (args, code, out)
         assert "== " not in out and "unknown section" not in out and "--only" in out, (args, out)
@@ -142,6 +147,22 @@ def without_only_every_test_runs_whatever_the_environment_holds():
     code, out = run_sh("phase", AGENTS_SUITE_ONLY="status_line_names_the_branch")
     assert code == 0, out
     assert sorted(named_lines(out, "phase")) == sorted(f"ok   {name}" for name in phase_tests()), out
+
+
+def only_survives_the_home_re_execution():
+    with tempfile.TemporaryDirectory() as home:
+        code, out = run_sh("--only", "status_line_names_the_branch", "phase", HOME=home,
+                           AGENTS_SUITE_ONLY="walks_the_flow")
+    assert code == 0, out
+    assert named_lines(out, "phase") == ["ok   status_line_names_the_branch"], out
+
+
+def every_harness_with_named_tests_applies_the_selection():
+    for name in sorted(os.listdir(TESTS_DIR)):
+        if re.fullmatch(r"test_.*\.py", name):
+            source = open(os.path.join(TESTS_DIR, name)).read()
+            if re.search(r"^(for test in |for t in |TESTS = )", source, re.M):
+                assert "kit_home.selected(" in source, f"{name} loops over named tests without kit_home.selected"
 
 
 def a_child_runs_its_named_test_whatever_the_selection():
@@ -156,7 +177,9 @@ for test in kit_home.selected((the_helper_keeps_only_the_named_tests, usage_erro
                                each_harness_runs_only_the_named_test, two_names_run_both, an_unknown_name_fails_the_run,
                                a_name_one_file_of_a_section_holds_is_enough,
                                without_only_every_test_runs_whatever_the_environment_holds,
-                               a_child_runs_its_named_test_whatever_the_selection)):
+                               a_child_runs_its_named_test_whatever_the_selection,
+                               only_survives_the_home_re_execution,
+                               every_harness_with_named_tests_applies_the_selection)):
     try:
         test()
         RESULTS.append((test.__name__, None))

@@ -1,4 +1,5 @@
-"""Imported first by every Python test: the tests reach the kit through ~/.agents, so it must be this checkout."""
+"""Imported first by every Python test: the tests reach the kit through ~/.agents, so it must be this checkout.
+selected() applies `tests/run.sh --only` to a harness's list of tests."""
 import os
 import sys
 
@@ -17,4 +18,4 @@ if os.environ.get("AGENTS_KIT_UNDER_TEST") != CHECKOUT:
 def selected(tests):
     """The tests `tests/run.sh --only` named, or every one without it."""
     names = os.environ.get("AGENTS_SUITE_ONLY")
-    return [test for test in tests if test.__name__ in names.split(",")] if names else tests
+    return [test for test in tests if test.__name__ in names.split(",")] if names else list(tests)

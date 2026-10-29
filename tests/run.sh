@@ -171,8 +171,9 @@ section_doctor() {
 skip=0 only='' asked=()
 [ "${1-}" = --skip ] && { skip=1; shift; [ $# -gt 0 ] || { echo "--skip needs section names"; exit 2; }; }
 if [ "${1-}" = --only ]; then
+  [ $skip = 0 ] || { echo "--only doesn't combine with --skip"; exit 2; }
   only=${2-}
-  [[ $only =~ ^[^,]+(,[^,]+)*$ ]] || { echo "--only needs test names, comma-separated: --only <test>[,<test>...] <section>..."; exit 2; }
+  [[ $only =~ ^[A-Za-z_][A-Za-z0-9_]*(,[A-Za-z_][A-Za-z0-9_]*)*$ ]] || { echo "--only needs test names, comma-separated: --only <test>[,<test>...] <section>..."; exit 2; }
   shift 2
   [ $# -gt 0 ] || { echo "--only needs the sections to look in: --only $only <section>..."; exit 2; }
 fi
@@ -243,7 +244,7 @@ if [ -n "$only" ]; then
     awk -v n="$name" '$0 == "ok   " n || $0 == "FAIL " n || index($0, "skip " n ": ") == 1 { found = 1 } END { exit !found }' \
       "${ran[@]}" || { echo "FAIL no test named $name in ${asked[*]}"; missing=1; fail=1; }
   done
-  [ $missing = 1 ] || echo "ok   every test named ran"
+  [ $missing = 1 ] || echo "ok   every test named ran or was skipped"
 fi
 
 printf '\n== %s\n' "real hook log untouched"
