@@ -469,15 +469,15 @@ def a_session_without_builds_lists_none(home):
     assert found["builds"] == [], found["builds"]
 
 
-for test in (phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, branches_started_by_commands,
-             writing_the_spec_marks_the_work_before_it, what_counts_as_starting_the_code, short_gaps_add_up,
-             the_users_attention_per_branch, what_the_user_did_not_type, another_agents_run_is_not_the_user,
-             a_session_of_typed_commands, the_kit_names_count_as_their_former_phases,
-             builds_come_from_their_transcripts, opus_prices_and_usage_without_the_cache_split,
-             advisor_calls_and_what_the_table_cannot_price, a_session_without_builds_lists_none,
-             an_orca_worktree_takes_its_repo_from_git, a_removed_orca_worktree_takes_its_repo_from_the_main_checkout,
-             a_removed_orca_worktree_finds_its_checkout_anywhere_a_session_ran,
-             a_removed_orca_worktree_without_one_main_checkout_stays_unattributed):
+for test in kit_home.selected((phases_per_branch_and_skill, a_rename_keeps_the_phase, what_ends_a_phase, branches_started_by_commands,
+                               writing_the_spec_marks_the_work_before_it, what_counts_as_starting_the_code, short_gaps_add_up,
+                               the_users_attention_per_branch, what_the_user_did_not_type, another_agents_run_is_not_the_user,
+                               a_session_of_typed_commands, the_kit_names_count_as_their_former_phases,
+                               builds_come_from_their_transcripts, opus_prices_and_usage_without_the_cache_split,
+                               advisor_calls_and_what_the_table_cannot_price, a_session_without_builds_lists_none,
+                               an_orca_worktree_takes_its_repo_from_git, a_removed_orca_worktree_takes_its_repo_from_the_main_checkout,
+                               a_removed_orca_worktree_finds_its_checkout_anywhere_a_session_ran,
+                               a_removed_orca_worktree_without_one_main_checkout_stays_unattributed)):
     base = tempfile.mkdtemp(prefix="agents-test-extract-sessions-")
     home = os.environ["HOME"]
     try:

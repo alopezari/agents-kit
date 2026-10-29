@@ -190,7 +190,7 @@ def kit_is_recognised_when_it_is_a_worktree(base):
     assert not guard_bash.targets_kit(None, None, main), "a KIT inside another repository isn't that repository"
 
 
-for test in (kit_prs_are_checked, pr_text_is_checked_before_gh, kit_commits_are_checked, kit_is_recognised_when_it_is_a_worktree):
+for test in kit_home.selected((kit_prs_are_checked, pr_text_is_checked_before_gh, kit_commits_are_checked, kit_is_recognised_when_it_is_a_worktree)):
     base = tempfile.mkdtemp(prefix="agents-test-terms-")
     try:
         test(base)

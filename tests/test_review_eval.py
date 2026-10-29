@@ -246,9 +246,9 @@ def a_failed_review_is_an_error_not_a_miss(base):
     assert "- Correctness: recall n/a, no clean case, 3 errors" in broken.stdout and "bundle.sh exit 1" in broken.stderr, broken
 
 
-for test in (adds_each_case_once, refuses_cases_it_cant_replay, scores_hits_misses_and_false_alarms,
-             cases_with_the_same_review_share_one_pass, a_worktree_left_behind_is_an_error,
-             a_failed_review_is_an_error_not_a_miss, refuses_a_limit_below_one):
+for test in kit_home.selected((adds_each_case_once, refuses_cases_it_cant_replay, scores_hits_misses_and_false_alarms,
+                               cases_with_the_same_review_share_one_pass, a_worktree_left_behind_is_an_error,
+                               a_failed_review_is_an_error_not_a_miss, refuses_a_limit_below_one)):
     base = tempfile.mkdtemp(prefix="agents-test-review-eval-")
     try:
         test(base)

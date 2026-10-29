@@ -163,11 +163,11 @@ def review_prompt_bundles_the_request_and_the_spec(base):
 
 
 RESULTS = []
-for test in (lint_passes_the_documented_shape, lint_names_every_missing_part, lint_rejects_a_placeholder_verify,
-             lint_warns_outside_three_to_six_criteria, lint_exits_2_on_an_unreadable_spec,
-             lint_takes_a_change_map_only_when_filled, lint_takes_decisions_only_when_filled,
-             lint_demands_a_risk_line_with_a_reason, lint_takes_decisions_only_on_a_high_risk_spec,
-             review_prompt_bundles_the_request_and_the_spec):
+for test in kit_home.selected((lint_passes_the_documented_shape, lint_names_every_missing_part, lint_rejects_a_placeholder_verify,
+                               lint_warns_outside_three_to_six_criteria, lint_exits_2_on_an_unreadable_spec,
+                               lint_takes_a_change_map_only_when_filled, lint_takes_decisions_only_when_filled,
+                               lint_demands_a_risk_line_with_a_reason, lint_takes_decisions_only_on_a_high_risk_spec,
+                               review_prompt_bundles_the_request_and_the_spec)):
     base = tempfile.mkdtemp(prefix="agents-test-spec-")
     try:
         test(base)

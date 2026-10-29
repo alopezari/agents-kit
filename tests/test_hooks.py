@@ -5062,6 +5062,7 @@ if sys.argv[1:]:
     for name in sys.argv[1:]:
         test(by_name[name])
 else:
+    TESTS = kit_home.selected(TESTS)
     # Each test in a process of its own, as every test already gets its own HOME, hook state and session ids there:
     # threads would share the HOME's repo overlays and logs.
     def run_alone(t):

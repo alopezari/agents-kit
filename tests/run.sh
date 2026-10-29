@@ -3,8 +3,12 @@
 #   ~/.agents/tests/run.sh                        every section
 #   ~/.agents/tests/run.sh hooks install          only those sections
 #   ~/.agents/tests/run.sh --skip hooks install   all but those (CI's third job, so a new section lands there)
+#   ~/.agents/tests/run.sh --only a,b phase       only the tests named a or b in those sections; a name none of them ran
+#                                                 fails the run. Files whose checks aren't named functions (test_docs,
+#                                                 test_triage, the .sh tests...) run whole
 # Sections run concurrently, after the doctor on its own; each prints as one block, in this order, once it and every section above it have finished.
 cd "$(dirname "$0")" || exit 2
+unset AGENTS_SUITE_ONLY  # the tests --only names (kit_home.selected); a run without --only runs every test
 # The tests reach the kit through ~/.agents. Run from another checkout, re-run under a HOME holding only .agents,
 # linked to it, as the verify overlay does. Its tests see no install outside .agents, so the doctor is skipped.
 if [ "$(cd .. && pwd -P)" != "$(cd "$HOME/.agents" 2>/dev/null && pwd -P)" ]; then
@@ -49,7 +53,7 @@ sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wra
   "verify-changed|verify on changed lines" "structure-facts|structure facts for review" "deps|dependencies" "outcomes|outcomes and escapes" "review-eval|review evals"
   "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
-  "doctor|install doctor" "kit-home|every test refuses another checkout")
+  "doctor|install doctor" "kit-home|every test refuses another checkout" "run-sh|tests/run.sh --only")
 names=("${sections[@]%%|*}")
 
 section_hooks() { local f=0; python3 test_hooks.py || f=1; python3 test_private_terms.py || f=1; return $f; }
@@ -144,6 +148,7 @@ section_version() {
   return $f
 }
 section_install() { bash test_install.sh; }
+section_run_sh() { python3 test_run_sh.py; }
 section_kit_home() {
   local missing
   missing=$(grep -L -E '^import kit_home\b|^\. "\$\(dirname "\$0"\)/kit_home\.sh"' test_*.py test_*.sh)
@@ -163,12 +168,22 @@ section_doctor() {
   return 1
 }
 
-skip=0 asked=()
+skip=0 only='' asked=()
 [ "${1-}" = --skip ] && { skip=1; shift; [ $# -gt 0 ] || { echo "--skip needs section names"; exit 2; }; }
+if [ "${1-}" = --only ]; then
+  [ $skip = 0 ] || { echo "--only doesn't combine with --skip"; exit 2; }
+  only=${2-}
+  [[ $only =~ ^[A-Za-z_][A-Za-z0-9_]*(,[A-Za-z_][A-Za-z0-9_]*)*$ ]] || { echo "--only needs test names, comma-separated: --only <test>[,<test>...] <section>..."; exit 2; }
+  shift 2
+  [ $# -gt 0 ] || { echo "--only needs the sections to look in: --only $only <section>..."; exit 2; }
+fi
+for arg in "$@"; do
+  if [[ ( $arg = --only && $skip = 1 ) || ( $arg = --skip && -n $only ) ]]; then echo "--only doesn't combine with --skip"; exit 2; fi
+done
 for arg in "$@"; do
   known=0
   for name in "${names[@]}"; do [ "$arg" = "$name" ] && known=1; done
-  [ $known = 1 ] || { echo "unknown section: $arg (sections: ${names[*]}; --skip goes first)"; exit 2; }
+  [ $known = 1 ] || { echo "unknown section: $arg (sections: ${names[*]}; --skip or --only goes first)"; exit 2; }
   asked+=("$arg")
 done
 picked=()
@@ -183,6 +198,7 @@ run_root=$(mktemp -d "${TMPDIR:-/tmp}/kit-suite-XXXXXX") || exit 2
 trap 'rm -rf "$run_root"; remove_own_home' EXIT
 out="$run_root/out" && mkdir "$out" "$run_root/tmp" || exit 2
 export TMPDIR="$run_root/tmp" AGENTS_SUITE_RUN="${run_root##*/}"
+[ -n "$only" ] && export AGENTS_SUITE_ONLY="$only"
 # A script's background jobs ignore SIGINT, so a signal here ends each section's process tree. No set -m: a group per
 # section would outlive a harness that kills this shell's process group on timeout. Each process is stopped before its
 # children are listed: test_hooks' pool would otherwise start the next test as each one dies, and orphan it.
@@ -217,6 +233,19 @@ for n in "${!picked[@]}"; do
   printf '\n== %s\n' "${sections[$i]#*|}"
   cat "$out/$i"
 done
+
+if [ -n "$only" ]; then
+  printf '\n== %s\n' "tests named by --only"
+  missing=0 ran=()
+  for i in "${picked[@]}"; do ran+=("$out/$i"); done
+  IFS=, read -ra wanted <<<"$only"
+  for name in "${wanted[@]}"; do
+    # structure-facts reports a test it can't run as "skip <name>: <why>": it ran, so it was found.
+    awk -v n="$name" '$0 == "ok   " n || $0 == "FAIL " n || index($0, "skip " n ": ") == 1 { found = 1 } END { exit !found }' \
+      "${ran[@]}" || { echo "FAIL no test named $name in ${asked[*]}"; missing=1; fail=1; }
+  done
+  [ $missing = 1 ] || echo "ok   every test named ran or was skipped"
+fi
 
 printf '\n== %s\n' "real hook log untouched"
 if ! logged=$(from_tests); then

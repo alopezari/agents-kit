@@ -107,8 +107,8 @@ def leaves_the_main_checkout_alone(base):
     assert out.returncode == 1 and os.path.isdir(main) and "main checkout" in out.stdout + out.stderr, out
 
 
-for test in (removes_a_worktree_the_agent_made, frees_a_branch_behind_its_upstream, detaches_the_session_worktree, refuses_to_lose_work,
-             leaves_the_main_checkout_alone):
+for test in kit_home.selected((removes_a_worktree_the_agent_made, frees_a_branch_behind_its_upstream, detaches_the_session_worktree, refuses_to_lose_work,
+                               leaves_the_main_checkout_alone)):
     base = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-free-branch-"))
     try:
         test(base)
