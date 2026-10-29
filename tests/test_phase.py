@@ -240,6 +240,51 @@ def new_repo(base):
     return repo
 
 
+def reports_path_takes_several_kinds(base):
+    repo = new_repo(base)
+    reports = os.path.expanduser("~/.agents/bin/reports")
+
+    def run(*args):
+        return subprocess.run([reports, *args], cwd=repo, capture_output=True, text=True)
+    kinds = ["verify", "review", "validation", "checks-guide", "follow-pr", "pr-body", "decision-notes", "evidence"]
+    sh(repo, "git", "checkout", "-q", "-b", "feature/cart")
+    for branch in ([], ["--branch", "other/branch"]):
+        one_by_one = [run(*branch, "path", kind).stdout.strip() for kind in kinds]
+        together = run(*branch, "path", *kinds[::-1])
+        assert together.returncode == 0 and together.stdout.splitlines() == one_by_one[::-1], (branch, together)
+    guide = run("path", "checks-guide").stdout.strip()
+    open(guide.replace("checks-guide-", "staging-guide-"), "w").write("# Staging guide\n")
+    assert run("path", "verify", "checks-guide").stdout.splitlines()[1] == guide.replace("checks-guide-", "staging-guide-"), \
+        "a branch with only a staging guide reads it as its checks guide, in a multi-kind call too"
+
+    sh(repo, "git", "switch", "-q", "--detach")
+    alone = run("path", "evidence")
+    assert alone.returncode == 2 and "needs a branch" in alone.stderr and alone.stdout == "", alone
+    mixed = run("path", "evidence", "validation", "pr-body", "review")
+    validation, review = run("path", "validation").stdout.strip(), run("path", "review").stdout.strip()
+    assert mixed.returncode == 2 and mixed.stdout == f"\n{validation}\n\n{review}\n", mixed
+    assert "reports path evidence needs a branch" in mixed.stderr and "reports path pr-body needs a branch" in mixed.stderr, mixed
+    assert run("--branch", "other/branch", "path", "evidence", "pr-body").returncode == 0, "a named branch needs no checkout"
+
+    sh(repo, "git", "switch", "-q", "feature/cart")
+    evidence = run("path", "evidence").stdout.strip()
+    os.rmdir(evidence)
+    open(evidence, "w").close()
+    stopped = run("path", "verify", "evidence", "review")
+    assert stopped.returncode not in (0, 2) and stopped.stdout == run("path", "verify").stdout, \
+        ("a failed mkdir stops the call, unlike a missing branch", stopped)
+
+
+def reports_path_refuses_an_unknown_kind_before_resolving_any(base):
+    repo = new_repo(base)
+    reports = os.path.expanduser("~/.agents/bin/reports")
+    evidence = os.path.join(os.path.dirname(sh(repo, reports, "path", "verify")), "evidence-shop-trunk")
+    for kinds in (["evidence", "bogus"], ["bogus", "evidence"], ["bogus"], []):
+        done = subprocess.run([reports, "path", *kinds], cwd=repo, capture_output=True, text=True)
+        assert done.returncode == 2 and done.stdout == "" and done.stderr.startswith("usage: reports path "), (kinds, done)
+        assert not os.path.exists(evidence), f"{kinds} created the evidence directory before the usage error"
+
+
 def kit_state_follows_the_branch_from_a_xirp_to_an_orca_worktree(base):
     # Moving a branch between tools: Xirp names its worktree <main>-worktree-<session>, Orca nests it as
     # <dir>/<repo>/<worktree>. Git allows the branch in one worktree at a time, so the first goes before the second.
@@ -544,7 +589,8 @@ TESTS = (switched_off_phases_leave_the_flow, status_line_names_the_branch, statu
          a_rename_log_that_cannot_be_written_leaves_the_spec_path,
          slash_and_dash_branches_keep_their_own_files, files_under_the_old_dash_key_move_unless_that_branch_exists,
          fast_path_serves_cache_and_refreshes, concurrent_refreshes_each_write_their_own_file,
-         a_branch_recreated_after_prune_gets_its_own_label, reading_a_reflog_keeps_to_the_deadline)
+         a_branch_recreated_after_prune_gets_its_own_label, reading_a_reflog_keeps_to_the_deadline,
+         reports_path_takes_several_kinds, reports_path_refuses_an_unknown_kind_before_resolving_any)
 
 if sys.argv[1:]:
     by_name = {t.__name__: t for t in TESTS}

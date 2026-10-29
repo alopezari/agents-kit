@@ -406,7 +406,11 @@ def stamp_matches(kind, current):
 
 def report_paths(*kinds):
     reports = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "reports")
-    return [subprocess.run([reports, "path", kind], capture_output=True, text=True).stdout.strip() for kind in kinds]
+    if not kinds:
+        return []
+    # One line per kind; a kind that failed leaves an empty line, and a call that stopped early leaves the rest unprinted.
+    lines = subprocess.run([reports, "path", *kinds], capture_output=True, text=True).stdout.removesuffix("\n").split("\n")
+    return [line.strip() for line in (lines + [""] * len(kinds))[:len(kinds)]]
 
 
 def table_cells(line):

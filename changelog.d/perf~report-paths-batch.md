@@ -1,0 +1,1 @@
+- `reports path` takes several kinds in one call and prints one line per kind, in the order given (a kind that needs a branch and has none prints an empty line, with its error on stderr and exit 2 at the end), and the decision page, `pr-validation` and the validate stamp look their report paths up with one call instead of one per kind, so the decision page builds faster.

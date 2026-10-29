@@ -334,6 +334,7 @@ quality-log pr <number>
 **`bin/reports`**: Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). A branch with only a guide saved under its older name, staging-guide, reads it as its checks-guide.
 
 ```
+reports path <kind>...                           one line per kind, in order; a kind that needs a branch and has none prints an empty line among several, its error on stderr, exit 2
 reports path <verify|review|validation|checks-guide|follow-pr>   where the stop hook or a skill saves that report
 reports path pr-body                             where kit-ship and kit-follow-pr save the PR description; left out of the listings
 reports path decision-notes                      where kit-ship saves its decision notes for the decision page; left out of the listings

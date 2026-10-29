@@ -1,6 +1,7 @@
 #!/bin/bash
 # Review and testing reports for the current repo and branch, stored next to the spec (outside the tree). A branch
 # with only a guide saved under its older name, staging-guide, reads it as its checks-guide.
+#   reports path <kind>...                           one line per kind, in order; a kind that needs a branch and has none prints an empty line among several, its error on stderr, exit 2
 #   reports path <verify|review|validation|checks-guide|follow-pr>   where the stop hook or a skill saves that report
 #   reports path pr-body                             where kit-ship and kit-follow-pr save the PR description; left out of the listings
 #   reports path decision-notes                      where kit-ship saves its decision notes for the decision page; left out of the listings
@@ -11,7 +12,7 @@
 #   reports --branch <name> …                        the same for another branch of this repo, without phase and switches
 set -euo pipefail
 if [ "${1:-}" = "--branch" ]; then
-  [ -n "${2:-}" ] || { echo "usage: reports --branch <name> [path <kind> | brief]" >&2; exit 2; }
+  [ -n "${2:-}" ] || { echo "usage: reports --branch <name> [path <kind>... | brief]" >&2; exit 2; }
   # Only reads: path.sh would move the current branch's reports, never another's.
   dir="$(git rev-parse --path-format=absolute --git-common-dir)/agents"
   tilde='~'  # review_stamp.branch_key: / becomes ~
@@ -35,21 +36,34 @@ report_file() {
 }
 
 if [ "${1:-}" = "path" ]; then
-  case "${2:-}" in
-    verify|review|validation|checks-guide|follow-pr) report_file "$2" ;;
-    pr-body|decision-notes)
-      # Every detached checkout would share one file, and a PR edit could send another PR's description.
-      [ $other_branch = 1 ] || [ -n "$(git branch --show-current)" ] \
-        || { echo "reports path $2 needs a branch: run it from the PR branch's checkout, or pass --branch <name>" >&2; exit 2; }
-      echo "$dir/$2-$suffix.md" ;;
-    evidence)
-      # Every detached checkout would share one directory, and a validation could cite another's outputs.
-      [ $other_branch = 1 ] || [ -n "$(git branch --show-current)" ] \
-        || { echo "reports path evidence needs a branch: run it from the branch's checkout, or pass --branch <name>" >&2; exit 2; }
-      mkdir -p "$dir/evidence-$suffix"; echo "$dir/evidence-$suffix" ;;
-    *) echo "usage: reports path <verify|review|validation|checks-guide|follow-pr|pr-body|decision-notes|evidence>" >&2; exit 2 ;;
-  esac
-  exit 0
+  shift
+  usage="usage: reports path <verify|review|validation|checks-guide|follow-pr|pr-body|decision-notes|evidence>..."
+  [ $# -gt 0 ] || { echo "$usage" >&2; exit 2; }
+  for kind; do
+    case $kind in
+      verify|review|validation|checks-guide|follow-pr|pr-body|decision-notes|evidence) ;;
+      *) echo "$usage" >&2; exit 2 ;;
+    esac
+  done
+  status=0 kinds=$#
+  # Every detached checkout would share one file or directory: a PR edit could send another PR's description, and a
+  # validation could cite another's outputs. Several kinds keep a line each, so the caller can tell which one failed.
+  on_branch=$other_branch  # asked once, when a kind first needs it
+  refuse_without_branch() {
+    [ $on_branch = 1 ] && return 1
+    [ -n "$(git branch --show-current)" ] && { on_branch=1; return 1; }
+    echo "reports path $1 needs a branch: run it from $2 checkout, or pass --branch <name>" >&2
+    status=2
+    [ $kinds -eq 1 ] || echo
+  }
+  for kind; do
+    case $kind in
+      verify|review|validation|checks-guide|follow-pr) report_file "$kind" ;;
+      pr-body|decision-notes) refuse_without_branch "$kind" "the PR branch's" || echo "$dir/$kind-$suffix.md" ;;
+      evidence) refuse_without_branch evidence "the branch's" || { mkdir -p "$dir/evidence-$suffix"; echo "$dir/evidence-$suffix"; } ;;
+    esac
+  done
+  exit $status
 fi
 
 if [ "${1:-}" = "html" ]; then
