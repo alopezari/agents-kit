@@ -2354,6 +2354,10 @@ def the_answer_needs_more_than_its_confidence(base):
     write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "**Confidence:** **high**."))
     _, markup = generate(repo, base)
     assert listed(markup, "blockers") == [] and "high confidence" in summary_row(markup, "answer"), listed(markup, "blockers")
+    write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "Confidence: high. One trace only"))
+    _, markup = generate(repo, base)
+    answer = summary_row(markup, "answer")
+    assert "One trace only" in answer and ". One trace" not in answer, answer
     write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "Confidence: " + "*" * 50_000 + "x"))
     before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
     generate(repo, base)
@@ -2376,6 +2380,24 @@ def a_kept_script_the_evidence_names_shows_once(base):
     os.symlink("F1.py", os.path.join(evidence, "checks", "F1.sh"))
     _, markup = generate(repo, base)
     assert check_block(markup, "F1").count("ONLY-ONCE") == 1, "a script the row names and keeps shows twice"
+
+
+def a_file_a_row_names_three_ways_shows_once(base):
+    repo, _ = investigation_branch(base)
+    _, markup = generate(repo, base)
+    once = check_block(markup, "F1").count('class="file"')
+    write(repo, "validation", "# Validation: totals drift\n\n## A. Findings\n\n"
+                              + FINDINGS_ROWS.replace("[trace](trace.txt)", "`trace.txt`, [trace](trace.txt) and trace.txt"))
+    _, markup = generate(repo, base)
+    assert check_block(markup, "F1").count('class="file"') == once, "a file the row names three ways shows more than once"
+
+
+def notes_over_the_limit_keep_the_change_page(base):
+    repo, _ = investigation_branch(base, notes=INVESTIGATION_NOTES + "x" * (2 * 1024 * 1024))
+    _, markup = generate(repo, base)
+    assert "Decision page for" in text(markup), "notes over 2 MB gave the investigation page"
+    shown = sh(repo, REPORTS, "brief")
+    assert shown.returncode == 0 and "mode: investigation" not in shown.stdout, shown
 
 
 for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
@@ -2420,7 +2442,8 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
              the_skills_describe_the_investigation_notes, a_marker_on_an_empty_diff_gives_the_investigation_page,
              the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert, hypotheses_keep_their_lists_and_subheadings,
              the_notes_embed_each_file_under_its_first_part, the_answer_needs_more_than_its_confidence,
-             a_marker_inside_a_longer_fence_is_not_the_mode, a_kept_script_the_evidence_names_shows_once):
+             a_marker_inside_a_longer_fence_is_not_the_mode, a_kept_script_the_evidence_names_shows_once,
+             notes_over_the_limit_keep_the_change_page, a_file_a_row_names_three_ways_shows_once):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
         test(os.path.realpath(base))
