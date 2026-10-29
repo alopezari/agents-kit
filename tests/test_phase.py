@@ -266,6 +266,14 @@ def reports_path_takes_several_kinds(base):
     assert "reports path evidence needs a branch" in mixed.stderr and "reports path pr-body needs a branch" in mixed.stderr, mixed
     assert run("--branch", "other/branch", "path", "evidence", "pr-body").returncode == 0, "a named branch needs no checkout"
 
+    sh(repo, "git", "switch", "-q", "feature/cart")
+    evidence = run("path", "evidence").stdout.strip()
+    os.rmdir(evidence)
+    open(evidence, "w").close()
+    stopped = run("path", "verify", "evidence", "review")
+    assert stopped.returncode not in (0, 2) and stopped.stdout == run("path", "verify").stdout, \
+        ("a failed mkdir stops the call, unlike a missing branch", stopped)
+
 
 def reports_path_refuses_an_unknown_kind_before_resolving_any(base):
     repo = new_repo(base)
