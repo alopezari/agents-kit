@@ -88,8 +88,8 @@ def the_helper_keeps_only_the_named_tests():
     before = os.environ.get("AGENTS_SUITE_ONLY")
     try:
         os.environ["AGENTS_SUITE_ONLY"] = "kept,also_kept"
-        for test in kit_home.selected((kept, dropped, also_kept)):
-            test()
+        for picked in kit_home.selected((kept, dropped, also_kept)):
+            picked()
         assert called == ["kept", "also_kept"], called
         os.environ["AGENTS_SUITE_ONLY"] = "also_kept"
         assert kit_home.selected((kept, dropped, also_kept)) == [also_kept], "a name matched part of another"
@@ -162,7 +162,8 @@ def every_harness_with_named_tests_applies_the_selection():
         if re.fullmatch(r"test_.*\.py", name):
             source = open(os.path.join(TESTS_DIR, name)).read()
             if re.search(r"^(for test in |for t in |TESTS = )", source, re.M):
-                assert "kit_home.selected(" in source, f"{name} loops over named tests without kit_home.selected"
+                assert re.search(r"^\s*(for test in |for t in |TESTS = )kit_home\.selected\(", source, re.M), \
+                    f"{name} loops over named tests without kit_home.selected"
 
 
 def a_child_runs_its_named_test_whatever_the_selection():
