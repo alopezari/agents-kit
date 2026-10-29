@@ -105,6 +105,7 @@ MAKERS = {"spec": "the kit-spec skill writes it", "decision-notes": "kit-ship wr
 INVESTIGATION_SECTIONS = {1: "Hypotheses", 2: "Options", 3: "Not checked", 4: "Findings", 5: "Reports"}
 FINDING_WORDS = {"PASS": "as expected", "FAIL": "not as expected"}
 CONFIDENCE = re.compile(r"[*_]*Confidence[*_]*:[*_]*[ \t]*(.*?)[*_.]*[ \t]*", re.I)
+CONFIDENCE_LEVEL = re.compile(r"(high|medium|low)\b[*_]*[ \t]*(?:[—–:,;-][ \t]*)?(.*)", re.I)
 HYPOTHESIS_PART = re.compile(r"[*_]*(For|Against)[*_]*:[*_]*[ \t]*(.*)", re.I)
 UNBLOCKS = re.compile(r"[*_]*Unblocks[*_]*:[*_]*[ \t]*(.*)", re.I)
 DOES_NOT_APPLY = "PR, CI, verify, review stamp, validate stamp, checks guide and ship steps"
@@ -1679,11 +1680,13 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
 
     question = required("The question", "the question")
     answer = required("The answer", "the answer")
-    confidence, kept = None, []
+    confidence, confidence_reason, kept = None, "", []
     for line, fenced in outside_fences(answer):
         found = not fenced and confidence is None and CONFIDENCE.fullmatch(line.strip())
         if found:
-            confidence = found.group(1).strip().lower()
+            value = found.group(1).strip()
+            level = CONFIDENCE_LEVEL.fullmatch(value)
+            confidence, confidence_reason = (level.group(1).lower(), level.group(2)) if level else (value.lower(), "")
         else:
             kept.append(line)
     if answer and confidence not in ("high", "medium", "low"):
@@ -1768,7 +1771,8 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
                + f"{body}</div></details>")
 
     # The summary
-    confidence_html = state(f"{confidence} confidence", "neutral") if confidence in ("high", "medium", "low") else ""
+    confidence_html = (state(f"{confidence} confidence", "neutral") + (f" {page.inline(confidence_reason)}" if confidence_reason else "")
+                       if confidence in ("high", "medium", "low") else "")
     rows_html = (("question", "The question", page.markdown(question, "question", top=3) + evidence_of(question, "sum-question")
                   if question else state("missing", "need")),
                  ("answer", "The answer", (page.markdown(answer, "answer", top=3) if answer else "") + f"<p>{confidence_html}</p>"

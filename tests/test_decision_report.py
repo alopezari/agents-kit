@@ -2146,6 +2146,11 @@ def missing_investigation_sections_are_blockers(base):
         _, markup = generate(repo, base)
         blockers = listed(markup, "blockers")
         assert len(blockers) == 1 and "Confidence" in blockers[0] and word in blockers[0], (line, blockers)
+    write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "Confidence: Medium — the refund path wasn't run"))
+    _, markup = generate(repo, base)
+    answer = summary_row(markup, "answer")
+    assert listed(markup, "blockers") == [], f"AC2: a reason after the level made it unknown: {listed(markup, 'blockers')}"
+    assert "medium confidence" in answer and "the refund path wasn" in answer and "Confidence:" not in answer, answer
 
 
 def blocks_that_need_a_change_do_not_apply(base):
