@@ -5,7 +5,8 @@ and the pull request's quality signals from quality.jsonl, then your decisions, 
 warnings. Five folded sections follow (coverage, tests, review, merge and ship, and the reports as annexes), each open
 only while it holds a failure or a blocker, then a footer of identifiers. The tests follow the testing pyramid (e2e,
 integration, unit, then the other levels), and a drawn pyramid filters them by layer. References link: the PR, its
-commits and file:line to GitHub, https URLs, and local reports and evidence by file://.
+commits and file:line to GitHub, https URLs, and local reports and evidence by file://. A branch that answers a question
+instead of shipping a change gets the investigation page, below.
 
 When the decision notes hold a `Mode: investigation` line outside fenced blocks, it writes the investigation page
 instead, for a branch that answers a question rather than ships a change: the question, the answer and its
@@ -19,7 +20,7 @@ apply to it, and it never calls gh.
 
 The page runs no script and loads nothing from the network. Of the files the reports name, it reads only those inside
 the evidence directory, and embeds text up to 200 KB (head and tail kept), images up to 2 MB, 20 MB in all; the rest is linked by file:// path.
-Besides the reports, it reads the repository's ship.md under ~/.agents/repos and the review's lenses.md, bounded as a report is,
+Besides the reports, the change page reads the repository's ship.md under ~/.agents/repos and the review's lenses.md, bounded as a report is,
 and the last 2 MB of the kit's logs/quality.jsonl for the signals `quality-log pr` recorded for the PR.
 It is written to a temporary file and renamed into place; when generation fails, the page is removed and the error
 printed (exit 1), so an older page is never taken for the current one.
@@ -63,7 +64,7 @@ CSP = "default-src 'none'; img-src file: data:; media-src file:; style-src 'unsa
 TEXT_LIMIT = 200 * 1024
 IMAGE_LIMIT = 2 * 1024 * 1024
 TOTAL_LIMIT = 20 * 1024 * 1024
-REPORT_LIMIT = 2 * 1024 * 1024
+REPORT_LIMIT = review_stamp.REPORT_LIMIT
 IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 VIDEOS = (".webm", ".mp4", ".mov")
 PLAYABLE = {".webm": "video/webm", ".mp4": "video/mp4"}  # a .mov plays only in Safari, so it stays a link
@@ -104,9 +105,9 @@ MAKERS = {"spec": "the kit-spec skill writes it", "decision-notes": "kit-ship wr
           "checks-guide": "the kit-validate skill writes it", "follow-pr": "the kit-follow-pr skill writes it"}
 INVESTIGATION_SECTIONS = {1: "Hypotheses", 2: "Options", 3: "Not checked", 4: "Findings", 5: "Reports"}
 FINDING_WORDS = {"PASS": "as expected", "FAIL": "not as expected"}
-CONFIDENCE = re.compile(r"[*_]*Confidence[*_]*:[*_]*[ \t]*(.*?)[*_.]*[ \t]*", re.I)
-CONFIDENCE_LEVEL = re.compile(r"(high|medium|low)\b[*_]*[ \t]*(?:[—–:,;-][ \t]*)?(.*)", re.I)
-HYPOTHESIS_PART = re.compile(r"[*_]*(For|Against)[*_]*:[*_]*[ \t]*(.*)", re.I)
+CONFIDENCE = re.compile(r"[*_]*Confidence[*_]*:(.*)", re.I)  # greedy: a lazy group before [*_.]* is quadratic
+CONFIDENCE_LEVEL = re.compile(r"[*_]*(high|medium|low)\b[*_]*[ \t]*(?:[—–:,;.-][ \t]*)?(.*)", re.I)
+HYPOTHESIS_PART = re.compile(r"(?:[-*+][ \t]+)?[*_]*(For|Against)[*_]*:[*_]*[ \t]*(.*)", re.I)
 UNBLOCKS = re.compile(r"[*_]*Unblocks[*_]*:[*_]*[ \t]*(.*)", re.I)
 DOES_NOT_APPLY = "PR, CI, verify, review stamp, validate stamp, checks guide and ship steps"
 
@@ -123,7 +124,8 @@ def file_href(path):
 
 
 def state(word, tone):
-    """A state word, set in mono and colored by tone: ok (proven), need (needs the owner), dim (not run, not recorded)."""
+    """A state word, set in mono and colored by tone: ok (proven), need (needs the owner), dim (not run, not recorded),
+    neutral (a finding: what was found, neither good nor bad)."""
     return f'<span class="st {tone}">{esc(word)}</span>'
 
 
@@ -499,15 +501,7 @@ class Page:
 
 # Sources
 
-def outside_fences(text):
-    """Each line of text with whether it is a fence line or inside a fenced block, where a `#` line is no heading."""
-    fenced = False
-    for line in text.split("\n"):
-        if re.match(r"\s*(```|~~~)", line):
-            fenced = not fenced
-            yield line, True
-        else:
-            yield line, fenced
+outside_fences = review_stamp.outside_fences
 
 
 def notes_by_section(text):
@@ -618,10 +612,8 @@ def check_rows(text, results=review_stamp.RESULTS):
 def named_files(page, row):
     """(path as named, real path inside the evidence directory or None) for each file the row's Evidence cell names,
     then the check's kept script from checks/."""
-    found = files_named_in(page, row["observed"])
-    seen = {real or named for named, real in found}
     scripts = [page.resolve(os.path.join(page.evidence, "checks", name)) for name in page.scripts if name.startswith(row["id"] + ".")]
-    return found + [(named, real) for named, real in scripts if (real or named) not in seen]
+    return unique_files(files_named_in(page, row["observed"]) + scripts)
 
 
 def files_named_in(page, cell):
@@ -639,6 +631,23 @@ def files_named_in(page, cell):
     for text, named_on_purpose in ((spans, True), (prose, False)):
         found += [page.resolve(token) for token in PATH_TOKEN.findall(text) + FILE_TOKEN.findall(text)
                   if named_on_purpose or exists(token)]
+    return unique_files(found)
+
+
+def files_the_notes_name(page, text):
+    """(path as named, real path inside the evidence directory or None) for each file the notes name: a link or an
+    image always, and a code span, bold text or word only when the evidence directory holds it, since notes cite
+    source files (`client.py:42`) the evidence directory never will."""
+    found = [page.resolve(link.group(4).strip()) for link in INLINE.finditer(text) if link.group(4) is not None
+             and not (re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", link.group(4).strip()) and not link.group(4).strip().startswith("file://"))]
+    spans = [m.group(1) or m.group(2) for m in INLINE.finditer(text) if m.group(4) is None]
+    words = [re.sub(r":\d+(?::\d+)?$", "", span.strip()) for span in spans] + FILE_TOKEN.findall(" ".join(spans) + " " + INLINE.sub(" ", text))
+    held = lambda word: (not os.path.isabs(os.path.expanduser(word)) and os.path.lexists(os.path.join(page.evidence, word))
+                         and not os.path.isdir(os.path.join(page.evidence, word)))
+    return unique_files(found + [page.resolve(word) for word in words if held(word)])
+
+
+def unique_files(found):
     unique, seen = [], set()
     for named, real in found:
         key = real or named
@@ -1598,16 +1607,20 @@ def build(page_path, evidence):
               f'<dt>Generated</dt><dd>{esc(now)}</dd>'
               f'<dt>Page</dt><dd>local file, not published · <a href="{esc(file_href(page_path))}"><code>{esc(page_path)}</code></a></dd>'
               '</dl></footer>')
+    return document(title, f"Decision page for <code>{esc(branch)}</code>, from its spec, reports and evidence",
+                    " ".join(f'<span class="gate">{name} {state(word, tone)}</span>' for name, word, tone in strip) + f" {decide_link}",
+                    summary + body_html, footer)
+
+
+def document(title, purpose, strip, main, footer):
+    """The page around its parts: the CSP, the skip link and the header, the same on both layouts."""
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta http-equiv="Content-Security-Policy" content="{esc(CSP)}">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">'
             f"<title>{esc(title)}</title><style>{STYLE}</style></head><body>"
             f'<a class="skip" href="#main">Skip to the summary</a>'
-            f'<header class="top"><h1>{esc(title)}</h1>'
-            f'<p class="purpose">Decision page for <code>{esc(branch)}</code>, from its spec, reports and evidence</p>'
-            f'<p class="strip">' + " ".join(f'<span class="gate">{name} {state(word, tone)}</span>' for name, word, tone in strip)
-            + f" {decide_link}</p></header>"
-            f'<main id="main">{summary}{body_html}</main>{footer}</body></html>\n')
+            f'<header class="top"><h1>{esc(title)}</h1><p class="purpose">{purpose}</p><p class="strip">{strip}</p></header>'
+            f'<main id="main">{main}</main>{footer}</body></html>\n')
 
 
 def split_hypotheses(text):
@@ -1616,7 +1629,7 @@ def split_hypotheses(text):
     for line, fenced in outside_fences(text):
         title = not fenced and heading(line)
         start = not fenced and HYPOTHESIS_PART.fullmatch(line.strip())
-        if title and title[0] >= 3:
+        if title and title[0] == 3:
             found.append((title[1], [], {}))
             part = None
         elif found and start:
@@ -1647,19 +1660,20 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
     page.local_roots.append(os.path.realpath(os.path.dirname(paths["validation"])))
     if not page.charge(texts["decision-notes"], texts["validation"] or ""):
         page.embedded = TOTAL_LIMIT
-    blockers = []  # (link, text, the section it opens or None)
-    if phases_error:
-        blockers.append(("#footer", f'Phase switches {state("unavailable", "need")} {esc(phases_error)}', None))
+    blockers = []  # (link, text, the section it opens or None); no phase switch applies here, so an unreadable one isn't one
     for kind, why in (("spec", spec_read_why), ("validation", whys["validation"])):
         if why and not why.startswith("no report"):
             blockers.append((f"#annex-{kind}", f'{state("unavailable", "need")} {esc(why)}', 5))
+
+    missing = set()
 
     def evidence_of(text, anchor, number=None):
         """The files the text names, below it: an image shown, a text file folded; one named inside the evidence
         directory but not there is a blocker."""
         out = []
-        for named, real in files_named_in(page, text):
-            if real is not None and not os.path.exists(real):
+        for named, real in files_the_notes_name(page, text):
+            if real is not None and not os.path.exists(real) and real not in missing:
+                missing.add(real)
                 blockers.append((f"#{anchor}", f'<code>{esc(named)}</code> {state("missing", "need")}: the decision notes '
                                                "name it, the evidence directory doesn't hold it", number))
             block = page.file_block(named, real)
@@ -1684,7 +1698,7 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
     for line, fenced in outside_fences(answer):
         found = not fenced and confidence is None and CONFIDENCE.fullmatch(line.strip())
         if found:
-            value = found.group(1).strip()
+            value = found.group(1).strip(" \t*_.")
             level = CONFIDENCE_LEVEL.fullmatch(value)
             confidence, confidence_reason = (level.group(1).lower(), level.group(2)) if level else (value.lower(), "")
         else:
@@ -1693,8 +1707,14 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
         word, said = ("missing", "") if confidence is None else ("unknown", f" <code>{esc(confidence)}</code>")
         blockers.append(("#sum-answer", f'The answer\'s <code>Confidence:</code> line {state(word, "need")}{said}: '
                                         "write high, medium or low", None))
+    if answer and not "\n".join(kept).strip():
+        blockers.append(("#sum-answer", f'<code>## The answer</code> {state("missing", "need")}: it holds only its '
+                                        "<code>Confidence:</code> line", None))
+    # The question's and the answer's files first: the page shows them first, and a file is embedded where it first shows
+    question_evidence, answer_evidence = evidence_of(question, "sum-question"), evidence_of(answer, "sum-answer")
     answer = "\n".join(kept).strip()
-    decide = required("What you must decide", "what you must decide")
+    # An `Unblocks:` line written flush under its item still belongs to it
+    decide = re.sub(r"(?m)^(?=[*_]*Unblocks[*_]*:)", "  ", required("What you must decide", "what you must decide"))
 
     # Your decisions: an item `None` says there is nothing to decide
     decisions = []
@@ -1715,15 +1735,17 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
     for n, (title, description, parts) in enumerate(hypotheses, 1):
         page.ids.add(f"hyp-{n}")
         s1 += (f'<div class="hyp" id="hyp-{n}"><h3>{page.inline(title)}</h3>'
-               + (page.markdown(description, f"hyp-{n}-text", top=4) + evidence_of(description, f"hyp-{n}", 1) if description else "")
+               + (page.markdown(description, f"hyp-{n}-text", top=4) if description else "") + evidence_of(title + "\n" + description, f"hyp-{n}", 1)
                + '<dl class="row">' + "".join(f'<dt>{label}</dt><dd id="hyp-{n}-{key}">{part(parts.get(key, ""), f"hyp-{n}-{key}", 1)}</dd>'
                                              for key, label in (("for", "For"), ("against", "Against"))) + "</dl></div>")
     s1 = s1 or f'<p>{state("none recorded", "dim")}</p>'
     s2 = part(notes.get("options") or "", "s02", 2)
-    rows = check_rows(texts["validation"], review_stamp.RESULTS + review_stamp.FINDINGS) if texts["validation"] is not None else []
+    rows = check_rows(texts["validation"], RESULTS + review_stamp.FINDINGS) if texts["validation"] is not None else []
     for row in rows:
         row["anchor"] = page.new_id(f"check-{row['id']}")
     not_run = [row for row in rows if row["result"] == "NOT RUN"]
+    if not page.charge("".join(row["observed"] for row in not_run)):  # their reasons show again under Not checked
+        page.embedded = TOTAL_LIMIT
     s3 = (f'<div id="not-checked-notes">{part(notes.get("not checked") or "", "not-checked-notes", 3)}</div><h3>Checks NOT RUN</h3>'
           + ('<ol class="items" id="not-run">' + "".join(
               f'<li><a href="#{row["anchor"]}"><code>{esc(row["id"])}</code></a> {page.inline(row["check"])}: '
@@ -1773,11 +1795,12 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
     # The summary
     confidence_html = (state(f"{confidence} confidence", "neutral") + (f" {page.inline(confidence_reason)}" if confidence_reason else "")
                        if confidence in ("high", "medium", "low") else "")
-    rows_html = (("question", "The question", page.markdown(question, "question", top=3) + evidence_of(question, "sum-question")
+    rows_html = (("question", "The question", page.markdown(question, "question", top=3) + question_evidence
                   if question else state("missing", "need")),
                  ("answer", "The answer", (page.markdown(answer, "answer", top=3) if answer else "") + f"<p>{confidence_html}</p>"
-                  + evidence_of(answer, "sum-answer") if answer or confidence_html else state("missing", "need")),
-                 ("gates", "Gates", f'{state("does not apply", "dim")} {DOES_NOT_APPLY}: an investigation changes nothing to merge'))
+                  + answer_evidence if answer or confidence_html else state("missing", "need")),
+                 ("gates", "Gates", f'{state("does not apply", "dim")} {DOES_NOT_APPLY}: an investigation delivers an answer, '
+                                    "not a change to merge"))
     summary = ('<section id="summary" aria-labelledby="h00"><h2 class="vh" id="h00">Summary</h2><dl class="sum">'
                + "".join(f'<div class="row"><dt id="sum-{key}">{label}</dt><dd>{body}</dd></div>' for key, label, body in rows_html)
                + "</dl>" + item_list(page, "decisions", "Your decisions", decisions, "nothing to decide")
@@ -1809,15 +1832,8 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
               f'<dt>Generated</dt><dd>{esc(now)}</dd>'
               f'<dt>Page</dt><dd>local file, not published · <a href="{esc(file_href(page_path))}"><code>{esc(page_path)}</code></a></dd>'
               '</dl></footer>')
-    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            f'<meta http-equiv="Content-Security-Policy" content="{esc(CSP)}">'
-            f'<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">'
-            f"<title>{esc(title)}</title><style>{STYLE}</style></head><body>"
-            f'<a class="skip" href="#main">Skip to the summary</a>'
-            f'<header class="top"><h1>{esc(title)}</h1>'
-            f'<p class="purpose">Investigation page for <code>{esc(branch)}</code>, from its notes, findings and evidence</p>'
-            f'<p class="strip"><a class="todo {"need" if blockers else "ok"}" href="#decisions">{todo}</a></p></header>'
-            f'<main id="main">{summary}{body_html}</main>{footer}</body></html>\n')
+    return document(title, f"Investigation page for <code>{esc(branch)}</code>, from its notes, findings and evidence",
+                    f'<a class="todo {"need" if blockers else "ok"}" href="#decisions">{todo}</a>', summary + body_html, footer)
 
 
 STYLE = """

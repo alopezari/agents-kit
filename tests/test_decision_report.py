@@ -2211,7 +2211,7 @@ def the_notes_embed_their_evidence(base):
              .replace("For:\nAgainst: the table", "For: `link.txt`\nAgainst: the table")
              .replace("the bank rounds there.", "the bank rounds there, `page.html`.")
              .replace("needs the payment sandbox.\n", "needs the payment sandbox, ![big](huge.png).\n")
-             .replace("Keep the old receipts as they are.", "Keep the old receipts as they are, see `gone.txt`."))
+             .replace("Keep the old receipts as they are.", "Keep the old receipts as they are, see [trace](gone.txt)."))
     repo, evidence = investigation_branch(base, notes=notes)
     put(os.path.join(evidence, "diagram.png"), PNG)
     put(os.path.join(evidence, "big.txt"), "FIRST LINE\n" + "".join(f"middle {n:07d}\n" for n in range(20000)) + "LAST LINE\n")
@@ -2261,6 +2261,10 @@ def brief_counts_findings(base):
     write(repo, "validation", "\n".join(r for r in FINDINGS_ROWS.split("\n") if not re.search(r"\| (PASS|FAIL) \|", r)))
     shown = brief()
     assert "findings: 1 Supports, 1 Refutes, 1 Inconclusive, 1 NOT RUN\n" in shown and "as expected" not in shown, shown
+    rows = FINDINGS_ROWS.split("\n")
+    write(repo, "validation", "\n".join(rows[:2] + [rows[2]] * 3 + [rows[5]] * 2 + [rows[6]] * 4) + "\n")
+    shown = brief()
+    assert "findings: 3 Supports, 0 Refutes, 0 Inconclusive, 2 NOT RUN, 0 as expected, 4 not as expected\n" in shown, shown
 
 
 def the_skills_describe_the_investigation_notes(base):
@@ -2271,9 +2275,105 @@ def the_skills_describe_the_investigation_notes(base):
     for needle in ("`Mode: investigation`", "`## The question`", "`## The answer`", "`Confidence: high`", "`## Hypotheses`",
                    "`For:`", "`Against:`", "`## Options`", "`## Not checked`", "`Unblocks:`", "without opening a pull request"):
         assert needle in ship, needle
-    reports = read("bin", "reports")
-    assert "investigation" in reports and "findings:" in reports, "bin/reports' usage doesn't describe the mode"
+    usage = "".join(line for line in read("bin", "reports").split("\n", 12)[:12] if line.startswith("#"))
+    assert "investigation" in usage and "findings:" in usage, "bin/reports' usage doesn't describe the mode"
     assert "investigation" in read("bin", "decision-report").split('"""')[1], "the docstring doesn't describe the investigation page"
+
+
+def a_marker_on_an_empty_diff_gives_the_investigation_page(base):
+    repo, _ = investigation_branch(base)
+    git(repo, "checkout", "-qb", "feature/empty", "main")
+    write(repo, "decision-notes", INVESTIGATION_NOTES)
+    write(repo, "validation", "# Validation\n\n" + "\n".join(FINDINGS_ROWS.split("\n")[:5]) + "\n")
+    _, markup = generate(repo, base)
+    assert "Investigation page for" in text(markup), "AC1: an empty diff with the marker isn't an investigation"
+    assert "<dt>Changed files</dt>" not in footer(markup), "AC1: the footer counts files on a branch without a diff"
+    assert "Mode: investigation" not in text(summary(markup)), "the investigation page suggests its own mode"
+    words = [re.search(r'<span class="st [^"]*">([^<]+)</span>', check_block(markup, f"F{n}")).group(1) for n in (1, 2, 3)]
+    assert words == ["Supports", "Refutes", "Inconclusive"], f"AC4: a findings-only table: {words}"
+
+
+def the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert(base):
+    notes = (INVESTIGATION_NOTES.replace("### H1. Rounding runs twice", "### H1. <script>alert('h')</script>")
+             .replace("Confidence: medium", "Confidence: medium — <img src=x onerror=alert('c')>"))
+    repo, _ = investigation_branch(base, notes=notes)
+    _, markup = generate(repo, base)
+    metas = [dict(attrs) for tag, attrs in tags(markup) if tag == "meta" and dict(attrs).get("http-equiv")]
+    assert [m["content"] for m in metas if m["http-equiv"] == "Content-Security-Policy"] == [CSP], metas
+    assert not any(tag in ("script", "img") and "alert" in str(attrs) for tag, attrs in tags(markup)), "hostile text became markup"
+    assert "<script>alert('h')</script>" in text(element(markup, "hyp-1")), "the title isn't shown as text"
+    assert "onerror=alert('c')" in text(summary_row_markup(markup, "answer")), "the confidence reason isn't shown as text"
+
+
+def hypotheses_keep_their_lists_and_subheadings(base):
+    notes = INVESTIGATION_NOTES.replace(
+        "The cart rounds in two places.\nFor: the trace shows two round() calls.\nAgainst:\n",
+        "The cart rounds in two places.\n\n#### Where\nIn the cart and the receipt.\n\n- For:\n  - the trace shows two round() calls\n"
+        "  - the receipt rounds too\n- Against: one cart in a hundred\n")
+    repo, _ = investigation_branch(base, notes=notes)
+    _, markup = generate(repo, base)
+    first = element(markup, "hyp-1")
+    assert "In the cart and the receipt." in text(first) and 'id="hyp-2"' in markup and "hyp-3" not in markup, \
+        "a #### heading split its hypothesis"
+    assert "two round() calls" in text(element(markup, "hyp-1-for")) and "receipt rounds too" in text(element(markup, "hyp-1-for"))
+    assert "one cart in a hundred" in text(element(markup, "hyp-1-against")), "a listed Against: was dropped"
+
+
+def the_notes_embed_each_file_under_its_first_part(base):
+    notes = (INVESTIGATION_NOTES
+             .replace("drift by a cent?", "drift by a cent? See [the report](q.txt).")
+             .replace("Confidence: medium", "Confidence: medium — one trace only, `checks/trace.txt:3`")
+             .replace("Rounding runs twice:", "Rounding runs twice (`shared.txt`):")
+             .replace("### H1. Rounding runs twice", "### H1. Rounding runs twice, `title.txt`")
+             .replace("two round() calls.", "two round() calls in `shared.txt`, as `client.py:42` does.")
+             .replace("Round at the total or per line.", "Round at the total or per line, `decide.txt`.")
+             )
+    repo, evidence = investigation_branch(base, notes=notes)
+    for name in ("q.txt", "shared.txt", "title.txt", "decide.txt", "checks/trace.txt"):
+        put(os.path.join(evidence, name), f"CONTENT OF {name}\n")
+    _, markup = generate(repo, base)
+    assert listed(markup, "blockers") == [], f"AC5: a source file the notes cite became a blocker: {listed(markup, 'blockers')}"
+    assert "CONTENT OF q.txt" in summary_row_markup(markup, "question"), "AC5: the question's link isn't embedded"
+    answer = summary_row_markup(markup, "answer")
+    assert "CONTENT OF shared.txt" in answer and "CONTENT OF checks/trace.txt" in answer, "AC5: the answer's files aren't embedded"
+    assert "CONTENT OF shared.txt" not in element(markup, "hyp-1-for") and "shown above" in element(markup, "hyp-1-for"), \
+        "AC5: a file is embedded twice, or not where it first shows"
+    assert "CONTENT OF title.txt" in element(markup, "hyp-1"), "AC5: a hypothesis title's file isn't embedded"
+    assert "CONTENT OF decide.txt" in " ".join(listed(markup, "decisions")), "AC5: a decision's file isn't embedded"
+    assert "client.py:42" in text(element(markup, "hyp-1-for")), "a cited source file isn't kept as text"
+
+
+def the_answer_needs_more_than_its_confidence(base):
+    repo, _ = investigation_branch(base, notes=INVESTIGATION_NOTES.replace(
+        "Rounding runs twice: once per line and once on the total.\n\nConfidence: medium", "Confidence: medium"))
+    _, markup = generate(repo, base)
+    blockers = listed(markup, "blockers")
+    assert len(blockers) == 1 and "The answer" in blockers[0] and "only its" in blockers[0], blockers
+    write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "**Confidence:** **high**."))
+    _, markup = generate(repo, base)
+    assert listed(markup, "blockers") == [] and "high confidence" in summary_row(markup, "answer"), listed(markup, "blockers")
+    write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "Confidence: " + "*" * 50_000 + "x"))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
+    generate(repo, base)
+    spent = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime - before
+    assert spent < 5, f"{spent:.1f} s of CPU for a long Confidence line"
+
+
+def a_marker_inside_a_longer_fence_is_not_the_mode(base):
+    repo, _ = investigation_branch(base)
+    write(repo, "decision-notes", NOTES + "\n````\n```\nMode: investigation\n````\n")
+    _, markup = generate(repo, base)
+    assert "Decision page for" in text(markup), "AC1: a marker inside a four-backtick block switched the page"
+    shown = sh(repo, REPORTS, "brief")
+    assert shown.returncode == 0 and "mode: investigation" not in shown.stdout, shown
+
+
+def a_kept_script_the_evidence_names_shows_once(base):
+    repo, evidence = investigation_branch(base, rows=FINDINGS_ROWS.replace("[trace](trace.txt)", "`checks/F1.sh`"))
+    put(os.path.join(evidence, "checks", "F1.py"), "print('ONLY-ONCE')\n")
+    os.symlink("F1.py", os.path.join(evidence, "checks", "F1.sh"))
+    _, markup = generate(repo, base)
+    assert check_block(markup, "F1").count("ONLY-ONCE") == 1, "a script the row names and keeps shows twice"
 
 
 for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
@@ -2315,7 +2415,10 @@ for test in (writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_em
              an_empty_diff_only_suggests_the_mode, the_investigation_page_shows_each_section,
              missing_investigation_sections_are_blockers, blocks_that_need_a_change_do_not_apply,
              findings_are_not_failures, the_notes_embed_their_evidence, brief_counts_findings,
-             the_skills_describe_the_investigation_notes):
+             the_skills_describe_the_investigation_notes, a_marker_on_an_empty_diff_gives_the_investigation_page,
+             the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert, hypotheses_keep_their_lists_and_subheadings,
+             the_notes_embed_each_file_under_its_first_part, the_answer_needs_more_than_its_confidence,
+             a_marker_inside_a_longer_fence_is_not_the_mode, a_kept_script_the_evidence_names_shows_once):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
         test(os.path.realpath(base))

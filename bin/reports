@@ -81,21 +81,13 @@ if [ "${1:-}" = "brief" ]; then
     switches="$("$HOME/.agents/bin/phase" switches 2>&1)" || switches="unknown (bin/phase switches failed: $switches)"
     [ -z "$switches" ] || echo "off: $(sed 's/: off (/ (/' <<<"$switches" | paste -sd, - | sed 's/,/, /g')"
   fi
-  # The decision notes' `Mode: investigation` line, read as bin/decision-report reads it: notes past 2 MB are a change's.
   mode=change notes="$(report_file decision-notes)"
   if [ -f "$notes" ]; then
     mode="$(python3 - "$notes" <<'PY'
 import os, sys
 sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
 import review_stamp
-limit = 2 * 1024 * 1024
-try:
-    with open(sys.argv[1], encoding="utf-8") as fh:
-        text = fh.read(limit + 1)
-except (OSError, UnicodeDecodeError) as error:
-    print(f"unknown (can't read {sys.argv[1]}: {error})")
-else:
-    print("investigation" if len(text) <= limit and review_stamp.is_investigation(text.replace("\r\n", "\n")) else "change")
+print(review_stamp.notes_mode(sys.argv[1]))
 PY
 )"
   fi
@@ -119,7 +111,7 @@ if sys.argv[2] == "investigation":  # a finding is what was found, so PASS and F
     print("findings: " + ", ".join(said))
 else:
     counts = collections.Counter(row[1] for row in review_stamp.result_rows(lines, None))
-    print(", ".join(f"{counts[r]} {r}" for r in ("PASS", "FAIL", "NOT RUN")))
+    print(", ".join(f"{counts[r]} {r}" for r in review_stamp.RESULTS))
 PY
 )" ;;
       checks-guide) line="$(grep -q '^## Results' "$f" && echo 'results recorded' || echo 'no results yet')" ;;
