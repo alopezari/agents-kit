@@ -2309,7 +2309,7 @@ def hypotheses_keep_their_lists_and_subheadings(base):
     notes = INVESTIGATION_NOTES.replace(
         "The cart rounds in two places.\nFor: the trace shows two round() calls.\nAgainst:\n",
         "The cart rounds in two places.\n\n#### Where\nIn the cart and the receipt.\n\n- For:\n  - the trace shows two round() calls\n"
-        "  - the receipt rounds too\n- Against: one cart in a hundred\n")
+        "  - the receipt rounds too\n- Against: one cart in a hundred\n\n#### Second trace\nFor: the refund rounds twice too\n")
     repo, _ = investigation_branch(base, notes=notes)
     _, markup = generate(repo, base)
     first = element(markup, "hyp-1")
@@ -2317,6 +2317,8 @@ def hypotheses_keep_their_lists_and_subheadings(base):
         "a #### heading split its hypothesis"
     assert "two round() calls" in text(element(markup, "hyp-1-for")) and "receipt rounds too" in text(element(markup, "hyp-1-for"))
     assert "one cart in a hundred" in text(element(markup, "hyp-1-against")), "a listed Against: was dropped"
+    assert "two round() calls" in text(element(markup, "hyp-1-for")) and "refund rounds twice" in text(element(markup, "hyp-1-for")), \
+        "a second For: replaced the first"
 
 
 def the_notes_embed_each_file_under_its_first_part(base):

@@ -1634,7 +1634,7 @@ def split_hypotheses(text):
             part = None
         elif found and start:
             part = start.group(1).lower()
-            found[-1][2][part] = [start.group(2)]
+            found[-1][2].setdefault(part, []).append(start.group(2))
         elif found:
             (found[-1][2][part] if part else found[-1][1]).append(line)
         else:
