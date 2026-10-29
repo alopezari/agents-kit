@@ -456,6 +456,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |
 | optional | `impeccable` | https://github.com/pbakaus/impeccable/releases | the Design lens and validate's design check (the impeccable skill fetches it on first use) |
 | optional | `docker` | https://www.docker.com | repository verifies that run in containers |
+| optional | `pipx` | brew install pipx | installing lizard, for the structure facts |
 | optional | `lizard ≥ 1.24` | pipx install lizard | structure facts (bin/structure-facts): complexity for the Maintainability lens and each PR's quality line |
 | optional | `jscpd ≥ 5.4` | npm install -g jscpd | structure facts (bin/structure-facts): new clones for the Maintainability lens and each PR's quality line |
 
