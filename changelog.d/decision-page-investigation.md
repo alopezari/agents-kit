@@ -1,0 +1,3 @@
+- The decision page has an investigation mode: decision notes with a `Mode: investigation` line give a page for a branch that answers a question, with the question, the answer and its confidence, the hypotheses with what speaks for and against each, the options, what was not checked and your decisions. Its findings read Supports, Refutes, Inconclusive or NOT RUN, never as failures, and the PR, CI, the stamps and the ship steps show as not applying.
+- On a branch with no diff, the decision page warns that the `Mode: investigation` line would give the investigation page.
+- `reports brief` prints `mode: investigation` for such a branch and counts its findings instead of PASS and FAIL.

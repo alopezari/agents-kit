@@ -438,9 +438,51 @@ def has_reason(cell):
     return bool(cell.strip(" \t-\u2013\u2014*_`"))
 
 
-def result_table(lines):
-    """(index in lines, column names, cells, result) for each PASS, FAIL and NOT RUN row of the tables in lines that have
-    Result and Evidence columns."""
+RESULTS = ("PASS", "FAIL", "NOT RUN")
+FINDINGS = ("Supports", "Refutes", "Inconclusive")  # an investigation's results: what was found, never a failure
+INVESTIGATION_MARKER = re.compile(r"Mode:[ \t]*investigation[ \t]*", re.I)
+
+
+REPORT_LIMIT = 2 * 1024 * 1024  # the most a report may hold for the decision page to read it; bigger notes hold no marker
+
+
+def outside_fences(text):
+    """Each line of text with whether it is a fence line or inside a fenced block, where a `#` line is no heading. A
+    block closes on a line that starts with its opening fence, as the decision page renders it: a ``` line inside a
+    ```` block, or inside a ~~~ one, is content."""
+    opening = None
+    for line in text.split("\n"):
+        fence = re.match(r"\s*(`{3,}|~{3,})", line)
+        if opening is None and fence:
+            opening = fence.group(1)
+            yield line, True
+        elif opening is not None and line.strip().startswith(opening):
+            opening = None
+            yield line, True
+        else:
+            yield line, opening is not None
+
+
+def is_investigation(notes):
+    """Whether the decision notes hold a `Mode: investigation` line outside fenced blocks."""
+    return any(not fenced and INVESTIGATION_MARKER.fullmatch(line) for line, fenced in outside_fences(notes))
+
+
+def notes_mode(path):
+    """investigation or change for the decision notes at path, read as the decision page reads them, or unknown with
+    why when they can't be read."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read(REPORT_LIMIT + 1)
+    except (OSError, UnicodeDecodeError) as error:
+        return f"unknown (can't read {path}: {error})"
+    return "investigation" if len(text) <= REPORT_LIMIT and is_investigation(text.replace("\r\n", "\n")) else "change"
+
+
+def result_table(lines, results=RESULTS):
+    """(index in lines, column names, cells, result) for each row whose Result is one of results, of the tables in lines
+    that have Result and Evidence columns."""
+    word = re.compile(r"[*_]*(?:(" + "|".join(map(re.escape, results)) + r")\b)?")
     names = None
     for index, line in enumerate(lines):
         cells = table_cells(line)
@@ -449,7 +491,7 @@ def result_table(lines):
         elif {"Result", "Evidence"} <= {c.strip("*_") for c in cells}:
             names = [c.strip("*_") for c in cells]
         elif names and len(cells) > names.index("Result"):
-            result = re.match(r"[*_]*(?:(PASS|FAIL|NOT RUN)\b)?", cells[names.index("Result")]).group(1)
+            result = word.match(cells[names.index("Result")]).group(1)
             if result:
                 yield index, names, cells, result
 

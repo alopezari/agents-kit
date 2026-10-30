@@ -5,13 +5,22 @@ and the pull request's quality signals from quality.jsonl, then your decisions, 
 warnings. Five folded sections follow (coverage, tests, review, merge and ship, and the reports as annexes), each open
 only while it holds a failure or a blocker, then a footer of identifiers. The tests follow the testing pyramid (e2e,
 integration, unit, then the other levels), and a drawn pyramid filters them by layer. References link: the PR, its
-commits and file:line to GitHub, https URLs, and local reports and evidence by file://.
+commits and file:line to GitHub, https URLs, and local reports and evidence by file://. A branch that answers a question
+instead of shipping a change gets the investigation page, below.
+
+When the decision notes hold a `Mode: investigation` line outside fenced blocks, it writes the investigation page
+instead, for a branch that answers a question rather than ships a change: the question, the answer and its
+confidence, your decisions and the blockers come first, then folded hypotheses (each with what speaks for and against
+it), options, what was not checked, the findings (Supports, Refutes, Inconclusive, NOT RUN; PASS and FAIL read as
+expected or not) and the reports, then a footer of identifiers. The files the notes name are embedded under the part
+that names them, within the same limits. The PR, CI, verify, the stamps, the checks guide and the ship steps do not
+apply to it, and it never calls gh.
 
   decision-report <page> <evidence dir>    run by `reports html`, which passes both paths; prints the page's path
 
 The page runs no script and loads nothing from the network. Of the files the reports name, it reads only those inside
 the evidence directory, and embeds text up to 200 KB (head and tail kept), images up to 2 MB, 20 MB in all; the rest is linked by file:// path.
-Besides the reports, it reads the repository's ship.md under ~/.agents/repos and the review's lenses.md, bounded as a report is,
+Besides the reports, the change page reads the repository's ship.md under ~/.agents/repos and the review's lenses.md, bounded as a report is,
 and the last 2 MB of the kit's logs/quality.jsonl for the signals `quality-log pr` recorded for the PR.
 It is written to a temporary file and renamed into place; when generation fails, the page is removed and the error
 printed (exit 1), so an older page is never taken for the current one.
@@ -55,7 +64,7 @@ CSP = "default-src 'none'; img-src file: data:; media-src file:; style-src 'unsa
 TEXT_LIMIT = 200 * 1024
 IMAGE_LIMIT = 2 * 1024 * 1024
 TOTAL_LIMIT = 20 * 1024 * 1024
-REPORT_LIMIT = 2 * 1024 * 1024
+REPORT_LIMIT = review_stamp.REPORT_LIMIT
 IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 VIDEOS = (".webm", ".mp4", ".mov")
 PLAYABLE = {".webm": "video/webm", ".mp4": "video/mp4"}  # a .mov plays only in Safari, so it stays a link
@@ -89,11 +98,18 @@ ANNEXES = (("spec", "Spec"), ("decision-notes", "Decision notes"), ("pr-body", "
            ("review", "Review report"), ("validation", "Validation report"), ("checks-guide", "Checks guide"),
            ("follow-pr", "Follow-pr report"))
 REVIEW_OUTCOMES = ("Fixed", "Rejected", "Pre-existing", "Open", "Not run")
-RESULTS = ("PASS", "FAIL", "NOT RUN")
+RESULTS = review_stamp.RESULTS
 MAKERS = {"spec": "the kit-spec skill writes it", "decision-notes": "kit-ship writes them before it generates this page",
           "pr-body": "kit-ship writes it when it opens the pull request", "verify": "the stop hook's verify writes it",
           "review": "the kit-review skill writes it", "validation": "the kit-validate skill writes it",
           "checks-guide": "the kit-validate skill writes it", "follow-pr": "the kit-follow-pr skill writes it"}
+INVESTIGATION_SECTIONS = {1: "Hypotheses", 2: "Options", 3: "Not checked", 4: "Findings", 5: "Reports"}
+FINDING_WORDS = {"PASS": "as expected", "FAIL": "not as expected"}
+CONFIDENCE = re.compile(r"[*_]*Confidence[*_]*:(.*)", re.I)  # greedy: a lazy group before [*_.]* is quadratic
+CONFIDENCE_LEVEL = re.compile(r"[*_]*(high|medium|low)\b[*_]*[ \t]*(?:[—–:,;.-][ \t]*)?(.*)", re.I)
+HYPOTHESIS_PART = re.compile(r"(?:[-*+][ \t]+)?[*_]*(For|Against)[*_]*:[*_]*[ \t]*(.*)", re.I)
+UNBLOCKS = re.compile(r"[*_]*Unblocks[*_]*:[*_]*[ \t]*(.*)", re.I)
+DOES_NOT_APPLY = "PR, CI, verify, review stamp, validate stamp, checks guide and ship steps"
 
 
 def esc(text):
@@ -108,7 +124,8 @@ def file_href(path):
 
 
 def state(word, tone):
-    """A state word, set in mono and colored by tone: ok (proven), need (needs the owner), dim (not run, not recorded)."""
+    """A state word, set in mono and colored by tone: ok (proven), need (needs the owner), dim (not run, not recorded),
+    neutral (a finding: what was found, neither good nor bad)."""
     return f'<span class="st {tone}">{esc(word)}</span>'
 
 
@@ -484,15 +501,7 @@ class Page:
 
 # Sources
 
-def outside_fences(text):
-    """Each line of text with whether it is a fence line or inside a fenced block, where a `#` line is no heading."""
-    fenced = False
-    for line in text.split("\n"):
-        if re.match(r"\s*(```|~~~)", line):
-            fenced = not fenced
-            yield line, True
-        else:
-            yield line, fenced
+outside_fences = review_stamp.outside_fences
 
 
 def notes_by_section(text):
@@ -577,7 +586,7 @@ def parse_review(text):
     return header, fields, entries
 
 
-def check_rows(text):
+def check_rows(text, results=review_stamp.RESULTS):
     """[{id, result, check, ac, acs, ac_column, case, expected (None without the column), observed, line, group, level
     (None without the column)}] in report order."""
     lines = text.split("\n")
@@ -586,7 +595,7 @@ def check_rows(text):
     for line in lines:
         group = line[3:].strip() if line.startswith("## ") else group
         groups.append(group)
-    for index, names, cells, result in review_stamp.result_table(lines):
+    for index, names, cells, result in review_stamp.result_table(lines, results):
         group = groups[index]
 
         def cell(name, prefix=False):
@@ -603,7 +612,13 @@ def check_rows(text):
 def named_files(page, row):
     """(path as named, real path inside the evidence directory or None) for each file the row's Evidence cell names,
     then the check's kept script from checks/."""
-    cell, found = row["observed"], []
+    scripts = [page.resolve(os.path.join(page.evidence, "checks", name)) for name in page.scripts if name.startswith(row["id"] + ".")]
+    return unique_files(files_named_in(page, row["observed"]) + scripts)
+
+
+def files_named_in(page, cell):
+    """(path as named, real path inside the evidence directory or None) for each file a piece of Markdown names, once."""
+    found = []
     for link in INLINE.finditer(cell):
         target = (link.group(4) or "").strip()
         if link.group(4) is not None and not (re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target) and not target.startswith("file://")):
@@ -616,8 +631,23 @@ def named_files(page, row):
     for text, named_on_purpose in ((spans, True), (prose, False)):
         found += [page.resolve(token) for token in PATH_TOKEN.findall(text) + FILE_TOKEN.findall(text)
                   if named_on_purpose or exists(token)]
-    found += [page.resolve(os.path.join(page.evidence, "checks", name)) for name in page.scripts
-              if name.startswith(row["id"] + ".")]
+    return unique_files(found)
+
+
+def files_the_notes_name(page, text):
+    """(path as named, real path inside the evidence directory or None) for each file the notes name: a link or an
+    image always, and a code span, bold text or word only when the evidence directory holds it, since notes cite
+    source files (`client.py:42`) the evidence directory never will."""
+    found = [page.resolve(link.group(4).strip()) for link in INLINE.finditer(text) if link.group(4) is not None
+             and not (re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", link.group(4).strip()) and not link.group(4).strip().startswith("file://"))]
+    spans = [m.group(1) or m.group(2) for m in INLINE.finditer(text) if m.group(4) is None]
+    words = [re.sub(r":\d+(?::\d+)?$", "", span.strip()) for span in spans] + FILE_TOKEN.findall(" ".join(spans) + " " + INLINE.sub(" ", text))
+    held = lambda word: (not os.path.isabs(os.path.expanduser(word)) and os.path.lexists(os.path.join(page.evidence, word))
+                         and not os.path.isdir(os.path.join(page.evidence, word)))
+    return unique_files(found + [page.resolve(word) for word in words if held(word)])
+
+
+def unique_files(found):
     unique, seen = [], set()
     for named, real in found:
         key = real or named
@@ -944,6 +974,15 @@ def level_id(level):
     return "level-" + ("not-recorded" if level == NO_LEVEL else re.sub(r"[^a-z0-9]+", "-", level).strip("-"))
 
 
+def item_list(page, key, label, items, empty):
+    """One of the summary's lists: (link, text, ...) items, each with a link to its details."""
+    page.ids.add(key)
+    return (f'<div class="list" id="{key}"><h2>{label} <span class="n">{len(items)}</span></h2>'
+            f'<ol class="items" id="{key}-items">'
+            + "".join(f'<li>{body} <a class="go" href="{esc(href)}">details</a></li>' for href, body, *_ in items)
+            + "</ol>" + ("" if items else f"<p>{state(empty, 'ok')}</p>") + "</div>")
+
+
 def build(page_path, evidence):
     page = Page(evidence)
     page.ids.update({"main", "summary", "h00", "footer", "environment"})
@@ -953,6 +992,8 @@ def build(page_path, evidence):
     texts, whys = {}, {}
     for kind in kinds:
         texts[kind], whys[kind] = read_report(paths[kind])
+    if texts["decision-notes"] is not None and review_stamp.is_investigation(texts["decision-notes"]):
+        return build_investigation(page_path, page, off, phases_error, paths, texts, whys)
     spec_path, criteria, spec_why = review_stamp.spec_criteria()
     spec_text, spec_read_why = read_report(spec_path) if spec_path else (None, spec_why)
     spec_path = spec_path or "the spec"
@@ -1415,6 +1456,10 @@ def build(page_path, evidence):
                   if text is not None and phase_of.get(kind) not in off and (href := page.local_href(path)) else "")
                + f'{body}</div></details>')
     groups = changed_files(base)
+    if not groups:
+        warnings.append(("#annex-changed", f'{state("no diff", "dim")} no file differs from the base: if this branch answers '
+                                           "a question rather than changes code, add a <code>Mode: investigation</code> line "
+                                           "to the decision notes for the investigation page"))
     dir_rows = "".join(f'<tr><th scope="row">{esc(top)}</th><td>{len(files)}</td>'
                        f'<td>+{sum(int(a) for _, a, _ in files if a.isdigit())}</td>'
                        f'<td>-{sum(int(r) for _, _, r in files if r.isdigit())}</td></tr>' for top, files in sorted(groups.items()))
@@ -1509,20 +1554,14 @@ def build(page_path, evidence):
     gates = (f'CI {state(ci_word, ci_tone)} · review stamp {state(stamps["review"], stamp_tone(stamps["review"]))}'
              f' · validate stamp {state(stamps["validate"], stamp_tone(stamps["validate"]))} · verify {verify_html}')
 
-    def item_list(key, label, items, empty):
-        page.ids.add(key)
-        return (f'<div class="list" id="{key}"><h2>{label} <span class="n">{len(items)}</span></h2>'
-                f'<ol class="items" id="{key}-items">'
-                + "".join(f'<li>{body} <a class="go" href="{esc(href)}">details</a></li>' for href, body, *_ in items)
-                + "</ol>" + ("" if items else f"<p>{state(empty, 'ok')}</p>") + "</div>")
     summary = ('<section id="summary" aria-labelledby="h00"><h2 class="vh" id="h00">Summary</h2><dl class="sum">'
                + "".join(f'<div class="row"><dt id="sum-{key}">{label}</dt><dd>{body}</dd></div>'
                          for key, label, body in (("task", "Task", task), ("solution", "Solution", solution),
                                                   ("review", "Review", review_line), ("tests", "Tests", tests_line),
                                                   ("gates", "Gates", gates), ("signals", "Signals", signals_line(pr, pr_error))))
-               + "</dl>" + item_list("decisions", "Your decisions", decisions, "nothing to decide")
-               + item_list("blockers", "Blockers the agent owns", blockers, "no blocker")
-               + item_list("warnings", "Warnings", warnings, "no warning")
+               + "</dl>" + item_list(page, "decisions", "Your decisions", decisions, "nothing to decide")
+               + item_list(page, "blockers", "Blockers the agent owns", blockers, "no blocker")
+               + item_list(page, "warnings", "Warnings", warnings, "no warning")
                + '<nav class="toc" aria-label="Sections"><ol>'
                + "".join(f'<li><a href="#s0{n}">{SECTIONS[n]}</a></li>' for n in SECTIONS) + "</ol></nav></section>")
 
@@ -1568,16 +1607,233 @@ def build(page_path, evidence):
               f'<dt>Generated</dt><dd>{esc(now)}</dd>'
               f'<dt>Page</dt><dd>local file, not published · <a href="{esc(file_href(page_path))}"><code>{esc(page_path)}</code></a></dd>'
               '</dl></footer>')
+    return document(title, f"Decision page for <code>{esc(branch)}</code>, from its spec, reports and evidence",
+                    " ".join(f'<span class="gate">{name} {state(word, tone)}</span>' for name, word, tone in strip) + f" {decide_link}",
+                    summary + body_html, footer)
+
+
+def document(title, purpose, strip, main, footer):
+    """The page around its parts: the CSP, the skip link and the header, the same on both layouts."""
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta http-equiv="Content-Security-Policy" content="{esc(CSP)}">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">'
             f"<title>{esc(title)}</title><style>{STYLE}</style></head><body>"
             f'<a class="skip" href="#main">Skip to the summary</a>'
-            f'<header class="top"><h1>{esc(title)}</h1>'
-            f'<p class="purpose">Decision page for <code>{esc(branch)}</code>, from its spec, reports and evidence</p>'
-            f'<p class="strip">' + " ".join(f'<span class="gate">{name} {state(word, tone)}</span>' for name, word, tone in strip)
-            + f" {decide_link}</p></header>"
-            f'<main id="main">{summary}{body_html}</main>{footer}</body></html>\n')
+            f'<header class="top"><h1>{esc(title)}</h1><p class="purpose">{purpose}</p><p class="strip">{strip}</p></header>'
+            f'<main id="main">{main}</main>{footer}</body></html>\n')
+
+
+def split_hypotheses(text):
+    """(the text before the first `###`, [(title, description, {"for": text, "against": text} or None per part)])."""
+    intro, found, part = [], [], None
+    for line, fenced in outside_fences(text):
+        title = not fenced and heading(line)
+        start = not fenced and HYPOTHESIS_PART.fullmatch(line.strip())
+        if title and title[0] == 3:
+            found.append((title[1], [], {}))
+            part = None
+        elif found and start:
+            part = start.group(1).lower()
+            found[-1][2].setdefault(part, []).append(start.group(2))
+        elif found:
+            (found[-1][2][part] if part else found[-1][1]).append(line)
+        else:
+            intro.append(line)
+    join = lambda lines: "\n".join(lines).strip()
+    return join(intro), [(t, join(d), {k: join(v) for k, v in parts.items()}) for t, d, parts in found]
+
+
+def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
+    """The investigation page: the question, the answer, the hypotheses, the options and the findings; nothing on it
+    waits on a pull request, CI, the stamps or ship steps, so gh is never called."""
+    spec_path, _, spec_why = review_stamp.spec_criteria()
+    spec_text, spec_read_why = read_report(spec_path) if spec_path else (None, spec_why)
+    spec_path = spec_path or "the spec"
+    spec_title = re.search(r"^# (.+)$", spec_text or "", re.M)
+    notes = ship_sections(texts["decision-notes"])
+    branch = review_stamp.git("branch", "--show-current")
+    head = review_stamp.git("rev-parse", "--verify", "--quiet", "HEAD") or "no commit yet"
+    base, base_ref = review_stamp.merge_base(), review_stamp.branch_base()[0]
+    status = review_stamp.run_git(["status", "--porcelain"])
+    changed = sum(len(files) for files in changed_files(base).values())
+    now = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+    page.local_roots.append(os.path.realpath(os.path.dirname(paths["validation"])))
+    if not page.charge(texts["decision-notes"], texts["validation"] or ""):
+        page.embedded = TOTAL_LIMIT
+    blockers = []  # (link, text, the section it opens or None); no phase switch applies here, so an unreadable one isn't one
+    for kind, why in (("spec", spec_read_why), ("validation", whys["validation"])):
+        if why and not why.startswith("no report"):
+            blockers.append((f"#annex-{kind}", f'{state("unavailable", "need")} {esc(why)}', 5))
+
+    missing = set()
+
+    def evidence_of(text, anchor, number=None):
+        """The files the text names, below it: an image shown, a text file folded; one named inside the evidence
+        directory but not there is a blocker."""
+        out = []
+        for named, real in files_the_notes_name(page, text):
+            if real is not None and not os.path.exists(real) and real not in missing:
+                missing.add(real)
+                blockers.append((f"#{anchor}", f'<code>{esc(named)}</code> {state("missing", "need")}: the decision notes '
+                                               "name it, the evidence directory doesn't hold it", number))
+            block = page.file_block(named, real)
+            out.append(f'<details class="earlier"><summary>{esc(os.path.basename(named))}</summary>{block}</details>'
+                       if block.startswith('<div class="file text"') else block)
+        return "".join(out)
+
+    def part(text, anchor, number):
+        return ((page.markdown(text, anchor, top=4) if text.strip() else f'<p>{state("none recorded", "dim")}</p>')
+                + evidence_of(text, anchor, number))
+
+    def required(heading_text, key):
+        body = (notes.get(key) or "").strip()
+        if not body:
+            blockers.append(("#annex-decision-notes", f'<code>## {esc(heading_text)}</code> {state("missing", "need")} '
+                                                     "in the decision notes", None))
+        return body
+
+    question = required("The question", "the question")
+    answer = required("The answer", "the answer")
+    confidence, confidence_reason, kept = None, "", []
+    for line, fenced in outside_fences(answer):
+        found = not fenced and confidence is None and CONFIDENCE.fullmatch(line.strip())
+        if found:
+            value = found.group(1).strip(" \t*_.")
+            level = CONFIDENCE_LEVEL.fullmatch(value)
+            confidence, confidence_reason = (level.group(1).lower(), level.group(2)) if level else (value.lower(), "")
+        else:
+            kept.append(line)
+    if answer and confidence not in ("high", "medium", "low"):
+        word, said = ("missing", "") if confidence is None else ("unknown", f" <code>{esc(confidence)}</code>")
+        blockers.append(("#sum-answer", f'The answer\'s <code>Confidence:</code> line {state(word, "need")}{said}: '
+                                        "write high, medium or low", None))
+    if answer and not "\n".join(kept).strip():
+        blockers.append(("#sum-answer", f'<code>## The answer</code> {state("missing", "need")}: it holds only its '
+                                        "<code>Confidence:</code> line", None))
+    # The question's and the answer's files first: the page shows them first, and a file is embedded where it first shows
+    question_evidence, answer_evidence = evidence_of(question, "sum-question"), evidence_of(answer, "sum-answer")
+    answer = "\n".join(kept).strip()
+    # An `Unblocks:` line written flush under its item still belongs to it
+    decide = re.sub(r"(?m)^(?=[*_]*Unblocks[*_]*:)", "  ", required("What you must decide", "what you must decide"))
+
+    # Your decisions: an item `None` says there is nothing to decide
+    decisions = []
+    for item in note_items(decide):
+        first, *rest = item.split("\n")
+        if not rest and first.strip("*_.: ").lower() == "none":
+            continue
+        unblocks = next((UNBLOCKS.fullmatch(line.strip()) for line in rest if UNBLOCKS.fullmatch(line.strip())), None)
+        lines = "".join(f'<span class="sub">{page.inline(line)}</span>' for line in rest if not UNBLOCKS.fullmatch(line.strip()))
+        said = page.inline(unblocks.group(1)) if unblocks and unblocks.group(1).strip() else state("not recorded", "dim")
+        decisions.append(("#annex-decision-notes", page.inline(first) + lines
+                          + f'<span class="sub"><span class="k">Unblocks:</span> {said}</span>'
+                          + evidence_of(item, "decisions")))
+
+    # Hypotheses, options, not checked
+    intro, hypotheses = split_hypotheses(notes.get("hypotheses") or "")
+    s1 = (page.markdown(intro, "hyp-intro", top=3) if intro else "") + evidence_of(intro, "s01", 1)
+    for n, (title, description, parts) in enumerate(hypotheses, 1):
+        page.ids.add(f"hyp-{n}")
+        s1 += (f'<div class="hyp" id="hyp-{n}"><h3>{page.inline(title)}</h3>'
+               + (page.markdown(description, f"hyp-{n}-text", top=4) if description else "") + evidence_of(title + "\n" + description, f"hyp-{n}", 1)
+               + '<dl class="row">' + "".join(f'<dt>{label}</dt><dd id="hyp-{n}-{key}">{part(parts.get(key, ""), f"hyp-{n}-{key}", 1)}</dd>'
+                                             for key, label in (("for", "For"), ("against", "Against"))) + "</dl></div>")
+    s1 = s1 or f'<p>{state("none recorded", "dim")}</p>'
+    s2 = part(notes.get("options") or "", "s02", 2)
+    rows = check_rows(texts["validation"], RESULTS + review_stamp.FINDINGS) if texts["validation"] is not None else []
+    for row in rows:
+        row["anchor"] = page.new_id(f"check-{row['id']}")
+    not_run = [row for row in rows if row["result"] == "NOT RUN"]
+    if not page.charge("".join(row["observed"] for row in not_run)):  # their reasons show again under Not checked
+        page.embedded = TOTAL_LIMIT
+    s3 = (f'<div id="not-checked-notes">{part(notes.get("not checked") or "", "not-checked-notes", 3)}</div><h3>Checks NOT RUN</h3>'
+          + ('<ol class="items" id="not-run">' + "".join(
+              f'<li><a href="#{row["anchor"]}"><code>{esc(row["id"])}</code></a> {page.inline(row["check"])}: '
+              f'{page.inline(row["observed"]) or state("no reason recorded", "dim")}</li>' for row in not_run) + "</ol>"
+             if not_run else f'<p id="not-run">{state("none", "dim")} no finding is NOT RUN</p>'))
+
+    # Findings: a result is what was found, not a gate, so no row is a failure
+    items = []
+    for row in rows:
+        blocks = "".join(page.file_block(named, real) for named, real in named_files(page, row))
+        expected = row["expected"]
+        items.append(
+            f'<li class="check" id="{row["anchor"]}"><details><summary><span class="cid">{esc(row["id"])}</span> '
+            f'{state(FINDING_WORDS.get(row["result"], row["result"]), "dim" if row["result"] == "NOT RUN" else "neutral")} '
+            f'<span class="ac">{esc(row["ac"]) or state("no AC", "dim")}</span> '
+            f'<span class="ctext">{page.inline(row["check"], links=False)}</span></summary><dl class="row">'
+            f'<dt>Expected</dt><dd>{page.inline(expected) if expected and expected.strip() else state("not recorded", "dim")}</dd>'
+            f'<dt>Observed</dt><dd>{page.inline(row["observed"]) or state("not recorded", "dim")}</dd>'
+            f'<dt>Evidence</dt><dd>{blocks or state("no evidence named", "dim")}</dd>'
+            f'<dt>Source</dt><dd>{page.path(paths["validation"], paths["validation"] + ":" + str(row["line"]))}</dd></dl></details></li>')
+    s4 = (f'<ol class="checks">{"".join(items)}</ol>' if items else
+          f'<p class="absent">{state("not recorded", "dim")} no findings table in <code>{esc(paths["validation"])}</code></p>')
+    found_words = review_stamp.FINDINGS + ("NOT RUN", "PASS", "FAIL")
+    s4_meta = " · ".join(f"{n} {FINDING_WORDS.get(word, word)}" for word in found_words
+                         if (n := sum(row["result"] == word for row in rows))) or "no findings"
+
+    # Reports, as annexes
+    annexes = {"spec": (spec_path, spec_text, spec_read_why), "decision-notes": (paths["decision-notes"], texts["decision-notes"], None),
+               "validation": (paths["validation"], texts["validation"], whys["validation"])}
+    s5 = ""
+    for kind, label in ANNEXES:
+        if kind not in annexes:
+            continue
+        path, text, why = annexes[kind]
+        if text is None:
+            body = (f'<p class="absent">{state("not recorded", "dim")}</p>' if not why or why.startswith("no report")
+                    else unavailable(why.replace(path, "the file")))
+        elif not page.charge(text):
+            body = f'<p>{state("linked", "dim")} past the 20 MB embedded in total: <a href="{esc(file_href(path))}">{esc(os.path.basename(path))}</a></p>'
+        else:
+            body = page.markdown(text, f"annex-{kind}", top=3)
+        s5 += (f'<details class="annex" id="annex-{kind}"><summary>{label} <code>{esc(path)}</code></summary>'
+               f'<div class="annex-body">' + (f'<p class="meta"><a href="{esc(href)}">open the file</a></p>'
+                                              if text is not None and (href := page.local_href(path)) else "")
+               + f"{body}</div></details>")
+
+    # The summary
+    confidence_html = (state(f"{confidence} confidence", "neutral") + (f" {page.inline(confidence_reason)}" if confidence_reason else "")
+                       if confidence in ("high", "medium", "low") else "")
+    rows_html = (("question", "The question", page.markdown(question, "question", top=3) + question_evidence
+                  if question else state("missing", "need")),
+                 ("answer", "The answer", (page.markdown(answer, "answer", top=3) if answer else "") + f"<p>{confidence_html}</p>"
+                  + answer_evidence if answer or confidence_html else state("missing", "need")),
+                 ("gates", "Gates", f'{state("does not apply", "dim")} {DOES_NOT_APPLY}: an investigation delivers an answer, '
+                                    "not a change to merge"))
+    summary = ('<section id="summary" aria-labelledby="h00"><h2 class="vh" id="h00">Summary</h2><dl class="sum">'
+               + "".join(f'<div class="row"><dt id="sum-{key}">{label}</dt><dd>{body}</dd></div>' for key, label, body in rows_html)
+               + "</dl>" + item_list(page, "decisions", "Your decisions", decisions, "nothing to decide")
+               + item_list(page, "blockers", "Blockers the agent owns", blockers, "no blocker")
+               + '<nav class="toc" aria-label="Sections"><ol>'
+               + "".join(f'<li><a href="#s0{n}">{name}</a></li>' for n, name in INVESTIGATION_SECTIONS.items()) + "</ol></nav></section>")
+    opened = {number for _, _, number in blockers if number}
+    metas = {1: "1 hypothesis" if len(hypotheses) == 1 else f"{len(hypotheses)} hypotheses", 2: "the options weighed",
+             3: f"{len(not_run)} NOT RUN", 4: s4_meta, 5: "the spec, the decision notes and the validation report"}
+    sections = {1: s1, 2: s2, 3: s3, 4: s4, 5: s5}
+    body_html = "".join(
+        f'<details class="sec"{" open" if n in opened else ""} id="s0{n}"><summary><h2 id="h0{n}"><span class="num">0{n}</span> '
+        f'{INVESTIGATION_SECTIONS[n]}</h2><span class="meta">{esc(metas[n])}</span></summary><div class="sec-body">{sections[n]}</div></details>'
+        for n in sorted(sections))
+
+    # Header, footer
+    title = spec_title.group(1) if spec_title else branch
+    todo = f'{len(decisions)} decision{"s" * (len(decisions) != 1)} · {len(blockers)} blocker{"s" * (len(blockers) != 1)}'
+    tree = (state("unknown", "need") + " " + esc(" ".join(status.stderr.split())) if status.returncode
+            else "dirty" if status.stdout.strip() else "clean")
+    footer = ('<footer id="footer"><dl class="ids">'
+              f'<dt>Repository</dt><dd>{esc(review_stamp.repo_name())}</dd>'
+              f'<dt>Base</dt><dd>commit <code>{esc(base)}</code>, where it left <code>{esc(base_ref)}</code></dd>'
+              f'<dt>HEAD</dt><dd><code>{esc(head)}</code></dd>'
+              f'<dt>Working tree</dt><dd>{tree}</dd>'
+              f'<dt>Branch</dt><dd><code>{esc(branch)}</code></dd>'
+              + (f'<dt>Changed files</dt><dd>{changed} against the base</dd>' if changed else "")
+              + f'<dt>Phases off</dt><dd>{esc(phase_switches.describe(off)) if not phases_error else state("unavailable", "need")}</dd>'
+              f'<dt>Generated</dt><dd>{esc(now)}</dd>'
+              f'<dt>Page</dt><dd>local file, not published · <a href="{esc(file_href(page_path))}"><code>{esc(page_path)}</code></a></dd>'
+              '</dl></footer>')
+    return document(title, f"Investigation page for <code>{esc(branch)}</code>, from its notes, findings and evidence",
+                    f'<a class="todo {"need" if blockers else "ok"}" href="#decisions">{todo}</a>', summary + body_html, footer)
 
 
 STYLE = """
@@ -1637,7 +1893,7 @@ p{margin:0 0 .75rem}
 code,pre,.st,.cid,.ac,.case,.n,.k,.ref,.said,.owner,.size,.fields dt,.ids dt{font-family:var(--mono)}
 code{font-size:.9em;color:var(--text);overflow-wrap:anywhere}
 .st{font-size:.8125rem;letter-spacing:.02em;overflow-wrap:anywhere}
-.st.ok{color:var(--lime)}.st.need{color:var(--human)}.st.dim{color:var(--dim)}
+.st.ok{color:var(--lime)}.st.need{color:var(--human)}.st.dim{color:var(--dim)}.st.neutral{color:var(--text)}
 .k{color:var(--muted);font-size:.875rem}
 .n{color:var(--dim);font-size:.875rem;font-weight:400;margin-left:.375rem}
 .meta,.by,.size{color:var(--dim);font-size:.8125rem}

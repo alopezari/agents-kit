@@ -6,9 +6,9 @@
 #   reports path pr-body                             where kit-ship and kit-follow-pr save the PR description; left out of the listings
 #   reports path decision-notes                      where kit-ship saves its decision notes for the decision page; left out of the listings
 #   reports path evidence                            the directory (created) for validation evidence: outputs, screenshots; needs a branch, as pr-body does
-#   reports html                                     writes the branch's decision page (bin/decision-report) next to its reports and prints its path
+#   reports html                                     writes the branch's decision page (bin/decision-report) next to its reports and prints its path; the investigation page when the decision notes hold a `Mode: investigation` line
 #   reports                                          every report that exists, with its path, the evidence, the phases off
-#   reports brief                                    the phase and one line per report, to pick a branch up in a new session
+#   reports brief                                    the phase and one line per report, to pick a branch up in a new session; an investigation adds `mode: investigation` and counts its findings: `findings: <n> Supports, <n> Refutes, <n> Inconclusive, <n> NOT RUN`, then `<n> as expected, <n> not as expected` for PASS and FAIL rows
 #   reports --branch <name> …                        the same for another branch of this repo, without phase and switches
 set -euo pipefail
 if [ "${1:-}" = "--branch" ]; then
@@ -81,18 +81,37 @@ if [ "${1:-}" = "brief" ]; then
     switches="$("$HOME/.agents/bin/phase" switches 2>&1)" || switches="unknown (bin/phase switches failed: $switches)"
     [ -z "$switches" ] || echo "off: $(sed 's/: off (/ (/' <<<"$switches" | paste -sd, - | sed 's/,/, /g')"
   fi
+  mode=change notes="$(report_file decision-notes)"
+  if [ -f "$notes" ]; then
+    mode="$(python3 - "$notes" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
+import review_stamp
+print(review_stamp.notes_mode(sys.argv[1]))
+PY
+)"
+  fi
+  [ "$mode" = change ] || echo "mode: $mode"
   for kind in spec verify review validation checks-guide follow-pr; do
     f="$(report_file "$kind")"
     [ -f "$f" ] || continue
     case $kind in
       spec) line="$(head -1 "$f" | sed 's/^# //')" ;;
       review) line="$(head -1 "$f")$(grep -m1 -E '^(Open:|## Open)' "$f" | sed 's/^/ · /' || true)" ;;
-      validation) line="$(python3 - "$f" <<'PY'
+      validation) line="$(python3 - "$f" "$mode" <<'PY'
 import collections, os, sys
 sys.path.insert(0, os.path.expanduser("~/.agents/hooks"))
 import review_stamp
-counts = collections.Counter(row[1] for row in review_stamp.result_rows(open(sys.argv[1]).read().splitlines(), None))
-print(", ".join(f"{counts[r]} {r}" for r in ("PASS", "FAIL", "NOT RUN")))
+lines = open(sys.argv[1]).read().splitlines()
+if sys.argv[2] == "investigation":  # a finding is what was found, so PASS and FAIL read as expected or not
+    counts = collections.Counter(row[3] for row in review_stamp.result_table(lines, review_stamp.RESULTS + review_stamp.FINDINGS))
+    said = [f"{counts[r]} {r}" for r in review_stamp.FINDINGS + ("NOT RUN",)]
+    if counts["PASS"] or counts["FAIL"]:
+        said += [f"{counts['PASS']} as expected", f"{counts['FAIL']} not as expected"]
+    print("findings: " + ", ".join(said))
+else:
+    counts = collections.Counter(row[1] for row in review_stamp.result_rows(lines, None))
+    print(", ".join(f"{counts[r]} {r}" for r in review_stamp.RESULTS))
 PY
 )" ;;
       checks-guide) line="$(grep -q '^## Results' "$f" && echo 'results recorded' || echo 'no results yet')" ;;

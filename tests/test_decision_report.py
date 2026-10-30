@@ -1992,6 +1992,414 @@ def signals_read_only_the_last_2_mb(base):
     assert "42 lines added" in summary_row(markup, "signals"), f"AC5: a whole first line was dropped: {summary_row(markup, 'signals')}"
 
 
+# Investigation mode
+
+INVESTIGATION_NOTES = """Mode: investigation
+
+## The question
+Why do checkout totals drift by a cent?
+
+## The answer
+Rounding runs twice: once per line and once on the total.
+
+Confidence: medium
+
+## Hypotheses
+
+### H1. Rounding runs twice
+The cart rounds in two places.
+For: the trace shows two round() calls.
+Against:
+
+### H2. The currency table is stale
+For:
+Against: the table matches the bank's rates.
+
+## Options
+- Round once at the total: chosen, the bank rounds there.
+- Round per line: rejected, it drifts on long carts.
+
+## Not checked
+The refund path: it needs the payment sandbox.
+
+## What you must decide
+- Round at the total or per line.
+  Unblocks: the fix in the cart.
+- Keep the old receipts as they are.
+"""
+
+FINDINGS_ROWS = """| # | AC | Check | Expected | Result | Evidence |
+|---|---|---|---|---|---|
+| F1 | AC1 | two round calls in the trace | one call | Supports | [trace](trace.txt) |
+| F2 | AC1 | the currency table is stale | rates differ | Refutes | rates match |
+| F3 | AC2 | refund rounding | one rounding | Inconclusive | one sample only |
+| F4 | AC2 | the refund path | one rounding | NOT RUN | needs the payment sandbox |
+| F5 | AC1 | a cart of 100 lines | totals match | FAIL | off by 0.01 |
+| F6 | AC1 | a cart of 1 line | totals match | PASS | totals match |
+"""
+
+
+def investigation_branch(base, notes=INVESTIGATION_NOTES, rows=FINDINGS_ROWS):
+    """shop on feature/cart, its notes holding the marker and its validation findings rows."""
+    repo = new_repo(base)
+    evidence = path_of(repo, "evidence")
+    put(path_of(repo, "spec"), "# Totals drift\n\nGoal: find why totals drift.\n\n## Acceptance criteria\n"
+                               "1. The cause is named. — verify: manual.\n2. The refund is checked. — verify: manual.\n")
+    write(repo, "decision-notes", notes)
+    output(evidence, "trace.txt", "make trace", "round(a)\nround(total)\n", repo, working_tree(repo))
+    write(repo, "validation", f"# Validation: totals drift\n\n## A. Findings\n\n{rows}")
+    return repo, evidence
+
+
+def element(page, element_id):
+    """The markup of the element with that id, up to its own closing tag."""
+    start = re.search(rf'<(\w+)\b[^>]*\bid="{re.escape(element_id)}"', page)
+    assert start, f"no element {element_id}"
+    tag, depth = start.group(1), 0
+    for found in re.finditer(rf"<(/?){tag}\b[^>]*>", page[start.start():]):
+        depth += -1 if found.group(1) else 1
+        if depth == 0:
+            return page[start.start():start.start() + found.end()]
+    raise AssertionError(f"{element_id} is not closed")
+
+
+def an_investigation_is_chosen_by_the_marker_only(base):
+    repo, _ = investigation_branch(base)
+    _, markup = generate(repo, base)
+    assert "Investigation page for" in text(markup) and 'id="sum-question"' in markup, "AC1: the marker gave no investigation page"
+    assert footer_value(markup, "Changed files").startswith("2"), "AC1: the footer doesn't count the diff's files"
+    write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Mode: investigation", "MODE:  Investigation \t"))
+    _, markup = generate(repo, base)
+    assert "Investigation page for" in text(markup), "AC1: the marker is matched in any case"
+    for notes in (INVESTIGATION_NOTES.replace("Mode: investigation\n", ""),
+                  INVESTIGATION_NOTES.replace("Mode: investigation", "```\nMode: investigation\n```"),
+                  INVESTIGATION_NOTES.replace("Mode: investigation", "Mode: investigation, maybe")):
+        write(repo, "decision-notes", notes)
+        _, markup = generate(repo, base)
+        assert "Investigation page for" not in text(markup) and "Decision page for" in text(markup), notes[:60]
+        sections = [h.strip() for h in re.findall(r'<h2[^>]*><span class="num">\d\d</span>\s*([^<]+)</h2>', markup)]
+        assert sections == HEADINGS, sections
+
+
+def an_empty_diff_only_suggests_the_mode(base):
+    repo = new_repo(base)
+    _, markup = generate(repo, base)
+    assert not any("Mode: investigation" in item for item in listed(markup, "warnings")), "a branch with a diff is told of the mode"
+    git(repo, "checkout", "-qb", "feature/empty", "main")
+    write(repo, "decision-notes", NOTES)
+    _, markup = generate(repo, base)
+    assert "Decision page for" in text(markup), "AC1: an empty diff switched the mode by itself"
+    named = [item for item in listed(markup, "warnings") if "Mode: investigation" in item]
+    assert len(named) == 1, f"AC1: no warning names the marker: {listed(markup, 'warnings')}"
+
+
+def the_investigation_page_shows_each_section(base):
+    repo, _ = investigation_branch(base)
+    _, markup = generate(repo, base)
+    assert "Why do checkout totals drift by a cent?" in summary_row(markup, "question")
+    answer = summary_row(markup, "answer")
+    assert "Rounding runs twice" in answer and "medium confidence" in answer and "Confidence:" not in answer, answer
+    decisions = listed(markup, "decisions")
+    assert len(decisions) == 2, decisions
+    assert "Round at the total or per line." in decisions[0] and "Unblocks: the fix in the cart." in decisions[0], decisions
+    assert "Keep the old receipts" in decisions[1] and "Unblocks: not recorded" in decisions[1], decisions
+    assert listed(markup, "blockers") == [], listed(markup, "blockers")
+    assert "2 decisions · 0 blockers" in text(re.search(r'<p class="strip">.*?</p>', markup, re.S).group(0))
+    hypotheses = section(markup, 1)
+    assert "H1. Rounding runs twice" in text(element(hypotheses, "hyp-1")) and "The cart rounds in two places." in text(element(hypotheses, "hyp-1"))
+    assert "two round() calls" in text(element(hypotheses, "hyp-1-for"))
+    assert "none recorded" in text(element(hypotheses, "hyp-1-against")), "AC2: an empty Against isn't none recorded"
+    assert "none recorded" in text(element(hypotheses, "hyp-2-for")) and "bank's rates" in text(element(hypotheses, "hyp-2-against"))
+    assert "Round per line: rejected" in text(section(markup, 2)) and "Round per line" not in text(hypotheses)
+    unchecked = section(markup, 3)
+    assert "The refund path: it needs the payment sandbox." in text(element(unchecked, "not-checked-notes"))
+    not_run = element(unchecked, "not-run")
+    assert 'href="#check-F4"' in not_run and "needs the payment sandbox" in text(not_run) and "F3" not in text(not_run), not_run
+    findings = section(markup, 4)
+    assert all(f'id="check-F{n}"' in findings for n in range(1, 7)), "AC2: a check row isn't under Findings"
+    for kind in ("spec", "decision-notes", "validation"):
+        assert f'id="annex-{kind}"' in section(markup, 5), kind
+    assert footer_value(markup, "Repository") == "shop"
+    base_sha = git(repo, "merge-base", "HEAD", "main")
+    assert base_sha in footer_value(markup, "Base") and "main" in footer_value(markup, "Base"), footer_value(markup, "Base")
+    assert git(repo, "rev-parse", "HEAD") in footer_value(markup, "HEAD")
+    assert footer_value(markup, "Working tree") == "clean" and footer_value(markup, "Branch") == "feature/cart"
+    assert re.search(r"\d{4}-\d\d-\d\d \d\d:\d\d", footer_value(markup, "Generated")) and "decision-" in footer_value(markup, "Page")
+    put(os.path.join(repo, "notes.txt"), "draft\n")
+    _, markup = generate(repo, base)
+    assert footer_value(markup, "Working tree") == "dirty", footer_value(markup, "Working tree")
+    write(repo, "decision-notes", INVESTIGATION_NOTES.split("## What you must decide")[0] + "## What you must decide\n- None\n")
+    _, markup = generate(repo, base)
+    assert listed(markup, "decisions") == [] and "0 decisions" in text(markup), "AC2: an item None asks a decision"
+
+
+def missing_investigation_sections_are_blockers(base):
+    repo, _ = investigation_branch(base, notes="Mode: investigation\n\n## Options\n\n## Hypotheses\n### H1. A guess\nFor:\nAgainst:\n")
+    _, markup = generate(repo, base)
+    blockers = listed(markup, "blockers")
+    for name in ("The question", "The answer", "What you must decide"):
+        assert sum(name in item for item in blockers) == 1, (name, blockers)
+    assert len(blockers) == 3, f"AC2: an empty part became a blocker: {blockers}"
+    assert "none recorded" in text(section(markup, 2)) and "none recorded" in text(element(markup, "hyp-1-for"))
+    for line, word in (("", "missing"), ("Confidence: certain", "unknown")):
+        write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", line))
+        _, markup = generate(repo, base)
+        blockers = listed(markup, "blockers")
+        assert len(blockers) == 1 and "Confidence" in blockers[0] and word in blockers[0], (line, blockers)
+    write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "Confidence: Medium — the refund path wasn't run"))
+    _, markup = generate(repo, base)
+    answer = summary_row(markup, "answer")
+    assert listed(markup, "blockers") == [], f"AC2: a reason after the level made it unknown: {listed(markup, 'blockers')}"
+    assert "medium confidence" in answer and "the refund path wasn" in answer and "Confidence:" not in answer, answer
+
+
+def blocks_that_need_a_change_do_not_apply(base):
+    repo, _ = investigation_branch(base)
+    calls = os.path.join(base, "calls.log")
+    for off in ((), ("validate",)):
+        for phase in off:
+            out = sh(repo, "python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", phase)
+            assert out.returncode == 0, out
+        _, markup = generate(repo, base, {"error": True})
+        assert not os.path.exists(calls), f"AC3: gh was called: {open(calls).read()}"
+        page = text(markup)
+        line = summary_row(markup, "gates")
+        for block in ("PR", "CI", "verify", "review stamp", "validate stamp", "checks guide", "ship steps"):
+            assert block in line, (block, line)
+        assert page.count("does not apply") == 1 and "does not apply" in line, line
+        for word in ("no PR yet", "missing", "unavailable", "phase off"):
+            assert word not in page, (off, word)
+        assert all(f'id="check-F{n}"' in section(markup, 4) for n in range(1, 7)), f"AC3: {off} hid a finding"
+        assert listed(markup, "blockers") == [], listed(markup, "blockers")
+
+
+def findings_are_not_failures(base):
+    import sys
+    sys.path.insert(0, os.path.join(KIT, "hooks"))
+    import review_stamp
+    legacy = FINDINGS_ROWS.split("\n")[:2] + [r for r in FINDINGS_ROWS.split("\n") if re.search(r"\| (PASS|FAIL|NOT RUN) \|", r)]
+    for rows, ids in ((FINDINGS_ROWS, range(1, 7)), ("\n".join(legacy) + "\n", (4, 5, 6)),
+                      (FINDINGS_ROWS.replace("| Supports |", "| **Supports** |"), range(1, 7))):
+        repo, _ = investigation_branch(base, rows=rows)
+        _, markup = generate(repo, base)
+        words = {n: re.search(r'<span class="st [^"]*">([^<]+)</span>', check_block(markup, f"F{n}")).group(1) for n in ids}
+        expected = {1: "Supports", 2: "Refutes", 3: "Inconclusive", 4: "NOT RUN", 5: "not as expected", 6: "as expected"}
+        assert words == {n: expected[n] for n in ids}, words
+        for n in ids:
+            block = check_block(markup, f"F{n}")
+            assert 'class="st need"' not in block and "FAIL" not in text(block), block
+            assert "validation-shop-feature~cart.md:" in text(block), "AC4: a row lost its source line"
+        assert listed(markup, "blockers") == [], f"AC4: a finding is a blocker: {listed(markup, 'blockers')}"
+        if 1 in ids:
+            assert "round(total)" in check_block(markup, "F1"), "AC4: a row lost its evidence"
+        shutil.rmtree(repo)
+    lines = FINDINGS_ROWS.split("\n")
+    assert [row[1] for row in review_stamp.result_rows(lines, None)] == ["NOT RUN", "FAIL", "PASS"], \
+        "AC4: the gates' parser reads findings words"
+    guide = "### M1. Look\n- **Where:** you\n\n## Results\n\n| Step | Result | Evidence |\n|---|---|---|\n| M1 | Supports | seen |\n"
+    assert review_stamp.guide_steps(guide)["M1"]["result"] is None, "AC4: the checks guide reads a findings word"
+
+
+def the_notes_embed_their_evidence(base):
+    outside = os.path.join(base, "secret.txt")
+    put(outside, "SECRET-TOKEN-1\n")
+    put(os.path.join(base, "secret2.txt"), "SECRET-TOKEN-2\n")
+    notes = (INVESTIGATION_NOTES
+             .replace("once on the total.", "once on the total. ![diagram](diagram.png)")
+             .replace("two round() calls.", "two round() calls in `big.txt`.")
+             .replace("Against:\n\n### H2", f"Against: [out]({outside})\n\n### H2")
+             .replace("For:\nAgainst: the table", "For: `link.txt`\nAgainst: the table")
+             .replace("the bank rounds there.", "the bank rounds there, `page.html`.")
+             .replace("needs the payment sandbox.\n", "needs the payment sandbox, ![big](huge.png).\n")
+             .replace("Keep the old receipts as they are.", "Keep the old receipts as they are, see [trace](gone.txt)."))
+    repo, evidence = investigation_branch(base, notes=notes)
+    put(os.path.join(evidence, "diagram.png"), PNG)
+    put(os.path.join(evidence, "big.txt"), "FIRST LINE\n" + "".join(f"middle {n:07d}\n" for n in range(20000)) + "LAST LINE\n")
+    os.symlink(os.path.join(base, "secret2.txt"), os.path.join(evidence, "link.txt"))
+    put(os.path.join(evidence, "page.html"), "<script>alert(1)</script>")
+    put(os.path.join(evidence, "huge.png"), PNG + b"\0" * (2 * 1024 * 1024 + 10))
+    _, markup = generate(repo, base)
+    assert 'src="data:image/png' in summary_row_markup(markup, "answer"), "AC5: the answer's image isn't embedded under it"
+    big = element(markup, "hyp-1-for")
+    assert "FIRST LINE" in big and "LAST LINE" in big and "middle 0010000" not in big and re.search(r"\bcut\b", text(big)), \
+        "AC5: a text over 200 KB isn't embedded head and tail"
+    assert "<details" in big, "AC5: a text file isn't folded"
+    assert "SECRET-TOKEN" not in markup, "AC5: a file outside the evidence directory was read"
+    for name in ("secret.txt", "secret2.txt"):
+        assert "file://" + urllib.parse.quote(os.path.join(os.path.realpath(base), name)) not in markup, name
+    assert "outside the evidence directory" in text(element(markup, "hyp-1-against")) and \
+        "outside the evidence directory" in text(element(markup, "hyp-2-for")), "AC5: an outside file isn't named as not read"
+    options = section(markup, 2)
+    assert "page.html" in text(options) and "not linked" in text(options) and "page.html\"" not in options, "AC5: an .html file is linked"
+    huge = section(markup, 3)
+    assert "huge.png" in text(huge) and "over 2 MB" in text(huge) and "data:image" not in huge, "AC5: an image over 2 MB is embedded"
+    blockers = listed(markup, "blockers")
+    assert len(blockers) == 1 and "gone.txt" in blockers[0] and "missing" in blockers[0], f"AC5: {blockers}"
+
+
+def brief_counts_findings(base):
+    repo, _ = investigation_branch(base)
+    git(repo, "checkout", "-qb", "feature/change")
+    write(repo, "decision-notes", NOTES)
+    write(repo, "validation", "| # | Check | Result | Evidence |\n|---|---|---|---|\n| A1 | a | PASS | e |\n"
+                              "| A2 | b | FAIL | e |\n| A3 | c | NOT RUN | e |\n| A4 | d | Supports | e |\n")
+    findings = "findings: 1 Supports, 1 Refutes, 1 Inconclusive, 1 NOT RUN, 1 as expected, 1 not as expected"
+    change = "1 PASS, 1 FAIL, 1 NOT RUN"
+
+    def brief(*args):
+        out = sh(repo, REPORTS, *args, "brief")
+        assert out.returncode == 0, out
+        return out.stdout
+    for branch, other in (("feature/cart", "feature/change"), ("feature/change", "feature/cart")):
+        git(repo, "checkout", "-q", branch)
+        for shown, name in ((brief(), branch), (brief("--branch", other), other)):
+            if name == "feature/cart":
+                assert findings in shown and "FAIL" not in shown and "mode: investigation" in shown, (branch, shown)
+            else:
+                assert change in shown and "findings:" not in shown and "mode:" not in shown, (branch, shown)
+    git(repo, "checkout", "-q", "feature/cart")
+    write(repo, "validation", "\n".join(r for r in FINDINGS_ROWS.split("\n") if not re.search(r"\| (PASS|FAIL) \|", r)))
+    shown = brief()
+    assert "findings: 1 Supports, 1 Refutes, 1 Inconclusive, 1 NOT RUN\n" in shown and "as expected" not in shown, shown
+    rows = FINDINGS_ROWS.split("\n")
+    write(repo, "validation", "\n".join(rows[:2] + [rows[2]] * 3 + [rows[5]] * 2 + [rows[6]] * 4) + "\n")
+    shown = brief()
+    assert "findings: 3 Supports, 0 Refutes, 0 Inconclusive, 2 NOT RUN, 0 as expected, 4 not as expected\n" in shown, shown
+
+
+def the_skills_describe_the_investigation_notes(base):
+    def read(*parts):
+        with open(os.path.join(KIT, *parts)) as fh:
+            return fh.read()
+    ship = read("skills", "kit-ship", "SKILL.md")
+    for needle in ("`Mode: investigation`", "`## The question`", "`## The answer`", "`Confidence: high`", "`## Hypotheses`",
+                   "`For:`", "`Against:`", "`## Options`", "`## Not checked`", "`Unblocks:`", "without opening a pull request"):
+        assert needle in ship, needle
+    usage = "".join(line for line in read("bin", "reports").split("\n", 12)[:12] if line.startswith("#"))
+    assert "investigation" in usage and "findings:" in usage, "bin/reports' usage doesn't describe the mode"
+    assert "investigation" in read("bin", "decision-report").split('"""')[1], "the docstring doesn't describe the investigation page"
+
+
+def a_marker_on_an_empty_diff_gives_the_investigation_page(base):
+    repo, _ = investigation_branch(base)
+    git(repo, "checkout", "-qb", "feature/empty", "main")
+    write(repo, "decision-notes", INVESTIGATION_NOTES)
+    write(repo, "validation", "# Validation\n\n" + "\n".join(FINDINGS_ROWS.split("\n")[:5]) + "\n")
+    _, markup = generate(repo, base)
+    assert "Investigation page for" in text(markup), "AC1: an empty diff with the marker isn't an investigation"
+    assert "<dt>Changed files</dt>" not in footer(markup), "AC1: the footer counts files on a branch without a diff"
+    assert "Mode: investigation" not in text(summary(markup)), "the investigation page suggests its own mode"
+    words = [re.search(r'<span class="st [^"]*">([^<]+)</span>', check_block(markup, f"F{n}")).group(1) for n in (1, 2, 3)]
+    assert words == ["Supports", "Refutes", "Inconclusive"], f"AC4: a findings-only table: {words}"
+
+
+def the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert(base):
+    notes = (INVESTIGATION_NOTES.replace("### H1. Rounding runs twice", "### H1. <script>alert('h')</script>")
+             .replace("Confidence: medium", "Confidence: medium — <img src=x onerror=alert('c')>"))
+    repo, _ = investigation_branch(base, notes=notes)
+    _, markup = generate(repo, base)
+    metas = [dict(attrs) for tag, attrs in tags(markup) if tag == "meta" and dict(attrs).get("http-equiv")]
+    assert [m["content"] for m in metas if m["http-equiv"] == "Content-Security-Policy"] == [CSP], metas
+    assert not any(tag in ("script", "img") and "alert" in str(attrs) for tag, attrs in tags(markup)), "hostile text became markup"
+    assert "<script>alert('h')</script>" in text(element(markup, "hyp-1")), "the title isn't shown as text"
+    assert "onerror=alert('c')" in text(summary_row_markup(markup, "answer")), "the confidence reason isn't shown as text"
+
+
+def hypotheses_keep_their_lists_and_subheadings(base):
+    notes = INVESTIGATION_NOTES.replace(
+        "The cart rounds in two places.\nFor: the trace shows two round() calls.\nAgainst:\n",
+        "The cart rounds in two places.\n\n#### Where\nIn the cart and the receipt.\n\n- For:\n  - the trace shows two round() calls\n"
+        "  - the receipt rounds too\n- Against: one cart in a hundred\n\n#### Second trace\nFor: the refund rounds twice too\n")
+    repo, _ = investigation_branch(base, notes=notes)
+    _, markup = generate(repo, base)
+    first = element(markup, "hyp-1")
+    assert "In the cart and the receipt." in text(first) and 'id="hyp-2"' in markup and "hyp-3" not in markup, \
+        "a #### heading split its hypothesis"
+    assert "two round() calls" in text(element(markup, "hyp-1-for")) and "receipt rounds too" in text(element(markup, "hyp-1-for"))
+    assert "one cart in a hundred" in text(element(markup, "hyp-1-against")), "a listed Against: was dropped"
+    assert "two round() calls" in text(element(markup, "hyp-1-for")) and "refund rounds twice" in text(element(markup, "hyp-1-for")), \
+        "a second For: replaced the first"
+
+
+def the_notes_embed_each_file_under_its_first_part(base):
+    notes = (INVESTIGATION_NOTES
+             .replace("drift by a cent?", "drift by a cent? See [the report](q.txt).")
+             .replace("Confidence: medium", "Confidence: medium — one trace only, `checks/trace.txt:3`")
+             .replace("Rounding runs twice:", "Rounding runs twice (`shared.txt`):")
+             .replace("### H1. Rounding runs twice", "### H1. Rounding runs twice, `title.txt`")
+             .replace("two round() calls.", "two round() calls in `shared.txt`, as `client.py:42` does.")
+             .replace("Round at the total or per line.", "Round at the total or per line, `decide.txt`.")
+             )
+    repo, evidence = investigation_branch(base, notes=notes)
+    for name in ("q.txt", "shared.txt", "title.txt", "decide.txt", "checks/trace.txt"):
+        put(os.path.join(evidence, name), f"CONTENT OF {name}\n")
+    _, markup = generate(repo, base)
+    assert listed(markup, "blockers") == [], f"AC5: a source file the notes cite became a blocker: {listed(markup, 'blockers')}"
+    assert "CONTENT OF q.txt" in summary_row_markup(markup, "question"), "AC5: the question's link isn't embedded"
+    answer = summary_row_markup(markup, "answer")
+    assert "CONTENT OF shared.txt" in answer and "CONTENT OF checks/trace.txt" in answer, "AC5: the answer's files aren't embedded"
+    assert "CONTENT OF shared.txt" not in element(markup, "hyp-1-for") and "shown above" in element(markup, "hyp-1-for"), \
+        "AC5: a file is embedded twice, or not where it first shows"
+    assert "CONTENT OF title.txt" in element(markup, "hyp-1"), "AC5: a hypothesis title's file isn't embedded"
+    assert "CONTENT OF decide.txt" in " ".join(listed(markup, "decisions")), "AC5: a decision's file isn't embedded"
+    assert "client.py:42" in text(element(markup, "hyp-1-for")), "a cited source file isn't kept as text"
+
+
+def the_answer_needs_more_than_its_confidence(base):
+    repo, _ = investigation_branch(base, notes=INVESTIGATION_NOTES.replace(
+        "Rounding runs twice: once per line and once on the total.\n\nConfidence: medium", "Confidence: medium"))
+    _, markup = generate(repo, base)
+    blockers = listed(markup, "blockers")
+    assert len(blockers) == 1 and "The answer" in blockers[0] and "only its" in blockers[0], blockers
+    write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "**Confidence:** **high**."))
+    _, markup = generate(repo, base)
+    assert listed(markup, "blockers") == [] and "high confidence" in summary_row(markup, "answer"), listed(markup, "blockers")
+    write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "Confidence: high. One trace only"))
+    _, markup = generate(repo, base)
+    answer = summary_row(markup, "answer")
+    assert "One trace only" in answer and ". One trace" not in answer, answer
+    write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "Confidence: " + "*" * 50_000 + "x"))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
+    generate(repo, base)
+    spent = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime - before
+    assert spent < 5, f"{spent:.1f} s of CPU for a long Confidence line"
+
+
+def a_marker_inside_a_longer_fence_is_not_the_mode(base):
+    repo, _ = investigation_branch(base)
+    write(repo, "decision-notes", NOTES + "\n````\n```\nMode: investigation\n````\n")
+    _, markup = generate(repo, base)
+    assert "Decision page for" in text(markup), "AC1: a marker inside a four-backtick block switched the page"
+    shown = sh(repo, REPORTS, "brief")
+    assert shown.returncode == 0 and "mode: investigation" not in shown.stdout, shown
+
+
+def a_kept_script_the_evidence_names_shows_once(base):
+    repo, evidence = investigation_branch(base, rows=FINDINGS_ROWS.replace("[trace](trace.txt)", "`checks/F1.sh`"))
+    put(os.path.join(evidence, "checks", "F1.py"), "print('ONLY-ONCE')\n")
+    os.symlink("F1.py", os.path.join(evidence, "checks", "F1.sh"))
+    _, markup = generate(repo, base)
+    assert check_block(markup, "F1").count("ONLY-ONCE") == 1, "a script the row names and keeps shows twice"
+
+
+def a_file_a_row_names_three_ways_shows_once(base):
+    repo, _ = investigation_branch(base)
+    _, markup = generate(repo, base)
+    once = check_block(markup, "F1").count('class="file"')
+    write(repo, "validation", "# Validation: totals drift\n\n## A. Findings\n\n"
+                              + FINDINGS_ROWS.replace("[trace](trace.txt)", "`trace.txt`, [trace](trace.txt) and trace.txt"))
+    _, markup = generate(repo, base)
+    assert check_block(markup, "F1").count('class="file"') == once, "a file the row names three ways shows more than once"
+
+
+def notes_over_the_limit_keep_the_change_page(base):
+    repo, _ = investigation_branch(base, notes=INVESTIGATION_NOTES + "x" * (2 * 1024 * 1024))
+    _, markup = generate(repo, base)
+    assert "Decision page for" in text(markup), "notes over 2 MB gave the investigation page"
+    shown = sh(repo, REPORTS, "brief")
+    assert shown.returncode == 0 and "mode: investigation" not in shown.stdout, shown
+
+
 for test in kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
                                reads_nothing_outside_the_evidence_directory, a_long_last_line_keeps_its_tail,
                                unmatched_brackets_take_linear_time, a_long_check_table_takes_linear_time, a_failed_generation_leaves_no_page, the_older_page_is_gone_while_it_builds,
@@ -2027,7 +2435,15 @@ for test in kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path,
                                open_findings_hold_no_link_inside_a_link, a_filename_git_holds_in_any_bytes_keeps_the_page,
                                signals_show_the_latest_usable_matching_line, signals_show_the_structure_facts, signal_warnings_carry_the_need_tone,
                                coverage_shows_a_percentage_only_when_measured, signals_without_a_line_say_why, red_checks_that_didnt_run_are_dim,
-                               signals_read_only_the_last_2_mb)):
+                               signals_read_only_the_last_2_mb, an_investigation_is_chosen_by_the_marker_only,
+                               an_empty_diff_only_suggests_the_mode, the_investigation_page_shows_each_section,
+                               missing_investigation_sections_are_blockers, blocks_that_need_a_change_do_not_apply,
+                               findings_are_not_failures, the_notes_embed_their_evidence, brief_counts_findings,
+                               the_skills_describe_the_investigation_notes, a_marker_on_an_empty_diff_gives_the_investigation_page,
+                               the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert, hypotheses_keep_their_lists_and_subheadings,
+                               the_notes_embed_each_file_under_its_first_part, the_answer_needs_more_than_its_confidence,
+                               a_marker_inside_a_longer_fence_is_not_the_mode, a_kept_script_the_evidence_names_shows_once,
+                               notes_over_the_limit_keep_the_change_page, a_file_a_row_names_three_ways_shows_once)):
     base = tempfile.mkdtemp(prefix="agents-test-decision-report-")
     try:
         test(os.path.realpath(base))
