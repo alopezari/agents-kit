@@ -156,9 +156,9 @@ def diff_coverage_counts_changed_executable_lines_and_caps_its_lists(base):
 
 
 RESULTS = []
-for test in (files_outside_cwd_are_not_linted, repo_root_cwd_lints_everything, phpstan_with_nothing_in_scope_is_not_a_failure,
-             red_check_keeps_export_ignored_tests, red_check_reports_tests_that_pass_without_the_change,
-             diff_coverage_counts_changed_executable_lines_and_caps_its_lists):
+for test in kit_home.selected((files_outside_cwd_are_not_linted, repo_root_cwd_lints_everything, phpstan_with_nothing_in_scope_is_not_a_failure,
+                               red_check_keeps_export_ignored_tests, red_check_reports_tests_that_pass_without_the_change,
+                               diff_coverage_counts_changed_executable_lines_and_caps_its_lists)):
     base = tempfile.mkdtemp(prefix="agents-test-verify-changed-")
     try:
         test(base)

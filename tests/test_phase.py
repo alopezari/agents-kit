@@ -611,6 +611,9 @@ if sys.argv[1:]:
             print(f"     {error}")
     sys.exit(1 if any(error for _, error in RESULTS) else 0)
 
+TESTS = kit_home.selected(TESTS)
+
+
 # Each test in a process of its own: the tests share this HOME's quality log, which renames append to.
 def run_alone(t):
     done = subprocess.run([sys.executable, os.path.abspath(__file__), t.__name__], capture_output=True, text=True,

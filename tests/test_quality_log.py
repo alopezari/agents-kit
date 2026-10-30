@@ -580,7 +580,8 @@ def a_timeout_stops_the_tools_too(base):
     tools = os.path.join(base, "tools")
     os.makedirs(tools)
     with open(os.path.join(tools, "lizard"), "w") as fh:
-        fh.write("#!/bin/bash\nsleep 97\n")
+        # Unique per run: the verify overlay runs this file under two Pythons at once, each looking for its own tool.
+        fh.write(f"#!/bin/bash\nsleep 97.{os.getpid()}\n")
     os.chmod(os.path.join(tools, "lizard"), 0o755)
     env = {**os.environ, "HOME": home, "QUALITY_LOG_STRUCTURE_TIMEOUT": "3", "STRUCTURE_FACTS_LIZARD_TIMEOUT": "120",
            "PATH": os.pathsep.join((tools, os.path.join(home, "shim"), os.environ["PATH"]))}
@@ -588,7 +589,7 @@ def a_timeout_stops_the_tools_too(base):
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 0 and entries(home)[-1]["structure"] is None, (out.stderr, entries(home)[-1])
     time.sleep(0.5)
-    left = subprocess.run(["pgrep", "-f", "sleep 97"], capture_output=True, text=True).stdout.split()
+    left = subprocess.run(["pgrep", "-f", f"sleep 97.{os.getpid()}"], capture_output=True, text=True).stdout.split()
     for pid in left:
         os.kill(int(pid), 9)
     assert not left, "the tool outlived the timeout"
@@ -602,15 +603,15 @@ def refuses_a_pr_number_that_isnt_one(base):
     assert entries(home) == [], "nothing was written"
 
 
-for test in (writes_well_formed_entries, records_the_findings_the_other_model_shared, keeps_lens_names_to_the_lenses_there_are,
-             refuses_malformed_entries, a_session_on_a_worktree_logs_to_the_main_checkout,
-             other_kit_layouts_keep_their_rows_in_the_kit, records_each_findings_outcome,
-             refuses_malformed_outcomes, a_lens_with_no_findings_logs_without_outcomes, records_the_spec_and_diff_tiers,
-             accepts_each_canonical_test_type, refuses_other_test_type_spellings, marks_a_flaky_run,
-             records_a_prs_size_and_origin, records_the_verify_signals, records_weakened_tests,
-             a_signal_it_cant_compute_is_null, refuses_a_pr_number_that_isnt_one, refuses_a_pr_from_another_branch,
-             a_dirty_tree_nulls_what_it_would_misread, a_renamed_test_is_not_a_deleted_one, undecodable_output_nulls_the_signal,
-             records_the_structure_facts, keeps_only_structure_facts_of_the_right_shape, a_timeout_stops_the_tools_too):
+for test in kit_home.selected((writes_well_formed_entries, records_the_findings_the_other_model_shared, keeps_lens_names_to_the_lenses_there_are,
+                               refuses_malformed_entries, a_session_on_a_worktree_logs_to_the_main_checkout,
+                               other_kit_layouts_keep_their_rows_in_the_kit, records_each_findings_outcome,
+                               refuses_malformed_outcomes, a_lens_with_no_findings_logs_without_outcomes, records_the_spec_and_diff_tiers,
+                               accepts_each_canonical_test_type, refuses_other_test_type_spellings, marks_a_flaky_run,
+                               records_a_prs_size_and_origin, records_the_verify_signals, records_weakened_tests,
+                               a_signal_it_cant_compute_is_null, refuses_a_pr_number_that_isnt_one, refuses_a_pr_from_another_branch,
+                               a_dirty_tree_nulls_what_it_would_misread, a_renamed_test_is_not_a_deleted_one, undecodable_output_nulls_the_signal,
+                               records_the_structure_facts, keeps_only_structure_facts_of_the_right_shape, a_timeout_stops_the_tools_too)):
     base = tempfile.mkdtemp(prefix="agents-test-quality-log-")
     try:
         test(base)

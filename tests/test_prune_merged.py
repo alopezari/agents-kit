@@ -454,15 +454,15 @@ def names_the_files_it_cannot_delete(base):
         f"the other branches still go: {out.stdout}"
 
 
-for test in (removes_merged_and_keeps_the_rest_with_reasons, keeps_the_worktree_it_runs_in,
-             a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect,
-             forgets_the_phase_switches_of_the_branches_it_deletes, forgets_only_the_switches_of_its_own_repo,
-             forgets_the_switches_of_a_renamed_branch_never_read, keeps_a_branch_whose_rename_history_it_cannot_read,
-             deletes_the_branch_even_when_its_switches_stay, keeps_a_branch_when_it_cannot_search_for_its_guide,
-             keeps_a_branch_whose_guide_link_is_dangling,
-             says_when_it_cannot_check_the_switches, keeps_the_switches_when_it_cannot_name_the_repo,
-             deletes_the_files_kept_for_the_branches_it_deletes, deletes_the_files_of_a_renamed_branch_but_not_of_a_copy_source,
-             keeps_a_branch_whose_steps_after_the_merge_have_not_passed, names_the_files_it_cannot_delete):
+for test in kit_home.selected((removes_merged_and_keeps_the_rest_with_reasons, keeps_the_worktree_it_runs_in,
+                               a_failed_fetch_removes_nothing, keeps_a_worktree_it_cannot_inspect,
+                               forgets_the_phase_switches_of_the_branches_it_deletes, forgets_only_the_switches_of_its_own_repo,
+                               forgets_the_switches_of_a_renamed_branch_never_read, keeps_a_branch_whose_rename_history_it_cannot_read,
+                               deletes_the_branch_even_when_its_switches_stay, keeps_a_branch_when_it_cannot_search_for_its_guide,
+                               keeps_a_branch_whose_guide_link_is_dangling,
+                               says_when_it_cannot_check_the_switches, keeps_the_switches_when_it_cannot_name_the_repo,
+                               deletes_the_files_kept_for_the_branches_it_deletes, deletes_the_files_of_a_renamed_branch_but_not_of_a_copy_source,
+                               keeps_a_branch_whose_steps_after_the_merge_have_not_passed, names_the_files_it_cannot_delete)):
     base = os.path.realpath(tempfile.mkdtemp(prefix="agents-test-prune-"))
     # the copies of reports a sandbox keeps in $TMPDIR/agents-specs: never the user's own, nor another test's.
     os.environ["TMPDIR"] = os.path.join(base, "tmp")

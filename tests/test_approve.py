@@ -179,7 +179,7 @@ def a_grant_is_the_turn_approval_a_message_would_write(base):
             f"{verb} cut short takes back the names it wrote"
 
 
-for test in (names_the_approvals_that_would_lift_a_block, a_profile_that_didnt_load_offers_no_dialog, names_the_merge_and_protected_push_approvals, a_grant_is_the_turn_approval_a_message_would_write):
+for test in kit_home.selected((names_the_approvals_that_would_lift_a_block, a_profile_that_didnt_load_offers_no_dialog, names_the_merge_and_protected_push_approvals, a_grant_is_the_turn_approval_a_message_would_write)):
     base = tempfile.mkdtemp(prefix="agents-test-approve-")
     try:
         test(base)

@@ -422,11 +422,11 @@ def signals_read_the_prs_settled_since_last_month(base):
 
 
 RESULTS = []
-for test in (pr_metrics_count_people_not_me_or_bots, follow_ups_need_a_shared_file_and_a_fix_title,
-             escapes_join_to_their_branch_and_lens, sessions_join_by_repo_and_branch, a_checkout_named_unlike_its_repo,
-             quality_log_names_the_repo_not_the_worktree, attention_per_pr_and_its_coverage,
-             a_share_never_measured_is_not_zero, signals_join_by_host_repo_and_number, signal_cells,
-             structure_cells, the_prompt_names_every_signal_split, signals_read_the_prs_settled_since_last_month):
+for test in kit_home.selected((pr_metrics_count_people_not_me_or_bots, follow_ups_need_a_shared_file_and_a_fix_title,
+                               escapes_join_to_their_branch_and_lens, sessions_join_by_repo_and_branch, a_checkout_named_unlike_its_repo,
+                               quality_log_names_the_repo_not_the_worktree, attention_per_pr_and_its_coverage,
+                               a_share_never_measured_is_not_zero, signals_join_by_host_repo_and_number, signal_cells,
+                               structure_cells, the_prompt_names_every_signal_split, signals_read_the_prs_settled_since_last_month)):
     base = tempfile.mkdtemp(prefix="agents-test-outcomes-")
     try:
         test(base)
