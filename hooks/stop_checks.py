@@ -68,7 +68,7 @@ ORPHAN_MIN_CORES = 0.5
 ORPHAN_MIN_UP_SECS = 300
 ORPHAN_EXCLUDED_PATHS = ("/System/", "/Applications/", "/Library/")
 # Under those paths but what a shell command runs: Apple's own /usr/bin/python3 re-executes from /Library/Developer/.
-ORPHAN_TOOLCHAIN_PATHS = ("/Library/Developer/", "/Library/Frameworks/", "/Library/Java/", "/Applications/Xcode.app/Contents/Developer/")
+ORPHAN_TOOLCHAIN_PATHS = re.compile(r"/Library/(Developer|Frameworks|Java)/|/Applications/Xcode[^/]*\.app/Contents/Developer/")
 ORPHAN_MAX_GROUPS = 5
 ORPHAN_MAX_PIDS = 10
 PROCESS_TOOL_TIMEOUT = 2
@@ -77,6 +77,7 @@ PROCESS_TOOL_TIMEOUT = 2
 PS_LISTING = "pid=,ppid=,pgid=,etime=,time=,lstart=,comm="
 PS_DURATION = r"(?:\d+-)?(?:\d+:)?\d+:\d+(?:\.\d+)?"
 PS_ROW = re.compile(rf"\s*(\d+)\s+(\d+)\s+(\d+)\s+({PS_DURATION})\s+({PS_DURATION})\s+(\w{{3}}\s+\w{{3}}\s+\d+\s+[\d:]+\s+\d+)\s+(.+)")
+PS_NAME_ROW = re.compile(r"\s*(\d+)\s+(\S.*?)\s*")
 LAUNCHCTL_HEADER = ["PID", "Status", "Label"]
 LAUNCHCTL_ROW = re.compile(r"(\d+|-)\s+(-?\d+|-)\s+\S")
 
@@ -626,12 +627,12 @@ def launchd_job_pids(payload):
 def process_names(payload, pids):
     """The executable's name of each pid still running, as far as `ps` can say: a notice goes out without it."""
     listing = process_tool_output(payload, "ps", "-o", "pid=,ucomm=", "-p", ",".join(map(str, pids))) or ""
-    return {int(pid): name.strip() for pid, name in (line.split(None, 1) for line in listing.splitlines() if len(line.split(None, 1)) == 2)}
+    return {int(row[1]): row[2] for row in map(PS_NAME_ROW.fullmatch, listing.splitlines()) if row}
 
 
 def orphans_in(group, launchd_jobs=()):
     return [p for p in group if p["ppid"] == 1 and p["up"] >= ORPHAN_MIN_UP_SECS and p["pid"] not in launchd_jobs
-            and (not p["title"].startswith(ORPHAN_EXCLUDED_PATHS) or p["title"].startswith(ORPHAN_TOOLCHAIN_PATHS))]
+            and (not p["title"].startswith(ORPHAN_EXCLUDED_PATHS) or ORPHAN_TOOLCHAIN_PATHS.match(p["title"]))]
 
 
 def over_cpu_threshold(orphans):

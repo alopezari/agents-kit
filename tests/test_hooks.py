@@ -5176,7 +5176,8 @@ def an_app_or_system_process_gets_no_notice(base):
     # A shell command's tools live under those folders too: Apple's stock python3 does.
     for tool in ("/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Pyth…",
                  "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3", "/Library/Java/JavaVirtualMachines/jdk/bin/java",
-                 "/Applications/Xcode.app/Contents/Developer/usr/bin/python3"):
+                 "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+                 "/Applications/Xcode-beta.app/Contents/Developer/usr/bin/python3"):
         forget_reports(base)
         assert ORPHAN_NOTICE in orphan_notice(base, fake_processes(base, [orphan_row(7001, title=tool)])), tool
 
@@ -5268,6 +5269,19 @@ def a_notice_goes_out_without_the_name_when_ps_cant_say(base):
     forget_reports(base)
     fake_tool(fakes, "ps", f'case "$*" in *ucomm=*) echo "  7001" ;; *) /bin/cat "{fakes}/ps-comm" ;; esac')
     assert "`unknown` (pid 7001)" in orphan_notice(base, env)
+
+    # A row of another shape is no name, and no reason to lose the stop.
+    forget_reports(base)
+    fake_tool(fakes, "ps", f'case "$*" in *ucomm=*) echo "unexpected output" ;; *) /bin/cat "{fakes}/ps-comm" ;; esac')
+    assert "`unknown` (pid 7001)" in orphan_notice(base, env)
+
+
+def a_notice_asks_the_name_of_each_groups_busiest_only(base):
+    rows = [orphan_row(7001, cpu="1:00.00"), orphan_row(7002), orphan_row(7003, cpu="2:00.00"), orphan_row(7100, pgid=7100, name="other")]
+    notice = orphan_notice(base, fake_processes(base, rows))
+    lookups = [call for call in fake_calls(base) if "ucomm=" in call]
+    assert len(lookups) == 1 and lookups[0].endswith(("-p 7002,7100", "-p 7100,7002")), lookups
+    assert "(pid 7002)" in notice and "`other` (pid 7100)" in notice, notice
 
 
 def a_group_is_reported_once_on_the_machine(base):
@@ -5455,6 +5469,7 @@ def a_launchctl_that_fails_reports_nothing(base):
                            ("echo 'PID Status Label'; echo 'not a job list'; echo 'at all'", "launchctl: unexpected listing, 2 of 2 rows unparseable"),
                            ("echo 'PID Status Label'; echo '7001 0 com.example.job'; echo 'not a row'", "launchctl: unexpected listing, 1 of 2 rows unparseable"),
                            ("echo 'PID Status Label'", "launchctl: unexpected listing, 0 of 0 rows unparseable"),
+                           ("echo 'PID Status Label'; echo '7001 running com.example.job'", "launchctl: unexpected listing, 1 of 1 rows unparseable"),
                            # Without its header, the first line read as one would drop a job.
                            ("echo '7001 0 com.example.job'; echo '7002 0 com.example.other'", "launchctl: unexpected listing, 0 of 1 rows unparseable")):
         fake_tool(fakes, "launchctl", body)
@@ -5539,7 +5554,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
           stop_asks_once_about_files_outside_the_change_map, stop_asks_about_removed_assertions,
           stop_asks_about_loosened_assertions, stop_asks_about_changed_expected_values_only_beside_code,
           stop_asks_about_each_weakened_test_once, stop_asks_about_assertions_their_rewrite_hides, stop_reads_every_hunk_of_the_branch, verify_by_hand_warns_about_weakened_tests, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, stop_suggests_a_fresh_session_for_the_next_change, a_group_of_orphans_burning_cpu_gets_a_notice, an_idle_orphan_gets_no_notice, a_young_orphan_gets_no_notice, a_launchd_job_gets_no_notice, an_app_or_system_process_gets_no_notice, a_process_with_a_living_parent_gets_no_notice, a_pure_orphan_group_is_stopped_by_its_group_id, a_mixed_group_is_stopped_by_its_orphans_pids, the_notice_and_the_log_keep_a_command_line_out, a_group_is_reported_once_on_the_machine, a_reused_group_id_is_a_new_group, a_group_is_reported_again_once_its_earliest_member_exits, a_stop_killed_before_its_notice_reports_the_group_again, the_reported_groups_are_kept_in_the_state_directory, a_mark_that_cant_be_written_reports_the_group_again, the_orphan_notice_reaches_every_kind_of_stop, the_orphan_notice_sits_next_to_the_fresh_session_notices, a_ps_that_fails_leaves_the_stop_working, a_launchctl_that_fails_reports_nothing, a_group_id_of_one_or_less_is_never_killed_as_a_group,
-         a_notice_goes_out_without_the_name_when_ps_cant_say, a_stop_whose_notice_never_left_the_buffer_reports_the_group_again,
+         a_notice_goes_out_without_the_name_when_ps_cant_say, a_stop_whose_notice_never_left_the_buffer_reports_the_group_again, a_notice_asks_the_name_of_each_groups_busiest_only,
          a_launchd_job_that_died_of_a_signal_is_still_a_row, launchctl_runs_only_for_a_group_over_the_threshold, a_notice_names_at_most_five_groups, the_real_ps_listing_parses, guard_records_the_pushed_checkout,
           post_edit_syntax_feedback, a_git_call_that_hangs_times_out_and_keeps_the_edits, stop_clears_only_the_edits_it_checked,
           a_delete_only_patch_is_checked, stamp_flags_take_an_equals_sign, a_verify_report_that_cant_be_written_is_said,
