@@ -67,14 +67,18 @@ REPORTED_ORPHANS = os.path.join(STATE_DIR, "orphan-cpu")  # one file per group: 
 ORPHAN_MIN_CORES = 0.5
 ORPHAN_MIN_UP_SECS = 300
 ORPHAN_EXCLUDED_PATHS = ("/System/", "/Applications/", "/Library/")
+# Under those paths but what a shell command runs: Apple's own /usr/bin/python3 re-executes from /Library/Developer/.
+ORPHAN_TOOLCHAIN_PATHS = ("/Library/Developer/", "/Library/Frameworks/", "/Library/Java/", "/Applications/Xcode.app/Contents/Developer/")
 ORPHAN_MAX_GROUPS = 5
 ORPHAN_MAX_PIDS = 10
 PROCESS_TOOL_TIMEOUT = 2
-# `comm`, the executable's path, not `command`: this hook never holds a process's arguments, which can hold a secret.
+# macOS's `comm` is what the process calls itself, argv[0] or a title it set, which can hold a secret: it only decides
+# ORPHAN_EXCLUDED_PATHS, and only `ucomm`, the kernel's name for the executable, reaches a notice.
 PS_LISTING = "pid=,ppid=,pgid=,etime=,time=,lstart=,comm="
 PS_DURATION = r"(?:\d+-)?(?:\d+:)?\d+:\d+(?:\.\d+)?"
 PS_ROW = re.compile(rf"\s*(\d+)\s+(\d+)\s+(\d+)\s+({PS_DURATION})\s+({PS_DURATION})\s+(\w{{3}}\s+\w{{3}}\s+\d+\s+[\d:]+\s+\d+)\s+(.+)")
-LAUNCHCTL_ROW = re.compile(r"(\d+|-)\s+\S+\s+\S")
+LAUNCHCTL_HEADER = ["PID", "Status", "Label"]
+LAUNCHCTL_ROW = re.compile(r"(\d+|-)\s+(-?\d+|-)\s+\S")
 
 TEST_FILE = review_stamp.TEST_FILE
 WEAKENED_TEST = re.compile(
@@ -292,17 +296,17 @@ def main():
     except ValueError:
         return 0
     start_profile_after_turns(payload)
-    orphans, reported = orphan_cpu_notice(payload)
+    orphan_notice, reported = orphan_cpu_notice(payload)
     if payload.get("stop_hook_active"):
-        block(payload, [], 0, orphans)
+        block(payload, [], 0, orphan_notice)
     else:
-        check_turn(payload, orphans)
+        check_turn(payload, orphan_notice)
     sys.stdout.flush()  # the notice is out before its groups are recorded as reported
     mark_orphans_reported(payload, reported)
     return 0
 
 
-def check_turn(payload, orphans):
+def check_turn(payload, orphan_notice):
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
     notice = fresh_session_notice(session, payload)
     marker = os.path.join(MARKER_DIR, f"{session}.edited")
@@ -317,7 +321,7 @@ def check_turn(payload, orphans):
     if next_change and not notice:
         notice, detail = next_change
         log("stop_checks", "new-change", payload, detail)
-    notice = "\n".join(filter(None, [notice, orphans]))
+    notice = "\n".join(filter(None, [notice, orphan_notice]))
     problems = ci_after_push(session, payload)
     if edited is None:
         return block(payload, problems, streak=0, notice=notice)
@@ -562,9 +566,9 @@ def record_branches_and_notice(session, transcript, payload, edited):
 def process_tool_output(payload, *command):
     """What a process tool printed, or None, logged, when it couldn't say."""
     try:
-        # lstart follows the locale, in order as well as in language.
+        # lstart follows the locale, in order as well as in language, and the timezone, which a reported group's marker can't.
         done = subprocess.run(command, capture_output=True, text=True, errors="replace", timeout=PROCESS_TOOL_TIMEOUT,
-                              env={**os.environ, "LC_ALL": "C"})
+                              env={**os.environ, "LC_ALL": "C", "TZ": "UTC"})
     except subprocess.TimeoutExpired:
         failure = f"timed out after {PROCESS_TOOL_TIMEOUT}s"
     except OSError as error:
@@ -587,8 +591,8 @@ def ps_duration_seconds(text):
 
 
 def listed_processes(payload):
-    """The user's processes, from one `ps`. A row of another shape is logged and left out, not a reason to lose the
-    rest; a listing with no row at all can't be true, as `ps` lists the hook that ran it."""
+    """The user's processes, from one `ps`, or none, logged, unless every row parses: a group missing a member would
+    look pure and get a kill of the whole group. A listing with no row can't be true, as `ps` lists the hook that ran it."""
     listing = process_tool_output(payload, "ps", "-x", "-U", str(os.getuid()), "-o", PS_LISTING)
     if listing is None:
         return []
@@ -596,12 +600,13 @@ def listed_processes(payload):
     processes = []
     for match in map(PS_ROW.fullmatch, rows):
         if match:
-            pid, ppid, pgid, etime, cpu, started, exe = match.groups()
+            pid, ppid, pgid, etime, cpu, started, title = match.groups()
             up = ps_duration_seconds(etime)
             processes.append({"pid": int(pid), "ppid": int(ppid), "pgid": int(pgid), "up": up,
-                              "share": ps_duration_seconds(cpu) / max(up, 1), "started": " ".join(started.split()), "exe": exe})
+                              "share": ps_duration_seconds(cpu) / max(up, 1), "started": " ".join(started.split()), "title": title})
     if len(processes) < len(rows) or not rows:
-        log("stop_checks", "orphan-check-failed", payload, f"ps: {len(rows) - len(processes)} unparseable rows of {len(rows)}")
+        log("stop_checks", "orphan-check-failed", payload, f"ps: unexpected listing, {len(rows) - len(processes)} of {len(rows)} rows unparseable")
+        return []
     return processes
 
 
@@ -610,17 +615,23 @@ def launchd_job_pids(payload):
     listing = process_tool_output(payload, "launchctl", "list")
     if listing is None:
         return None
-    rows = listing.splitlines()[1:]  # the first is the header
+    header, *rows = listing.splitlines() or [""]
     unparseable = sum(not LAUNCHCTL_ROW.match(row) for row in rows)
-    if unparseable or not rows:
-        log("stop_checks", "orphan-check-failed", payload, f"launchctl: {unparseable} unparseable rows of {len(rows)}")
+    if header.split() != LAUNCHCTL_HEADER or unparseable or not rows:
+        log("stop_checks", "orphan-check-failed", payload, f"launchctl: unexpected listing, {unparseable} of {len(rows)} rows unparseable")
         return None
     return {int(row.split()[0]) for row in rows if row.split()[0] != "-"}
 
 
+def process_names(payload, pids):
+    """The executable's name of each pid still running, as far as `ps` can say: a notice goes out without it."""
+    listing = process_tool_output(payload, "ps", "-o", "pid=,ucomm=", "-p", ",".join(map(str, pids))) or ""
+    return {int(pid): name.strip() for pid, name in (line.split(None, 1) for line in listing.splitlines() if len(line.split(None, 1)) == 2)}
+
+
 def orphans_in(group, launchd_jobs=()):
     return [p for p in group if p["ppid"] == 1 and p["up"] >= ORPHAN_MIN_UP_SECS and p["pid"] not in launchd_jobs
-            and not p["exe"].startswith(ORPHAN_EXCLUDED_PATHS)]
+            and (not p["title"].startswith(ORPHAN_EXCLUDED_PATHS) or p["title"].startswith(ORPHAN_TOOLCHAIN_PATHS))]
 
 
 def over_cpu_threshold(orphans):
@@ -657,26 +668,28 @@ def orphan_cpu_notice(payload):
     found.sort(key=lambda entry: -entry["cores"])
     shown = found[:ORPHAN_MAX_GROUPS]
     lines = ["Orphaned processes are still burning CPU: their parent is gone, and nothing has been stopped."]
-    lines += [orphan_group_line(entry) for entry in shown]
+    names = process_names(payload, [max(entry["orphans"], key=lambda p: p["share"])["pid"] for entry in shown])
+    lines += [orphan_group_line(entry, names) for entry in shown]
     hidden = len(found) - len(shown)
     if hidden:
         lines.append(f"…and {hidden} more group{'s' * (hidden > 1)} at the next stop.")
     return "\n".join(lines), shown
 
 
-def orphan_group_line(entry):
+def orphan_group_line(entry, names):
     """A group's line, with a stop command that ends only what the line reports."""
     pgid, orphans = entry["pgid"], entry["orphans"]
     busiest = max(orphans, key=lambda p: p["share"])
-    name = re.sub(r"[^\w.+-]", "_", os.path.basename(busiest["exe"]))
+    name = re.sub(r"[^\w.+-]", "_", names.get(busiest["pid"], "unknown"))
     plural = "es" * (len(orphans) > 1)
     figures = f"{entry['cores']:.1f} cores, `{name}` (pid {busiest['pid']})"
-    if len(orphans) == entry["members"]:
+    # `kill -1` would signal every process of the user, and `kill -0` the caller's own group.
+    if len(orphans) == entry["members"] and pgid > 1:
         return f"- Group {pgid}: {len(orphans)} process{plural}, {figures}. To stop: `kill -TERM -{pgid}`"
     pids = " ".join(str(p["pid"]) for p in orphans[:ORPHAN_MAX_PIDS])
     more = len(orphans) - ORPHAN_MAX_PIDS
     return (f"- Group {pgid}: {len(orphans)} orphaned process{plural}, {figures}. Other processes share this group, so to "
-            f"stop only these: `kill -TERM {pids}`" + f" and {more} more orphans" * (more > 0))
+            f"stop only these: `kill -TERM {pids}`" + f" and {more} more orphan{'s' * (more > 1)}" * (more > 0))
 
 
 def mark_orphans_reported(payload, reported):

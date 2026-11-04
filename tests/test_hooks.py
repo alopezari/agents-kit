@@ -5051,25 +5051,27 @@ SPIN = "/Users/me/bin/spin"
 ORPHAN_NOTICE = "Orphaned processes"
 
 
-def orphan_row(pid, pgid=7000, ppid=1, up="10:00", cpu="10:00.00", exe=SPIN, args="--fast", started="Wed Nov  4 08:00:00 2026"):
+def orphan_row(pid, pgid=7000, ppid=1, up="10:00", cpu="10:00.00", title=SPIN, name="spin", args="--fast", started="Wed Nov  4 08:00:00 2026"):
     """One process as a fake `ps` lists it. The default is one busy orphan, a whole core for ten minutes."""
-    return {"pid": pid, "pgid": pgid, "ppid": ppid, "up": up, "cpu": cpu, "exe": exe, "args": args, "started": started}
+    return {"pid": pid, "pgid": pgid, "ppid": ppid, "up": up, "cpu": cpu, "title": title, "name": name, "args": args, "started": started}
 
 
 def fake_processes(base, rows, jobs=()):
     """The env of a stop that sees `rows` through a fake `ps`, and `jobs` as launchd's pids through a fake `launchctl`,
     each recording its calls. Called again, it changes what they list. Like the real `ps`, the fake prints arguments
-    only to whoever asks for the command line."""
+    only to whoever asks for the command line, and an executable's own name to whoever asks for `ucomm`."""
     fakes = os.path.join(base, "fakes")
     os.makedirs(fakes, exist_ok=True)
     columns = "{pid:>6} {ppid:>5} {pgid:>5} {up:>11} {cpu:>10} {started}     "
-    for name, tail in (("ps-comm", "{exe}"), ("ps-args", "{exe} {args}")):
+    for name, tail in (("ps-comm", "{title}"), ("ps-args", "{title} {args}")):
         with open(os.path.join(fakes, name), "w") as fh:
             fh.writelines((columns + tail).format(**row) + "\n" for row in rows)
+    with open(os.path.join(fakes, "ps-names"), "w") as fh:
+        fh.writelines("{pid:>6} {name:<16}\n".format(**row) for row in rows)
     with open(os.path.join(fakes, "launchctl-list"), "w") as fh:
         fh.write("PID\tStatus\tLabel\n-\t0\tcom.example.idle\n" + "".join(f"{pid}\t0\tcom.example.job{pid}\n" for pid in jobs))
     fake_tool(fakes, "ps", f'echo "ps LC_ALL=$LC_ALL $*" >> "{fakes}/calls"\n'
-              f'case "$*" in *command=*|*args=*) /bin/cat "{fakes}/ps-args" ;; *) /bin/cat "{fakes}/ps-comm" ;; esac')
+              f'case "$*" in *command=*|*args=*) /bin/cat "{fakes}/ps-args" ;; *ucomm=*) /bin/cat "{fakes}/ps-names" ;; *) /bin/cat "{fakes}/ps-comm" ;; esac')
     fake_tool(fakes, "launchctl", f'echo "launchctl $*" >> "{fakes}/calls"\n/bin/cat "{fakes}/launchctl-list"')
     return {"PATH": f"{fakes}:{os.environ['PATH']}", "AGENTS_STATE_DIR": os.path.join(base, "orphan-state"),
             "AGENTS_LOG_DIR": os.path.join(base, "orphan-logs")}
@@ -5116,7 +5118,7 @@ def forget_reports(base):
 
 def a_group_of_orphans_burning_cpu_gets_a_notice(base):
     # The incident: 54 loops at 24% each, under each other's contention, for almost four hours.
-    loops = [orphan_row(7000 + i, up="03:46:25", cpu="54:20.40", exe="/bin/zsh") for i in range(54)]
+    loops = [orphan_row(7000 + i, up="03:46:25", cpu="54:20.40", title="/bin/zsh", name="zsh") for i in range(54)]
     notice = orphan_notice(base, fake_processes(base, loops))
     assert ORPHAN_NOTICE in notice and "Group 7000" in notice and "54 processes" in notice and "13.0 cores" in notice, notice
     assert "`zsh`" in notice and re.search(r"pid 70[0-5]\d\b", notice), notice
@@ -5135,7 +5137,7 @@ def a_group_of_orphans_burning_cpu_gets_a_notice(base):
     assert "0.6 cores" in orphan_notice(base, fake_processes(base, many_small)), "a group's orphans add up"
 
     forget_reports(base)
-    a_path_with_spaces = [orphan_row(8300, pgid=8300, exe="/Users/me/My Tools/spin fast")]
+    a_path_with_spaces = [orphan_row(8300, pgid=8300, name="spin fast")]
     assert "`spin_fast`" in orphan_notice(base, fake_processes(base, a_path_with_spaces))
 
 
@@ -5167,10 +5169,16 @@ def a_launchd_job_gets_no_notice(base):
 def an_app_or_system_process_gets_no_notice(base):
     for folder in ("/System/", "/Applications/", "/Library/"):
         forget_reports(base)
-        assert_warns_but_for(base, exe=folder + "Some App/Contents/MacOS/some app")
+        assert_warns_but_for(base, title=folder + "Some App/Contents/MacOS/some app")
     forget_reports(base)
-    assert ORPHAN_NOTICE in orphan_notice(base, fake_processes(base, [orphan_row(7001, exe="/Users/me/Library/spin")])), \
+    assert ORPHAN_NOTICE in orphan_notice(base, fake_processes(base, [orphan_row(7001, title="/Users/me/Library/spin")])), \
         "the folder at the root, not any folder of that name"
+    # A shell command's tools live under those folders too: Apple's stock python3 does.
+    for tool in ("/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Pyth…",
+                 "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3", "/Library/Java/JavaVirtualMachines/jdk/bin/java",
+                 "/Applications/Xcode.app/Contents/Developer/usr/bin/python3"):
+        forget_reports(base)
+        assert ORPHAN_NOTICE in orphan_notice(base, fake_processes(base, [orphan_row(7001, title=tool)])), tool
 
 
 def a_process_with_a_living_parent_gets_no_notice(base):
@@ -5183,9 +5191,22 @@ def a_pure_orphan_group_is_stopped_by_its_group_id(base):
     assert "3 processes" in notice and "`kill -TERM -7000`" in notice and "share" not in notice, notice
 
 
+def notice_has_one_more(notice):
+    assert "and 1 more orphan" in notice and "more orphans" not in notice, notice
+    return True
+
+
+def a_group_id_of_one_or_less_is_never_killed_as_a_group(base):
+    # `kill -TERM -1` would end every process of the user.
+    for pgid in (0, 1):
+        forget_reports(base)
+        notice = orphan_notice(base, fake_processes(base, [orphan_row(7001, pgid=pgid)]))
+        assert f"Group {pgid}:" in notice and "`kill -TERM 7001`" in notice and "kill -TERM -" not in notice, notice
+
+
 def a_mixed_group_is_stopped_by_its_orphans_pids(base):
     for other in (orphan_row(7100, ppid=4242), orphan_row(7100, up="01:00", cpu="0:01.00"),
-                  orphan_row(7100, exe="/Applications/Some.app/Contents/MacOS/Some")):
+                  orphan_row(7100, title="/Applications/Some.app/Contents/MacOS/Some")):
         forget_reports(base)
         rows = [orphan_row(7001), orphan_row(7002), other]
         notice = orphan_notice(base, fake_processes(base, rows))
@@ -5198,6 +5219,10 @@ def a_mixed_group_is_stopped_by_its_orphans_pids(base):
     listed = " ".join(str(7000 + i) for i in range(1, 11))
     assert "12 orphaned processes" in notice and f"`kill -TERM {listed}`" in notice and "and 2 more" in notice, notice
     assert "7011" not in notice and "7012" not in notice, notice
+
+    forget_reports(base)
+    rows = [orphan_row(7000 + i) for i in range(1, 12)] + [orphan_row(7100, ppid=4242)]
+    assert notice_has_one_more(orphan_notice(base, fake_processes(base, rows)))
 
     # A launchd job in the group is another process the group kill would end.
     forget_reports(base)
@@ -5218,9 +5243,31 @@ def the_notice_and_the_log_keep_a_command_line_out(base):
     assert orphan_log(base, "orphan-cpu") == ["pgid=7000 processes=1 cores=1.0"], log_text
     assert "command=" not in fake_calls(base)[0] and "args=" not in fake_calls(base)[0], "the hook never reads a command line"
 
+    # What a process calls itself is its own to set, and macOS's `comm` prints it: a real `exec -a` printed this shape.
     forget_reports(base)
-    named = orphan_notice(base, fake_processes(base, [orphan_row(7001, exe="/tmp/`touch x`\x1b[2J; spin")]))
+    titled = [orphan_row(7001, title=f"myworker --token={secret}", name="sleep")]
+    env = fake_processes(base, titled)
+    output = orphan_stop(base, env)
+    assert "`sleep`" in output.get("systemMessage", "") and secret not in json.dumps(output), output
+    assert secret not in open(os.path.join(base, "orphan-logs", "hooks.jsonl")).read()
+    assert any(call.endswith("-o pid=,ucomm= -p 7001") for call in fake_calls(base)), fake_calls(base)
+
+    forget_reports(base)
+    named = orphan_notice(base, fake_processes(base, [orphan_row(7001, name="`touch x`\x1b[2J; spin")]))
     assert "`_touch_x___2J__spin`" in named and "\x1b" not in named, named
+
+
+def a_notice_goes_out_without_the_name_when_ps_cant_say(base):
+    env = fake_processes(base, [orphan_row(7001)])
+    fakes = os.path.join(base, "fakes")
+    fake_tool(fakes, "ps", f'case "$*" in *ucomm=*) exit 3 ;; *) /bin/cat "{fakes}/ps-comm" ;; esac')
+    assert "`unknown` (pid 7001)" in orphan_notice(base, env)
+    assert orphan_log(base, "orphan-check-failed") == ["ps: exit 3"]
+
+    # Exited since the listing: `ps` then exits non-zero, or prints nothing or half a row.
+    forget_reports(base)
+    fake_tool(fakes, "ps", f'case "$*" in *ucomm=*) echo "  7001" ;; *) /bin/cat "{fakes}/ps-comm" ;; esac')
+    assert "`unknown` (pid 7001)" in orphan_notice(base, env)
 
 
 def a_group_is_reported_once_on_the_machine(base):
@@ -5255,6 +5302,16 @@ def a_group_is_reported_again_once_its_earliest_member_exits(base):
     assert ORPHAN_NOTICE in orphan_notice(base, fake_processes(base, [parent, younger]))
     assert orphan_stop(base, fake_processes(base, [parent, younger])) == {}
     assert ORPHAN_NOTICE in orphan_notice(base, fake_processes(base, [younger])), "a member that wasn't an orphan counts too"
+
+
+def a_stop_whose_notice_never_left_the_buffer_reports_the_group_again(base):
+    env = fake_processes(base, [orphan_row(7001)])
+    payload = json.dumps({"session_id": RUN + "unflushed", "cwd": base})
+    code = ("import io\nclass DiesOnFlush(io.StringIO):\n    def flush(self):\n        os._exit(9)\n"
+            "sys.stdout = DiesOnFlush()\nsys.exit(s.main())")
+    died = in_hooks(code, base, env, payload)
+    assert died.returncode == 9, died
+    assert not os.path.exists(os.path.join(env["AGENTS_STATE_DIR"], "orphan-cpu")), "marked before the notice was out"
 
 
 def a_stop_killed_before_its_notice_reports_the_group_again(base):
@@ -5346,7 +5403,7 @@ def a_ps_that_fails_leaves_the_stop_working(base):
     env = fake_processes(base, [orphan_row(7001)])
     fakes = os.path.join(base, "fakes")
     for body, expected in (("exit 3", "ps: exit 3"), ("exec /bin/sleep 8", "ps: timed out after 2s"),
-                           ("echo 'no such table'; echo 'an error: ===='", "ps: 2 unparseable rows of 2")):
+                           ("echo 'no such table'; echo 'an error: ===='", "ps: unexpected listing, 2 of 2 rows unparseable")):
         fake_tool(fakes, "ps", body)
         shutil.rmtree(os.path.join(base, "orphan-logs"), ignore_errors=True)
         assert orphan_stop(base, env) == {}, body
@@ -5355,19 +5412,24 @@ def a_ps_that_fails_leaves_the_stop_working(base):
         output = orphan_stop(base, env, session="orphan-failed", cwd=repo)
         assert "Debug leftover" in output["reason"], (body, output)
 
-    # Some rows of another shape: the rest still count, and the log says so.
+    # One row of another shape: it could be a member of a group, whose kill would then end what no line reported.
     fake_processes(base, [orphan_row(7001)])
     fake_tool(fakes, "ps", f'echo "not a row"\n/bin/cat "{fakes}/ps-comm"')
     shutil.rmtree(os.path.join(base, "orphan-logs"), ignore_errors=True)
+    assert orphan_stop(base, env) == {}
+    assert orphan_log(base, "orphan-check-failed") == ["ps: unexpected listing, 1 of 2 rows unparseable"]
+
+    # Bytes that aren't text are still a row.
+    forget_reports(base)
+    fake_tool(fakes, "ps", f"""case "$*" in *ucomm=*) /bin/cat "{fakes}/ps-names" ;; *) printf '  7001     1  7000       10:00   10:00.00 Wed Nov  4 08:00:00 2026 /tmp/\\377spin\\n' ;; esac""")
     assert ORPHAN_NOTICE in orphan_notice(base, env)
-    assert orphan_log(base, "orphan-check-failed") == ["ps: 1 unparseable rows of 2"]
 
     # An empty listing can't be true: `ps` lists at least the hook that ran it.
     forget_reports(base)
     fake_tool(fakes, "ps", "exit 0")
     shutil.rmtree(os.path.join(base, "orphan-logs"), ignore_errors=True)
     assert orphan_stop(base, env) == {}
-    assert orphan_log(base, "orphan-check-failed") == ["ps: 0 unparseable rows of 0"]
+    assert orphan_log(base, "orphan-check-failed") == ["ps: unexpected listing, 0 of 0 rows unparseable"]
 
     # Missing altogether.
     only_git = os.path.join(base, "only-git")
@@ -5379,12 +5441,22 @@ def a_ps_that_fails_leaves_the_stop_working(base):
     assert [line.split(":")[0] for line in orphan_log(base, "orphan-check-failed")] == ["ps"], orphan_log(base, "orphan-check-failed")
 
 
+def a_launchd_job_that_died_of_a_signal_is_still_a_row(base):
+    env = fake_processes(base, [orphan_row(7001)])
+    fake_tool(os.path.join(base, "fakes"), "launchctl", """printf 'PID\\tStatus\\tLabel\\n-\\t-9\\tcom.example.killed\\n7001\\t0\\tcom.example.job\\n'""")
+    assert orphan_stop(base, env) == {}
+    assert orphan_log(base, "orphan-check-failed") == []
+
+
 def a_launchctl_that_fails_reports_nothing(base):
     env = fake_processes(base, [orphan_row(7001)])
     fakes = os.path.join(base, "fakes")
     for body, expected in (("exit 3", "launchctl: exit 3"), ("exec /bin/sleep 8", "launchctl: timed out after 2s"),
-                           ("echo 'PID Status Label'; echo 'not a job list'; echo 'at all'", "launchctl: 2 unparseable rows of 2"),
-                           ("echo 'PID Status Label'", "launchctl: 0 unparseable rows of 0")):
+                           ("echo 'PID Status Label'; echo 'not a job list'; echo 'at all'", "launchctl: unexpected listing, 2 of 2 rows unparseable"),
+                           ("echo 'PID Status Label'; echo '7001 0 com.example.job'; echo 'not a row'", "launchctl: unexpected listing, 1 of 2 rows unparseable"),
+                           ("echo 'PID Status Label'", "launchctl: unexpected listing, 0 of 0 rows unparseable"),
+                           # Without its header, the first line read as one would drop a job.
+                           ("echo '7001 0 com.example.job'; echo '7002 0 com.example.other'", "launchctl: unexpected listing, 0 of 1 rows unparseable")):
         fake_tool(fakes, "launchctl", body)
         shutil.rmtree(os.path.join(base, "orphan-logs"), ignore_errors=True)
         assert orphan_stop(base, env) == {}, body
@@ -5435,8 +5507,20 @@ def a_notice_names_at_most_five_groups(base):
 def the_real_ps_listing_parses(base):
     env = fake_processes(base, [])
     env["PATH"] = "/usr/bin:/bin"  # the system's own ps, past the suite's fakes
-    done = in_hooks("print([os.path.basename(p['exe']) for p in s.listed_processes({}) if p['pid'] == os.getpid()])", base, env)
-    assert "python" in done.stdout.lower(), done
+    # A process of known figures, idle for its two seconds, tells the columns apart: nothing here spins.
+    sleeper = subprocess.Popen(["/bin/sleep", "20"], start_new_session=True)
+    try:
+        time.sleep(2)
+        code = (f"me = [p for p in s.listed_processes({{}}) if p['pid'] == {sleeper.pid}][0]\n"
+                f"print(me['ppid'], me['pgid'], me['up'], me['share'], s.process_names({{}}, [{sleeper.pid}])[{sleeper.pid}], me['title'], me['started'])")
+        tokyo, new_york = (in_hooks(code, base, {**env, "TZ": zone}) for zone in ("Asia/Tokyo", "America/New_York"))
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+    ppid, pgid, up, share, name, title, *started = tokyo.stdout.split()
+    assert (int(ppid), int(pgid), name, os.path.basename(title)) == (os.getpid(), sleeper.pid, "sleep", "sleep"), tokyo
+    assert 2 <= float(up) < 20 and float(share) < 0.5, tokyo
+    assert new_york.stdout.split()[5:] == [title, *started], ("a timezone must not move a group's marker", tokyo, new_york)
     assert orphan_log(base, "orphan-check-failed") == [], "every row of a real listing has the shape expected"
 
 
@@ -5454,7 +5538,9 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
           stop_asks_once_about_files_outside_the_change_map, stop_asks_about_removed_assertions,
           stop_asks_about_loosened_assertions, stop_asks_about_changed_expected_values_only_beside_code,
-          stop_asks_about_each_weakened_test_once, stop_asks_about_assertions_their_rewrite_hides, stop_reads_every_hunk_of_the_branch, verify_by_hand_warns_about_weakened_tests, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, stop_suggests_a_fresh_session_for_the_next_change, a_group_of_orphans_burning_cpu_gets_a_notice, an_idle_orphan_gets_no_notice, a_young_orphan_gets_no_notice, a_launchd_job_gets_no_notice, an_app_or_system_process_gets_no_notice, a_process_with_a_living_parent_gets_no_notice, a_pure_orphan_group_is_stopped_by_its_group_id, a_mixed_group_is_stopped_by_its_orphans_pids, the_notice_and_the_log_keep_a_command_line_out, a_group_is_reported_once_on_the_machine, a_reused_group_id_is_a_new_group, a_group_is_reported_again_once_its_earliest_member_exits, a_stop_killed_before_its_notice_reports_the_group_again, the_reported_groups_are_kept_in_the_state_directory, a_mark_that_cant_be_written_reports_the_group_again, the_orphan_notice_reaches_every_kind_of_stop, the_orphan_notice_sits_next_to_the_fresh_session_notices, a_ps_that_fails_leaves_the_stop_working, a_launchctl_that_fails_reports_nothing, launchctl_runs_only_for_a_group_over_the_threshold, a_notice_names_at_most_five_groups, the_real_ps_listing_parses, guard_records_the_pushed_checkout,
+          stop_asks_about_each_weakened_test_once, stop_asks_about_assertions_their_rewrite_hides, stop_reads_every_hunk_of_the_branch, verify_by_hand_warns_about_weakened_tests, stop_follows_ci_after_a_push, stop_suggests_a_fresh_session_once_the_pr_is_open, stop_suggests_a_fresh_session_for_the_next_change, a_group_of_orphans_burning_cpu_gets_a_notice, an_idle_orphan_gets_no_notice, a_young_orphan_gets_no_notice, a_launchd_job_gets_no_notice, an_app_or_system_process_gets_no_notice, a_process_with_a_living_parent_gets_no_notice, a_pure_orphan_group_is_stopped_by_its_group_id, a_mixed_group_is_stopped_by_its_orphans_pids, the_notice_and_the_log_keep_a_command_line_out, a_group_is_reported_once_on_the_machine, a_reused_group_id_is_a_new_group, a_group_is_reported_again_once_its_earliest_member_exits, a_stop_killed_before_its_notice_reports_the_group_again, the_reported_groups_are_kept_in_the_state_directory, a_mark_that_cant_be_written_reports_the_group_again, the_orphan_notice_reaches_every_kind_of_stop, the_orphan_notice_sits_next_to_the_fresh_session_notices, a_ps_that_fails_leaves_the_stop_working, a_launchctl_that_fails_reports_nothing, a_group_id_of_one_or_less_is_never_killed_as_a_group,
+         a_notice_goes_out_without_the_name_when_ps_cant_say, a_stop_whose_notice_never_left_the_buffer_reports_the_group_again,
+         a_launchd_job_that_died_of_a_signal_is_still_a_row, launchctl_runs_only_for_a_group_over_the_threshold, a_notice_names_at_most_five_groups, the_real_ps_listing_parses, guard_records_the_pushed_checkout,
           post_edit_syntax_feedback, a_git_call_that_hangs_times_out_and_keeps_the_edits, stop_clears_only_the_edits_it_checked,
           a_delete_only_patch_is_checked, stamp_flags_take_an_equals_sign, a_verify_report_that_cant_be_written_is_said,
           a_base_with_no_common_commit_fails_the_stamps, the_problem_cap_never_hides_a_question, impeccable_files_in_a_shared_repo_need_the_user_first, impeccable_guard_edge_cases, impeccable_guard_reads_prose_as_text]
