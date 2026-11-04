@@ -1,0 +1,1 @@
+- The stop hook tells you when an orphaned process group keeps burning CPU, once per group on the machine, with what to run to stop it. It stops nothing itself, and it never blocks the turn.

@@ -79,7 +79,7 @@ Its `/flow` pane shows where the branch is in the flow, with the phases switched
 2. If it has no hook settings of its own, write `adapters/<harness>/` to translate its events into the payloads above:
    - before a command → `guard_bash.py`;
    - after an edit → `post_edit.py`;
-   - at idle or stop → `stop_checks.py`, with a guard so the stop check continues the agent only once per user turn.
+   - at idle or stop → `stop_checks.py`, with a guard so the stop check continues the agent only once per user turn. Call it on every stop, including the one after a continuation, and show its `systemMessage`: that is how the user hears of an orphaned process group still burning CPU, once per group on the machine, with what to run to stop it.
 3. Add a section to `install.sh` and run `install.sh --doctor`. Then test with a harmless blocked command in a scratch repo.
 4. Teach `bin/docs` where the new harness registers its hooks (`HARNESS_OF_SETTINGS` and `harness_hooks`), then commit: the pre-commit hook regenerates `docs/framework.md`.
 

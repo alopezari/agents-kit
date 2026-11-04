@@ -261,7 +261,8 @@ def render():
     w(f"- **{len(guard_rules()) + 3} guard rules** block irreversible or outward-facing shell commands before they run.")
     w("- **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), "
       "files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the "
-      "pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`).")
+      "pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`). Every stop also tells the user, "
+      "once and without blocking, about orphaned processes that keep burning CPU.")
     w(f"- **{len(function_docs('repos/_shared/verify_auto.py', 'check_'))} stacks** are verified automatically when a repo has no hand-written verify.")
     w(f"- **{len(jobs)} scheduled jobs** watch the kit's health, look for improvements and learn from code review.")
     w(f"- **{len(tool_rows)} command-line tools**: {', '.join(name for name, *_ in tool_rows)}.\n")

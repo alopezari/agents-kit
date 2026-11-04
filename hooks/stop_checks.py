@@ -15,8 +15,11 @@ one that edited nothing, asks about the pushed commit's CI when it failed, is st
 branch's PR is open and the session's context is over CONTEXT_NUDGE_TOKENS, or the session moves on to another change
 with its context over NEW_CHANGE_NUDGE_TOKENS, tells the user, once, that a new session picks it up for less (Claude
 Code only: it reads the transcript). Every stop also starts each profile's `after-turn` in the background with the
-stop payload on stdin, and doesn't wait for it. The Change map question, verify and the CI question each stay quiet
-for a checkout whose user switched off the spec, verify or ci phase (phase_switches.py); the other checks always run.
+stop payload on stdin, and doesn't wait for it. Every stop, in any session and even the one after an automatic
+continuation, also tells the user, once per group on the machine and without blocking, about a process group whose
+orphans keep burning CPU, with what to run to stop them; it stops nothing itself. The Change map question, verify and
+the CI question each stay quiet for a checkout whose user switched off the spec, verify or ci phase
+(phase_switches.py); the other checks always run.
 
 `stop_checks.py leftover-overrides` prints the marked overrides still present in every checkout
 the hook has seen, for the weekly health check. `stop_checks.py verify` runs verify on the current checkout now,
@@ -40,7 +43,8 @@ import post_edit  # noqa: E402
 import review_stamp  # noqa: E402
 
 MARKER_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "agent-hooks")
-CHECKOUTS = os.path.join(os.environ.get("AGENTS_STATE_DIR") or os.path.expanduser("~/.agents/monitors/state"), "checkouts.txt")
+STATE_DIR = os.environ.get("AGENTS_STATE_DIR") or os.path.expanduser("~/.agents/monitors/state")
+CHECKOUTS = os.path.join(STATE_DIR, "checkouts.txt")
 OVERRIDE_NAMES = ("docker-compose.override.yml", "docker-compose.override.yaml", "compose.override.yml", "compose.override.yaml")
 OVERRIDE_MARKER = "agents: temporary override"
 VERIFY_TIMEOUT = 600
@@ -59,6 +63,23 @@ DEFAULT_BRANCHES = ("main", "master", "trunk", "develop")
 TRANSCRIPT_TAIL_BYTES = 2_000_000
 SPEC_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills", "kit-spec", "path.sh"))
 AUTO_VERIFY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "repos", "_shared", "verify_auto.py"))
+REPORTED_ORPHANS = os.path.join(STATE_DIR, "orphan-cpu")  # one file per group: not MARKER_DIR, which follows TMPDIR
+ORPHAN_MIN_CORES = 0.5
+ORPHAN_MIN_UP_SECS = 300
+ORPHAN_EXCLUDED_PATHS = ("/System/", "/Applications/", "/Library/")
+# Under those paths but what a shell command runs: Apple's own /usr/bin/python3 re-executes from /Library/Developer/.
+ORPHAN_TOOLCHAIN_PATHS = re.compile(r"/Library/(Developer|Frameworks|Java)/|/Applications/Xcode[^/]*\.app/Contents/Developer/")
+ORPHAN_MAX_GROUPS = 5
+ORPHAN_MAX_PIDS = 10
+PROCESS_TOOL_TIMEOUT = 2
+# macOS's `comm` is what the process calls itself, argv[0] or a title it set, which can hold a secret: it only decides
+# ORPHAN_EXCLUDED_PATHS, and only `ucomm`, the kernel's name for the executable, reaches a notice.
+PS_LISTING = "pid=,ppid=,pgid=,etime=,time=,lstart=,comm="
+PS_DURATION = r"(?:\d+-)?(?:\d+:)?\d+:\d+(?:\.\d+)?"
+PS_ROW = re.compile(rf"\s*(\d+)\s+(\d+)\s+(\d+)\s+({PS_DURATION})\s+({PS_DURATION})\s+(\w{{3}}\s+\w{{3}}\s+\d+\s+[\d:]+\s+\d+)\s+(.+)")
+PS_NAME_ROW = re.compile(r"\s*(\d+)\s+(\S.*?)\s*")
+LAUNCHCTL_HEADER = ["PID", "Status", "Label"]
+LAUNCHCTL_ROW = re.compile(r"(\d+|-)\s+(-?\d+|-)\s+\S")
 
 TEST_FILE = review_stamp.TEST_FILE
 WEAKENED_TEST = re.compile(
@@ -276,8 +297,17 @@ def main():
     except ValueError:
         return 0
     start_profile_after_turns(payload)
+    orphan_notice, reported = orphan_cpu_notice(payload)
     if payload.get("stop_hook_active"):
-        return 0
+        block(payload, [], 0, orphan_notice)
+    else:
+        check_turn(payload, orphan_notice)
+    sys.stdout.flush()  # the notice is out before its groups are recorded as reported
+    mark_orphans_reported(payload, reported)
+    return 0
+
+
+def check_turn(payload, orphan_notice):
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "unknown"))
     notice = fresh_session_notice(session, payload)
     marker = os.path.join(MARKER_DIR, f"{session}.edited")
@@ -292,6 +322,7 @@ def main():
     if next_change and not notice:
         notice, detail = next_change
         log("stop_checks", "new-change", payload, detail)
+    notice = "\n".join(filter(None, [notice, orphan_notice]))
     problems = ci_after_push(session, payload)
     if edited is None:
         return block(payload, problems, streak=0, notice=notice)
@@ -531,6 +562,148 @@ def record_branches_and_notice(session, transcript, payload, edited):
     return (f"This session's context is {tokens // 1000}K tokens, re-read on every turn, and it has moved on to "
             f"{new[0]}. A new session for it starts lighter: `~/.agents/bin/reports brief` there picks up its spec and "
             "reports.", f"{new[0]} {tokens // 1000}K")
+
+
+def process_tool_output(payload, *command):
+    """What a process tool printed, or None, logged, when it couldn't say."""
+    try:
+        # lstart follows the locale, in order as well as in language, and the timezone, which a reported group's marker can't.
+        done = subprocess.run(command, capture_output=True, text=True, errors="replace", timeout=PROCESS_TOOL_TIMEOUT,
+                              env={**os.environ, "LC_ALL": "C", "TZ": "UTC"})
+    except subprocess.TimeoutExpired:
+        failure = f"timed out after {PROCESS_TOOL_TIMEOUT}s"
+    except OSError as error:
+        failure = error.strerror
+    else:
+        if done.returncode == 0:
+            return done.stdout
+        failure = f"exit {done.returncode}"
+    log("stop_checks", "orphan-check-failed", payload, f"{command[0]}: {failure}")
+    return None
+
+
+def ps_duration_seconds(text):
+    """`etime` (`02-23:22:14`, `03:46:25`, `10:00`) or `time` (`55:37.35`, whose minutes go past 60) in seconds."""
+    days, _, clock = text.rpartition("-")
+    seconds = 0
+    for part in clock.split(":"):
+        seconds = seconds * 60 + float(part)
+    return seconds + int(days or 0) * 86400
+
+
+def listed_processes(payload):
+    """The user's processes, from one `ps`, or none, logged, unless every row parses: a group missing a member would
+    look pure and get a kill of the whole group. A listing with no row can't be true, as `ps` lists the hook that ran it."""
+    listing = process_tool_output(payload, "ps", "-x", "-U", str(os.getuid()), "-o", PS_LISTING)
+    if listing is None:
+        return []
+    rows = [line for line in listing.splitlines() if line.strip()]
+    processes = []
+    for match in map(PS_ROW.fullmatch, rows):
+        if match:
+            pid, ppid, pgid, etime, cpu, started, title = match.groups()
+            up = ps_duration_seconds(etime)
+            processes.append({"pid": int(pid), "ppid": int(ppid), "pgid": int(pgid), "up": up,
+                              "share": ps_duration_seconds(cpu) / max(up, 1), "started": " ".join(started.split()), "title": title})
+    if len(processes) < len(rows) or not rows:
+        log("stop_checks", "orphan-check-failed", payload, f"ps: unexpected listing, {len(rows) - len(processes)} of {len(rows)} rows unparseable")
+        return []
+    return processes
+
+
+def launchd_job_pids(payload):
+    """The pids of launchd's running jobs, or None when it can't say: then a job can't be told from an orphan."""
+    listing = process_tool_output(payload, "launchctl", "list")
+    if listing is None:
+        return None
+    header, *rows = listing.splitlines() or [""]
+    unparseable = sum(not LAUNCHCTL_ROW.match(row) for row in rows)
+    if header.split() != LAUNCHCTL_HEADER or unparseable or not rows:
+        log("stop_checks", "orphan-check-failed", payload, f"launchctl: unexpected listing, {unparseable} of {len(rows)} rows unparseable")
+        return None
+    return {int(row.split()[0]) for row in rows if row.split()[0] != "-"}
+
+
+def process_names(payload, pids):
+    """The executable's name of each pid still running, as far as `ps` can say: a notice goes out without it."""
+    listing = process_tool_output(payload, "ps", "-o", "pid=,ucomm=", "-p", ",".join(map(str, pids))) or ""
+    return {int(row[1]): row[2] for row in map(PS_NAME_ROW.fullmatch, listing.splitlines()) if row}
+
+
+def orphans_in(group, launchd_jobs=()):
+    return [p for p in group if p["ppid"] == 1 and p["up"] >= ORPHAN_MIN_UP_SECS and p["pid"] not in launchd_jobs
+            and (not p["title"].startswith(ORPHAN_EXCLUDED_PATHS) or ORPHAN_TOOLCHAIN_PATHS.match(p["title"]))]
+
+
+def over_cpu_threshold(orphans):
+    return sum(p["share"] for p in orphans) >= ORPHAN_MIN_CORES
+
+
+def orphan_cpu_notice(payload):
+    """A notice of the process groups whose orphans keep burning CPU and that no stop reported yet, or None, and the
+    groups it names for mark_orphans_reported."""
+    groups = {}
+    for process in listed_processes(payload):
+        groups.setdefault(process["pgid"], []).append(process)
+    candidates = []
+    for pgid, group in groups.items():
+        if over_cpu_threshold(orphans_in(group)):
+            # Its earliest member's start tells a reused group id from the old one. A tie is two starts within a second.
+            earliest = min(group, key=lambda p: (-p["up"], p["started"]))
+            marker = os.path.join(REPORTED_ORPHANS, f"{pgid}-{re.sub(r'[^0-9A-Za-z]+', '-', earliest['started'])}")
+            if not os.path.exists(marker):
+                candidates.append((pgid, group, marker))
+    if not candidates:
+        return None, []
+    launchd_jobs = launchd_job_pids(payload)
+    if launchd_jobs is None:
+        return None, []
+    found = []
+    for pgid, group, marker in candidates:
+        orphans = orphans_in(group, launchd_jobs)
+        if over_cpu_threshold(orphans):
+            found.append({"pgid": pgid, "marker": marker, "members": len(group), "orphans": orphans,
+                          "cores": sum(p["share"] for p in orphans)})
+    if not found:
+        return None, []
+    found.sort(key=lambda entry: -entry["cores"])
+    shown = found[:ORPHAN_MAX_GROUPS]
+    lines = ["Orphaned processes are still burning CPU: their parent is gone, and nothing has been stopped."]
+    names = process_names(payload, [max(entry["orphans"], key=lambda p: p["share"])["pid"] for entry in shown])
+    lines += [orphan_group_line(entry, names) for entry in shown]
+    hidden = len(found) - len(shown)
+    if hidden:
+        lines.append(f"…and {hidden} more group{'s' * (hidden > 1)} at the next stop.")
+    return "\n".join(lines), shown
+
+
+def orphan_group_line(entry, names):
+    """A group's line, with a stop command that ends only what the line reports."""
+    pgid, orphans = entry["pgid"], entry["orphans"]
+    busiest = max(orphans, key=lambda p: p["share"])
+    name = re.sub(r"[^\w.+-]", "_", names.get(busiest["pid"], "unknown"))
+    plural = "es" * (len(orphans) > 1)
+    figures = f"{entry['cores']:.1f} cores, `{name}` (pid {busiest['pid']})"
+    # `kill -1` would signal every process of the user, and `kill -0` the caller's own group.
+    if len(orphans) == entry["members"] and pgid > 1:
+        return f"- Group {pgid}: {len(orphans)} process{plural}, {figures}. To stop: `kill -TERM -{pgid}`"
+    pids = " ".join(str(p["pid"]) for p in orphans[:ORPHAN_MAX_PIDS])
+    more = len(orphans) - ORPHAN_MAX_PIDS
+    return (f"- Group {pgid}: {len(orphans)} orphaned process{plural}, {figures}. Other processes share this group, so to "
+            f"stop only these: `kill -TERM {pids}`" + f" and {more} more orphan{'s' * (more > 1)}" * (more > 0))
+
+
+def mark_orphans_reported(payload, reported):
+    """Written after the notice: a stop that fails before showing a group reports it again. Two sessions stopping
+    together may both report one, which beats a lost warning."""
+    for entry in reported:
+        detail = f"pgid={entry['pgid']} processes={len(entry['orphans'])} cores={entry['cores']:.1f}"
+        log("stop_checks", "orphan-cpu", payload, detail)
+        try:
+            os.makedirs(REPORTED_ORPHANS, exist_ok=True)
+            open(entry["marker"], "w").close()
+        except OSError as error:
+            log("stop_checks", "orphan-mark-failed", payload, f"{detail}: {error.strerror}")
 
 
 def block(payload, problems, streak, notice=None):
