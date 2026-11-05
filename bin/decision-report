@@ -3106,6 +3106,7 @@ h1{font-size:clamp(2.2rem,5.4vw,3.3rem);line-height:1.02;font-weight:800;letter-
 h2{font-size:clamp(1.75rem,4.4vw,2.6rem);line-height:1.1;font-weight:750}
 h3{font-size:1.25rem;line-height:1.3;font-weight:700;margin-top:1.4rem;letter-spacing:-.01em}
 h4{font-size:1.0625rem;line-height:1.4;font-weight:650;letter-spacing:0}
+.inner h4,.annex-body h4{margin-top:1.75rem}.inner h3+h4,.annex-body h3+h4{margin-top:.5rem}
 p{margin:0;max-width:68ch}
 a{color:inherit;text-decoration:underline;text-decoration-color:#6c706a;text-underline-offset:.2em}
 a:hover{text-decoration-color:var(--ok)}
@@ -3147,7 +3148,7 @@ details .src{margin-top:.5rem}
 .ids{color:var(--muted);font-size:.9rem;border-top:1px solid var(--rule);padding-top:1rem}
 footer{display:grid}
 @media (max-width:560px){.crit li{grid-template-columns:1.6rem minmax(0,1fr)}.check header{flex-wrap:wrap}.check dl{grid-template-columns:minmax(0,1fr)}.check dt{margin-top:.3rem}.lenses td:nth-child(2){font-size:.85rem}}
-.eyebrow{font:600 .82rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ok);margin-bottom:-.75rem}
+.eyebrow{font-size:1rem;font-weight:600;color:var(--ok);margin-bottom:-.75rem}
 .panel{margin:0;border-top:1px solid var(--rule)}
 .panel>a{display:grid;grid-template-columns:9.5rem minmax(0,1fr) 5.5rem;gap:.15rem 1rem;padding:.8rem 0;border-bottom:1px solid var(--rule);text-decoration:none}
 .panel>a:hover{background:var(--panel)}
