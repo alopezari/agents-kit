@@ -14,6 +14,7 @@ import resource
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.parse
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
@@ -56,6 +57,9 @@ found = re.search(r"commits/([0-9a-f]+)/(check-runs|status)", args[-1])
 if args[:1] == ["api"] and state.get("api_error"):
     print("HTTP 502: bad gateway", file=sys.stderr)
     sys.exit(1)
+if args[:2] == ["api", "graphql"] and "no_ci" in state:
+    print(json.dumps({"data": {"repository": state["no_ci"]}}))
+    sys.exit(0)
 if args[:1] == ["api"] and found:
     key = "check_runs" if found.group(2) == "check-runs" else "statuses"
     for item in state.get("checks", {}).get(found.group(1), {}).get(key, []):
@@ -67,7 +71,15 @@ sys.exit(2)
 
 
 def sh(cwd, *cmd, env=None):
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env, timeout=300)  # a hung child would hold the whole pool with no output
+
+
+def in_order(where, *wanted):
+    """Each text is there, and after the one before it: comparing bare .find() results passes when one is missing."""
+    at = -1
+    for part in wanted:
+        at = where.find(part, at + 1)
+        assert at >= 0, f"{part!r} missing, or out of order, in {wanted}"
 
 
 def git(repo, *args):
@@ -2550,7 +2562,6 @@ Not run:   security lens — no auth code touched
 | Correctness | claude | 4 | 3 | fixed=2, wrong=1 |
 | Correctness | codex | 2 | 1 | fixed=1 |
 | Tests | claude | 1 | 1 | open=1 |
-| Security | codex | not run: exit 1 | — | — |
 """
 
 READY_GUIDE = """# Checks guide
@@ -2803,7 +2814,6 @@ def a_local_head_past_the_pr_is_not_ready(base):
     put(os.path.join(repo, "README.md"), "Shop, later\n")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "later")
-    gh["checks"] = dict(gh["checks"])
     stamp(repo, "review", "validate")
     _, markup = generate(repo, base, gh)
     assert_verdict(markup, "Not ready", "differs")
@@ -2866,11 +2876,11 @@ def a_phase_off_never_blocks(base):
     assert_verdict(markup, "Ready")
 
 
-def an_unreadable_guide_is_only_a_note(base):
+def an_unreadable_guide_is_your_call(base):
     repo, _, gh = ready_branch(base)
     put(path_of(repo, "checks-guide"), b"\xff\xfe not text")
     _, markup = generate(repo, base, gh)
-    assert_verdict(markup, "Ready", "Checks guide")
+    assert_verdict(markup, "Your call", "checks guide")
 
 
 def the_first_screen_holds_no_status_tokens(base):
@@ -2880,6 +2890,7 @@ def the_first_screen_holds_no_status_tokens(base):
     first = re.search(r'<header class="hero">(.*?)</header>', markup, re.S).group(1)
     first = re.sub(r'<details[^>]*id="verdict-why".*?</details>', "", first, flags=re.S)  # a fold, past the first screen
     assert not re.search(r" [·|•] ", text(first)), text(first)
+    assert panel_rows(markup), "no panel to read"
     for label, body, _ in panel_rows(markup):
         assert body and body.endswith((".", "?", "!")), (label, body)
         assert not re.search(r"\.\s+[A-Z]", body), f"more than one sentence: {label}: {body}"
@@ -2905,19 +2916,19 @@ def a_background_comes_before_the_problem(base):
     repo, _, gh = ready_branch(base)
     _, markup = generate(repo, base, gh)
     part = page_part(markup, "problem")
-    assert part.find("Shop sells things online") < part.find("A refresh ran the coupon step twice") < part.find("Who it hits"), "the background comes first"
+    in_order(part, "Shop sells things online", "A refresh ran the coupon step twice", "Who it hits")
 
 
 def missing_facts_read_not_recorded(base):
     repo, _, gh = ready_branch(base, notes="## The problem\nA refresh ran twice.\n\n## The solution\nThe cart stores it.\n")
     _, markup = generate(repo, base, gh)
     problem, fix = page_part(markup, "problem"), page_part(markup, "fix")
-    for label in ("background", "Who it hits", "What they see", "How bad", "How often"):
-        assert re.search(rf"{label}.*?Not recorded", text(problem)), label
+    for label in ("Some background first", "Who it hits", "What they see", "How bad", "How often"):
+        assert re.search(rf"{label}(?:\W|Agent.s judgment)*Not recorded", text(problem)), label
     assert "No deadline recorded" in text(problem), "an urgency no source names"
     for label in ("For you", "Time added", "Connects to", "If it fails", "To undo", "Rejected", "Worked example", "Architecture map",
                   "Where a regression could show up"):
-        assert re.search(rf"{label}.*?Not recorded", text(fix)), label
+        assert re.search(rf"{label}(?:\W|Agent.s judgment)*Not recorded", text(fix)), label
     panel = dict((label, body) for label, body, _ in panel_rows(markup))
     assert panel["Stability"] == "Not recorded." and panel["Your experience"] == "Not recorded." and panel["Undo"] == "Not recorded.", panel
 
@@ -2932,7 +2943,7 @@ def the_solution_carries_its_fact_sheet_and_map(base):
         found = re.search(rf"<dt>{label}.*?</dt><dd>(.*?)</dd>", part, re.S)
         assert found and value in text(found.group(1)), label
     assert "apply ONE -&gt; -5" in part, "the worked example"
-    assert part.find("Architecture map") < part.find('alt="The cart is touched') < part.find('id="regressions"'), "the map, then its table"
+    in_order(part, "Architecture map", 'alt="The cart is touched', 'id="regressions"')
     assert re.search(r'class="legend".*?Changed.*?Could be affected.*?Not touched', part, re.S), "the map has its legend"
     table = re.search(r'<table[^>]*id="regressions".*?</table>', part, re.S)
     assert table, "no regression table"
@@ -2968,7 +2979,7 @@ def a_figure_embeds_in_place(base):
     put(os.path.join(evidence, "bars.png"), PNG)
     _, markup = generate(repo, base, gh)
     part = page_part(markup, "problem")
-    assert part.find("Before.") < part.find('alt="What the bars show"') < part.find("After."), "the figure isn't in place"
+    in_order(part, "Before.", 'alt="What the bars show"', "After.")
     assert "data:image/png;base64," in part
 
 
@@ -3055,7 +3066,7 @@ def keyframes_of(markup):
 def a_scene_plays_in_place(base):
     markup = scene_page(base, {"coupon": SCENE})
     part = page_part(markup, "problem")
-    assert part.find("Before coupon.") < part.find('class="player"') < part.find("After."), "the scene isn't in place"
+    in_order(part, "Before coupon.", 'class="player"', "After.")
     assert "<script" not in markup and "<img" not in re.search(r'<div class="player".*', part, re.S).group(0).split("After.")[0], "a scene is inline SVG, with no script"
     metas = [dict(attrs) for tag, attrs in tags(markup) if tag == "meta"]
     assert [m["content"] for m in metas if m.get("http-equiv") == "Content-Security-Policy"] == [CSP], "the CSP stays exactly as it is"
@@ -3403,6 +3414,8 @@ def review_section(markup):
 
 def the_review_section_says_who_and_what_each_lens_is_for(base):
     repo, _, gh = ready_branch(base)
+    report_edit(repo, "review", "| Tests | claude | 1 | 1 | open=1 |", "| Tests | claude | 1 | 1 | open=1 |\n| Security | codex | not run: exit 1 | — | — |")
+    stamp(repo, "review")
     _, markup = generate(repo, base, gh)
     part = review_section(markup)
     assert part.startswith('<details class="sec" open'), "the review is open by default"
@@ -3418,14 +3431,16 @@ def the_review_section_says_who_and_what_each_lens_is_for(base):
 
 def the_review_funnel_shares_one_scale_and_explains_the_difference(base):
     repo, _, gh = ready_branch(base)
+    report_edit(repo, "review", "| Tests | claude | 1 | 1 | open=1 |", "| Tests | claude | 1 | 0 | wrong=1 |")  # confirmed differs from the report's lines
+    stamp(repo, "review")
     _, markup = generate(repo, base, gh)
     part = review_section(markup)
     funnel = re.search(r'<div class="funnel".*?</div>\s*(?:<p|<dl|<h3)', part, re.S)
     assert funnel, "no funnel"
     widths = [float(w) for w in re.findall(r"--w:([\d.]+)%", funnel.group(0))]
-    assert widths == [100.0, round(5 / 7 * 100, 1), round(5 / 7 * 100, 1)], widths  # raised 7, confirmed 5, report lines 5
+    assert widths == [100.0, round(4 / 7 * 100, 1), round(5 / 7 * 100, 1)], widths  # raised 7, confirmed 4, report lines 5
     said = text(part)
-    assert re.search(r"\b2\b[^.]*not confirmed", said), "the difference is explained from the counts"
+    assert re.search(r"\b3\b[^.]*not confirmed", said), "the difference is explained from the counts"
     assert re.search(r"2 fixed, 1 rejected, 1 open, 1 already there", said), said[:500]
 
 
@@ -3485,7 +3500,6 @@ def testing_section(markup):
 
 
 def the_criteria_map_to_their_proof_and_a_gap_shows(base):
-    rows = lambda evidence: None
     repo, evidence, gh = ready_branch(base)
     report_edit(repo, "validation", "| A3 | AC3 |", "| A3 |  |")
     stamp(repo, "validate")
@@ -3679,7 +3693,7 @@ def manual_tests_are_grouped_under_their_layer(base):
     report_edit(repo, "validation", "\n## Test types", f"| N1 |  |  | no level | + | x | PASS | [o]({evidence}/A1.txt) |\n\n## Test types")
     _, markup = generate(repo, base, gh)
     manual = re.search(r'<div id="manual".*?(?=<div id="todo"|<h3 id="todo")', testing_section(markup), re.S).group(0)
-    assert manual.find('id="level-e2e"') < manual.find('id="check-A1"') < manual.find('id="level-not-recorded"') < manual.find('id="check-N1"'), "grouped by layer"
+    in_order(manual, 'id="level-e2e"', 'id="check-A1"', 'id="level-not-recorded"', 'id="check-N1"')
     assert re.search(r'class="chip"[^>]*>End to end<', check_block(markup, "A1")), "each test carries its layer in words"
     assert re.search(r'class="chip"[^>]*>Layer not recorded<', check_block(markup, "N1"))
     assert re.search(r'class="chip"[^>]*>Unit<', check_block(markup, "U1")), "automated rows carry theirs too"
@@ -3856,12 +3870,422 @@ def a_list_past_the_threshold_folds(base):
     assert re.search(r'<details class="more"><summary><b>[^<]*</b> <span class="n">11</span>', automated), "eleven passing rows aren't folded with their count"
 
 
+# The verdict never reads Ready past something it can't vouch for
+
+READY_GAP = "- The receipt on a thermal printer — If it goes wrong: a shopper can't read the coupon's name — Worst case: support answers a question — Checked by: P1, after the merge"
+READY_DECISION = "  Accepts: A.\n"
+
+
+def panel_of(markup):
+    """{label: (body, the word at its end)}."""
+    found = re.search(r'<div class="panel"[^>]*>(.*?)</div>', markup, re.S)
+    assert found, "no control panel"
+    return {text(label): (text(body), text(word)) for label, body, word in re.findall(r"<b>(.*?)</b><span>(.*?)</span><i[^>]*>(.*?)</i>", found.group(1), re.S)}
+
+
+def ready_with_rows(base, change):
+    """The clean branch with its validation rows changed, stamped again."""
+    repo, evidence, gh = ready_branch(base)
+    report_edit(repo, "validation", ready_rows(evidence), change(evidence))
+    stamp(repo, "validate")
+    return repo, evidence, gh
+
+
+def no_ci_and_the_ci_phase_off_are_not_stops(base):
+    repo, _, gh = ready_branch(base)
+    nothing = {"statusCheckRollup": None}
+    gh["checks"] = {}
+    gh["no_ci"] = {"defaultBranchRef": {"target": nothing}, "parent": nothing, "pullRequests": {"nodes": []}}
+    markup = generate(repo, base, gh)[1]
+    assert footer_value(markup, "CI").startswith("no CI"), footer_value(markup, "CI")
+    assert_verdict(markup, "Ready")
+    out = sh(repo, "python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "ci")
+    assert out.returncode == 0, out
+    markup = generate(repo, base, gh)[1]
+    assert footer_value(markup, "CI").startswith("CI phase off"), footer_value(markup, "CI")
+    assert_verdict(markup, "Ready")
+
+
+def a_failed_verify_is_not_ready_and_one_that_checked_nothing_is_your_call(base):
+    repo, _, gh = ready_branch(base)
+    write(repo, "verify", "# Verify: FAIL (exit 1)\n")
+    assert_verdict(generate(repo, base, gh)[1], "Not ready", "verify failed")
+    write(repo, "verify", "# Verify: PASS, but nothing ran\n")
+    assert_verdict(generate(repo, base, gh)[1], "Your call", "checked nothing")
+
+
+def each_missing_impact_field_is_your_call(base):
+    for n, (kind, field) in enumerate((("review", " — If it goes wrong: a shopper sees the wrong currency"), ("review", " — Worst case: a wrong total on a mixed cart"),
+                                       ("review", " — Can wait because: the shop sells in one currency today"),
+                                       ("validation", " — If it goes wrong: a shopper can't read the coupon's name"), ("validation", " — Worst case: support answers a question"),
+                                       ("validation", " — Checked by: P1, after the merge"))):
+        here = os.path.join(base, str(n))
+        os.makedirs(here)
+        repo, _, gh = ready_branch(here)
+        report_edit(repo, kind, field, "")
+        stamp(repo, "review", "validate")
+        assert_verdict(generate(repo, here, gh)[1], "Your call", "no recorded impact")
+
+
+def every_old_way_of_naming_a_gap_is_listed(base):
+    repo, _, gh = ready_branch(base)
+    report_edit(repo, "validation", "## Not proven", "Couldn't run before the merge: the real launchctl.\nCouldn't run here: the installed plugin.\nCouldn't run locally: the live pane.\nCouldn't run: nothing.\n\n## Not proven")
+    stamp(repo, "validate")
+    said = text(page_part(generate(repo, base, gh)[1], "limits"))
+    assert "the real launchctl" in said and "the installed plugin" in said and "the live pane" in said, said
+    assert said.count("Impact not recorded") == 6, said  # two columns each for those three: a fourth row would be the "nothing" line
+
+
+def a_real_gap_starting_with_none_or_nothing_is_kept(base):
+    for n, gap in enumerate(("None of the e2e tests reach the refund path", "Nothing exercises the refund path")):
+        here = os.path.join(base, str(n))
+        os.makedirs(here)
+        repo, _, gh = ready_branch(here)
+        report_edit(repo, "validation", READY_GAP, f"{READY_GAP}\n- {gap} — If it goes wrong: a refund fails — Worst case: money is lost — Checked by: nothing — Blocking: yes")
+        stamp(repo, "validate")
+        assert_verdict(generate(repo, here, gh)[1], "Not ready", gap)
+
+
+def the_sentinels_still_mean_nothing_to_say(base):
+    repo, _, gh = ready_branch(base)
+    report_edit(repo, "validation", READY_GAP, "- None.")
+    stamp(repo, "validate")
+    markup = generate(repo, base, gh)[1]
+    assert_verdict(markup, "Ready")
+    assert "No gap recorded." in panel_of(markup)["Not proven"][0]
+    for n, word in enumerate(("None", "None.", "Nothing to decide.", "N/A")):
+        here = os.path.join(base, str(n))
+        repo, _, gh = ready_branch(here, notes=READY_NOTES[:READY_NOTES.index("## Decisions")] + f"## Decisions\n{word}\n")
+        markup = generate(repo, here, gh)[1]
+        assert "No decisions needed." in panel_of(markup)["Your decisions"][0], word
+
+
+def every_way_of_writing_blocking_blocks(base):
+    for n, mark in enumerate(("Blocking: yes, until P1 passes", "Blocking: true", "**Blocking:** Yes.", "blocking: YES")):
+        here = os.path.join(base, f"open{n}")
+        os.makedirs(here)
+        repo, _, gh = ready_branch(here)
+        report_edit(repo, "review", "one currency today", f"one currency today — {mark}")
+        stamp(repo, "review")
+        assert_verdict(generate(repo, here, gh)[1], "Not ready", "two currencies collapse")
+    for n, tail in enumerate((" Blocking: yes", "\n  Blocking: yes", "\nBlocking: yes")):
+        here = os.path.join(base, f"gap{n}")
+        os.makedirs(here)
+        repo, _, gh = ready_branch(here)
+        report_edit(repo, "validation", READY_GAP, READY_GAP + "." + tail)
+        stamp(repo, "validate")
+        assert_verdict(generate(repo, here, gh)[1], "Not ready", "thermal printer")
+    for n, notes in enumerate((READY_NOTES.replace("- Keep the refused-coupon log line", "- Keep the refused-coupon log line — Blocking: yes"),
+                               READY_NOTES.replace(READY_DECISION, READY_DECISION + "Blocking: yes\n"))):
+        here = os.path.join(base, f"dec{n}")
+        os.makedirs(here)
+        repo, _, gh = ready_branch(here, notes=notes)
+        assert_verdict(generate(repo, here, gh)[1], "Not ready", "refused-coupon")
+
+
+def blocking_no_does_not_block(base):
+    repo, _, gh = ready_branch(base)
+    report_edit(repo, "review", "one currency today", "one currency today — Blocking: no")
+    report_edit(repo, "validation", READY_GAP, READY_GAP + " — Blocking: No.")
+    stamp(repo, "review", "validate")
+    assert_verdict(generate(repo, base, gh)[1], "Ready")
+
+
+def a_decision_starting_with_merge_keeps_its_blocking_mark(base):
+    notes = READY_NOTES.replace("- Keep the refused-coupon log line", "- Merge the two coupon tables first?").replace(READY_DECISION, READY_DECISION + "  Blocking: yes\n")
+    repo, _, gh = ready_branch(base, notes=notes)
+    assert_verdict(generate(repo, base, gh)[1], "Not ready", "Merge the two coupon tables")
+
+
+def a_second_decisions_heading_adds_to_the_first(base):
+    notes = READY_NOTES + "\n## Decisions\n- Another choice\n  Blocking: yes\n"
+    repo, _, gh = ready_branch(base, notes=notes)
+    markup = generate(repo, base, gh)[1]
+    assert_verdict(markup, "Not ready", "Another choice")
+    assert "refused-coupon log line" in page_part(markup, "decide")
+
+
+def an_unreadable_report_is_your_call(base):
+    for n, kind in enumerate(("checks-guide", "decision-notes", "follow-pr")):
+        here = os.path.join(base, str(n))
+        os.makedirs(here)
+        repo, _, gh = ready_branch(here)
+        with open(path_of(repo, kind), "wb") as fh:
+            fh.write(b"\xff\xfe a FAIL nobody can read")
+        assert_verdict(generate(repo, here, gh)[1], "Your call", "read")
+
+
+def evidence_on_another_commit_is_your_call(base):
+    repo, evidence, gh = ready_branch(base)
+    with open(os.path.join(evidence, "A1.txt")) as fh:
+        output = fh.read()
+    with open(os.path.join(evidence, "A1.txt"), "w") as fh:
+        fh.write(re.sub(r"tree \w+$", "tree 1111111111111111111111111111111111111111", output, count=1, flags=re.M))
+    stamp(repo, "validate")
+    markup = generate(repo, base, gh)[1]
+    assert "This evidence is stale" in markup
+    assert not verdict_of(markup).startswith("Ready"), verdict_of(markup)
+
+
+def evidence_that_names_no_commit_is_your_call(base):
+    repo, evidence, gh = ready_branch(base)
+    with open(os.path.join(evidence, "A1.txt"), "w") as fh:
+        fh.write("no header\n")
+    stamp(repo, "validate")
+    assert_verdict(generate(repo, base, gh)[1], "Your call", "A1")
+
+
+def a_check_whose_only_evidence_is_a_video_is_not_flagged_for_freshness(base):
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace(f"[output]({ev}/A3.txt), ", ""))
+    assert_verdict(generate(repo, base, gh)[1], "Ready")
+
+
+def a_lens_that_failed_is_your_call_unless_switched_off(base):
+    repo, _, gh = ready_branch(base)
+    report_edit(repo, "review", "| Tests | claude | 1 | 1 | open=1 |", "| Tests | claude | 1 | 1 | open=1 |\n| Security | codex | not run: exit 1 | — | — |")
+    stamp(repo, "review")
+    markup = generate(repo, base, gh)[1]
+    assert_verdict(markup, "Your call", "Security")
+    assert "Every lens ran" not in markup
+
+
+def a_report_with_no_lenses_table_does_not_say_every_lens_ran(base):
+    repo, _, gh = ready_branch(base)
+    with open(path_of(repo, "review")) as fh:
+        body = fh.read()
+    write(repo, "review", body[:body.index("## Lenses")].replace("Not run:   security lens — no auth code touched\n", ""))
+    stamp(repo, "review")
+    assert "Every lens ran" not in generate(repo, base, gh)[1]
+
+
+def a_test_type_marked_not_run_is_your_call(base):
+    repo, _, gh = ready_branch(base)
+    with open(path_of(repo, "validation")) as fh:
+        body = fh.read()
+    changed = body.replace("| e2e | yes | A1 |", "| e2e | no | the runner was down |")
+    assert changed != body
+    write(repo, "validation", changed)
+    stamp(repo, "validate")
+    assert_verdict(generate(repo, base, gh)[1], "Your call", "e2e")
+
+
+def a_merged_or_closed_pr_is_not_ready(base):
+    repo, _, gh = ready_branch(base)
+    gh["pr"]["state"] = "MERGED"
+    assert_verdict(generate(repo, base, gh)[1], "Not ready", "merged")
+
+
+def evidence_outside_the_directory_is_your_call(base):
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace(f"[output]({ev}/A1.txt)", "[output](/etc/hosts)"))
+    assert_verdict(generate(repo, base, gh)[1], "Your call", "A1")
+
+
+def criteria_no_check_names_are_your_call(base):
+    repo, evidence, gh = ready_with_rows(base, lambda ev: re.sub(r"^(\| \w+ \|) [^|]* \|", r"\1", ready_rows(ev), flags=re.M))
+    report_edit(repo, "validation", "| # | AC | Level |", "| # | Level |")
+    report_edit(repo, "validation", "|---|---|---|---|---|---|---|---|", "|---|---|---|---|---|---|---|")
+    stamp(repo, "validate")
+    assert_verdict(generate(repo, base, gh)[1], "Your call", "criterion")
+
+
+def the_rule_on_the_page_says_what_the_code_does(base):
+    repo, _, gh = ready_branch(base)
+    why = text(re.search(r'<details[^>]*id="verdict-why".*?</details>', generate(repo, base, gh)[1], re.S).group(0))
+    for phrase in ("running", "HEAD", "verify", "lens", "unreadable", "marked as blocking"):
+        assert phrase.lower() in why.lower(), phrase
+    assert "Nothing else to read" not in why
+
+
+# The control panel says what the sources say
+
+def the_panel_values_come_from_their_sources(base):
+    repo, _, gh = ready_branch(base)
+    panel = panel_of(generate(repo, base, gh)[1])
+    assert panel["Code review"] == ("2 fixed, 1 rejected, 1 left open.", "Read this"), panel["Code review"]
+    assert panel["Undo"][0] == "Revert the pull request.", panel["Undo"]
+    assert panel["Your experience"][0] != panel["Stability"][0], panel
+    assert panel["Not proven"] == ("1 gap recorded, each named with what it would mean for you.", "Read this"), panel["Not proven"]
+    assert panel["Testing"][1] == "Clear", panel["Testing"]
+
+
+def the_panel_turns_on_a_failure_and_on_missing_sources(base):
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("| one discount line | PASS |", "| one discount line | FAIL |"))
+    panel = panel_of(generate(repo, base, gh)[1])
+    assert panel["Testing"][1] == "Read this" and "1 failed" in panel["Testing"][0], panel["Testing"]
+    here = os.path.join(base, "gone")
+    os.makedirs(here)
+    repo, _, gh = ready_branch(here)
+    report_edit(repo, "validation", " — Worst case: support answers a question", "")
+    stamp(repo, "validate")
+    panel = panel_of(generate(repo, here, gh)[1])
+    assert "each named" not in panel["Not proven"][0], panel["Not proven"]
+    here = os.path.join(base, "none")
+    os.makedirs(here)
+    repo, _, gh = ready_branch(here)
+    os.remove(path_of(repo, "validation"))
+    panel = panel_of(generate(repo, here, gh)[1])
+    assert panel["Not proven"][0] == "Not recorded." and panel["Not proven"][1] == "Read this", panel["Not proven"]
+
+
+def a_not_run_check_is_not_counted_as_run(base):
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("| one discount line | PASS |", "| one discount line | NOT RUN |"))
+    markup = generate(repo, base, gh)[1]
+    lead = text(re.search(r'<div id="manual">.*?</p>', markup, re.S).group(0))
+    assert "ran 2 tests" in lead and "2 passed" in lead and "1 did not run" in lead, lead
+    assert_verdict(markup, "Your call", "A1")
+
+
+def a_panel_row_holds_no_nested_link(base):
+    notes = READY_NOTES.replace("To undo: Revert the pull request.", "To undo: Revert https://github.com/acme/shop/pull/7 now.")
+    repo, _, gh = ready_branch(base, notes=notes)
+    panel = re.search(r'<div class="panel">.*?</div>', generate(repo, base, gh)[1], re.S).group(0)
+    for row in re.findall(r"<a href=.*?</a>\s*(?=<a href=|</div>)", panel, re.S):
+        assert row.count("<a ") == 1, row
+
+
+def a_funnel_with_no_counts_shows_no_zeros(base):
+    repo, _, gh = ready_branch(base)
+    with open(path_of(repo, "review")) as fh:
+        body = fh.read()
+    write(repo, "review", re.sub(r"(?m)^\| (\w+) \| (\w+) \| \d+ \| \d+ \|.*$", r"| \1 | \2 | not run: exit 1 | — | — |", body))
+    stamp(repo, "review")
+    funnel = text(re.search(r'<div class="funnel">.*?</div></div>', generate(repo, base, gh)[1], re.S).group(0))
+    assert funnel.startswith("Not recorded findings raised"), funnel
+
+
+def a_caught_planted_bug_and_a_survivor_look_different(base):
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("21/21 killed", "20/21 killed"))
+    markup = generate(repo, base, gh)[1]
+    assert "<li class=miss>" in markup
+    assert re.search(r"\.dots \.miss\{[^}]*\}", markup), "a survivor is drawn like a caught bug"
+
+
+def an_output_that_cannot_be_read_is_your_call(base):
+    repo, evidence, gh = ready_branch(base)
+    unreadable = os.path.join(evidence, "A1.txt")
+    os.chmod(unreadable, 0)
+    try:
+        assert_verdict(generate(repo, base, gh)[1], "Your call", "A1")
+    finally:
+        os.chmod(unreadable, 0o644)
+
+
+def a_huge_count_costs_no_time_and_breaks_nothing(base):
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("21/21 killed", "9" * 16000 + " killed"))
+    started = time.monotonic()
+    markup = generate(repo, base, gh)[1]
+    assert time.monotonic() - started < 15
+    assert "Planted bugs" in markup
+    here = os.path.join(base, "lens")
+    os.makedirs(here)
+    repo, _, gh = ready_branch(here)
+    report_edit(repo, "review", "| Tests | claude | 1 | 1 | open=1 |", "| Tests | claude | " + "9" * 5000 + " | 1 | open=1 |")
+    stamp(repo, "review")
+    assert_verdict(generate(repo, here, gh)[1], "Your call", "Tests")
+
+
+def animated_svg_stays_still_however_it_is_written(base):
+    for n, svg in enumerate(('<svg xmlns="http://www.w3.org/2000/svg"><style>rect{animation:x 1s infinite!important}</style><rect/></svg>',
+                             '<SVG xmlns="http://www.w3.org/2000/svg"><rect><ANIMATE attributeName="x"/></rect></SVG>',
+                             '<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg"><rect><s:animate attributeName="x"/></rect></svg>',
+                             '<!-- <svg> --><svg xmlns="http://www.w3.org/2000/svg"><style>rect{ANIMATION:x 1s}</style><rect/></svg>')):
+        here = os.path.join(base, str(n))
+        os.makedirs(here)
+        repo, evidence, gh = ready_branch(here, notes=READY_NOTES.replace(SCENE_SPOT, SCENE_SPOT + "\n\n![Moving.](moving.svg)"))
+        put(os.path.join(evidence, "moving.svg"), svg)
+        markup = generate(repo, here, gh)[1]
+        for item in embedded_svgs(markup):
+            if b"<rect" in item.lower():
+                assert not re.search(rb"(?i)<[\w:]*animate", item), item
+                assert re.match(rb"(?i)\s*<svg\b[^>]*><style>\*\{animation:none!important\}", item), item
+        assert "moving.svg" in markup or "Moving." in markup, svg
+
+
+def a_figure_past_its_limit_never_links_to_a_page(base):
+    notes = READY_NOTES.replace("![The cart is touched, checkout could be affected. Legend: filled is touched, outlined could be affected.](map.svg)", "![The map.](big.html)\n![The picture.](pic.png)")
+    repo, evidence, gh = ready_branch(base, notes=notes)
+    with open(os.path.join(evidence, "big.html"), "w") as fh:
+        fh.write("<script>alert(1)</script>" + " " * (3 * 1024 * 1024))  # past the image limit, so it isn't drawn
+    os.symlink(os.path.join(evidence, "big.html"), os.path.join(evidence, "pic.png"))
+    markup = generate(repo, base, gh)[1]
+    assert "big.html" in markup and "pic.png" in markup
+    assert not re.search(r'href="[^"]*(?:big\.html|pic\.png)"', markup), "a figure links to a page that runs its own scripts"
+
+
+def a_deeply_nested_scene_costs_only_itself(base):
+    for depth in (900, 960, 985, 995, 60000):  # the parser and the refusal's own printing give up at different depths
+        here = os.path.join(base, str(depth))
+        os.makedirs(here)
+        markup = scene_page(here, {"deep": '{"title":"Deep","alt":"Deep","seconds":' + "[" * depth + "]" * depth + ',"height":100,"shapes":[],"steps":[]}'})
+        assert '<div class="panel">' in markup and "deep.scene.json" in markup and "scene-refused" in markup, depth
+
+
+def refused_scenes_share_the_embed_budget(base):
+    bad = {"title": "Bad", "alt": "Bad", "seconds": -1, "height": 100, "shapes": [], "steps": [{"from": 0, "to": 1, "caption": "&" * 1000}] * 12}
+    named = "".join("![Bad](bad.scene.json)\n\n" for _ in range(500))  # about 58 KB each once escaped: 29 MB uncharged
+    repo, evidence, gh = ready_branch(base, notes=READY_NOTES.replace(SCENE_SPOT, named))
+    put(os.path.join(evidence, "bad.scene.json"), json.dumps(bad))
+    markup = generate(repo, base, gh)[1]
+    assert len(markup) < 22 * 1024 * 1024, len(markup)
+    assert "scene-refused" in markup
+
+
+def only_the_first_scenes_start_playing_and_a_page_holds_a_bounded_number(base):
+    named = "".join(f"![Scene {n}](s{n}.scene.json)\n\n" for n in range(14))
+    repo, evidence, gh = ready_branch(base, notes=READY_NOTES.replace(SCENE_SPOT, named))
+    for n in range(14):
+        put(os.path.join(evidence, f"s{n}.scene.json"), json.dumps(SCENE))
+    markup = generate(repo, base, gh)[1]
+    players = players_of(markup)
+    assert len(players) == 12, len(players)
+    assert markup.count("scene-refused") == 2
+    for n, player in enumerate(players):
+        checked = re.findall(r'class="sw s-(\w+) vh"[^>]*\bchecked', player)
+        assert checked == (["ra"] if n < 3 else ["pa"]), (n, checked)
+
+
+def a_mismatched_fence_forges_no_heading(base):
+    def level_of_real(fenced, here):
+        os.makedirs(here)
+        notes = READY_NOTES.replace("A refresh ran the coupon step twice.", f"A refresh ran the coupon step twice.\n\n#### Real\n\n{fenced}\n\nAfter.")
+        repo, _, gh = ready_branch(here, notes=notes)
+        markup = generate(repo, here, gh)[1]
+        assert not re.search(r"<h\d[^>]*>forged</h\d>", markup)
+        return re.search(r"<(h\d)[^>]*>Real</h\d>", markup).group(1)
+    assert level_of_real("~~~\n```\n# forged\n~~~", os.path.join(base, "odd")) == level_of_real("~~~\n# forged\n~~~", os.path.join(base, "even"))
+
+
+def the_phone_rule_for_commands_is_on_every_page(base):
+    repo, _, gh = ready_branch(base)
+    markup = generate(repo, base, gh)[1]
+    assert 'class="player"' not in markup, "this page must have no scene"
+    assert re.search(r"@media \(max-width:640px\)\{[^@]*pre\.cmd\{white-space:pre-wrap", stylesheet(markup))
+
+
+def every_disclosure_shows_it_opens(base):
+    repo, _, gh = ready_branch(base)
+    style = stylesheet(generate(repo, base, gh)[1])
+    assert not re.search(r"(?:^|\})summary\{[^}]*list-style:none", style), "a summary with no marker reads as plain text"
+    for hides_its_marker in re.findall(r"(\.\w+)>summary[^{},]*(?:,[^{}]*)?\{[^}]*list-style:none", style):
+        assert f"{hides_its_marker}>summary::after" in style, hides_its_marker
+
+
+def the_player_names_its_controls_for_any_state(base):
+    player = players_of(scene_page(base, {"coupon": SCENE}))[0]
+    names = re.findall(r'<input type="radio"[^>]*aria-label="([^"]*)"', player)
+    assert len(names) == 4 and not any(name.startswith(("Play:", "Restart and play:")) for name in names), names
+    assert 'role="group"' in player
+
+
+GUARD_TESTS = (no_ci_and_the_ci_phase_off_are_not_stops, a_failed_verify_is_not_ready_and_one_that_checked_nothing_is_your_call, each_missing_impact_field_is_your_call, every_old_way_of_naming_a_gap_is_listed, a_real_gap_starting_with_none_or_nothing_is_kept, the_sentinels_still_mean_nothing_to_say, every_way_of_writing_blocking_blocks, blocking_no_does_not_block, a_decision_starting_with_merge_keeps_its_blocking_mark, a_second_decisions_heading_adds_to_the_first, an_unreadable_report_is_your_call, evidence_on_another_commit_is_your_call, evidence_that_names_no_commit_is_your_call, a_check_whose_only_evidence_is_a_video_is_not_flagged_for_freshness, a_lens_that_failed_is_your_call_unless_switched_off, a_report_with_no_lenses_table_does_not_say_every_lens_ran, a_test_type_marked_not_run_is_your_call, a_merged_or_closed_pr_is_not_ready, evidence_outside_the_directory_is_your_call, criteria_no_check_names_are_your_call, the_rule_on_the_page_says_what_the_code_does, the_panel_values_come_from_their_sources, the_panel_turns_on_a_failure_and_on_missing_sources, a_not_run_check_is_not_counted_as_run, a_panel_row_holds_no_nested_link, a_funnel_with_no_counts_shows_no_zeros, a_caught_planted_bug_and_a_survivor_look_different, an_output_that_cannot_be_read_is_your_call, a_huge_count_costs_no_time_and_breaks_nothing, animated_svg_stays_still_however_it_is_written, a_figure_past_its_limit_never_links_to_a_page, a_deeply_nested_scene_costs_only_itself, refused_scenes_share_the_embed_budget, only_the_first_scenes_start_playing_and_a_page_holds_a_bounded_number, a_mismatched_fence_forges_no_heading, the_phone_rule_for_commands_is_on_every_page, every_disclosure_shows_it_opens, the_player_names_its_controls_for_any_state)
+
+
 REDESIGN_TESTS = (the_page_holds_its_parts_in_order, a_branch_with_nothing_still_has_its_parts_in_order, a_clean_branch_reads_ready, a_failed_ci_is_not_ready,
                   a_missing_ci_is_not_ready, a_branch_without_a_pr_is_not_ready, a_fail_row_is_not_ready, a_failed_guide_step_is_not_ready, a_missing_review_is_not_ready,
                   a_stale_review_is_not_ready, a_missing_validation_is_not_ready, a_stale_validation_is_not_ready, stale_evidence_is_not_ready,
                   a_local_head_past_the_pr_is_not_ready, a_blocking_open_finding_is_not_ready, a_blocking_gap_is_not_ready, a_blocking_decision_is_not_ready,
                   a_not_run_row_is_your_call, an_open_finding_without_its_impact_is_your_call, a_gap_without_its_impact_is_your_call, a_phase_off_never_blocks,
-                  an_unreadable_guide_is_only_a_note, the_first_screen_holds_no_status_tokens, the_problem_carries_its_fact_sheet, a_background_comes_before_the_problem,
+                  an_unreadable_guide_is_your_call, the_first_screen_holds_no_status_tokens, the_problem_carries_its_fact_sheet, a_background_comes_before_the_problem,
                   missing_facts_read_not_recorded, the_solution_carries_its_fact_sheet_and_map, a_blank_regression_check_reads_not_checked, the_skills_document_the_new_notes,
                   a_figure_embeds_in_place, an_svg_stays_an_inert_image, a_figure_series_is_a_static_strip, a_single_image_is_not_a_series,
                   an_svg_with_its_own_motion_holds_still, print_shows_the_folds_content, a_lost_frame_costs_that_frame,
@@ -3929,7 +4353,7 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert, hypotheses_keep_their_lists_and_subheadings,
                      the_notes_embed_each_file_under_its_first_part, the_answer_needs_more_than_its_confidence,
                      a_marker_inside_a_longer_fence_is_not_the_mode, a_kept_script_the_evidence_names_shows_once,
-                     notes_over_the_limit_keep_the_change_page, a_file_a_row_names_three_ways_shows_once) + REDESIGN_TESTS)
+                     notes_over_the_limit_keep_the_change_page, a_file_a_row_names_three_ways_shows_once) + REDESIGN_TESTS + GUARD_TESTS)
 
 
 def run_test(test):
@@ -3937,7 +4361,7 @@ def run_test(test):
     try:
         test(os.path.realpath(base))
         return test.__name__, None
-    except Exception as error:  # noqa: BLE001 - report every failure, keep running the rest
+    except (Exception, SystemExit) as error:  # noqa: BLE001 - report every failure, keep running the rest; a test calling exit must not pass
         return test.__name__, f"{type(error).__name__}: {str(error)[:600]}"
     finally:
         shutil.rmtree(base, ignore_errors=True)
@@ -3950,9 +4374,14 @@ def run_test(test):
 
 # Run one after another, this file alone took 12 minutes. A process pool, not threads, since each worker needs its own
 # HOME; its broken-pool error also fails the run if a test kills its worker, where a plain Pool would wait forever.
-with concurrent.futures.ProcessPoolExecutor(max_workers=min(8, os.cpu_count() or 1), mp_context=multiprocessing.get_context("fork"),
+try:
+  with concurrent.futures.ProcessPoolExecutor(max_workers=min(8, os.cpu_count() or 1), mp_context=multiprocessing.get_context("fork"),
                                             initializer=make_own_home) as pool:
     results = list(pool.map(run_test, TESTS))
+except concurrent.futures.BrokenExecutor as error:
+  print(f"FAIL a test killed its worker: {error}")
+  shutil.rmtree(SUITE_DIR, ignore_errors=True)
+  raise SystemExit(1)
 for name, error in results:
     print(f"{'FAIL' if error else 'ok  '} {name}")
     if error:
