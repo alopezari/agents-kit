@@ -34,7 +34,7 @@ KEPT_RULES = {
     "a failed page gives the error and counts": "give the error, say each verdict and its counts in a sentence",
     "a failed page gives the paths": "give each report's absolute path and the checks guide's",
     "reports are listed before a page exists": "Before there is a page, give each report's absolute path",
-    "switched-off phases are said": "Say which phases I switched off",
+    "switched-off phases are said": "In such a reply, say which phases I switched off",
     "follow-ups are mentioned": "Follow-ups worth an issue go at the end of the reply",
 }
 
