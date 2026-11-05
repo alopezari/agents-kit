@@ -2420,8 +2420,10 @@ def verdict_reasons(c):
         if texts[kind] is None and not whys[kind].startswith("no report") and not (kind == "checks-guide" and "validate" in c.off):
             calls.append((f"#annex-{kind}", f"{label} can't be read", f'{state("unavailable", "need")} {esc(whys[kind])}'))
     notes_text = texts["decision-notes"]
-    if (notes_text is None and whys["decision-notes"].startswith("no report")) or (notes_text is not None and not notes_text.strip()):
-        calls.append(("#annex-decision-notes", "the decision notes are missing", f'{state("missing", "need")} {esc(MAKERS["decision-notes"])}'))
+    notes_missing = whys["decision-notes"].startswith("no report") if notes_text is None else not notes_text.replace("\ufeff", "").strip()
+    if notes_missing:
+        calls.append(("#annex-decision-notes", "the decision notes are missing",
+                      f'{state("missing" if notes_text is None else "empty", "need")} {esc(MAKERS["decision-notes"])}, at {page.path(c.paths["decision-notes"])}'))
     if texts["pr-body"] is None and not whys["pr-body"].startswith("no report"):
         notes.append(("#annex-pr-body", "PR description", f'{state("unavailable", "need")} {esc(whys["pr-body"])}'))
     if c.ship_text is None and not c.ship_why.startswith("no report"):

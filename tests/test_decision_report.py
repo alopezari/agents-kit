@@ -987,7 +987,7 @@ def the_skills_regenerate_and_link_the_page(base):
     for skill, needles in (("kit-ship", ("reports html", "decision-notes", "linked by its absolute path", "don't repeat its tables",
                                   "the error", "each verdict and its counts", "no older file linked as current",
                                   "from a checkout of the PR's head branch", "before `~/.agents/bin/prune-merged` removes it")),
-                           ("kit-validate", ("names that checkout",)),
+                           ("kit-validate", ("names that checkout: the PR's head branch, never the default branch",)),
                            ("kit-follow-pr", ("reports html", "link the page by its absolute path", "don't repeat its tables", "the error",
                                        "each verdict and its counts", "link no older file as current"))):
         with open(os.path.join(KIT, "skills", skill, "SKILL.md")) as fh:
@@ -2885,12 +2885,14 @@ def notes_reasons(markup):
 
 
 def missing_decision_notes_are_your_call(base):
-    for n, notes in enumerate((None, " \n\t\n")):
+    for n, notes in enumerate((None, " \n\t\n", "\ufeff\n")):
         here = os.path.join(base, str(n))
         os.makedirs(here)
         repo, _, gh = ready_branch(here, notes=notes)
         markup = generate(repo, here, gh)[1]
-        assert_verdict(markup, "Your call", "decision notes")
+        assert_verdict(markup, "Your call")
+        assert "the decision notes are missing" in verdict_of(markup), verdict_of(markup)
+        assert any(path_of(repo, "decision-notes") in item for item in verdict_items(markup, "calls")), "the reason names where the notes go"
         reasons = notes_reasons(markup)
         assert len(reasons) == 1 and reasons[0][0] == "#annex-decision-notes" and "missing" in reasons[0][1], (notes, reasons)
         assert "missing decision notes" in text(re.search(r'<details[^>]*id="verdict-why".*?</details>', markup, re.S).group(0)), "the rule names them"
@@ -2900,7 +2902,8 @@ def missing_decision_notes_are_your_call(base):
     gh["checks"][git(repo, "rev-parse", "HEAD")]["check_runs"][0]["conclusion"] = "failure"
     markup = generate(repo, here, gh)[1]
     assert_verdict(markup, "Not ready", "CI failed")
-    assert len(notes_reasons(markup)) == 1, notes_reasons(markup)
+    assert sum("decision notes are missing" in item for item in verdict_items(markup, "calls")) == 1, verdict_items(markup, "calls")
+    assert not any("decision notes" in item for item in verdict_items(markup, "stops")), verdict_items(markup, "stops")
     here = os.path.join(base, "unreadable")
     os.makedirs(here)
     repo, _, gh = ready_branch(here)
