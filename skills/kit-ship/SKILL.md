@@ -94,9 +94,98 @@ On a failure, don't fix it here: report it, and offer the `kit-follow-pr` skill,
 
 When the wait ends, whatever its exit, write the decision page again, before step 6 frees the branch: the page shows CI for the PR's head as it stands.
 
-**The decision page.** One local HTML page that answers what the task must do, what the change does, what it changes for users, what was tested, how to test it by hand and what the user must decide, from the spec, the reports, the evidence and the repo's ship.md. It opens on a summary (the task, the solution, the review, the tests, the gates and the pull request's quality signals, then your decisions, the blockers the agent owns and the warnings); the coverage, the tests, the review, merge and ship and the reports follow folded, each open only when it holds a failure or a blocker. Write it after opening the PR or updating an open one, and again when the CI wait ends; never publish it (evidence can hold sensitive data).
+**The decision page.** One local HTML page for one question: is this PR safe to merge, or is something missing that could compromise system stability or the user's experience? It opens as a control panel: a verdict that comes only from recorded values (Not ready, Your call or Ready; the rule is on the page), then one sentence each on the problem, stability, the user's experience, testing, code review, what isn't proven, undo and your decisions. The sections follow, each open and collapsible: problem, solution, testing, code review, not covered, decisions, with long lists collapsed behind their count; merge, ship, rollback and the full reports sit in the footer. Write it after opening the PR or updating an open one, and again when the CI wait ends; never publish it (evidence can hold sensitive data).
 
-First write the decision notes, at the path `~/.agents/bin/reports path decision-notes` prints, and refresh them whenever the change or its reports changed since they were written. They are Markdown with these four headings, in ASD-STE100 style (short sentences, one statement each, active voice): `## What the task must do`, `## What the change does`, `## What it changes for users`, `## What you must decide`. Write them from the spec, the diff (`git diff <base>`) and the reports; each claim about the code names its `file:line`, and a fenced block can hold a small tree or flow. The first paragraph of `## What the task must do` and of `## What the change does` is what the summary shows, the rest folded under it: write each first paragraph as a summary that stands alone, in one to three sentences. Under `## What you must decide`, write one list item per decision, each with the choice, your recommendation and what it costs (`- Keep the phone check: A keeps it, B drops it; recommend A, since B saves a minute and loses the Safari case.`); an item that starts `Merge:` is your recommendation on the merge, which the page lists first. The page already lists the review's Open findings and the guide's optional steps as decisions: write an item for one of them only to add your recommendation. The page shows the notes labelled as written by the agent, and adds no prose of its own. Then:
+First write the decision notes, at the path `~/.agents/bin/reports path decision-notes` prints, and refresh them whenever the change or its reports changed since they were written. They are Markdown, in short plain sentences, for an owner who may never have seen this project. Write them from the spec, the diff (`git diff <base>`) and the reports; each claim about the code names its `file:line`. The page labels them as the agent's and adds no prose of its own, so what you leave out reads "Not recorded". The shape:
+
+````markdown
+# The claim this change makes true, as the page's title
+
+One or two sentences a reader can take away alone: the page's lead.
+
+## Stability
+One sentence: what this change could do to the running system.
+
+## Your experience
+One sentence: what the user sees differently.
+
+## The problem
+Headline: the problem, as the section's title
+Background: what this project is, what the affected part does and the situation that led to the problem, in plain words
+Who it hits: who, and how many if a source says
+What they see: what happens to them, as they would describe it
+How bad: words about the user's experience, with the reason; never a SEV grade
+How often: words, with the reason
+If we wait: only what a source names; left out, the page says "No deadline recorded"
+
+What went wrong, in prose, with its figures in place.
+
+## The solution
+Headline: the solution, as the section's title
+For you: what changes for the owner
+Time added: to the path this runs on
+Connects to: what it reads, calls or writes
+If it fails: what happens then
+To undo: the steps, and whether they're safe
+Rejected: the options not taken, each with why
+
+How it works, in prose, with its figures in place.
+
+### Worked example
+One real input followed through the change, in a fenced block.
+
+### Before and after
+Where it applies: a table or a figure of each.
+
+### The fix, in order
+Where it applies: the steps as a figure series or a list.
+
+### Architecture map
+![The cart is touched; the receipt could be affected; search is not touched](map.svg)
+
+### Where a regression could show up
+| System | Why it could regress | What checked it |
+|---|---|---|
+| Checkout | it reads the same coupon step | A1 |
+| Receipt | it prints the discount line | Not checked |
+
+## Decisions
+- A question only the owner can answer before the merge
+  Options: A keep it; B drop it
+  Cost: what each option costs
+  Recommendation: which, and why
+  Accepts: what merging without answering accepts
+````
+
+`How bad`, `How often` and the regression table are your judgment, and the page labels them so. Build the map and the regression table from the spec's Change map and a code search, not from memory; a blank `What checked it` reads "Not checked". Under `## Decisions` list only what the owner must decide before the merge, never the merge itself, whose verdict is the page's. Add `Blocking: yes` to a decision only when the merge must wait for it: that makes the verdict Not ready, and so does the same field on an Open finding or a not-proven gap.
+
+A figure is a line holding only `![what it shows](file)`, for an image or SVG in the evidence directory, and it's embedded where the line stands. Its alt text says everything the figure shows. An `.svg` is only ever an image, so its scripts can't run: never inline, never a link to its original. Write `Figure: title` on the line above several images in a row to draw them as one series, in order, each caption carrying what that step shows. Draw each SVG with a `viewBox` about 480 wide and text of at least 16 units, so it stays legible on a phone. The map follows the page's legend: solid lime for changed, dashed coral for could be affected, grey for untouched. A moving GIF or WebP can't be held still: write a scene instead.
+
+An animated figure is a scene file, `<name>.scene.json` in the evidence directory, on a line of its own: `![what it shows](<name>.scene.json)`. The page compiles it into inline SVG and CSS on one continuous timeline, with all its captions visible and the current one lit, a progress bar, play, pause and restart with no script, and the whole picture still under reduced motion and in print. A scene plays on its own, so one inside a `Figure:` series ends the series there. For example:
+
+```json
+{
+  "title": "The coupon runs once",
+  "alt": "A coupon is applied and the discount appears. A refresh tries again and is ignored, so the cart keeps one discount.",
+  "seconds": 6,
+  "height": 96,
+  "shapes": [
+    {"shape": "rect", "x": 0, "y": 8, "width": 480, "height": 20, "fill": "rule"},
+    {"shape": "rect", "x": 0, "y": 8, "width": 480, "height": 20, "fill": "ok", "tracks": {"scaleX": [[0.3, 0], [5, 1]]}},
+    {"shape": "circle", "cx": 10, "cy": 64, "r": 8, "fill": "ok", "pulse": true},
+    {"shape": "text", "x": 30, "y": 70, "text": "One discount", "tracks": {"opacity": [[1.5, 0], [2, 1]]}},
+    {"shape": "text", "x": 480, "y": 70, "text": "refresh ignored", "text-anchor": "end", "fill": "muted", "tracks": {"opacity": [[3.5, 0], [4, 1]]}}
+  ],
+  "steps": [
+    {"from": 0, "to": 3, "caption": "The shopper applies a coupon and the cart adds one discount."},
+    {"from": 3, "to": 6, "caption": "A refresh sends it again. The cart ignores it, so the total doesn't move."}
+  ]
+}
+```
+
+All six top-level keys are required: `title`, `alt` (what the motion shows, in words), `seconds` (1 to 120), `height` (of a canvas 480 wide), `shapes` and `steps`. A shape is `rect` (`x`, `y`, `width`, `height`), `line` (`x1`, `y1`, `x2`, `y2`, `stroke`), `circle` (`cx`, `cy`, `r`), `text` (`x`, `y`, `text`, and `font-size` of at least 20, since a phone shows the canvas at two thirds, `font-weight` 400, 600 or 700, `text-anchor`: `start`, `middle` or `end`) or `group` (`shapes`, not another group). Colours are tokens, in `fill` (not on a line) and `stroke` (not on a text): `fg`, `muted`, `dim`, `ok`, `need`, `rule`, `bg`, `panel`, `none`. Rect, line and circle also take `stroke-width` and `stroke-dasharray` (up to four numbers); any shape takes `opacity`. Motion is `tracks`, a list of `[second, value]` per `opacity`, `scaleX`, `translateY` (ending at 0, since the shape's own position is its place in the still figure) or `stroke-dashoffset`, on any shape or group; `translateY` and `scaleX` don't share a shape, so one goes in a group; or `"pulse": true` for a shape that never stops, whose fade in goes on a group around it. A shape's picture is its last value, so the still figure is whole. A step's `from` and `to` are seconds; steps don't overlap and last at least 0.4 seconds. The limits are 128 KB, 200 shapes, 1000 timing points and 12 steps. Anything else refuses the scene, which costs only that figure: the page shows its captions and names the refusal, and the verdict doesn't move.
+
+Notes in the older shape (`## What the task must do`, `## What the change does`, `## What it changes for users`, `## What you must decide`) still read, with the missing fields named. Then:
 
 ```bash
 ~/.agents/bin/reports html

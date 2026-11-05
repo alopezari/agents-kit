@@ -683,7 +683,7 @@ async function startWithReviewers($, on, triage: Run, answer = (spec) => ({ valu
   })
   on('ui.log', ($, e) => {
     logged.push({ text: e.text, to: e.to })
-    return undefined
+    return { value: undefined }
   })
   on('session.start', () => ({ cwd: ROOT }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT })
@@ -834,7 +834,7 @@ test('a triage that never answers holds the session start up for 2 s at most, wi
   const logged = []
   on('ui.log', ($, e) => {
     logged.push(e)
-    return undefined
+    return { value: undefined }
   })
   on('session.start', () => ({ cwd: ROOT }))
   let started = false

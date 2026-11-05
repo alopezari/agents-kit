@@ -119,8 +119,9 @@ Spec table, paths table and derived-data table (from the Correctness lens)
 Fixed:     <finding> — <file:line> — evidence: <failing test or output before the fix> — <test that now covers it>
 Rejected:  <finding> — evidence: <file:line where it's handled, or the command that disproves it>
 Pre-existing: <finding> — <file:line> — evidence: <the line on the base branch> (also under Found in the final message)
-Open:      <finding> — <uncertain | confirmed, not fixed after the last re-check: why | needs another round: the design question> — <evidence that would settle it, or the decision for the human>
+Open:      <finding> — <uncertain | confirmed, not fixed after the last re-check: why | needs another round: the design question> — <evidence that would settle it, or the decision for the human> — If it goes wrong: <what the user would see> — Worst case: <the worst it can do> — Can wait because: <why the merge needn't wait>
 Not run:   <lens or reviewer skipped, and why>
+Worst catch: <the worst thing this review stopped, in words about the user's experience>
 
 ## Lenses
 | Lens | Model | Findings | Confirmed | Outcomes |
@@ -129,4 +130,4 @@ Not run:   <lens or reviewer skipped, and why>
 | Correctness | codex | not run: exit 1 | — | — |
 ```
 
-The `## Lenses` table has one row per lens and model family, with the counts you logged above; a reviewer that failed or was skipped keeps its row, `not run: <why>` in Findings and `—` in the rest. The decision page shows it lens by lens.
+The `## Lenses` table has one row per lens and model family, with the counts you logged above; a reviewer that failed or was skipped keeps its row, `not run: <why>` in Findings and `—` in the rest. The decision page shows it lens by lens, and reads an Open finding's `If it goes wrong:`, `Worst case:` and `Can wait because:` as what it means for the owner: a missing one reads "Impact not recorded" and makes the verdict the owner's call. Add ` — Blocking: yes` only to a finding the merge must wait for, which makes the verdict Not ready.
