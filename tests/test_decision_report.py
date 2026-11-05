@@ -14,7 +14,6 @@ import resource
 import shutil
 import subprocess
 import tempfile
-import time
 import urllib.parse
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
@@ -4170,11 +4169,126 @@ def an_output_that_cannot_be_read_is_your_call(base):
         os.chmod(unreadable, 0o644)
 
 
+def a_huge_svg_costs_no_time(base):
+    head = b'<svg xmlns="http://www.w3.org/2000/svg"><rect/>'
+    for n, body in enumerate((b"animation" * 100_000, b"<![CDATA[" + b"<!--" * 400_000 + b"]]>")):
+        here = os.path.join(base, str(n))
+        os.makedirs(here)
+        repo, evidence, gh = ready_branch(here, notes=READY_NOTES.replace(SCENE_SPOT, SCENE_SPOT + "\n\n![Big.](big.svg)"))
+        put(os.path.join(evidence, "big.svg"), head + body + b"</svg>")
+        before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
+        generate(repo, here, gh)
+        spent = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime - before
+        assert spent < 5, f"{spent:.1f} s of CPU on a {len(body)} byte SVG"
+
+
+def a_check_naming_no_file_is_your_call(base):
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace(f"[output]({ev}/A1.txt)", "looks good"))
+    markup = generate(repo, base, gh)[1]
+    assert_verdict(markup, "Your call", "A1")
+    assert "Every check&#x27;s evidence covers" not in markup
+
+
+def a_screenshot_is_not_claimed_to_cover_a_commit(base):
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace(f"[output]({ev}/A3.txt), ", ""))
+    markup = generate(repo, base, gh)[1]
+    assert_verdict(markup, "Ready")
+    said = text(re.search(r'<p id="freshness">.*?</p>', markup, re.S).group(0))
+    assert "Every output" in said and "1 check" in said and "screenshot or video" in said, said
+
+
+def a_full_gap_named_with_an_old_label_counts_once(base):
+    repo, _, gh = ready_branch(base)
+    report_edit(repo, "validation", READY_GAP, READY_GAP.replace("- The receipt", "- Only unit-tested: the receipt"))
+    stamp(repo, "validate")
+    markup = generate(repo, base, gh)[1]
+    assert_verdict(markup, "Ready")
+    assert text(page_part(markup, "limits")).count("the receipt on a thermal printer") == 1
+
+
+def the_same_old_gap_in_a_section_and_on_a_line_counts_once(base):
+    repo, _, gh = ready_branch(base)
+    report_edit(repo, "validation", "## Not proven", "## Couldn't run locally\n\n- Couldn't run locally: the live pane\n\n## Not proven")
+    stamp(repo, "validate")
+    assert text(page_part(generate(repo, base, gh)[1], "limits")).count("the live pane") == 1
+
+
+def a_wrapped_open_line_keeps_its_blocking_mark(base):
+    for n, wrapped in enumerate(("Open:      two totals — uncertain — Worst case: b\n           — Blocking: yes",
+                                 "Open:\n- two totals — uncertain — Worst case: b\n  — Blocking: yes")):
+        here = os.path.join(base, str(n))
+        os.makedirs(here)
+        repo, _, gh = ready_branch(here)
+        with open(path_of(repo, "review")) as fh:
+            body = fh.read()
+        changed = re.sub(r"^Open: .*$", lambda _: wrapped, body, flags=re.M)
+        assert changed != body
+        write(repo, "review", changed)
+        stamp(repo, "review")
+        assert_verdict(generate(repo, here, gh)[1], "Not ready", "two totals")
+
+
+def a_reviewer_that_failed_on_a_not_run_line_is_your_call(base):
+    repo, _, gh = ready_branch(base)
+    report_edit(repo, "review", "Not run:   security lens — no auth code touched", "Not run:   codex correctness lens — timed out twice")
+    stamp(repo, "review")
+    markup = generate(repo, base, gh)[1]
+    assert_verdict(markup, "Your call", "timed out twice")
+    assert panel_of(markup)["Code review"][1] == "Read this", panel_of(markup)
+
+
+def a_panel_row_is_not_clear_when_it_holds_the_verdicts_reason(base):
+    def word_of(markup, label):
+        return panel_of(markup)[label][1]
+
+    def broken(name, change):
+        here = os.path.join(base, name)
+        os.makedirs(here)
+        repo, evidence, gh = ready_branch(here)
+        change(repo, evidence)
+        return generate(repo, here, gh)[1]
+
+    def type_not_run(repo, _):
+        report_edit(repo, "validation", "| e2e | yes | A1 |", "| e2e | no | the runner was down |")
+        stamp(repo, "validate")
+
+    def no_ac_named(repo, evidence):
+        report_edit(repo, "validation", ready_rows(evidence), ready_rows(evidence).replace("AC3", "AC1"))
+        stamp(repo, "validate")
+
+    def lens_failed(repo, _):
+        report_edit(repo, "review", "| Tests | claude | 1 | 1 | open=1 |", "| Tests | claude | 1 | 1 | open=1 |\n| Security | codex | not run: exit 1 | — | — |")
+        stamp(repo, "review")
+
+    clean = broken("clean", lambda repo, evidence: None)
+    assert word_of(clean, "Testing") == "Clear", word_of(clean, "Testing")
+    for name, change in (("type", type_not_run), ("ac", no_ac_named), ("stale", lambda repo, _: put(os.path.join(repo, "later.txt"), "x"))):
+        markup = broken(name, change)
+        assert word_of(markup, "Testing") == "Read this", (name, word_of(markup, "Testing"))
+    assert word_of(broken("lens", lens_failed), "Code review") == "Read this"
+
+
+def no_decisions_needed_is_no_decision(base):
+    repo, _, gh = ready_branch(base, notes=READY_NOTES[:READY_NOTES.index("## Decisions")] + "## Decisions\nNo decisions needed.\n")
+    markup = generate(repo, base, gh)[1]
+    assert_verdict(markup, "Ready")
+    assert panel_of(markup)["Your decisions"][0] == "No decisions needed.", panel_of(markup)
+
+
+def a_result_the_page_cannot_read_is_your_call(base):
+    for word in ("FAILED", "Fail", "Not run", "SKIPPED"):
+        here = os.path.join(base, word.replace(" ", ""))
+        os.makedirs(here)
+        repo, _, gh = ready_with_rows(here, lambda ev: ready_rows(ev).replace("one discount line | PASS |", f"one discount line | {word} |"))
+        assert_verdict(generate(repo, here, gh)[1], "Your call", "A1", word)
+
+
 def a_huge_count_costs_no_time_and_breaks_nothing(base):
     repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("21/21 killed", "9" * 16000 + " killed"))
-    started = time.monotonic()
+    started = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime
     markup = generate(repo, base, gh)[1]
-    assert time.monotonic() - started < 15
+    spent = resource.getrusage(resource.RUSAGE_CHILDREN).ru_utime - started
+    assert spent < 5, f"{spent:.1f} s of CPU"  # CPU, not the wall clock: the workers share the machine
     assert "Planted bugs" in markup
     here = os.path.join(base, "lens")
     os.makedirs(here)
@@ -4241,7 +4355,8 @@ def only_the_first_scenes_start_playing_and_a_page_holds_a_bounded_number(base):
     assert markup.count("scene-refused") == 2
     for n, player in enumerate(players):
         checked = re.findall(r'class="sw s-(\w+) vh"[^>]*\bchecked', player)
-        assert checked == (["ra"] if n < 3 else ["pa"]), (n, checked)
+        assert checked == (["ra"] if n < 3 else ["still"]), (n, checked)
+    assert ".s-still:checked~.copy-a *,.s-still:checked~.copy-a .prog::after{animation:none}" in markup, "a stopped scene shows its whole picture, not its first frame"
 
 
 def a_mismatched_fence_forges_no_heading(base):
@@ -4277,7 +4392,7 @@ def the_player_names_its_controls_for_any_state(base):
     assert 'role="group"' in player
 
 
-GUARD_TESTS = (no_ci_and_the_ci_phase_off_are_not_stops, a_failed_verify_is_not_ready_and_one_that_checked_nothing_is_your_call, each_missing_impact_field_is_your_call, every_old_way_of_naming_a_gap_is_listed, a_real_gap_starting_with_none_or_nothing_is_kept, the_sentinels_still_mean_nothing_to_say, every_way_of_writing_blocking_blocks, blocking_no_does_not_block, a_decision_starting_with_merge_keeps_its_blocking_mark, a_second_decisions_heading_adds_to_the_first, an_unreadable_report_is_your_call, evidence_on_another_commit_is_your_call, evidence_that_names_no_commit_is_your_call, a_check_whose_only_evidence_is_a_video_is_not_flagged_for_freshness, a_lens_that_failed_is_your_call_unless_switched_off, a_report_with_no_lenses_table_does_not_say_every_lens_ran, a_test_type_marked_not_run_is_your_call, a_merged_or_closed_pr_is_not_ready, evidence_outside_the_directory_is_your_call, criteria_no_check_names_are_your_call, the_rule_on_the_page_says_what_the_code_does, the_panel_values_come_from_their_sources, the_panel_turns_on_a_failure_and_on_missing_sources, a_not_run_check_is_not_counted_as_run, a_panel_row_holds_no_nested_link, a_funnel_with_no_counts_shows_no_zeros, a_caught_planted_bug_and_a_survivor_look_different, an_output_that_cannot_be_read_is_your_call, a_huge_count_costs_no_time_and_breaks_nothing, animated_svg_stays_still_however_it_is_written, a_figure_past_its_limit_never_links_to_a_page, a_deeply_nested_scene_costs_only_itself, refused_scenes_share_the_embed_budget, only_the_first_scenes_start_playing_and_a_page_holds_a_bounded_number, a_mismatched_fence_forges_no_heading, the_phone_rule_for_commands_is_on_every_page, every_disclosure_shows_it_opens, the_player_names_its_controls_for_any_state)
+GUARD_TESTS = (no_ci_and_the_ci_phase_off_are_not_stops, a_failed_verify_is_not_ready_and_one_that_checked_nothing_is_your_call, each_missing_impact_field_is_your_call, every_old_way_of_naming_a_gap_is_listed, a_real_gap_starting_with_none_or_nothing_is_kept, the_sentinels_still_mean_nothing_to_say, every_way_of_writing_blocking_blocks, blocking_no_does_not_block, a_decision_starting_with_merge_keeps_its_blocking_mark, a_second_decisions_heading_adds_to_the_first, an_unreadable_report_is_your_call, evidence_on_another_commit_is_your_call, evidence_that_names_no_commit_is_your_call, a_check_whose_only_evidence_is_a_video_is_not_flagged_for_freshness, a_lens_that_failed_is_your_call_unless_switched_off, a_report_with_no_lenses_table_does_not_say_every_lens_ran, a_test_type_marked_not_run_is_your_call, a_merged_or_closed_pr_is_not_ready, evidence_outside_the_directory_is_your_call, criteria_no_check_names_are_your_call, the_rule_on_the_page_says_what_the_code_does, the_panel_values_come_from_their_sources, the_panel_turns_on_a_failure_and_on_missing_sources, a_not_run_check_is_not_counted_as_run, a_panel_row_holds_no_nested_link, a_funnel_with_no_counts_shows_no_zeros, a_caught_planted_bug_and_a_survivor_look_different, an_output_that_cannot_be_read_is_your_call, a_huge_svg_costs_no_time, a_check_naming_no_file_is_your_call, a_screenshot_is_not_claimed_to_cover_a_commit, a_full_gap_named_with_an_old_label_counts_once, the_same_old_gap_in_a_section_and_on_a_line_counts_once, a_wrapped_open_line_keeps_its_blocking_mark, a_reviewer_that_failed_on_a_not_run_line_is_your_call, a_panel_row_is_not_clear_when_it_holds_the_verdicts_reason, no_decisions_needed_is_no_decision, a_result_the_page_cannot_read_is_your_call, a_huge_count_costs_no_time_and_breaks_nothing, animated_svg_stays_still_however_it_is_written, a_figure_past_its_limit_never_links_to_a_page, a_deeply_nested_scene_costs_only_itself, refused_scenes_share_the_embed_budget, only_the_first_scenes_start_playing_and_a_page_holds_a_bounded_number, a_mismatched_fence_forges_no_heading, the_phone_rule_for_commands_is_on_every_page, every_disclosure_shows_it_opens, the_player_names_its_controls_for_any_state)
 
 
 REDESIGN_TESTS = (the_page_holds_its_parts_in_order, a_branch_with_nothing_still_has_its_parts_in_order, a_clean_branch_reads_ready, a_failed_ci_is_not_ready,

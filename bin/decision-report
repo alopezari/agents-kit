@@ -79,8 +79,7 @@ FIGURE_LINE = re.compile(r"!\[([^\[\]\n]*)\]\(([^()\n]*)\)")
 ESCAPED_BACKTICK = "\ue000"  # private use: a report's \` must not open a code span
 SVG_MOTION = re.compile(rb"(?i)@keyframes|animation|<(?:[\w-]+:)?(?:animate\w*|set)\b")
 SVG_MOTION_TAG = re.compile(rb"(?i)</?(?:[\w-]+:)?(?:animate\w*|set)\b[^<>]*>")  # not `set` at a word's end: <feOffset> is a filter
-SVG_UNSTOPPABLE = re.compile(rb"(?i)animation[^;{}\"']*!important")
-SVG_COMMENT = re.compile(rb"(?s)<!--.*?-->")  # a root written in a comment would take the stop rule
+SVG_DECLARATION_END = re.compile(rb"[;{}\"']")
 RESULT_DETAIL = re.compile(r"[*_]*(?:PASS|FAIL|NOT RUN)\b[*_]*\s*:\s*(.*)", re.S)
 SVG_ROOT = re.compile(rb"(?i)<svg\b[^<>]*>")
 SCENE_SUFFIX = ".scene.json"
@@ -143,6 +142,11 @@ OLD_NOT_PROVEN_LINE = re.compile(rf"^[ \t]*(?:[-*+][ \t]+)?[*_]*({OLD_NOT_PROVEN
 SAYS_NONE = re.compile(r"\W*(?:none|nothing(?: to \w+)?|n/a)\s*(?:$|[.:(,;—–-])", re.I)  # "None of the e2e tests…" is a gap, not a none
 BLOCKING_MARK = re.compile(r"(?<![\w-])[*_]*Blocking[*_]*:[*_]*[ \t]*([^\n—]*)", re.I)
 NOT_BLOCKING = re.compile(r"(?:no|false|none|n/a)\b", re.I)
+WRAPPED_LINE = re.compile(r"\n[ \t]+(?![-*][ \t])(?=\S)")  # a long entry's own lines: its fields, a Blocking mark among them, sit on the last
+NO_DECISIONS = re.compile(r"\W*no decisions?(?: (?:needed|required|to (?:make|take)))?\W*$", re.I)
+REVIEWER_FAILED = re.compile(r"\b(?:timed? ?out|fail\w*|exit(?:ed)?|errors?|crash\w*|unavailable|not installed|couldn.t|could not)\b", re.I)
+ANY_RESULT = re.compile(r"[*_]*(?:PASS|FAIL|NOT RUN)\b")
+FAILURE_LIKE_RESULT = re.compile(r"[*_]*(?:fail\w*|not[ _-]?run\w*|skip\w*)", re.I)
 SWITCHED_OFF = re.compile(r"\bswitched off by the user\b", re.I)
 IMPACT_NOT_RECORDED = "Impact not recorded"
 EXPECTED_LINE = re.compile(r"(?:[-*+] +)?[*_]*Expected[*_]*:[*_]* *(.+)")
@@ -155,7 +159,7 @@ VERDICT_REASONS = 3  # how many reasons the verdict's sentence names before "and
 MAX_DOTS = 200
 VERDICT_RULE = ("Not ready: CI failed, running, missing or unread; the local HEAD differs from the PR's; the PR is merged or closed; a check or verify failed; "
                 "a missing or stale review or validation; or an item marked as blocking. "
-                "Your call: a check or test type that did not run, a lens that failed, an unreadable report, evidence that is missing, on another commit or names none, "
+                "Your call: a check or test type that did not run, a result the page can't count, a lens or reviewer that failed, an unreadable report, evidence that is missing, on another commit or names none, "
                 "a criterion with no check, an impact not recorded, or verify missing or having checked nothing. "
                 "Ready: none of these. Only recorded values count.")
 LEVELS = ("e2e", "integration", "unit", "mutation", "property", "regex", "design", "a11y", "query budget", "migration", "manual")
@@ -206,13 +210,34 @@ def esc(text):
     return html.escape(CONTROL.sub("�", text), quote=True)
 
 
+def has_unstoppable_motion(data):
+    """An animation declared !important. Found declaration by declaration: one regex over the whole file takes minutes on a repeated word."""
+    for declaration in SVG_DECLARATION_END.split(data.lower()):
+        at = declaration.find(b"animation")
+        if at >= 0 and declaration.find(b"!important", at) >= 0:
+            return True
+    return False
+
+
+def without_svg_comments(data):
+    """The file with its comments cut, since a root written in a comment would take the stop rule. By hand for the same reason as above."""
+    kept, at = [], 0
+    while True:
+        start = data.find(b"<!--", at)
+        end = data.find(b"-->", start + 4) if start >= 0 else -1
+        if end < 0:
+            return b"".join(kept) + data[at:]
+        kept.append(data[at:start])
+        at = end + 3
+
+
 def still_svg(data):
     """An SVG with its own motion, stopped, or None when the file's own !important would win: nothing on the page could pause it once it is an image.
     Stopped rather than refused, since a Mermaid diagram carries animation rules it never plays."""
     if not SVG_MOTION.search(data):
         return data
-    data = SVG_COMMENT.sub(b"", data)
-    if SVG_UNSTOPPABLE.search(data):
+    data = without_svg_comments(data)
+    if has_unstoppable_motion(data):
         return None
     return SVG_ROOT.sub(lambda found: found.group(0) + b"<style>*{animation:none!important}</style>", SVG_MOTION_TAG.sub(b"", data), count=1)
 
@@ -646,6 +671,7 @@ class Page:
 
     def scene_player(self, scene):
         """(the player, its keyframes): four radios and two identical copies, because showing the other copy is what starts it over with no script.
+        A scene past the autoplay limit has a fifth radio to start from: stopped on its whole picture, where a paused one would hold its first frame, maybe blank.
         A copy holds no id, which it would repeat."""
         self.scenes += 1
         timeline = Timeline(f"s{self.scenes}", scene["seconds"])
@@ -656,14 +682,16 @@ class Page:
         title = esc(scene["title"])
         group = self.new_id(f"player-{self.scenes}")
         ids = {side: self.new_id(f"{group}-{side}") for side in ("ra", "pa", "rb", "pb")}
+        plays_at_once = self.scenes <= AUTOPLAY_SCENES
 
         def radio(side, label):
-            on = " checked" if side == ("ra" if self.scenes <= AUTOPLAY_SCENES else "pa") else ""
+            on = " checked" if side == "ra" and plays_at_once else ""
             return f'<input type="radio" class="sw s-{side} vh" name="{group}" id="{ids[side]}" aria-label="{label}: {title}"{on}>'
 
         def button(shows, side, icon, label):
             return f'<label class="btn {shows}" for="{ids[side]}"><i class="icon-{icon}"></i>{label}</label>'
         player = (f'<div class="player" role="group" aria-label="{title}" style="--L:{scene_num(scene["seconds"])}s">'
+                  + ("" if plays_at_once else f'<input type="radio" class="sw s-still vh" name="{group}" aria-label="Stopped: {title}" checked>')
                   + radio("ra", "Play or restart") + radio("pa", "Pause") + radio("rb", "Play or restart") + radio("pb", "Pause")
                   + f'<div class="copy copy-a">{drawn}</div><div class="copy copy-b">{drawn}</div><div class="ctl">'
                   + button("to-pa", "pa", "pause", "Pause") + button("to-ra", "ra", "play", "Play")
@@ -1043,7 +1071,7 @@ def parse_review(text):
                    if re.match(r"(?:#+[ \t]+)?(Self-review|Review)( \(|$)", line)), None)
     labels = "|".join(re.escape(o) for o in REVIEW_OUTCOMES)
     entries = []
-    for label, entry in pr_validation.labelled(text, rf"(?:{labels})(?: \([^)\n]*\))?"):
+    for label, entry in pr_validation.labelled(WRAPPED_LINE.sub(" ", text), rf"(?:{labels})(?: \([^)\n]*\))?"):
         entries.append((next(o for o in REVIEW_OUTCOMES if label.startswith(o)), label, entry))
     if header is None and not entries:
         return None
@@ -1526,9 +1554,10 @@ def not_proven_items(text):
         items.append((" — ".join([head] + others), fields, raw))
     old = [item for name, body in sections.items() if name.startswith(OLD_NOT_PROVEN) for item in note_items(body)]
     outside = "\n".join(line for line, fenced in outside_fences(text) if not fenced)
+    old = [OLD_NOT_PROVEN_LINE.sub("", item, count=1).strip() for item in old]
     old += [entry for _, entry in pr_validation.labelled(OLD_NOT_PROVEN_LINE.sub(lambda found: found.group(1).capitalize() + ":", outside), OLD_NOT_PROVEN_LABELS)]
     return ([item for item in items if not SAYS_NONE.match(item[0])]
-            + [(item, {}, item) for item in dict.fromkeys(old) if not SAYS_NONE.match(item)])
+            + [(item, {}, item) for item in dict.fromkeys(old) if not SAYS_NONE.match(item) and not any(item in raw for _, _, raw in items)])
 
 
 def guide_expected(text):
@@ -1560,17 +1589,35 @@ NO_OUTPUT = "no output"
 
 def evidence_freshness(page, row, merged_tree, scripts):
     """Whether a row's evidence covers the tree being merged: current, stale, unknown when an output doesn't say which commit
-    it saw, or NO_OUTPUT when the row has none that could: a screenshot or a video holds no commit."""
-    words = set()
+    it saw or the row names no evidence, or NO_OUTPUT when all it has is a screenshot or a video, which hold no commit."""
+    words, media = set(), False
     for _, real in named_files(page, row):
-        if real is None or not os.path.isfile(real) or os.path.dirname(real) == scripts or real.lower().endswith(IMAGE_AND_VIDEO):
+        if real is None or not os.path.isfile(real) or os.path.dirname(real) == scripts:
+            continue
+        if real.lower().endswith(IMAGE_AND_VIDEO):
+            media = True
             continue
         try:
             tree = review_stamp.evidence_tree(real)
         except OSError:
             tree = None
         words.add(None if not tree else "current" if tree == merged_tree else "stale")
-    return NO_OUTPUT if not words else "stale" if "stale" in words else "current" if words == {"current"} else "unknown"
+    return (NO_OUTPUT if media else "unknown") if not words else "stale" if "stale" in words else "current" if words == {"current"} else "unknown"
+
+
+def unread_results(lines):
+    """(first cell, result) of each row whose result reads like a failure or a skip in words the stamp and the page don't count: left out, it would read as nothing wrong."""
+    names = None
+    for line in lines:
+        cells = review_stamp.table_cells(line)
+        if not cells:
+            names = None
+        elif {"Result", "Evidence"} <= {cell.strip("*_") for cell in cells}:
+            names = [cell.strip("*_") for cell in cells]
+        elif names and len(cells) > names.index("Result"):
+            result = cells[names.index("Result")]
+            if FAILURE_LIKE_RESULT.match(result) and not ANY_RESULT.match(result):
+                yield cells[0], result
 
 
 def verdict_of_change(stops, calls):
@@ -1748,6 +1795,9 @@ def read_change(page, page_path, evidence, off, phases_error, paths, texts, whys
                     enumerate((e for e in c.entries if e[0] == "Open"), 1)]
     c.lenses = section_table(texts["review"], "Lenses", ("lens", "model", "findings", "confirmed", "outcomes")) if c.review else None
     c.failed_lenses = [lens for lens in c.lenses or [] if not LENS_COUNT.fullmatch(lens["findings"].strip())]
+    c.failed_reviewers = [entry for outcome, _, entry in c.entries
+                          if outcome == "Not run" and REVIEWER_FAILED.search(entry) and not SAYS_NONE.match(entry) and not SWITCHED_OFF.search(entry)]
+    c.unread_results = list(unread_results(texts["validation"].split("\n"))) if c.validation_ok else []
     c.briefs, c.briefs_why = lens_briefs()
     notes = c.notes or {}
     c.problem_facts, c.problem_text = split_facts(notes.get("problem") or "", PROBLEM_FACTS)
@@ -1756,7 +1806,7 @@ def read_change(page, page_path, evidence, off, phases_error, paths, texts, whys
     legacy = note_items(notes.get("decide") or "")  # only here is a "Merge…" item the recommendation: under Decisions it is a decision
     c.merge_note = next((item for item in legacy if re.match(MERGE_NOTE, item, re.I)), None)
     c.decisions = [parse_decision(item) for item in note_items(notes.get("decisions") or "") + legacy
-                   if item is not c.merge_note and not SAYS_NONE.match(item)]
+                   if item is not c.merge_note and not SAYS_NONE.match(item) and not NO_DECISIONS.match(item)]
     return c
 
 
@@ -1953,7 +2003,11 @@ def freshness_sentence(c):
     if not set(words) & {"current", NO_OUTPUT} or any(row["fresh"] == "unknown" and row["result"] in ("PASS", "FAIL") for row in c.rows):
         return (f'<p id="freshness"><strong class="dim">Whether this evidence covers <code>{esc(commit)}</code> is unknown:</strong> '
                 f"at least one output doesn&#x27;t say which commit it ran on, so the page can&#x27;t tell. {tally}</p>")
-    return f'<p id="freshness">Every check&#x27;s evidence covers commit <code>{esc(commit)}</code>, the one you would merge. {tally}</p>'
+    media = counted(words.count(NO_OUTPUT), "check")
+    if "current" not in words:
+        return (f'<p id="freshness">No output here names a commit: every check has only a screenshot or video, which can&#x27;t show that it covers <code>{esc(commit)}</code>. {tally}</p>')
+    return (f'<p id="freshness">Every output covers commit <code>{esc(commit)}</code>, the one you would merge.'
+            + (f" {media} {'has' if words.count(NO_OUTPUT) == 1 else 'have'} only a screenshot or video, which can&#x27;t name a commit." if NO_OUTPUT in words else "") + f" {tally}</p>")
 
 
 def layers_table(c):
@@ -2343,6 +2397,10 @@ def verdict_reasons(c):
     for lens in c.failed_lenses:
         if not SWITCHED_OFF.search(lens["findings"]):
             calls.append(("#review-lenses", f'the {lens["model"]} {lens["lens"]} lens did not run', page.inline(lens["findings"])))
+    for entry in c.failed_reviewers:
+        calls.append(("#review-not-run", "a reviewer did not run", page.inline(entry)))
+    for check, result in c.unread_results:
+        calls.append(("#testing", f"{check} has a result the page can't count: {result}", "Read it as not passed until the report says PASS, FAIL or NOT RUN."))
     for skipped in c.not_run_types.values():
         calls.append(("#testing", f'{skipped["type"]} tests did not run', page.inline(skipped["evidence"]) or "No reason recorded."))
     if c.criteria_numbers and c.validation_ok and not c.ac_known:
@@ -2435,18 +2493,20 @@ def hero(c, title, stops, calls, notes):
     else:
         tested = "Not recorded."
     fresh_words = [row.get("fresh") for row in c.rows]
-    test_word = "Clear" if c.validation_ok and not fails and not not_run and "stale" not in fresh_words and "unknown" not in fresh_words else "Read this"
+    validation_state = source_state(c, "validation", "validate")
+    test_word = ("Clear" if c.validation_ok and validation_state is None and c.stamps["validate"] == "current" and not fails and not not_run and "stale" not in fresh_words and "unknown" not in fresh_words
+                 and not c.not_run_types and not c.uncovered and not c.missing_files and not c.unread_results else "Read this")
     if c.review:
         kinds = {outcome: sum(e[0] == outcome for e in c.entries) for outcome in REVIEW_OUTCOMES}
         reviewed = f'{kinds["Fixed"]} fixed, {kinds["Rejected"]} rejected, {kinds["Open"]} left open.'
     else:
         reviewed = "Not recorded."
-    review_word = "Clear" if c.review and not c.open_items and c.stamps["review"] == "current" else "Read this"
+    lens_down = any(not SWITCHED_OFF.search(lens["findings"]) for lens in c.failed_lenses)
+    review_word = "Clear" if c.review and not c.open_items and c.stamps["review"] == "current" and not lens_down and not c.failed_reviewers else "Read this"
     limits = limit_rows(c)
     gaps = len(limits)
     all_named = not any(impact_missing(fields, GAP_IMPACT) for _, fields in limits)
     proven = (f'{counted(gaps, "gap")} recorded' + (", each named with what it would mean for you." if all_named else ".")) if gaps else "No gap recorded."
-    validation_state = source_state(c, "validation", "validate")
     unread = validation_state is not None and validation_state not in QUIET
     if validation_state:
         proven = "Not recorded." if unread else f"Validation {validation_state}."
@@ -3018,7 +3078,8 @@ PLAYER_STYLE = """
 .ctl{display:flex;gap:.5rem;flex-wrap:wrap}
 .btn{display:none;align-items:center;gap:.45rem;min-height:2.5rem;padding:0 .75rem;border:1px solid var(--dim);cursor:pointer;font-size:.92rem;font-weight:600;user-select:none}
 .btn:hover{border-color:var(--ok)}
-.s-ra:checked~.ctl .to-pa,.s-pa:checked~.ctl .to-ra,.s-rb:checked~.ctl .to-pb,.s-pb:checked~.ctl .to-rb{display:inline-flex}
+.s-still:checked~.copy-a *,.s-still:checked~.copy-a .prog::after{animation:none}.s-still:checked~.copy-a .prog{visibility:hidden}
+.s-still:checked~.ctl .to-ra,.s-ra:checked~.ctl .to-pa,.s-pa:checked~.ctl .to-ra,.s-rb:checked~.ctl .to-pb,.s-pb:checked~.ctl .to-rb{display:inline-flex}
 .s-ra:checked~.ctl .re-b,.s-pa:checked~.ctl .re-b,.s-rb:checked~.ctl .re-a,.s-pb:checked~.ctl .re-a{display:inline-flex}
 .sw:focus-visible~.ctl{outline:2px solid var(--ok);outline-offset:3px}
 .icon-pause{width:.7rem;height:.8rem;border-inline:.22rem solid currentColor}
