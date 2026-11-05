@@ -4265,7 +4265,19 @@ def a_panel_row_is_not_clear_when_it_holds_the_verdicts_reason(base):
     for name, change in (("type", type_not_run), ("ac", no_ac_named), ("stale", lambda repo, _: put(os.path.join(repo, "later.txt"), "x"))):
         markup = broken(name, change)
         assert word_of(markup, "Testing") == "Read this", (name, word_of(markup, "Testing"))
+    def nothing_left_open(repo):
+        with open(path_of(repo, "review")) as fh:
+            lines = fh.read().split("\n")
+        put(path_of(repo, "review"), "\n".join(line for line in lines if not line.startswith(("Open:", "Not run:"))))
+        stamp(repo, "review")
+
     assert word_of(broken("lens", lens_failed), "Code review") == "Read this"
+    settled = broken("settled", lambda repo, _: nothing_left_open(repo))
+    assert word_of(settled, "Code review") == "Clear", word_of(settled, "Code review")
+    one_lens_down = broken("down", lambda repo, _: (nothing_left_open(repo), lens_failed(repo, None)))
+    assert word_of(one_lens_down, "Code review") == "Read this", "a lens that didn't run leaves the row unread, even with nothing open"
+    worded = broken("worded", lambda repo, evidence: (report_edit(repo, "validation", "one discount line | PASS |", "one discount line | FAILED |"), stamp(repo, "validate")))
+    assert word_of(worded, "Testing") == "Read this", "a result the page can't count isn't a clear row"
 
 
 def no_decisions_needed_is_no_decision(base):
@@ -4312,6 +4324,7 @@ def animated_svg_stays_still_however_it_is_written(base):
             if b"<rect" in item.lower():
                 assert not re.search(rb"(?i)<[\w:]*animate", item), item
                 assert re.match(rb"(?i)\s*<svg\b[^>]*><style>\*\{animation:none!important\}", item), item
+                assert b"infinite!important" not in item, "an author's !important outlasts the stop rule, so this figure is refused"
         assert "moving.svg" in markup or "Moving." in markup, svg
 
 
