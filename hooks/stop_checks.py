@@ -712,7 +712,7 @@ def block(payload, problems, streak, notice=None):
     if problems:
         reason = (
             "Before finishing, resolve these or explain to the user why they are intended. If you can't resolve one "
-            "honestly, report it under **Blocked on me** with what you tried; never work around a check "
+            "honestly, tell the user what you tried and that it is still open; never work around a check "
             "(skipping or loosening tests, deleting files, disabling a rule, editing the hook):\n- "
             + "\n- ".join(problems)
         )

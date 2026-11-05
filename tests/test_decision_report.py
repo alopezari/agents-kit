@@ -984,8 +984,8 @@ def hostile_text_renders_inert(base):
 # AC7
 
 def the_skills_regenerate_and_link_the_page(base):
-    for skill, needles in (("kit-ship", ("reports html", "decision-notes", "Review and testing")),
-                           ("kit-follow-pr", ("reports html", "Review and testing"))):
+    for skill, needles in (("kit-ship", ("reports html", "decision-notes", "link the decision page by its absolute path", "the error")),
+                           ("kit-follow-pr", ("reports html", "link the page by its absolute path", "the error"))):
         with open(os.path.join(KIT, "skills", skill, "SKILL.md")) as fh:
             body = fh.read()
         for needle in needles:

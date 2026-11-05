@@ -43,7 +43,7 @@ In Claude Code with the kit plugin, each lens is an agent type, on Opus at high 
 
 When Maintainability is selected, run `~/.agents/bin/structure-facts <base>` once and give its whole output to that reviewer, `not measured` lines included, so it knows which facts are missing: the cognitive complexity and NLOC of each function the change touches at both ends, and the clones it adds. `bundle.sh <base> Maintainability` appends it itself.
 
-The Correctness lens always runs, at every risk level, and its tables go into the final report. Also run the repo's personal checks when they exist, with `python3 ~/.agents/hooks/stop_checks.py verify`, which runs `~/.agents/repos/<repo>/verify` and stamps a pass. Run it whenever the change edits tests, even without personal checks: it also prints a `warning:` line for each assertion the change removes, loosens or gives a new expected value, and each is a Tests-lens finding to verify.
+The Correctness lens always runs, at every risk level, and its tables go into the saved report. Also run the repo's personal checks when they exist, with `python3 ~/.agents/hooks/stop_checks.py verify`, which runs `~/.agents/repos/<repo>/verify` and stamps a pass. Run it whenever the change edits tests, even without personal checks: it also prints a `warning:` line for each assertion the change removes, loosens or gives a new expected value, and each is a Tests-lens finding to verify.
 
 ### Cross-model reviewer
 
@@ -79,7 +79,7 @@ Reviewers produce false positives, and a fix for a non-bug is a new bug. For eac
    A verdict without evidence is uncertain. Forcing this choice beats adding reviewers ([arXiv 2608.18167](https://arxiv.org/abs/2608.18167)).
 
    Check the severity the same way: a Pre-existing finding is one the base branch already has (`git show <merge-base>:<file>`) and the change doesn't make reachable; otherwise it keeps the reviewer's Important or Nit.
-3. Fix confirmed Important findings with the smallest change, and add the failing test when there is one. Fix at most five confirmed Nits, the ones worth a reader's time, unless the review guide sets another cap, and drop the rest from the report. A confirmed Pre-existing finding is not fixed in this change: it goes on the report's `Pre-existing:` line and under **Found**, and stays Pre-existing in later rounds.
+3. Fix confirmed Important findings with the smallest change, and add the failing test when there is one. Fix at most five confirmed Nits, the ones worth a reader's time, unless the review guide sets another cap, and drop the rest from the report. A confirmed Pre-existing finding is not fixed in this change: it goes on the report's `Pre-existing:` line and in what you tell the user at the end of your reply, and stays Pre-existing in later rounds.
 4. Put uncertain findings in front of the human; don't silently fix or drop them.
 
 Findings reported by two independent reviewers, or by both model families, deserve extra attention but still need verification.
@@ -111,14 +111,14 @@ Log every lens that ran, the cross-model passes included, confirmed meaning a fi
 
 When a lens ran in both model families in step 2, add `--shared` to both rows: how many of that row's confirmed findings the other family also reported, a defect both found counting once per row. Claude confirms A and B, Codex confirms B and C: `--shared 1` on both. It is what the monthly job weighs the cross-model pass by, so leave it out when the other family's pass failed or was skipped: no `--shared` means unknown, not zero. Log each re-check round from step 4 as `correctness-recheck`, without `--shared`, so its findings don't count toward the first pass's.
 
-Save the report to `$(~/.agents/bin/reports path review)`. Put its verdict and counts in the final message, as AGENTS.md → Communication asks; the full tables stay in the file. Use this shape; it can go straight into the PR's validation notes:
+Save the report to `$(~/.agents/bin/reports path review)`. Tell the user its verdict and counts in a sentence, and link the decision page once it's written, as AGENTS.md → Communication asks; the full tables stay in the file. Use this shape; it can go straight into the PR's validation notes:
 
 ```
 Review (risk: standard; lenses: correctness, tests, maintainability, security; cross-model: codex; re-check rounds: 1 (default))
 Spec table, paths table and derived-data table (from the Correctness lens)
 Fixed:     <finding> — <file:line> — evidence: <failing test or output before the fix> — <test that now covers it>
 Rejected:  <finding> — evidence: <file:line where it's handled, or the command that disproves it>
-Pre-existing: <finding> — <file:line> — evidence: <the line on the base branch> (also under Found in the final message)
+Pre-existing: <finding> — <file:line> — evidence: <the line on the base branch> (also told to the user at the end of the reply)
 Open:      <finding> — <uncertain | confirmed, not fixed after the last re-check: why | needs another round: the design question> — <evidence that would settle it, or the decision for the human> — If it goes wrong: <what the user would see> — Worst case: <the worst it can do> — Can wait because: <why the merge needn't wait>
 Not run:   <lens or reviewer skipped, and why>
 Worst catch: <the worst thing this review stopped, in words about the user's experience>
