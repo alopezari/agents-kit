@@ -19,7 +19,7 @@ The kit doesn't trust the agent's account of its work: gates read recorded evide
 ## Operating Context
 - The flow: spec → build → review → validate → ship (opens the PR, waits for CI) → the owner decides the merge. The owner decides at the PR and nowhere earlier.
 - Reports are Markdown files per branch in `.git/agents/` (spec, verify, review, validation, checks guide, PR body), with evidence files and check scripts in an evidence directory. They are listed by `bin/reports`, and `bin/prune-merged` deletes them after the merge.
-- The decision page is read in two passes: about 30 seconds to decide whether it can merge, then the annex only when something doesn't add up.
+- The decision page is read in two passes: about 30 seconds to decide whether it can merge, then the section behind whatever doesn't add up.
 
 ## Capabilities and Constraints
 - Pages generated from the kit's reports are local files: they are never published by the kit, since evidence can hold sensitive data. They make no network requests and run no scripts.
