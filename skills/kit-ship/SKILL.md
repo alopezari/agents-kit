@@ -205,17 +205,15 @@ cd <the session's directory> && ~/.agents/bin/free-branch <worktree path>
 
 It removes a worktree you created and detaches the one the session runs in (the session's hooks need that directory). It refuses, changing nothing, while anything there isn't committed and pushed, or, to remove it, while it holds ignored files an install or build doesn't bring back (a `.env`, local notes): it lists them, and they're the user's call. Give the user the switch command it prints. From then on the branch's reports are read from a checkout of it: the main checkout once the user has switched, or a worktree added for a fix (follow-pr).
 
-### Report
+### What to tell the user
 
-```
-PR:        <url> (opened | already open: <N> commits pushed, description <refreshed | unchanged>)
-CI:        passed | failed: <checks> (kit-follow-pr can take it) | still running | no checks | GitHub unreadable | no CI | not waited: ci switched off
-Branch:    free (<worktree removed | detached>; `cd <main checkout> && git switch <branch>`) | in the main checkout
-Evidence:  verify <PASS | FAIL | checked nothing: <tests run instead>> · review <stamp ok> · validate <stamp ok | not needed: tests/docs only>
-Decision:  <the page's absolute path> | not written: <the error reports html printed>
-```
+Lead with the outcome and the user's next step, in a few plain sentences, not a form. Draw on these facts, each only when it matters now, and say the expected case briefly or not at all:
 
-The final report's **Review and testing** section links the decision page first, by its absolute path, or says it wasn't written and gives the error.
+- The pull request's URL; when it was already open, how many commits you pushed and whether you refreshed its description.
+- CI: passed; failed, naming the checks (kit-follow-pr can take it); still running; no checks; GitHub unreadable; no CI; or not waited because `ci` is switched off.
+- The branch: the `cd <main checkout> && git switch <branch>` command when you freed it, or why it is still held.
+- The evidence, only when it isn't the expected case: verify checked nothing (and the tests you ran instead), or the validation wasn't needed because only tests or docs changed.
+- The decision page, linked by its absolute path; don't repeat its tables, counts or guide steps. When it wasn't written: the error `reports html` printed, each verdict and its counts in a sentence, and no older file linked as current.
 
 ## Part 2. After the merge
 
@@ -262,13 +260,12 @@ When the user says the deploy is done, or you ran it, read the verification step
 
 PR outcomes (merged, reverted) reach the monthly analysis on their own; nothing to log here.
 
-### Report
+### What to tell the user
 
-```
-Ship:      <PR url>, merged <date>
-Steps:     ship.md <used | drafted: <sections inferred or unknown>>
-Guide:     deploy + <N> verification steps given to the user | run here (installed on this machine)
-Rollback:  <from ship.md, with this change's values> (+ <data left behind, or none>)
-Result:    <P steps PASS/FAIL, from their evidence> | waiting for the deploy
-Closed:    issue update <drafted/posted> · notes <updated/nothing new> · branch <deleted/kept>
-```
+Lead with the result (which P steps passed or failed, from their evidence, or that you're waiting for the deploy) and what the user does next, in a few plain sentences, not a form. Draw on these facts, each only when it matters now:
+
+- Which pull request shipped, and the date it merged.
+- Which sections of ship.md you drafted, inferred or found unknown, when it didn't supply every step.
+- The deploy guide and its verification steps you gave the user, or that you ran them here because the repo is installed on this machine.
+- The rollback, from ship.md with this change's values, and any data it leaves behind.
+- What you closed: the issue update drafted or posted, the repo notes updated, the branch deleted or kept and why.

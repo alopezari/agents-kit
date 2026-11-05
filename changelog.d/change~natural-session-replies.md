@@ -1,0 +1,1 @@
+- The agent's replies read like a colleague talking instead of seven fixed headings (Status, What it does, How sure, Review and testing, Blocked on me, Changed and Found). What decides a merge stays on the decision page, which the reply links; the rules behind the headings still hold: only observed states, stale evidence is not proof, merge and deploy are yours.

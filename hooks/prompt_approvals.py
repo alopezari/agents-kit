@@ -22,7 +22,7 @@ either blocks the message.
 The objects guard_mcp.py records a session's approved writes to outlast the user's messages: this hook only deletes
 the ones older than guard_mcp.OBJECT_APPROVAL_HOURS.
 When the message arrives RETURN_GAP_HOURS or more after the newest conversation entry in the transcript's tail, the
-hook tells the agent to run `~/.agents/bin/reports brief` and open its reply with Status, What it does and How sure.
+hook tells the agent to run `~/.agents/bin/reports brief` and say where the task stands, what was proven and what's left.
 It runs no report itself, and a tail it can't read only leaves that out (logged as return-gap-unreadable).
 """
 import datetime
@@ -53,9 +53,8 @@ LOCAL_COMMAND = re.compile(r"\s*<(command-|local-command-|bash-)")
 RETURN_BRIEF = (
     "The user is back after {hours:.0f} hours away. Before answering, run `~/.agents/bin/reports brief` from the "
     "checkout of the branch this conversation was about (`~/.agents/bin/reports --branch <branch> brief` when that "
-    "checkout is gone or detached), and open your reply with **Status**, **What it does** and **How sure** for that "
-    "task, as AGENTS.md's Communication section describes them. When the brief fails or finds no reports, say the "
-    "status is unknown, and why.")
+    "checkout is gone or detached), and say where the task stands, what was proven and what wasn't, and what's left, as AGENTS.md's "
+    "Communication section asks. When the brief fails or finds no reports, say the status is unknown, and why.")
 # Written without accents, as plain() leaves text. An offer's verb opens its phrase ("¿la creo?", "¿quieres que la
 # cree?", "¿puedo crearla?", "want me to create…?"); a verb that offers a read as often ("abro", "open", "make", "log",
 # "dejo") is left out, and so are orders that as often revise the draft ("cambia", "add", "edit"): those approve nothing.

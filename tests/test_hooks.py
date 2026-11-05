@@ -3397,6 +3397,15 @@ def stop_continues_only_once(base):
     assert run_hook("stop_checks.py", {"session_id": RUN + "s2", "cwd": repo, "stop_hook_active": True}) is None
 
 
+def the_stop_message_forbids_working_around_a_check_and_names_no_heading(base):
+    repo = new_repo(base)
+    open(os.path.join(repo, "app.py"), "a").write("breakpoint()\n")
+    reason = stop(RUN + "s2b", repo, [os.path.join(repo, "app.py")]).get("reason", "")
+    assert "Debug leftover" in reason, reason
+    assert "never work around a check" in reason and "tell the user what you tried" in reason, reason
+    assert not re.search(r"\b(?:Status|What it does|How sure|Review and testing|Blocked on me|Changed|Found)\b|\*\*", reason), f"the reason names a heading: {reason}"
+
+
 def stop_flags_secrets_redacted(base):
     repo = new_repo(base)
     token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
@@ -4659,10 +4668,14 @@ def coming_back_after_hours_asks_for_the_status_first(base):
         return json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"] if done.stdout.strip() else None
 
     ask = "¿Está ya terminado?"
-    ended = claude("assistant", "Blocked on me: merge #12 and deploy.", 8)
+    ended = claude("assistant", "Nothing left on my side: merge #12 and deploy.", 8)
     told = context(ask, claude("user", "fix the report", 9), ended)
-    assert told and "reports brief" in told and "Status" in told and "How sure" in told, told
+    assert told and "reports brief" in told, told
+    assert "where the task stands" in told and "what was proven" in told and "what's left" in told, told
     assert "--branch" in told and "unknown" in told, "where to read it when the checkout is gone, and what if it fails"
+    assert "no reports" in told, "what to say when the brief finds nothing"
+    assert "detached" in told and "why" in told, "the gone-or-detached case, and saying why the status is unknown"
+    assert not re.search(r"\b(?:Status|What it does|How sure|Review and testing|Blocked on me|Changed|Found)\b|\*\*", told), f"the message names a heading: {told}"
     assert context(ask, claude("assistant", "Done.", 7 + 59 / 60)) is None, "under the gap: nothing"
     harness_now = {"type": "attachment", "timestamp": stamp(0), "attachment": {"type": "hook_additional_context"}}
     assert context(ask, ended, claude("user", ask, 0), harness_now), \
@@ -5548,7 +5561,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
          validate_stamp_refuses_a_suite_run_that_doesnt_count, validate_stamp_suite_overlay_edge_cases,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, evidence_env_keeps_its_bounds, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, report_paths_asks_one_reports_process_for_all_kinds, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
-          stop_falls_back_to_auto_verify, stop_continues_only_once,
+          stop_falls_back_to_auto_verify, stop_continues_only_once, the_stop_message_forbids_working_around_a_check_and_names_no_heading,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
           stop_asks_once_about_files_outside_the_change_map, stop_asks_about_removed_assertions,
