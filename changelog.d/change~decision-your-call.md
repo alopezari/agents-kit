@@ -1,0 +1,1 @@
+- A decision page written without decision notes, or with an empty notes file, now says "Your call" and names the missing notes, instead of "Ready to merge" with every explanation reading "Not recorded". After a merge, ship regenerates a branch's page from a checkout of that branch, since `reports html` there writes the default branch's page, not the PR's.

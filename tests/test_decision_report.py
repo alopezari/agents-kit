@@ -985,7 +985,9 @@ def hostile_text_renders_inert(base):
 
 def the_skills_regenerate_and_link_the_page(base):
     for skill, needles in (("kit-ship", ("reports html", "decision-notes", "linked by its absolute path", "don't repeat its tables",
-                                  "the error", "each verdict and its counts", "no older file linked as current")),
+                                  "the error", "each verdict and its counts", "no older file linked as current",
+                                  "from a checkout of the PR's head branch", "before `~/.agents/bin/prune-merged` removes it")),
+                           ("kit-validate", ("names that checkout: the PR's head branch, never the default branch",)),
                            ("kit-follow-pr", ("reports html", "link the page by its absolute path", "don't repeat its tables", "the error",
                                        "each verdict and its counts", "link no older file as current"))):
         with open(os.path.join(KIT, "skills", skill, "SKILL.md")) as fh:
@@ -2877,6 +2879,39 @@ def a_phase_off_never_blocks(base):
     assert_verdict(markup, "Ready")
 
 
+def notes_reasons(markup):
+    why = re.search(r'<details[^>]*id="verdict-why".*?</details>', markup, re.S).group(0)
+    return [(href, text(phrase)) for href, phrase in re.findall(r'<li><a href="([^"]*)">([^<]*decision notes[^<]*)</a>', why)]
+
+
+def missing_decision_notes_are_your_call(base):
+    for n, notes in enumerate((None, " \n\t\n", "\ufeff\n")):
+        here = os.path.join(base, str(n))
+        os.makedirs(here)
+        repo, _, gh = ready_branch(here, notes=notes)
+        markup = generate(repo, here, gh)[1]
+        assert_verdict(markup, "Your call")
+        assert "the decision notes are missing" in verdict_of(markup), verdict_of(markup)
+        assert any(path_of(repo, "decision-notes") in item for item in verdict_items(markup, "calls")), "the reason names where the notes go"
+        reasons = notes_reasons(markup)
+        assert len(reasons) == 1 and reasons[0][0] == "#annex-decision-notes" and "missing" in reasons[0][1], (notes, reasons)
+        assert "missing decision notes" in text(re.search(r'<details[^>]*id="verdict-why".*?</details>', markup, re.S).group(0)), "the rule names them"
+    here = os.path.join(base, "ci")
+    os.makedirs(here)
+    repo, _, gh = ready_branch(here, notes=None)
+    gh["checks"][git(repo, "rev-parse", "HEAD")]["check_runs"][0]["conclusion"] = "failure"
+    markup = generate(repo, here, gh)[1]
+    assert_verdict(markup, "Not ready", "CI failed")
+    assert sum("decision notes are missing" in item for item in verdict_items(markup, "calls")) == 1, verdict_items(markup, "calls")
+    assert not any("decision notes" in item for item in verdict_items(markup, "stops")), verdict_items(markup, "stops")
+    here = os.path.join(base, "unreadable")
+    os.makedirs(here)
+    repo, _, gh = ready_branch(here)
+    put(path_of(repo, "decision-notes"), b"\xff\xfe not text")
+    reasons = notes_reasons(generate(repo, here, gh)[1])
+    assert len(reasons) == 1 and "can't be read" in reasons[0][1], reasons
+
+
 def an_unreadable_guide_is_your_call(base):
     repo, _, gh = ready_branch(base)
     put(path_of(repo, "checks-guide"), b"\xff\xfe not text")
@@ -4416,7 +4451,7 @@ REDESIGN_TESTS = (the_page_holds_its_parts_in_order, a_branch_with_nothing_still
                   a_stale_review_is_not_ready, a_missing_validation_is_not_ready, a_stale_validation_is_not_ready, stale_evidence_is_not_ready,
                   a_local_head_past_the_pr_is_not_ready, a_blocking_open_finding_is_not_ready, a_blocking_gap_is_not_ready, a_blocking_decision_is_not_ready,
                   a_not_run_row_is_your_call, an_open_finding_without_its_impact_is_your_call, a_gap_without_its_impact_is_your_call, a_phase_off_never_blocks,
-                  an_unreadable_guide_is_your_call, the_first_screen_holds_no_status_tokens, the_problem_carries_its_fact_sheet, a_background_comes_before_the_problem,
+                  an_unreadable_guide_is_your_call, missing_decision_notes_are_your_call, the_first_screen_holds_no_status_tokens, the_problem_carries_its_fact_sheet, a_background_comes_before_the_problem,
                   missing_facts_read_not_recorded, the_solution_carries_its_fact_sheet_and_map, a_blank_regression_check_reads_not_checked, the_skills_document_the_new_notes,
                   a_figure_embeds_in_place, an_svg_stays_an_inert_image, a_figure_series_is_a_static_strip, a_single_image_is_not_a_series,
                   an_svg_with_its_own_motion_holds_still, print_shows_the_folds_content, a_lost_frame_costs_that_frame,

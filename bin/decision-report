@@ -160,7 +160,7 @@ MAX_DOTS = 200
 VERDICT_RULE = ("Not ready: CI failed, running, missing or unread; the local HEAD differs from the PR's; the PR is merged or closed; a check or verify failed; "
                 "a missing or stale review or validation; or an item marked as blocking. "
                 "Your call: a check or test type that did not run, a result the page can't count, a lens or reviewer that failed, an unreadable report, evidence that is missing, on another commit or names none, "
-                "a criterion with no check, an impact not recorded, or verify missing or having checked nothing. "
+                "a criterion with no check, an impact not recorded, missing decision notes, or verify missing or having checked nothing. "
                 "Ready: none of these. Only recorded values count.")
 LEVELS = ("e2e", "integration", "unit", "mutation", "property", "regex", "design", "a11y", "query budget", "migration", "manual")
 # triage's and the quality log's names for a test type, as a Test types row or a Level cell may give them
@@ -2419,6 +2419,11 @@ def verdict_reasons(c):
     for kind, label in (("checks-guide", "the checks guide"), ("follow-pr", "the follow-pr report"), ("decision-notes", "the decision notes")):
         if texts[kind] is None and not whys[kind].startswith("no report") and not (kind == "checks-guide" and "validate" in c.off):
             calls.append((f"#annex-{kind}", f"{label} can't be read", f'{state("unavailable", "need")} {esc(whys[kind])}'))
+    notes_text = texts["decision-notes"]
+    notes_missing = whys["decision-notes"].startswith("no report") if notes_text is None else not notes_text.replace("\ufeff", "").strip()
+    if notes_missing:
+        calls.append(("#annex-decision-notes", "the decision notes are missing",
+                      f'{state("missing" if notes_text is None else "empty", "need")} {esc(MAKERS["decision-notes"])}, at {page.path(c.paths["decision-notes"])}'))
     if texts["pr-body"] is None and not whys["pr-body"].startswith("no report"):
         notes.append(("#annex-pr-body", "PR description", f'{state("unavailable", "need")} {esc(whys["pr-body"])}'))
     if c.ship_text is None and not c.ship_why.startswith("no report"):
