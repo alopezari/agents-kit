@@ -3343,6 +3343,7 @@ def the_pause_rule_covers_the_progress_bar(base):
 
 def a_scene_holds_still_without_motion(base):
     style = stylesheet(scene_page(base, {"coupon": SCENE}))
+    assert re.search(r"(?<![\w-])\.sw\{bottom:", style), "the browser scrolls to the focused radio, and the focus ring is on the controls below the picture"
     for media in ("(prefers-reduced-motion:reduce)", "print"):
         blocks = [body for body in re.findall(r"@media " + re.escape(media) + r"\{((?:[^{}]*\{[^{}]*\})*)\}", style) if ".player" in body]
         assert len(blocks) == 1, (media, blocks)

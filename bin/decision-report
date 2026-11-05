@@ -3081,6 +3081,7 @@ PLAYER_STYLE = """
 .s-still:checked~.copy-a *,.s-still:checked~.copy-a .prog::after{animation:none}.s-still:checked~.copy-a .prog{visibility:hidden}
 .s-still:checked~.ctl .to-ra,.s-ra:checked~.ctl .to-pa,.s-pa:checked~.ctl .to-ra,.s-rb:checked~.ctl .to-pb,.s-pb:checked~.ctl .to-rb{display:inline-flex}
 .s-ra:checked~.ctl .re-b,.s-pa:checked~.ctl .re-b,.s-rb:checked~.ctl .re-a,.s-pb:checked~.ctl .re-a{display:inline-flex}
+.sw{bottom:1.25rem}
 .sw:focus-visible~.ctl{outline:2px solid var(--ok);outline-offset:3px}
 .icon-pause{width:.7rem;height:.8rem;border-inline:.22rem solid currentColor}
 .icon-play{width:0;height:0;border-left:.7rem solid currentColor;border-block:.42rem solid transparent}
