@@ -3403,7 +3403,7 @@ def the_stop_message_forbids_working_around_a_check_and_names_no_heading(base):
     reason = stop(RUN + "s2b", repo, [os.path.join(repo, "app.py")]).get("reason", "")
     assert "Debug leftover" in reason, reason
     assert "never work around a check" in reason and "tell the user what you tried" in reason, reason
-    assert not re.search(r"Blocked on me|\*\*", reason), f"the reason names a heading: {reason}"
+    assert not re.search(r"\b(?:Status|What it does|How sure|Review and testing|Blocked on me|Changed|Found)\b|\*\*", reason), f"the reason names a heading: {reason}"
 
 
 def stop_flags_secrets_redacted(base):
@@ -4674,7 +4674,8 @@ def coming_back_after_hours_asks_for_the_status_first(base):
     assert "where the task stands" in told and "what was proven" in told and "what's left" in told, told
     assert "--branch" in told and "unknown" in told, "where to read it when the checkout is gone, and what if it fails"
     assert "no reports" in told, "what to say when the brief finds nothing"
-    assert not re.search(r"Status|What it does|How sure|\*\*", told), f"the message names a heading: {told}"
+    assert "detached" in told and "why" in told, "the gone-or-detached case, and saying why the status is unknown"
+    assert not re.search(r"\b(?:Status|What it does|How sure|Review and testing|Blocked on me|Changed|Found)\b|\*\*", told), f"the message names a heading: {told}"
     assert context(ask, claude("assistant", "Done.", 7 + 59 / 60)) is None, "under the gap: nothing"
     harness_now = {"type": "attachment", "timestamp": stamp(0), "attachment": {"type": "hook_additional_context"}}
     assert context(ask, ended, claude("user", ask, 0), harness_now), \

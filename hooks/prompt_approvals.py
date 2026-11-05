@@ -53,7 +53,7 @@ LOCAL_COMMAND = re.compile(r"\s*<(command-|local-command-|bash-)")
 RETURN_BRIEF = (
     "The user is back after {hours:.0f} hours away. Before answering, run `~/.agents/bin/reports brief` from the "
     "checkout of the branch this conversation was about (`~/.agents/bin/reports --branch <branch> brief` when that "
-    "checkout is gone or detached), and say where the task stands, what was proven and what's left, as AGENTS.md's "
+    "checkout is gone or detached), and say where the task stands, what was proven and what wasn't, and what's left, as AGENTS.md's "
     "Communication section asks. When the brief fails or finds no reports, say the status is unknown, and why.")
 # Written without accents, as plain() leaves text. An offer's verb opens its phrase ("¿la creo?", "¿quieres que la
 # cree?", "¿puedo crearla?", "want me to create…?"); a verb that offers a read as often ("abro", "open", "make", "log",

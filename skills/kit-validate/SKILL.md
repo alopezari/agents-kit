@@ -168,6 +168,6 @@ The guide holds the checks that couldn't run in step 4. What needs an environmen
 - **Anything that changes shared configuration** (repo variables, feature flags, production settings) is marked as the user's step, never run by you.
 - **Cleanup keeps the evidence.** "Put the environment back" undoes deploys and data, never `$EVIDENCE_DIR`: it is the results' proof.
 
-Give the guide in chat in the user's language, and save an English copy to `$(~/.agents/bin/reports path checks-guide)`.
+Save the guide in English to `$(~/.agents/bin/reports path checks-guide)`. Until a decision page covers the current change, give it in chat in the user's language; once one does, the page holds its steps, as AGENTS.md → Communication asks, and the reply links the page.
 
 **When the user runs steps and says so,** read each step's evidence in `$EVIDENCE_DIR` and judge it against the step's Expected yourself; the user's word settles only what left no file. Append a `## Results (<date>)` table to the guide, one row per step run (`| Step | Result | Evidence |`), with the observation that decided it and a link to each evidence file by its absolute path. A failure is a finding: fix it (verify, the kit-review skill's same-model re-check, with no new cross-model round, and this skill's stamp again), update the guide, and tell the user which steps to run again.

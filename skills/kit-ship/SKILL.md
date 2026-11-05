@@ -207,13 +207,13 @@ It removes a worktree you created and detaches the one the session runs in (the 
 
 ### What to tell the user
 
-Say it in a few plain sentences, not a form:
+Lead with the outcome and the user's next step, in a few plain sentences, not a form. Draw on these facts, each only when it matters now, and say the expected case briefly or not at all:
 
-- The pull request's URL, and whether you opened it or it was already open (then how many commits you pushed and whether you refreshed its description or left it).
-- Where CI stands: passed; failed, naming the checks (kit-follow-pr can take it); still running; no checks; GitHub unreadable; no CI; or not waited because `ci` is switched off.
-- The branch: free (say whether you removed the worktree or detached it, with the `cd <main checkout> && git switch <branch>` command to give the user), or still in the main checkout.
-- The evidence: the verify result (PASS, FAIL, or that it checked nothing and which tests you ran instead), that the review and the validation stamps cover this exact change, or that the validation wasn't needed because only tests or docs changed.
-- The decision page: link the decision page by its absolute path, and don't repeat its tables, counts or guide steps. When it wasn't written, give the error `reports html` printed and each verdict and its counts in a sentence, and link no older file as current.
+- The pull request's URL; when it was already open, how many commits you pushed and whether you refreshed its description.
+- CI: passed; failed, naming the checks (kit-follow-pr can take it); still running; no checks; GitHub unreadable; no CI; or not waited because `ci` is switched off.
+- The branch: the `cd <main checkout> && git switch <branch>` command when you freed it, or why it is still held.
+- The evidence, only when it isn't the expected case: verify checked nothing (and the tests you ran instead), or the validation wasn't needed because only tests or docs changed.
+- The decision page, linked by its absolute path; don't repeat its tables, counts or guide steps. When it wasn't written: the error `reports html` printed, each verdict and its counts in a sentence, and no older file linked as current.
 
 ## Part 2. After the merge
 
@@ -262,11 +262,10 @@ PR outcomes (merged, reverted) reach the monthly analysis on their own; nothing 
 
 ### What to tell the user
 
-Say it in a few plain sentences, not a form:
+Lead with the result (which P steps passed or failed, from their evidence, or that you're waiting for the deploy) and what the user does next, in a few plain sentences, not a form. Draw on these facts, each only when it matters now:
 
 - Which pull request shipped, and the date it merged.
-- Whether ship.md supplied the steps, or you drafted them and which sections you had to infer or found unknown.
-- Whether you gave the user the deploy guide and its verification steps (how many), or ran them here because the repo is installed on this machine.
-- The rollback, from ship.md with this change's values, and any data it leaves behind (or that it leaves none).
-- The result: which P steps passed or failed, from their evidence, or that you're waiting for the deploy.
-- What you closed: whether you drafted or posted the issue update, whether the repo notes were updated or nothing was new, and whether the branch was deleted or kept.
+- Which sections of ship.md you drafted, inferred or found unknown, when it didn't supply every step.
+- The deploy guide and its verification steps you gave the user, or that you ran them here because the repo is installed on this machine.
+- The rollback, from ship.md with this change's values, and any data it leaves behind.
+- What you closed: the issue update drafted or posted, the repo notes updated, the branch deleted or kept and why.
