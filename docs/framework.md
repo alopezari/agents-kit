@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`). Every stop also tells the user, once and without blocking, about orphaned processes that keep burning CPU.
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **21 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, decision-report, docs, evidence, evidence-env, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, structure-facts, triage, wp-query-profile.
+- **22 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, decision-report, docs, evidence, evidence-env, evidence-video, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, structure-facts, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -228,7 +228,7 @@ Claude Code also loads the kit as a plugin (`mods/kit/`), whose mod draws in Cla
 | `kit:review-<lens>` agents: One reviewer agent type per review lens | One for each lens `bin/triage --lens-briefs` prints: its brief from lenses.md, no edit tools, no CLAUDE.md block | a subagent given the lens text from `skills/kit-review/lenses.md` |
 |  | Each lens on Opus at high effort, whatever the session runs on | the session's model |
 | `kit:build-<tier>` agents: One builder agent type per risk tier | `build-low` on Sonnet at medium effort, `build-standard` (also without a spec) on Sonnet at high, `build-high` on Opus at high, each with the session's tools and CLAUDE.md; until 2026-11-13 `bin/build-ab` gives low and standard builds Sonnet or Opus in turn, at the same effort | the session builds it, on its own model |
-| `kit:validate-runner` agent: A runner for the validation's local checks | `validate-runner` runs the checks through `bin/evidence` on Sonnet at medium effort and reports what each printed, leaving the verdict to the session | the session runs the checks itself |
+| `kit:validate-runner` agent: A runner for the validation's local checks | `validate-runner` runs the checks through `bin/evidence`, or `bin/evidence-video` for a recorded one, on Sonnet at medium effort and reports what each printed, leaving the verdict to the session | the session runs the checks itself |
 | `kit:pr-description` agent: A writer for the pull request's description | `pr-description` writes the title and description into the body file on Sonnet at medium effort, following kit-write-pr-description; the session opens the PR | the session writes it |
 
 The rules every mod follows are in the README (Mods contract). `install.sh` installs the plugin when Claude Code 2.1.287 or later is installed.
@@ -283,6 +283,12 @@ docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the 
 
 ```
 evidence-env      run it as `~/.agents/bin/evidence environment ~/.agents/bin/evidence-env`, which saves it as environment.txt
+```
+
+**`bin/evidence-video`**: Run a validation check through bin/evidence inside a terminal VHS records: The video opens on a header with the id, the case, the check and what it expects, and shows the check's `step:`, `precondition:`, `note:`, `PASS` and `FAIL` lines highlighted; the log keeps bin/evidence's plain output. Leaves bin/evidence's <id>.txt and a <id>.webm of the same run in the evidence directory bin/evidence uses, prints the log, and exits with the check's code as the log's header records it. Both files are removed before the run, so a log and a video never come from different runs. Without vhs it runs bin/evidence alone and says there is no video. Exits 74 when vhs fails, no log was written, or bin/evidence's own exit differs from the one its log records (it failed after the check ran); and 124, with neither file, when the check runs past EVIDENCE_VIDEO_MAX seconds (90 by default): the check is stopped there. The check's stdin is /dev/null, as a prompt it waited on would only run into the cap.
+
+```
+evidence-video [--check <what it checks>] [--case <+|−>] [--expected <what it asserts>] <id> <command> [args...]
 ```
 
 **`bin/free-branch`**: Free a pushed branch from its worktree, so the user can switch to it in the main checkout.
@@ -452,6 +458,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | recommended | `php` | brew install php | the generic verify's PHP checks; tests/run.sh |
 | recommended | `agent-browser` | brew install agent-browser | the kit-validate skill's browser checks (install.sh also downloads its Chrome) |
 | recommended | `ffmpeg` | brew install ffmpeg | the videos of browser checks (agent-browser's record) in the kit-validate skill |
+| recommended | `vhs` | brew install vhs | the videos of CLI checks (bin/evidence-video) in the kit-validate skill |
 | optional | `claude ≥ 2.1.287` | https://claude.com/claude-code | the kit plugin (mods, from this version on) and the scheduled jobs (they run `claude -p`) |
 | optional | `playwright-cli` | npm install -g @playwright/cli | agent-browser's fallback, for a browser check it can't do |
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |

@@ -14,6 +14,7 @@ recommended    gitleaks        brew:gitleaks             the secrets check at th
 recommended    php             brew:php                  the generic verify's PHP checks; tests/run.sh
 recommended    agent-browser   brew:agent-browser        the kit-validate skill's browser checks (install.sh also downloads its Chrome)
 recommended    ffmpeg          brew:ffmpeg               the videos of browser checks (agent-browser's record) in the kit-validate skill
+recommended    vhs             brew:vhs                  the videos of CLI checks (bin/evidence-video) in the kit-validate skill
 optional       claude>=2.1.287 https://claude.com/claude-code   the kit plugin (mods, from this version on) and the scheduled jobs (they run `claude -p`)
 optional       playwright-cli  npm:@playwright/cli       agent-browser's fallback, for a browser check it can't do
 optional       chrome          https://www.google.com/chrome    bin/a11y-check (or: npx playwright install chromium)

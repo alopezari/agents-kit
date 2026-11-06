@@ -558,9 +558,12 @@ def shell_code(command):
     return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(masked) else masked
 
 
-# bin/evidence <id> runs the rest of its line. A one-character lookbehind, with its path cut in Python: a path
-# pattern tried after every separator was quadratic on a long line.
-EVIDENCE_RUNNER = re.compile(r"(?<![^\s;&|(`/])evidence\s+(['\"]?)[A-Za-z0-9][\w.-]*\1\s+")
+# bin/evidence <id> and bin/evidence-video [--check|--case|--expected <text>]... <id> run the rest of their line. A
+# one-character lookbehind, with its path cut in Python: a path pattern tried after every separator was quadratic on a
+# long line.
+EVIDENCE_RUNNER = re.compile(r"(?<![^\s;&|(`/])evidence(?:-video(?P<options>(?:\s+--(?:check|case|expected)\s+"
+                             r"(?:'[^']*'|\"(?:[^\"\\]|\\.)*\"|\\.|[^\s'\"\\])+)*))?"
+                             r"\s+(?P<quote>['\"]?)[A-Za-z0-9][\w.-]*(?P=quote)\s+")
 
 
 def without_evidence_runner(command):
@@ -572,6 +575,9 @@ def without_evidence_runner(command):
         while start > last and command[start - 1] not in " \t\n;&|(`":
             start -= 1
         kept.append(command[last:start])
+        # The shell runs a substitution in an option's value before the recorder starts: keep it where the rules see it.
+        if re.search(r"[$`]", match.group("options") or ""):
+            kept.append(f": {match.group('options').strip()}; ")
         last = match.end()
     return "".join(kept) + command[last:]
 ENV_CLEARED = re.compile(r"\benv\s+(?:\S+\s+)*?(?:-[0v]*i[0v]*|--ignore-environment|-)\s")

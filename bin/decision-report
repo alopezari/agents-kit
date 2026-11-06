@@ -1391,7 +1391,7 @@ def section_table(text, title, columns):
 
 
 def output_lines(lines):
-    """(steps, result lines, runner tests) of one output: its `precondition:` and `step:` lines, its `PASS` and `FAIL`
+    """(steps, result lines, runner tests) of one output: its `precondition:`, `step:` and `note:` lines, its `PASS` and `FAIL`
     lines, and [(section, name, "ok" or "FAIL")] of a test runner's lines, which count only after a `== <section>` line."""
     steps, said, tests, section = [], [], [], None
     for line in lines:
@@ -1401,7 +1401,7 @@ def output_lines(lines):
             section = line[3:].strip()
         elif runner:
             tests.append((section, runner.group(2), runner.group(1)))
-        elif re.match(r"(precondition|step):\s*\S", bare):
+        elif re.match(r"(precondition|step|note):\s*\S", bare):
             steps.append(bare)
         elif re.match(r"(PASS|FAIL)\b", bare):
             said.append(bare)
@@ -1929,7 +1929,7 @@ def check_blocks(c):
                           else "is not a file" if not os.path.isfile(real) else "can't be read" if not os.access(real, os.R_OK) else None)
             if why_unread:
                 c.missing_files.setdefault(row["anchor"], []).append((os.path.basename(named), why_unread))
-            blocks.append(page.file_block(named, real, again=True))
+            blocks.append((real, page.file_block(named, real, again=True)))
             unread = unread or real in page.past
             if real in page.lines and os.path.dirname(real) != scripts:
                 if real not in outputs:
@@ -1940,6 +1940,7 @@ def check_blocks(c):
                     tests, partial = tests + found_tests, partial or real in page.cut
                 elif found_tests and owner is not row:
                     listed_in.append(owner)  # a suite output several checks cite counts its tests once, at its first
+        blocks = log_and_video_tabs(page, row, blocks, scripts)
         row["tests"] = (len(tests), sum(result == "FAIL" for _, _, result in tests), partial)
         fits = page.charge(*steps, *said, *(section + name for section, name, _ in tests))
         if not fits:
@@ -1990,6 +1991,39 @@ def check_blocks(c):
             + "".join(f'<span class="said">{esc(line)}</span>' for line in said) + runner
             + f'</dd><dt>Source</dt><dd>{page.path(c.paths["validation"], c.paths["validation"] + ":" + str(row["line"]))}</dd></dl>'
             f'{"".join(blocks) or state("no evidence named", "dim")}</div></details>')
+
+
+def log_and_video_tabs(page, row, blocks, scripts):
+    """The check's evidence blocks, with a log and a playable video of the same stem as Video and Log tabs where the
+    first of the two stood; the Log tab is selected unless the check passed."""
+    def kind(real):
+        if real is None or not os.path.isfile(real) or os.path.dirname(real) == scripts:
+            return None
+        ext = os.path.splitext(real)[1].lower()
+        return "log" if ext == ".txt" else "video" if ext in PLAYABLE else None
+
+    by_stem = {}
+    for real, html in blocks:
+        if kind(real):
+            by_stem.setdefault(os.path.splitext(real)[0], {}).setdefault(kind(real), html)
+    pairs = {stem: found for stem, found in by_stem.items() if len(found) == 2}
+    shown, out = set(), []
+    for real, html in blocks:
+        stem = real and os.path.splitext(real)[0]
+        if stem not in pairs or html not in pairs[stem].values():
+            out.append(html)
+            continue
+        if stem in shown:
+            continue
+        shown.add(stem)
+        name = page.new_id(f"tabs-{row['id']}")
+        log_first = row["result"] != "PASS"
+        radios = "".join(f'<input type="radio" class="t-{tab}" name="{name}" id="{tab_id}"{" checked" if on else ""}>'
+                         f'<label for="{tab_id}">{tab.capitalize()}</label>'
+                         for tab, on in (("video", not log_first), ("log", log_first)) if (tab_id := page.new_id(f"{name}-{tab}")))
+        out.append(f'<fieldset class="tabs"><legend class="vh">Evidence of {esc(row["id"])}: the video and the log of {esc(os.path.basename(stem))}</legend>'
+                   f'{radios}<div class="pane p-video">{pairs[stem]["video"]}</div><div class="pane p-log">{pairs[stem]["log"]}</div></fieldset>')
+    return out
 
 
 def freshness_sentence(c):
@@ -3234,6 +3268,14 @@ summary:hover::after{border-color:var(--ok)}
 .file video{max-width:100%;display:block}
 .file .name{font-size:.9rem;margin:0}.file .size{color:var(--dim);font-size:.82rem}
 .file figcaption{font-size:.85rem;color:var(--muted)}
+.tabs{position:relative;margin:.7rem 0 0;padding:0;border:0;min-width:0;display:flex;flex-wrap:wrap;gap:0 .5rem}
+.tabs>input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.tabs>label{display:inline-flex;align-items:center;min-height:2.5rem;padding:0 .9rem;border:1px solid var(--rule);color:var(--muted);cursor:pointer;font-size:.92rem;font-weight:600;user-select:none}
+.tabs>label:hover{border-color:var(--dim);color:var(--fg)}
+.tabs>input:checked+label{border-color:var(--fg);color:var(--fg);font-weight:700;text-decoration:underline;text-underline-offset:4px}
+.tabs>input:focus-visible+label{outline:2px solid var(--ok);outline-offset:2px}
+.tabs>.pane{display:none;flex-basis:100%;min-width:0}.tabs>.pane>.file{margin-top:0}
+.t-video:checked~.p-video,.t-log:checked~.p-log{display:block}
 .fields{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.1rem .8rem;font-size:.82rem;color:var(--muted);margin:0}
 .fields dd{margin:0;overflow-wrap:anywhere}
 .out,pre.cmd{margin:0;background:var(--panel);border:1px solid var(--rule);padding:.6rem .75rem;font:400 .8rem/1.5 var(--mono);overflow-x:auto;max-width:100%}
@@ -3256,7 +3298,7 @@ footer>details>summary{cursor:pointer;font-weight:600;color:var(--fg)}
 .sum .row{display:contents}.sum dd,.ids dd{margin:0;overflow-wrap:anywhere}.ids dt,.sum dt{color:var(--dim)}
 .ids code,.src code{overflow-wrap:anywhere}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-@media print{details::details-content{content-visibility:visible;display:block}details:not([open])>*:not(summary){display:block}summary::after{display:none}}
+@media print{details::details-content{content-visibility:visible;display:block}details:not([open])>*:not(summary){display:block}summary::after{display:none}.tabs>label{display:none}.tabs>.pane{display:block}}
 """
 
 
