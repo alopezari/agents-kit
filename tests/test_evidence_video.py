@@ -65,14 +65,14 @@ def stub_path(base):
     return bin_dir + os.pathsep + os.environ["PATH"]
 
 
-def record(base, check_id, *command, evidence=None, path=None, **env):
+def record(base, check_id, *command, options=(), evidence=None, path=None, **env):
     """(the recorder's run, the evidence directory), run from base/work."""
     evidence = evidence or os.path.join(base, "evidence dir")
     work = os.path.join(base, "work")
     os.makedirs(evidence, exist_ok=True)
     os.makedirs(work, exist_ok=True)
     run_env = {**os.environ, "EVIDENCE_DIR": evidence, "PATH": path or stub_path(base), **env}
-    done = subprocess.run([RECORDER, check_id, *command], cwd=work, capture_output=True, text=True, env=run_env, timeout=120)
+    done = subprocess.run([RECORDER, *options, check_id, *command], cwd=work, capture_output=True, text=True, env=run_env, timeout=120)
     return done, evidence
 
 
@@ -145,6 +145,30 @@ def a_bad_id_is_refused_before_anything_is_removed(base):
     done, _ = record(base, "../x", "true", evidence=evidence)
     assert done.returncode == 64 and os.path.exists(outside), (done.returncode, done.stderr)
     assert subprocess.run([RECORDER, "only-an-id"], capture_output=True).returncode == 64
+
+
+# AC7
+
+def the_video_opens_on_a_header_and_highlights_steps_but_the_log_stays_plain(base):
+    done, evidence = record(base, "H1", "bash", "-c", 'echo "precondition: an empty cart"; echo "step: apply coupon ONE"; echo "note: the cache is cold";'
+                            ' echo "one discount line"',
+                            options=("--check", "refresh keeps one discount", "--case", "+", "--expected", "one discount line"))
+    assert done.returncode == 0, done.stderr
+    screen = read(os.path.join(evidence, "H1.webm"))
+    assert "\033[1;36mH1 · + case · refresh keeps one discount\033[0m" in screen, screen
+    assert "\033[36mexpected: one discount line\033[0m" in screen, screen
+    for line, style in (("precondition: an empty cart", "1;33"), ("step: apply coupon ONE", "1;33"), ("note: the cache is cold", "3;35")):
+        assert f"\033[{style}m{line}\033[0m" in screen, (line, screen)
+    log = read(os.path.join(evidence, "H1.txt"))
+    assert "\033" not in log and "expected:" not in log and "H1 ·" not in log, log
+    assert "note: the cache is cold\n" in log and "step: apply coupon ONE\n" in log, log
+
+
+def an_option_without_its_value_is_a_usage_error(base):
+    for args in (("--check",), ("--case", "+", "--expected")):
+        done, evidence = record(base, "U2", "true", options=args)
+        assert done.returncode == 64 and "usage: evidence-video" in done.stderr, (args, done.returncode, done.stderr)
+        assert os.listdir(evidence) == [], os.listdir(evidence)
 
 
 # AC2
@@ -266,7 +290,8 @@ def kit_validate_sends_its_own_checks_to_the_recorder(base):
     skill = read(os.path.join(KIT, "skills", "kit-validate", "SKILL.md"))
     step = skill[skill.index("\n## 4. "):skill.index("\n## 5. ")]
     for needle in ("`~/.agents/bin/evidence-video <id> <command> [args...]`", "CLI, API and database checks", "`EVIDENCE_VIDEO_MAX`",
-                   "The full suite, mutation runs and the checks guide's steps stay on `bin/evidence`"):
+                   "The full suite, mutation runs and the checks guide's steps stay on `bin/evidence`",
+                   "`--check <text> --case <+|−> --expected <text>`", "`precondition:`, `step:` and `note:` lines", "`sleep 1`"):
         assert needle in step, needle
     assert re.search(r"\[output\]\([^)]*/A1\.txt\) \[video\]\([^)]*/A1\.webm\)", skill), "the Evidence cell example links no log and video pair"
     assert "marking the ones step 4 records with `bin/evidence-video`" in skill, "the skill doesn't tell the runner which checks to record"
@@ -292,7 +317,9 @@ for t in kit_home.selected([a_check_leaves_its_log_and_video_and_exits_with_its_
                             without_vhs_the_check_runs_on_bin_evidence_alone, a_failing_vhs_leaves_no_video_and_exits_74,
                             no_log_written_leaves_no_video_and_exits_74, the_cap_stops_the_check_and_leaves_nothing,
                             nothing_is_ever_uploaded, real_vhs_records_the_check_until_it_ends, real_vhs_cap_stops_the_check,
-                            kit_validate_sends_its_own_checks_to_the_recorder]):
+                            kit_validate_sends_its_own_checks_to_the_recorder,
+                            the_video_opens_on_a_header_and_highlights_steps_but_the_log_stays_plain,
+                            an_option_without_its_value_is_a_usage_error]):
     test(t)
 
 failed = [(n, e) for n, e, _ in RESULTS if e]

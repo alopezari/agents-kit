@@ -1199,7 +1199,7 @@ def levels_fall_back_to_test_types(base):
 def a_check_opens_to_steps_expected_actual_evidence(base):
     repo, evidence = full_branch(base)
     output(evidence, "S1.txt", "bash checks/S1.sh", "precondition: an empty cart\nstep: apply coupon ONE\nPASS one discount line\n"
-           "noise\nstep: refresh the cart\nFAIL two discount lines\n", repo, working_tree(repo))
+           "noise\nnote: the second load reads the cache\nstep: refresh the cart\nFAIL two discount lines\n", repo, working_tree(repo))
     add_rows(repo, f"| S1 | AC1 | refresh keeps one discount | + | one discount line after refresh | FAIL | two lines: [output]({evidence}/S1.txt) |\n")
     _, markup = generate(repo, base)
     block = check_block(markup, "S1")
@@ -1207,6 +1207,7 @@ def a_check_opens_to_steps_expected_actual_evidence(base):
     assert terms[:4] == ["Steps", "Expected", "Actual", "Source"], terms
     steps = re.search(r"<dt>Steps</dt><dd>(.*?)</dd>", block, re.S).group(1)
     assert [text(s) for s in re.findall(r"<li>(.*?)</li>", steps)] == ["precondition: an empty cart", "step: apply coupon ONE",
+                                                                         "note: the second load reads the cache",
                                                                          "step: refresh the cart"], steps
     actual = text(re.search(r"<dt>Actual</dt><dd>(.*?)</dd>", block, re.S).group(1))
     assert actual.startswith("two lines") and actual.index("PASS one discount line") < actual.index("FAIL two discount lines"), actual

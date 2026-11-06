@@ -1391,7 +1391,7 @@ def section_table(text, title, columns):
 
 
 def output_lines(lines):
-    """(steps, result lines, runner tests) of one output: its `precondition:` and `step:` lines, its `PASS` and `FAIL`
+    """(steps, result lines, runner tests) of one output: its `precondition:`, `step:` and `note:` lines, its `PASS` and `FAIL`
     lines, and [(section, name, "ok" or "FAIL")] of a test runner's lines, which count only after a `== <section>` line."""
     steps, said, tests, section = [], [], [], None
     for line in lines:
@@ -1401,7 +1401,7 @@ def output_lines(lines):
             section = line[3:].strip()
         elif runner:
             tests.append((section, runner.group(2), runner.group(1)))
-        elif re.match(r"(precondition|step):\s*\S", bare):
+        elif re.match(r"(precondition|step|note):\s*\S", bare):
             steps.append(bare)
         elif re.match(r"(PASS|FAIL)\b", bare):
             said.append(bare)

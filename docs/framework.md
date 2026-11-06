@@ -285,7 +285,11 @@ docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the 
 evidence-env      run it as `~/.agents/bin/evidence environment ~/.agents/bin/evidence-env`, which saves it as environment.txt
 ```
 
-**`bin/evidence-video`**: Run a validation check through bin/evidence inside a terminal VHS records: evidence-video <id> <command> [args...] Leaves bin/evidence's <id>.txt and a <id>.webm of the same run in the evidence directory bin/evidence uses, prints the log, and exits with the check's code as the log's header records it. Both files are removed before the run, so a log and a video never come from different runs. Without vhs it runs bin/evidence alone and says there is no video. Exits 74, with no video, when vhs fails or no log was written; and 124, with neither file, when the check runs past EVIDENCE_VIDEO_MAX seconds (120 by default): the check is stopped there.
+**`bin/evidence-video`**: Run a validation check through bin/evidence inside a terminal VHS records: The video opens on a header with the id, the case, the check and what it expects, and shows the check's `step:`, `precondition:` and `note:` lines highlighted; the log keeps bin/evidence's plain output. Leaves bin/evidence's <id>.txt and a <id>.webm of the same run in the evidence directory bin/evidence uses, prints the log, and exits with the check's code as the log's header records it. Both files are removed before the run, so a log and a video never come from different runs. Without vhs it runs bin/evidence alone and says there is no video. Exits 74, with no video, when vhs fails or no log was written; and 124, with neither file, when the check runs past EVIDENCE_VIDEO_MAX seconds (120 by default): the check is stopped there.
+
+```
+evidence-video [--check <what it checks>] [--case <+|−>] [--expected <what it asserts>] <id> <command> [args...]
+```
 
 **`bin/free-branch`**: Free a pushed branch from its worktree, so the user can switch to it in the main checkout.
 
