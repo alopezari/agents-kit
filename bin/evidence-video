@@ -49,7 +49,7 @@ log="$dir/$id.txt" video="$dir/$id.webm"
 rm -f "$log" "$video" || { echo "evidence-video: couldn't remove the earlier $log or $video" >&2; exit 74; }
 if ! command -v vhs >/dev/null; then
   echo "evidence-video: no video: vhs is not installed" >&2
-  EVIDENCE_DIR=$dir exec "$evidence" "$id" "$@"
+  EVIDENCE_DIR=$dir exec "$evidence" "$id" "$@" < /dev/null
 fi
 
 tmp=$(mktemp -d) || exit 74
@@ -78,9 +78,10 @@ done
   printf '#!/bin/bash\n'
   printf 'cd %q || exit 1\nclear\n' "$PWD"
   printf 'ps -o pgid= -p $$ | tr -d " " > %q\n' "$tmp/pgid"
-  printf 'cat %q\n' "$tmp/screen"
-  # Hidden text the tape waits for before it shows the terminal: frames start on the header, not on a cleared screen.
-  printf 'printf "\\033[8mevidence-video: ready %s\\033[0m\\r"\nread -rs\nprintf "\\r\\033[K"\ntouch %q\n' "$nonce" "$tmp/started"
+  # Hidden text the tape waits for before it shows the terminal, so frames start on the header, not on a cleared
+  # screen. It goes in row 0, above the header, for the same reason as the end marker: a tall header hid it.
+  printf 'printf "\\033[8mevidence-video: ready %s\\033[0m\\n"\n' "$nonce"
+  printf 'cat %q\nread -rs\ntouch %q\n' "$tmp/screen" "$tmp/started"
   printf 'EVIDENCE_DIR=%q %q %q' "$dir" "$evidence" "$id"
   printf ' %q' "$@"
   # Only the terminal is styled: bin/evidence has already saved the plain output when it reaches awk.
@@ -94,9 +95,10 @@ done
   # The last lines that fit, wrapped, between the marker and the prompt: a reprint that scrolled left the frame on its first lines.
   printf 'rows=$(tput lines 2>/dev/null) || rows=20\ncols=$(tput cols 2>/dev/null) || cols=80\n'
   printf 'awk -v rows=$((rows - 3)) -v cols=$cols %q %q\n' '{ line[NR] = $0 }
-END { first = NR; used = 0
+END { first = NR + 1; used = 0
   for (i = NR; i > 0; i--) { t = line[i]; gsub(/\033\[[0-9;]*m/, "", t); n = int((length(t) + cols - 1) / cols); if (n < 1) n = 1
     if (used + n > rows) break; used += n; first = i }
+  if (first > NR && NR > 0) print substr(t, length(t) - rows * cols + 1)
   for (i = first; i <= NR; i++) print line[i] }' "$tmp/screen"
 } > "$tmp/run" && chmod +x "$tmp/run" || exit 74
 cat > "$tmp/check.tape" <<TAPE || exit 74

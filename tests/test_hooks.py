@@ -242,6 +242,9 @@ def guard_blocks_irreversible(base):
         assert guard(f"~/.agents/bin/evidence-video --expected \"exit 2 and \\\"unknown pack\\\"\" --check 'it'\\''s' A1 {cmd}") \
             == "deny", f"quotes inside an option's value don't hide it: {cmd}"
     assert guard("cd /tmp && evidence B2 sudo ls") == "deny"
+    # The shell runs a substitution in an option's value before the recorder starts.
+    for options in ['--check "$(sudo ls)"', '--expected "refuses `sudo ls`"', '--case $(sudo ls)']:
+        assert guard(f"~/.agents/bin/evidence-video {options} A1 true") == "deny", options
     for wrapped in ["  evidence A1 rm -rf /opt/projects", 'evidence "A1" rm -rf /opt/projects']:
         assert guard(wrapped) == "deny", wrapped
     assert guard("~/.agents/bin/evidence A1 git status") == "allow"

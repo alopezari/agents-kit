@@ -79,14 +79,14 @@ def stub_path(base):
     return bin_dir + os.pathsep + os.environ["PATH"]
 
 
-def record(base, check_id, *command, options=(), evidence=None, path=None, recorder=RECORDER, **env):
+def record(base, check_id, *command, options=(), evidence=None, path=None, recorder=RECORDER, input=None, **env):
     """(the recorder's run, the evidence directory), run from base/work."""
     evidence = evidence or os.path.join(base, "evidence dir")
     work = os.path.join(base, "work")
     os.makedirs(evidence, exist_ok=True)
     os.makedirs(work, exist_ok=True)
     run_env = {**os.environ, "EVIDENCE_DIR": evidence, "PATH": path or stub_path(base), **env}
-    done = subprocess.run([recorder, *options, check_id, *command], cwd=work, capture_output=True, text=True, env=run_env, timeout=120)
+    done = subprocess.run([recorder, *options, check_id, *command], cwd=work, capture_output=True, text=True, env=run_env, input=input, timeout=120)
     return done, evidence
 
 
@@ -287,9 +287,11 @@ def bin_evidence_failing_after_its_log_is_not_a_pass(base):
 
 
 def a_check_that_reads_its_input_gets_none_and_goes_on(base):
-    done, evidence = record(base, "I1", "bash", "-c", 'read -r line; echo "read exit $?"', EVIDENCE_VIDEO_MAX="10")
-    assert done.returncode == 0, (done.returncode, done.stderr)
-    assert "read exit 1" in read(os.path.join(evidence, "I1.txt"))
+    for path in (None, "/usr/bin:/bin"):
+        done, evidence = record(base, "I1", "bash", "-c", 'read -r line; echo "read exit $?"', path=path, input="an answer\n",
+                                EVIDENCE_VIDEO_MAX="10")
+        assert done.returncode == 0, (path, done.returncode, done.stderr)
+        assert "read exit 1" in read(os.path.join(evidence, "I1.txt")), (path, read(os.path.join(evidence, "I1.txt")))
 
 
 def nothing_is_ever_uploaded(base):
@@ -331,6 +333,23 @@ def real_vhs_records_output_longer_than_its_screen(base):
     assert os.path.getsize(os.path.join(evidence, "R2.webm")) > 0
 
 
+def real_vhs_runs_a_check_whose_header_is_taller_than_its_screen(base):
+    need_real_vhs()
+    check = "a check described at length, " * 60
+    done, evidence = record(base, "R3", "echo", "ran", options=("--check", check, "--expected", "exit 0"), path=os.environ["PATH"])
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    assert "ran" in read(os.path.join(evidence, "R3.txt"))
+
+
+def a_last_line_longer_than_the_screen_still_fits_it(base):
+    program = re.search(r"awk -v rows=\$\(\(rows - 3\)\) -v cols=\$cols %q %q\\n' '(.*?)' \"\$tmp/screen\"", read(RECORDER), re.S).group(1)
+    screen = os.path.join(base, "screen")
+    open(screen, "w").write("header\n" + "x" * 5000 + "\n")
+    printed = subprocess.run(["awk", "-v", "rows=20", "-v", "cols=80", program, screen], capture_output=True, text=True).stdout
+    assert 0 < len(printed.rstrip("\n")) <= 20 * 80, f"the reprint fills {len(printed) // 80} rows of 20"
+    assert printed.rstrip("\n").endswith("x"), printed[-100:]
+
+
 def real_vhs_cap_stops_the_check(base):
     need_real_vhs()
     token = f"real-cap-{os.getpid()}-{time.time_ns()}"
@@ -349,7 +368,7 @@ def kit_validate_sends_its_own_checks_to_the_recorder(base):
     step = skill[skill.index("\n## 4. "):skill.index("\n## 5. ")]
     for needle in ("`~/.agents/bin/evidence-video <id> <command> [args...]`", "CLI, API and database checks", "`EVIDENCE_VIDEO_MAX`",
                    "The full suite, mutation runs and the checks guide's steps stay on `bin/evidence`",
-                   "`--check <text> --case <+|−> --expected <text>`", "`precondition:`, `step:` and `note:` lines, and `PASS` and `FAIL` ones", "`sleep 1`"):
+                   "`--check <text> --case <+|−> --expected <text>`", "`precondition:`, `step:` and `note:` lines, and `PASS` and `FAIL` ones", "the first three under Steps and the last two under Actual", "`sleep 1`"):
         assert needle in step, needle
     assert re.search(r"\[output\]\([^)]*/A1\.txt\) \[video\]\([^)]*/A1\.webm\)", skill), "the Evidence cell example links no log and video pair"
     assert "marking the ones step 4 records with `bin/evidence-video`" in skill, "the skill doesn't tell the runner which checks to record"
@@ -380,6 +399,7 @@ for t in kit_home.selected([a_check_leaves_its_log_and_video_and_exits_with_its_
                             a_check_that_ends_as_the_cap_hits_is_still_capped, bin_evidence_failing_after_its_log_is_not_a_pass,
                             a_vhs_that_times_out_before_the_check_starts_is_a_vhs_failure,
                             a_check_that_reads_its_input_gets_none_and_goes_on, real_vhs_records_output_longer_than_its_screen,
+                            real_vhs_runs_a_check_whose_header_is_taller_than_its_screen, a_last_line_longer_than_the_screen_still_fits_it,
                             nothing_is_ever_uploaded, real_vhs_records_the_check_until_it_ends, real_vhs_cap_stops_the_check,
                             kit_validate_sends_its_own_checks_to_the_recorder,
                             the_video_opens_on_a_header_and_highlights_steps_but_the_log_stays_plain,
