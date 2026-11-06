@@ -310,18 +310,22 @@ def nothing_is_ever_uploaded(base):
 def real_vhs_records_the_check_until_it_ends(base):
     need_real_vhs()
     tricky = 'a b "c" \'d\' `e` $HOME'
-    done, evidence = record(base, "R1", "python3", "-c",
-                            "import json, sys, time; print('step: print the arguments'); print(json.dumps(sys.argv[1:]));"
-                            "print('exit 0', flush=True); time.sleep(2); print('after the exit line')", tricky,
-                            path=os.environ["PATH"])
-    assert done.returncode == 0, (done.returncode, done.stderr)
-    log = read(os.path.join(evidence, "R1.txt"))
-    assert json.loads([line for line in log.splitlines() if line.startswith("[")][0]) == [tricky], log
-    assert "step: print the arguments" in log and "after the exit line" in log, log
-    video = os.path.join(evidence, "R1.webm")
-    assert os.path.getsize(video) > 0
-    # A recording of `true` lasts about 3 seconds (the tape's 1 second before the check and 2 after); this one sleeps 2 more.
-    assert duration(video) > 4.5, f"the video ends at {duration(video)}s, before the check's last line"
+    check = ("import json, sys, time; print('step: print the arguments'); print(json.dumps(sys.argv[2:]));"
+             "print('exit 0', flush=True); time.sleep(float(sys.argv[1])); print('after the exit line')")
+    lengths = {}
+    for wait in ("0", "4"):
+        done, evidence = record(base, f"R1-{wait}", "python3", "-c", check, wait, tricky, path=os.environ["PATH"])
+        assert done.returncode == 0, (done.returncode, done.stderr)
+        log = read(os.path.join(evidence, f"R1-{wait}.txt"))
+        assert json.loads([line for line in log.splitlines() if line.startswith("[")][0]) == [tricky], log
+        assert "step: print the arguments" in log and "after the exit line" in log, log
+        video = os.path.join(evidence, f"R1-{wait}.webm")
+        assert os.path.getsize(video) > 0
+        lengths[wait] = duration(video)
+    # vhs drops frames on a loaded machine, so a video runs shorter than the wall clock (3.5s for 5s on CI): compare
+    # two recordings on the same machine, not one against a fixed length. A recorder that stopped at the `exit 0` line
+    # would make both the same length.
+    assert lengths["4"] - lengths["0"] > 2, f"the 4s after `exit 0` add {lengths['4'] - lengths['0']:.2f}s to the video: {lengths}"
 
 
 def real_vhs_records_output_longer_than_its_screen(base):
