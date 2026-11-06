@@ -2021,7 +2021,7 @@ def log_and_video_tabs(page, row, blocks, scripts):
         radios = "".join(f'<input type="radio" class="t-{tab}" name="{name}" id="{tab_id}"{" checked" if on else ""}>'
                          f'<label for="{tab_id}">{tab.capitalize()}</label>'
                          for tab, on in (("video", not log_first), ("log", log_first)) if (tab_id := page.new_id(f"{name}-{tab}")))
-        out.append(f'<fieldset class="tabs"><legend class="vh">Evidence of {esc(row["id"])}: its video and its log</legend>'
+        out.append(f'<fieldset class="tabs"><legend class="vh">Evidence of {esc(row["id"])}: the video and the log of {esc(os.path.basename(stem))}</legend>'
                    f'{radios}<div class="pane p-video">{pairs[stem]["video"]}</div><div class="pane p-log">{pairs[stem]["log"]}</div></fieldset>')
     return out
 
@@ -3268,11 +3268,11 @@ summary:hover::after{border-color:var(--ok)}
 .file video{max-width:100%;display:block}
 .file .name{font-size:.9rem;margin:0}.file .size{color:var(--dim);font-size:.82rem}
 .file figcaption{font-size:.85rem;color:var(--muted)}
-.tabs{position:relative;margin:.7rem 0 0;padding:0;border:0;min-width:0;display:flex;flex-wrap:wrap;gap:.5rem}
+.tabs{position:relative;margin:.7rem 0 0;padding:0;border:0;min-width:0;display:flex;flex-wrap:wrap;gap:0 .5rem}
 .tabs>input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
 .tabs>label{display:inline-flex;align-items:center;min-height:2.5rem;padding:0 .9rem;border:1px solid var(--rule);color:var(--muted);cursor:pointer;font-size:.92rem;font-weight:600;user-select:none}
 .tabs>label:hover{border-color:var(--dim);color:var(--fg)}
-.tabs>input:checked+label{border-color:var(--ok);color:var(--fg)}
+.tabs>input:checked+label{border-color:var(--fg);color:var(--fg);font-weight:700;text-decoration:underline;text-underline-offset:4px}
 .tabs>input:focus-visible+label{outline:2px solid var(--ok);outline-offset:2px}
 .tabs>.pane{display:none;flex-basis:100%;min-width:0}.tabs>.pane>.file{margin-top:0}
 .t-video:checked~.p-video,.t-log:checked~.p-log{display:block}

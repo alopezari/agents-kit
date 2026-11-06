@@ -35,17 +35,28 @@ assert len(typed) == 1, typed
 if os.environ.get("STUB_VHS_MODE") == "no-run":
     open(output, "w").write("a terminal that ran nothing")
     sys.exit(0)
-seconds, pattern = re.search(r"^Wait\+Screen@(\d+)s /(.*)/$", tape, re.M).groups()
-check = subprocess.Popen(["bash", "-c", typed[0].strip("'\"")], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         start_new_session=True)
+if os.environ.get("VHS_PUBLISH") != "false":
+    print("stub vhs: VHS_PUBLISH must be false, or the real vhs uploads the recording", file=sys.stderr)
+    sys.exit(2)
+check = subprocess.Popen(["bash", "-c", typed[0].strip("'\"")], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, start_new_session=True)
 screen = []
-threading.Thread(target=lambda: [screen.append(line.decode()) for line in check.stdout], daemon=True).start()
-deadline = time.time() + int(seconds)
-while not re.search(pattern, "".join(screen)):
-    if time.time() > deadline:
-        print("failed to execute command: timeout waiting for the marker", file=sys.stderr)
-        sys.exit(1)
-    time.sleep(0.05)
+threading.Thread(target=lambda: [screen.append(c.decode(errors="replace")) for c in iter(lambda: check.stdout.read1(4096), b"")],
+                 daemon=True).start()
+# Each Wait in order; an Enter after one is sent once it matched, as the terminal's keystroke.
+for seconds, pattern, enter in re.findall(r"^Wait\+Screen@(\d+)s /(.*)/$((?:\n(?!Wait).*)*?\nEnter$)?", tape, re.M):
+    deadline = time.time() + int(seconds)
+    while not re.search(pattern, "".join(screen)):
+        if time.time() > deadline:
+            print(f"failed to execute command: timeout waiting for /{pattern}/", file=sys.stderr)
+            sys.exit(1)
+        time.sleep(0.05)
+    if enter:
+        check.stdin.write(b"\n")
+        check.stdin.flush()
+if os.environ.get("STUB_VHS_MODE") == "late":
+    print("failed to execute command: timeout waiting for the marker, just after the check ended", file=sys.stderr)
+    sys.exit(1)
 open(output, "w").write("".join(screen))
 print("Host your GIF on vhs.charm.sh: vhs publish <file>.gif")
 print("Host your GIF on vhs.charm.sh: vhs publish <file>.gif", file=sys.stderr)
@@ -65,14 +76,14 @@ def stub_path(base):
     return bin_dir + os.pathsep + os.environ["PATH"]
 
 
-def record(base, check_id, *command, options=(), evidence=None, path=None, **env):
+def record(base, check_id, *command, options=(), evidence=None, path=None, recorder=RECORDER, **env):
     """(the recorder's run, the evidence directory), run from base/work."""
     evidence = evidence or os.path.join(base, "evidence dir")
     work = os.path.join(base, "work")
     os.makedirs(evidence, exist_ok=True)
     os.makedirs(work, exist_ok=True)
     run_env = {**os.environ, "EVIDENCE_DIR": evidence, "PATH": path or stub_path(base), **env}
-    done = subprocess.run([RECORDER, *options, check_id, *command], cwd=work, capture_output=True, text=True, env=run_env, timeout=120)
+    done = subprocess.run([recorder, *options, check_id, *command], cwd=work, capture_output=True, text=True, env=run_env, timeout=120)
     return done, evidence
 
 
@@ -165,7 +176,7 @@ def the_video_opens_on_a_header_and_highlights_steps_but_the_log_stays_plain(bas
 
 
 def an_option_without_its_value_is_a_usage_error(base):
-    for args in (("--check",), ("--case", "+", "--expected")):
+    for args in (("--check",), ("--case", "+", "--expected"), ("--check", "--case", "+")):
         done, evidence = record(base, "U2", "true", options=args)
         assert done.returncode == 64 and "usage: evidence-video" in done.stderr, (args, done.returncode, done.stderr)
         assert os.listdir(evidence) == [], os.listdir(evidence)
@@ -244,6 +255,31 @@ def the_cap_stops_the_check_and_leaves_nothing(base):
     assert leftovers(token) == [], leftovers(token)
 
 
+def a_check_that_ends_as_the_cap_hits_is_still_capped(base):
+    evidence = os.path.join(base, "evidence")
+    done, _ = record(base, "C2", "true", evidence=evidence, STUB_VHS_MODE="late")
+    assert done.returncode == 124 and "stopped at the cap" in done.stderr, (done.returncode, done.stderr)
+    assert os.listdir(evidence) == [], os.listdir(evidence)
+
+
+def bin_evidence_failing_after_its_log_is_not_a_pass(base):
+    fake_bin = os.path.join(base, "fake-bin")
+    os.makedirs(fake_bin)
+    shutil.copy(RECORDER, fake_bin)
+    with open(os.path.join(fake_bin, "evidence"), "w") as fh:
+        fh.write('#!/bin/bash\nprintf "# in %s, 2026-11-06 08:00:00 +0000, exit 0\\n" "$PWD" > "$EVIDENCE_DIR/$1.txt"\n'
+                 'echo "evidence: couldn\'t save it all" >&2\nexit 74\n')
+    os.chmod(os.path.join(fake_bin, "evidence"), 0o755)
+    done, _ = record(base, "E1", "true", recorder=os.path.join(fake_bin, "evidence-video"))
+    assert done.returncode == 74 and "bin/evidence exited 74" in done.stderr, (done.returncode, done.stderr)
+
+
+def a_check_that_reads_its_input_gets_none_and_goes_on(base):
+    done, evidence = record(base, "I1", "bash", "-c", 'read -r line; echo "read exit $?"', EVIDENCE_VIDEO_MAX="10")
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    assert "read exit 1" in read(os.path.join(evidence, "I1.txt"))
+
+
 def nothing_is_ever_uploaded(base):
     source = read(RECORDER)
     assert "publish" not in source and not re.search(r"\svhs\b[^\n]*\s-p\b", source), "the recorder names VHS's upload"
@@ -273,6 +309,15 @@ def real_vhs_records_the_check_until_it_ends(base):
     assert duration(video) > 2.5, f"the video ends at {duration(video)}s, before the check's last line"
 
 
+def real_vhs_records_output_longer_than_its_screen(base):
+    need_real_vhs()
+    done, evidence = record(base, "R2", "bash", "-c", 'for i in $(seq 1 100); do echo "line $i, long enough to wrap across'
+                            ' the recorded terminal at its width of eight hundred pixels"; done', path=os.environ["PATH"])
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    assert "line 100," in read(os.path.join(evidence, "R2.txt"))
+    assert os.path.getsize(os.path.join(evidence, "R2.webm")) > 0
+
+
 def real_vhs_cap_stops_the_check(base):
     need_real_vhs()
     token = f"real-cap-{os.getpid()}-{time.time_ns()}"
@@ -297,7 +342,10 @@ def kit_validate_sends_its_own_checks_to_the_recorder(base):
     assert "marking the ones step 4 records with `bin/evidence-video`" in skill, "the skill doesn't tell the runner which checks to record"
     runner = read(os.path.join(KIT, "mods", "kit", "hooks", "register.js"))
     runner = runner[runner.index("const RUNNER_PROMPT"):runner.index("].join", runner.index("const RUNNER_PROMPT"))]
-    assert "`~/.agents/bin/evidence-video <id> <command>`" in runner, "kit:validate-runner's prompt doesn't name the recorder"
+    assert "`~/.agents/bin/evidence-video --check <text> --case <+|−> --expected <text> <id> <command>`" in runner, \
+        "kit:validate-runner's prompt doesn't name the recorder with its options"
+    assert "EVIDENCE_VIDEO_MAX (90 by default) plus 90 seconds" in runner, "the runner isn't told the command timeout"
+    assert "plus 90 seconds" in step, "the skill doesn't give the command timeout"
 
 
 def test(fn):
@@ -316,6 +364,8 @@ for t in kit_home.selected([a_check_leaves_its_log_and_video_and_exits_with_its_
                             any_argument_reaches_the_command_unchanged, an_early_exit_line_or_an_old_marker_does_not_end_the_recording,
                             without_vhs_the_check_runs_on_bin_evidence_alone, a_failing_vhs_leaves_no_video_and_exits_74,
                             no_log_written_leaves_no_video_and_exits_74, the_cap_stops_the_check_and_leaves_nothing,
+                            a_check_that_ends_as_the_cap_hits_is_still_capped, bin_evidence_failing_after_its_log_is_not_a_pass,
+                            a_check_that_reads_its_input_gets_none_and_goes_on, real_vhs_records_output_longer_than_its_screen,
                             nothing_is_ever_uploaded, real_vhs_records_the_check_until_it_ends, real_vhs_cap_stops_the_check,
                             kit_validate_sends_its_own_checks_to_the_recorder,
                             the_video_opens_on_a_header_and_highlights_steps_but_the_log_stays_plain,

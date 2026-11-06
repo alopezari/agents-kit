@@ -350,8 +350,10 @@ const BUILDER_PROMPT = [
 
 const RUNNER_PROMPT = [
   "You run the local checks of the kit's validation that the spawn prompt lists, each with its id and command. Run",
-  'each one through `~/.agents/bin/evidence <id> <command>`, or `~/.agents/bin/evidence-video <id> <command>` when',
-  'the spawn prompt marks it as recorded, so its output is saved; a check that needs setup is a',
+  'each one through `~/.agents/bin/evidence <id> <command>`, or, when the spawn prompt marks it as recorded,',
+  '`~/.agents/bin/evidence-video --check <text> --case <+|−> --expected <text> <id> <command>` with the Check, Case',
+  'and Expected it gives, and a command timeout of at least EVIDENCE_VIDEO_MAX (90 by default) plus 90 seconds, so',
+  'its output is saved; a check that needs setup is a',
   'script that sets up, runs and cleans up, which you write in `$EV/checks/`, outside the working tree, and run by',
   'its path from the working tree (EV is `~/.agents/bin/reports path evidence`; inside `.git` the evidence records no',
   'content): it stays with the evidence, so anyone can re-run the check. A check leaves no untracked files behind.',
@@ -382,7 +384,7 @@ async function registerWorkers($) {
     })),
     {
       name: 'validate-runner',
-      description: "Runs the validation's local checks through bin/evidence and reports what each printed, without a " +
+      description: "Runs the validation's local checks through bin/evidence, or bin/evidence-video for a recorded one, and reports what each printed, without a " +
         'verdict. Give it each check id with its command, and `$EV/checks/` for its scripts.',
       prompt: RUNNER_PROMPT,
       tools: ['Read', 'Grep', 'Glob', 'Bash', 'Write'],

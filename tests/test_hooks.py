@@ -236,10 +236,14 @@ def guard_blocks_irreversible(base):
                 "mysql -e 'drop table wp_x'", "touch ~/.agents/approvals/linear", "mkdir -p ~/.agents/approvals/turn/s1", "rm -rf ~", "rm -rf /opt/projects"]:
         assert guard(cmd) == "deny", f"should deny: {cmd}"
         assert guard(f"~/.agents/bin/evidence A1 {cmd}") == "deny", f"the evidence runner runs it all the same: {cmd}"
+        assert guard(f"~/.agents/bin/evidence-video A1 {cmd}") == "deny", f"the video recorder runs it all the same: {cmd}"
+        assert guard(f"~/.agents/bin/evidence-video --check 'a b' --case + --expected \"exit 2\" A1 {cmd}") == "deny", \
+            f"the recorder's options don't hide it: {cmd}"
     assert guard("cd /tmp && evidence B2 sudo ls") == "deny"
     for wrapped in ["  evidence A1 rm -rf /opt/projects", 'evidence "A1" rm -rf /opt/projects']:
         assert guard(wrapped) == "deny", wrapped
     assert guard("~/.agents/bin/evidence A1 git status") == "allow"
+    assert guard("~/.agents/bin/evidence-video --check 'git state' A1 git status") == "allow"
     # `git checkout -q -- .` slipped past and took uncommitted fixes with it.
     for cmd in ["git checkout -q -- .", "git checkout -f .", "git restore --worktree .", "git restore --source=HEAD~1 .",
                 "git restore -s HEAD .", "git checkout -- ./", "git checkout --conflict=merge ."]:
@@ -1448,6 +1452,8 @@ def pr_gate_review_and_validation(base):
     assert guard("gh pr create --fill", repo) == "deny", "behavior change needs validation too"
     assert guard(f"cd {repo} && ~/.agents/bin/evidence A1 gh pr create --fill", repo) == "deny", "the PR gate sees through the runner"
     assert guard("env X=1 evidence A1 gh pr create --fill", repo) == "deny"
+    assert guard(f"cd {repo} && ~/.agents/bin/evidence-video --check 'opens a PR' A1 gh pr create --fill", repo) == "deny", \
+        "the PR gate sees through the recorder"
     write_stamp(repo, "validate")
     assert guard("gh pr create --fill", repo) == "allow"
     assert guard("gh pr new --fill", repo) == "allow", "gh's alias passes the same gate"

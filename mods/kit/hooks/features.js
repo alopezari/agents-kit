@@ -50,7 +50,7 @@ export const FEATURES = [
     "agent": "validate-runner",
     "description": "A runner for the validation's local checks",
     "capabilities": [
-      {"name": "`validate-runner` runs the checks through `bin/evidence` on Sonnet at medium effort and reports what each printed, leaving the verdict to the session", "codex": "the session runs the checks itself"}
+      {"name": "`validate-runner` runs the checks through `bin/evidence`, or `bin/evidence-video` for a recorded one, on Sonnet at medium effort and reports what each printed, leaving the verdict to the session", "codex": "the session runs the checks itself"}
     ]
   },
   {
