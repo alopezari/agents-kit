@@ -1,0 +1,129 @@
+#!/bin/bash
+# Run a validation check through bin/evidence inside a terminal VHS records: evidence-video <id> <command> [args...]
+# Leaves bin/evidence's <id>.txt and a <id>.webm of the same run in the evidence directory bin/evidence uses, prints
+# the log, and exits with the check's code as the log's header records it. Both files are removed before the run, so a
+# log and a video never come from different runs.
+# Without vhs it runs bin/evidence alone and says there is no video. Exits 74, with no video, when vhs fails or no log
+# was written; and 124, with neither file, when the check runs past EVIDENCE_VIDEO_MAX seconds (120 by default): the
+# check is stopped there.
+set -uo pipefail
+if [ $# -lt 2 ]; then
+  echo "usage: evidence-video <id> <command> [args...]" >&2
+  exit 64
+fi
+id=$1; shift
+if [[ ! $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "evidence-video: the id names a file in the evidence directory: letters, digits, . _ - (got '$id')" >&2
+  exit 64
+fi
+if [ -n "${EVIDENCE_DIR+set}" ] && [ -z "$EVIDENCE_DIR" ]; then
+  echo "evidence-video: EVIDENCE_DIR is set but empty: the guide's step 0 couldn't find the evidence directory" >&2
+  exit 74
+fi
+dir="${EVIDENCE_DIR:-$("$HOME/.agents/bin/reports" path evidence)}" \
+  || { echo "evidence-video: \`reports path evidence\` gave no directory; EVIDENCE_DIR names one to save into" >&2; exit 74; }
+max=${EVIDENCE_VIDEO_MAX:-120}
+if [[ ! $max =~ ^[1-9][0-9]*$ ]]; then
+  echo "evidence-video: EVIDENCE_VIDEO_MAX is a whole number of seconds (got '$max')" >&2
+  exit 64
+fi
+# Beside this script, as bin/evidence finds its hook: run from a kit worktree, it must run that worktree's copy.
+evidence="$(cd "$(dirname "$0")" && pwd)/evidence"
+log="$dir/$id.txt" video="$dir/$id.webm"
+rm -f "$log" "$video" || { echo "evidence-video: couldn't remove the earlier $log or $video" >&2; exit 74; }
+if ! command -v vhs >/dev/null; then
+  echo "evidence-video: no video: vhs is not installed" >&2
+  EVIDENCE_DIR=$dir exec "$evidence" "$id" "$@"
+fi
+
+tmp=$(mktemp -d) || exit 74
+trap 'rm -rf "$tmp"' EXIT
+# The tape quotes only this path, so it must hold nothing its quotes can't.
+if [[ ! $tmp =~ ^[A-Za-z0-9_./+-]+$ ]]; then
+  echo "evidence-video: the temporary directory $tmp holds characters a tape can't quote; set TMPDIR to a plain path" >&2
+  exit 74
+fi
+nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+quote="'\\''"
+shown='$'
+for arg in "$@"; do
+  if [[ $arg =~ ^[A-Za-z0-9_./:=@%+,-]+$ ]]; then shown+=" $arg"; else shown+=" '${arg//\'/$quote}'"; fi
+done
+# The script prints the command line itself and gets its arguments from %q, so they never pass through the tape.
+{
+  printf '#!/bin/bash\n'
+  printf 'cd %q || exit 1\nclear\n' "$PWD"
+  printf 'ps -o pgid= -p $$ | tr -d " " > %q\n' "$tmp/pgid"
+  printf 'printf "%%s\\n\\n" %q\n' "$shown"
+  printf 'EVIDENCE_DIR=%q %q %q' "$dir" "$evidence" "$id"
+  printf ' %q' "$@"
+  printf '\nstatus=$?\ntouch %q\n' "$tmp/done"
+  printf 'echo "evidence-video: %s exit $status, run %s"\n' "$id" "$nonce"
+} > "$tmp/run" && chmod +x "$tmp/run" || exit 74
+cat > "$tmp/check.tape" <<TAPE || exit 74
+Output "$tmp/video.webm"
+Set Shell bash
+Set FontSize 16
+Set Width 1200
+Set Height 700
+Set TypingSpeed 0ms
+Env PS1 "$ "
+Hide
+Type "$tmp/run"
+Enter
+Sleep 500ms
+Show
+Wait+Screen@${max}s /evidence-video: ${id//./[.]} exit [0-9]+, run $nonce/
+Sleep 2s
+TAPE
+
+# VHS_PUBLISH=false: a caller's true would upload the check's terminal, and unset it prints a hint that it can.
+VHS_PUBLISH=false vhs -q "$tmp/check.tape" > "$tmp/vhs.log" 2>&1 &
+vhs_pid=$!
+# The tape's Wait is the cap; this bounds a vhs that hangs before it gets there (its browser, ttyd).
+deadline=$((SECONDS + max + 60))
+while kill -0 "$vhs_pid" 2>/dev/null && [ $SECONDS -lt $deadline ]; do sleep 0.2; done
+if kill -0 "$vhs_pid" 2>/dev/null; then
+  kill "$vhs_pid"
+  echo "vhs failed to finish within $((max + 60)) seconds" >> "$tmp/vhs.log"
+fi
+wait "$vhs_pid"
+vhs_status=$?
+if [ ! -e "$tmp/done" ]; then
+  # The check's own process group, never ours or a system one: a check that ignores the terminal's hangup outlives vhs.
+  pgid=$(cat "$tmp/pgid" 2>/dev/null)
+  if [[ $pgid =~ ^[0-9]+$ ]] && [ "$pgid" -gt 1 ] && [ "$pgid" != "$(ps -o pgid= -p $$ | tr -d ' ')" ]; then
+    kill -TERM -- "-$pgid" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 -- "-$pgid" 2>/dev/null || break; sleep 0.2; done
+    kill -KILL -- "-$pgid" 2>/dev/null
+  fi
+  rm -f "$log" "$video"
+  if grep -q "timeout waiting for" "$tmp/vhs.log"; then
+    echo "evidence-video: $id was stopped at the cap, $max seconds (EVIDENCE_VIDEO_MAX), and may have partly run;" \
+      "nothing was saved. Run it with bin/evidence instead: ~/.agents/bin/evidence $id <command> [args...]" >&2
+    exit 124
+  fi
+fi
+if [ $vhs_status != 0 ]; then
+  rm -f "$video"
+  reason=$(grep -v "vhs\.charm\.sh" "$tmp/vhs.log" | grep -m1 -iE "fail|error|invalid" | cut -c1-300)
+  echo "evidence-video: no video: vhs failed (exit $vhs_status)${reason:+: $reason}" >&2
+  exit 74
+fi
+if [ ! -f "$log" ]; then
+  rm -f "$video"
+  echo "evidence-video: no video and no log: the check didn't run to its end, so bin/evidence wrote no $log" >&2
+  exit 74
+fi
+if [ ! -s "$tmp/video.webm" ] || ! mv "$tmp/video.webm" "$video"; then
+  rm -f "$video"
+  echo "evidence-video: no video: vhs wrote none (the log is kept: $log)" >&2
+  exit 74
+fi
+cat "$log"
+header=$(head -1 "$log")
+if [[ $header =~ [0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9:]{8}\ [-+][0-9]{4},\ exit\ ([0-9]+) ]]; then
+  exit "${BASH_REMATCH[1]}"
+fi
+echo "evidence-video: $log has no exit code in its first line" >&2
+exit 74

@@ -11,7 +11,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`). Every stop also tells the user, once and without blocking, about orphaned processes that keep burning CPU.
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
 - **3 scheduled jobs** watch the kit's health, look for improvements and learn from code review.
-- **21 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, decision-report, docs, evidence, evidence-env, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, structure-facts, triage, wp-query-profile.
+- **22 command-line tools**: a11y-check, approve, build-ab, changelog, ci-wait, decision-report, docs, evidence, evidence-env, evidence-video, free-branch, gh, phase, pr-comments, pr-validation, prune-merged, quality-log, repo-name, reports, structure-facts, triage, wp-query-profile.
 
 ## How it fits together
 
@@ -285,6 +285,8 @@ docs --check    exit 1 when docs/framework.md is out of date (tests/run.sh, the 
 evidence-env      run it as `~/.agents/bin/evidence environment ~/.agents/bin/evidence-env`, which saves it as environment.txt
 ```
 
+**`bin/evidence-video`**: Run a validation check through bin/evidence inside a terminal VHS records: evidence-video <id> <command> [args...] Leaves bin/evidence's <id>.txt and a <id>.webm of the same run in the evidence directory bin/evidence uses, prints the log, and exits with the check's code as the log's header records it. Both files are removed before the run, so a log and a video never come from different runs. Without vhs it runs bin/evidence alone and says there is no video. Exits 74, with no video, when vhs fails or no log was written; and 124, with neither file, when the check runs past EVIDENCE_VIDEO_MAX seconds (120 by default): the check is stopped there.
+
 **`bin/free-branch`**: Free a pushed branch from its worktree, so the user can switch to it in the main checkout.
 
 ```
@@ -452,6 +454,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 | recommended | `php` | brew install php | the generic verify's PHP checks; tests/run.sh |
 | recommended | `agent-browser` | brew install agent-browser | the kit-validate skill's browser checks (install.sh also downloads its Chrome) |
 | recommended | `ffmpeg` | brew install ffmpeg | the videos of browser checks (agent-browser's record) in the kit-validate skill |
+| recommended | `vhs` | brew install vhs | the videos of CLI checks (bin/evidence-video) in the kit-validate skill |
 | optional | `claude ≥ 2.1.287` | https://claude.com/claude-code | the kit plugin (mods, from this version on) and the scheduled jobs (they run `claude -p`) |
 | optional | `playwright-cli` | npm install -g @playwright/cli | agent-browser's fallback, for a browser check it can't do |
 | optional | `chrome` | https://www.google.com/chrome | bin/a11y-check (or: npx playwright install chromium) |

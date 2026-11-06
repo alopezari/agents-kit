@@ -49,7 +49,7 @@ PY
 sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wrapper" "baselines|harness baselines"
   "semgrep|semgrep rules" "phase|flow phase" "quality-log|quality log input" "test-types|test type summary"
   "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree" "prune-merged|remove merged worktrees and branches"
-  "pr-validation|pull request validation section" "decision-report|decision page" "approve|approvals from a dialog" "spec|spec lint and second reading" "build-ab|build-model A/B"
+  "pr-validation|pull request validation section" "decision-report|decision page" "evidence-video|CLI check videos" "approve|approvals from a dialog" "spec|spec lint and second reading" "build-ab|build-model A/B"
   "verify-changed|verify on changed lines" "structure-facts|structure facts for review" "deps|dependencies" "outcomes|outcomes and escapes" "review-eval|review evals"
   "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
@@ -75,6 +75,7 @@ section_free_branch() { python3 test_free_branch.py; }
 section_prune_merged() { python3 test_prune_merged.py; }
 section_pr_validation() { python3 test_pr_validation.py; }
 section_decision_report() { python3 test_decision_report.py; }
+section_evidence_video() { python3 test_evidence_video.py; }
 section_approve() { python3 test_approve.py; }
 section_spec() { python3 test_spec.py; }
 section_build_ab() { python3 test_build_ab.py; }

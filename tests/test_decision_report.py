@@ -1261,6 +1261,80 @@ def a_video_plays_inline(base):
     assert "<video" not in outside and "not read" in text(outside), outside[:800]
 
 
+
+def tab_group(block):
+    """(the fieldset's markup, {tab label: whether it is checked}, the radios' names) of a check's Video and Log tabs, or None."""
+    found = re.search(r'<fieldset class="tabs"[^>]*>(.*?)</fieldset>', block, re.S)
+    if not found:
+        return None
+    radios = re.findall(r'<input type="radio"[^>]*>', found.group(1))
+    labels = dict(re.findall(r'<label for="([^"]+)"[^>]*>(.*?)</label>', found.group(1)))
+    checked = {text(labels[re.search(r'id="([^"]+)"', radio).group(1)]): " checked" in radio for radio in radios}
+    return found.group(0), checked, {re.search(r'name="([^"]+)"', radio).group(1) for radio in radios}
+
+
+def a_log_and_its_video_show_as_tabs_log_first_unless_passed(base):
+    repo, evidence = full_branch(base)
+    for name, result in (("T1", "PASS"), ("T2", "FAIL"), ("T3", "NOT RUN")):
+        output(evidence, f"{name}.txt", f"bash checks/{name}.sh", f"step: run {name}\nPASS the line\n", repo, working_tree(repo))
+        put(os.path.join(evidence, f"{name}.webm"), b"\x1aE\xdf\xa3 not really a video")
+    add_rows(repo, "".join(f"| {name} | AC1 | a CLI check | + | the line | {result} | seen: [log]({evidence}/{name}.txt) "
+                           f"[video]({evidence}/{name}.webm) |\n" for name, result in (("T1", "PASS"), ("T2", "FAIL"), ("T3", "NOT RUN"))))
+    _, markup = generate(repo, base)
+    names = set()
+    for name, selected in (("T1", "Video"), ("T2", "Log"), ("T3", "Log")):
+        block = check_block(markup, name)
+        group = tab_group(block)
+        assert group, f"{name}: the log and the video aren't tabs"
+        fieldset, checked, radio_names = group
+        assert list(checked) == ["Video", "Log"], checked
+        assert [label for label, on in checked.items() if on] == [selected], (name, checked)
+        assert re.search(r"<legend[^>]*>[^<]*\S", fieldset), "AC5: the group has no legend"
+        assert len(radio_names) == 1 and not radio_names & names, (name, radio_names, names)
+        names |= radio_names
+        assert "<video controls" in fieldset and f"{name}.webm" in fieldset, fieldset[:600]
+        assert '<pre class="out tail">' in fieldset and "PASS the line" in fieldset, "the Log tab doesn't hold the log"
+        steps = re.search(r"<dt>Steps</dt><dd>(.*?)</dd>", block, re.S).group(1)
+        assert f"step: run {name}" in text(steps), steps
+        assert "evidence current" in text(block), "the freshness doesn't come from the log"
+    assert "<script" not in markup.lower()
+
+
+def a_second_video_of_the_same_stem_stays_beside_the_tabs(base):
+    repo, evidence = full_branch(base)
+    output(evidence, "V1.txt", "make v1", "PASS one\n", repo, working_tree(repo))
+    for ext in ("webm", "mp4"):
+        put(os.path.join(evidence, f"V1.{ext}"), b"\x1aE\xdf\xa3 not really a video")
+    add_rows(repo, f"| V1 | AC1 | a CLI check | + | the line | PASS | [log]({evidence}/V1.txt) [video]({evidence}/V1.webm) "
+                   f"[again]({evidence}/V1.mp4) |\n")
+    _, markup = generate(repo, base)
+    block = check_block(markup, "V1")
+    fieldset = tab_group(block)[0]
+    assert "V1.webm" in fieldset and "V1.mp4" not in fieldset, fieldset[:600]
+    assert re.search(r'<video controls[^>]*aria-label="V1\.mp4"', block), "the second video was dropped"
+
+
+def a_log_or_video_alone_or_with_another_stem_is_not_tabs(base):
+    repo, evidence = full_branch(base)
+    output(evidence, "S1.txt", "make s1", "PASS one\n", repo, working_tree(repo))
+    output(evidence, "S2.txt", "make s2", "PASS two\n", repo, working_tree(repo))
+    put(os.path.join(evidence, "S3.webm"), b"\x1aE\xdf\xa3 not really a video")
+    put(os.path.join(evidence, "S4.webm"), b"\x1aE\xdf\xa3 not really a video")
+    output(evidence, "S5.txt", "make s5", "PASS five\n", repo, working_tree(repo))
+    put(os.path.join(evidence, "S5.mov"), b"\0\0\0 ftypqt not really")
+    add_rows(repo, f"| S1 | AC1 | log alone | + | one | PASS | [log]({evidence}/S1.txt) |\n"
+                   f"| S2 | AC1 | other stems | + | two | PASS | [log]({evidence}/S2.txt) [video]({evidence}/S4.webm) |\n"
+                   f"| S3 | AC1 | video alone | + | a video | PASS | [video]({evidence}/S3.webm) |\n"
+                   f"| S5 | AC1 | a video that doesn't play | + | five | PASS | [log]({evidence}/S5.txt) [video]({evidence}/S5.mov) |\n")
+    _, markup = generate(repo, base)
+    for name in ("A1", "S1", "S2", "S3", "S5"):
+        assert tab_group(check_block(markup, name)) is None, f"{name} shouldn't be tabs"
+    assert '<pre class="out tail">' in check_block(markup, "S1")
+    two = check_block(markup, "S2")
+    assert '<pre class="out tail">' in two and "<video controls" in two
+    assert "<video controls" in check_block(markup, "S3")
+    assert '<fieldset class="tabs"' not in markup
+
 def a_suite_output_lists_its_tests(base):
     repo, evidence = full_branch(base)
     put(path_of(repo, "spec"), SPEC.replace("2. A tampered total is refused. — verify: test.",
@@ -4519,7 +4593,9 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert, hypotheses_keep_their_lists_and_subheadings,
                      the_notes_embed_each_file_under_its_first_part, the_answer_needs_more_than_its_confidence,
                      a_marker_inside_a_longer_fence_is_not_the_mode, a_kept_script_the_evidence_names_shows_once,
-                     notes_over_the_limit_keep_the_change_page, a_file_a_row_names_three_ways_shows_once) + REDESIGN_TESTS + GUARD_TESTS)
+                     notes_over_the_limit_keep_the_change_page, a_file_a_row_names_three_ways_shows_once,
+                     a_log_and_its_video_show_as_tabs_log_first_unless_passed, a_second_video_of_the_same_stem_stays_beside_the_tabs,
+                     a_log_or_video_alone_or_with_another_stem_is_not_tabs) + REDESIGN_TESTS + GUARD_TESTS)
 
 
 def run_test(test):
