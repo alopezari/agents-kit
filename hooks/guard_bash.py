@@ -561,7 +561,7 @@ def shell_code(command):
 # bin/evidence <id> and bin/evidence-video [--check|--case|--expected <text>]... <id> run the rest of their line. A
 # one-character lookbehind, with its path cut in Python: a path pattern tried after every separator was quadratic on a
 # long line.
-EVIDENCE_RUNNER = re.compile(r"(?<![^\s;&|(`/])evidence(?:-video(?:\s+--(?:check|case|expected)\s+(?:'[^']*'|\"[^\"]*\"|[^\s'\"]+))*)?"
+EVIDENCE_RUNNER = re.compile(r"(?<![^\s;&|(`/])evidence(?:-video(?:\s+--(?:check|case|expected)\s+(?:'[^']*'|\"(?:[^\"\\]|\\.)*\"|\\.|[^\s'\"\\])+)*)?"
                              r"\s+(['\"]?)[A-Za-z0-9][\w.-]*\1\s+")
 
 

@@ -1287,6 +1287,7 @@ def a_log_and_its_video_show_as_tabs_log_first_unless_passed(base):
         block = check_block(markup, name)
         group = tab_group(block)
         assert group, f"{name}: the log and the video aren't tabs"
+        assert block.count('<fieldset class="tabs"') == 1, f"{name}: its log and video show as tabs more than once"
         fieldset, checked, radio_names = group
         assert list(checked) == ["Video", "Log"], checked
         assert [label for label, on in checked.items() if on] == [selected], (name, checked)

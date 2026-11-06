@@ -32,6 +32,9 @@ if os.environ.get("STUB_VHS_MODE") == "fail":
 output = re.search(r'^Output "(.*)"$', tape, re.M).group(1)
 typed = re.findall(r"^Type (.*)$", tape, re.M)
 assert len(typed) == 1, typed
+if os.environ.get("STUB_VHS_MODE") == "no-ready":
+    print("failed to execute command: timeout waiting for the terminal to be ready", file=sys.stderr)
+    sys.exit(1)
 if os.environ.get("STUB_VHS_MODE") == "no-run":
     open(output, "w").write("a terminal that ran nothing")
     sys.exit(0)
@@ -180,6 +183,8 @@ def an_option_without_its_value_is_a_usage_error(base):
         done, evidence = record(base, "U2", "true", options=args)
         assert done.returncode == 64 and "usage: evidence-video" in done.stderr, (args, done.returncode, done.stderr)
         assert os.listdir(evidence) == [], os.listdir(evidence)
+    alone = subprocess.run([RECORDER, "--check"], capture_output=True, text=True, timeout=30)
+    assert alone.returncode == 64 and "usage: evidence-video" in alone.stderr, (alone.returncode, alone.stderr)
 
 
 # AC2
@@ -197,7 +202,7 @@ def any_argument_reaches_the_command_unchanged(base):
 
 
 def an_early_exit_line_or_an_old_marker_does_not_end_the_recording(base):
-    old = "evidence-video: M1 exit 0, run 0123456789abcdef0123456789abcdef"
+    old = "evidence-video: exit 0, run 0123456789abcdef"  # the marker's format, with another run's nonce
     done, evidence = record(base, "M1", "bash", "-c", f'echo "exit 0"; echo "{old}"; sleep 1; echo "the late line"')
     assert done.returncode == 0, done.stderr
     assert "the late line" in read(os.path.join(evidence, "M1.webm")), "the recording stopped before the check ended"
@@ -262,6 +267,13 @@ def a_check_that_ends_as_the_cap_hits_is_still_capped(base):
     assert os.listdir(evidence) == [], os.listdir(evidence)
 
 
+def a_vhs_that_times_out_before_the_check_starts_is_a_vhs_failure(base):
+    evidence = os.path.join(base, "evidence")
+    done, _ = record(base, "C3", "true", evidence=evidence, STUB_VHS_MODE="no-ready")
+    assert done.returncode == 74 and "vhs failed" in done.stderr and "cap" not in done.stderr, (done.returncode, done.stderr)
+    assert os.listdir(evidence) == [], os.listdir(evidence)
+
+
 def bin_evidence_failing_after_its_log_is_not_a_pass(base):
     fake_bin = os.path.join(base, "fake-bin")
     os.makedirs(fake_bin)
@@ -306,7 +318,8 @@ def real_vhs_records_the_check_until_it_ends(base):
     assert "step: print the arguments" in log and "after the exit line" in log, log
     video = os.path.join(evidence, "R1.webm")
     assert os.path.getsize(video) > 0
-    assert duration(video) > 2.5, f"the video ends at {duration(video)}s, before the check's last line"
+    # A recording of `true` lasts about 3 seconds (the tape's 1 second before the check and 2 after); this one sleeps 2 more.
+    assert duration(video) > 4.5, f"the video ends at {duration(video)}s, before the check's last line"
 
 
 def real_vhs_records_output_longer_than_its_screen(base):
@@ -336,7 +349,7 @@ def kit_validate_sends_its_own_checks_to_the_recorder(base):
     step = skill[skill.index("\n## 4. "):skill.index("\n## 5. ")]
     for needle in ("`~/.agents/bin/evidence-video <id> <command> [args...]`", "CLI, API and database checks", "`EVIDENCE_VIDEO_MAX`",
                    "The full suite, mutation runs and the checks guide's steps stay on `bin/evidence`",
-                   "`--check <text> --case <+|−> --expected <text>`", "`precondition:`, `step:` and `note:` lines", "`sleep 1`"):
+                   "`--check <text> --case <+|−> --expected <text>`", "`precondition:`, `step:` and `note:` lines, and `PASS` and `FAIL` ones", "`sleep 1`"):
         assert needle in step, needle
     assert re.search(r"\[output\]\([^)]*/A1\.txt\) \[video\]\([^)]*/A1\.webm\)", skill), "the Evidence cell example links no log and video pair"
     assert "marking the ones step 4 records with `bin/evidence-video`" in skill, "the skill doesn't tell the runner which checks to record"
@@ -365,6 +378,7 @@ for t in kit_home.selected([a_check_leaves_its_log_and_video_and_exits_with_its_
                             without_vhs_the_check_runs_on_bin_evidence_alone, a_failing_vhs_leaves_no_video_and_exits_74,
                             no_log_written_leaves_no_video_and_exits_74, the_cap_stops_the_check_and_leaves_nothing,
                             a_check_that_ends_as_the_cap_hits_is_still_capped, bin_evidence_failing_after_its_log_is_not_a_pass,
+                            a_vhs_that_times_out_before_the_check_starts_is_a_vhs_failure,
                             a_check_that_reads_its_input_gets_none_and_goes_on, real_vhs_records_output_longer_than_its_screen,
                             nothing_is_ever_uploaded, real_vhs_records_the_check_until_it_ends, real_vhs_cap_stops_the_check,
                             kit_validate_sends_its_own_checks_to_the_recorder,

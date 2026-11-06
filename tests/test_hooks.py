@@ -239,6 +239,8 @@ def guard_blocks_irreversible(base):
         assert guard(f"~/.agents/bin/evidence-video A1 {cmd}") == "deny", f"the video recorder runs it all the same: {cmd}"
         assert guard(f"~/.agents/bin/evidence-video --check 'a b' --case + --expected \"exit 2\" A1 {cmd}") == "deny", \
             f"the recorder's options don't hide it: {cmd}"
+        assert guard(f"~/.agents/bin/evidence-video --expected \"exit 2 and \\\"unknown pack\\\"\" --check 'it'\\''s' A1 {cmd}") \
+            == "deny", f"quotes inside an option's value don't hide it: {cmd}"
     assert guard("cd /tmp && evidence B2 sudo ls") == "deny"
     for wrapped in ["  evidence A1 rm -rf /opt/projects", 'evidence "A1" rm -rf /opt/projects']:
         assert guard(wrapped) == "deny", wrapped

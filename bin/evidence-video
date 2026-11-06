@@ -2,12 +2,12 @@
 # Run a validation check through bin/evidence inside a terminal VHS records:
 #   evidence-video [--check <what it checks>] [--case <+|−>] [--expected <what it asserts>] <id> <command> [args...]
 # The video opens on a header with the id, the case, the check and what it expects, and shows the check's `step:`,
-# `precondition:` and `note:` lines highlighted; the log keeps bin/evidence's plain output.
+# `precondition:`, `note:`, `PASS` and `FAIL` lines highlighted; the log keeps bin/evidence's plain output.
 # Leaves bin/evidence's <id>.txt and a <id>.webm of the same run in the evidence directory bin/evidence uses, prints
 # the log, and exits with the check's code as the log's header records it. Both files are removed before the run, so a
 # log and a video never come from different runs.
-# Without vhs it runs bin/evidence alone and says there is no video. Exits 74, with no video, when vhs fails or no log
-# was written; and 124, with neither file, when the check runs past EVIDENCE_VIDEO_MAX seconds (90 by default): the
+# Without vhs it runs bin/evidence alone and says there is no video. Exits 74 when vhs fails, no log was written, or
+# bin/evidence's own exit differs from the one its log records (it failed after the check ran); and 124, with neither file, when the check runs past EVIDENCE_VIDEO_MAX seconds (90 by default): the
 # check is stopped there. The check's stdin is /dev/null, as a prompt it waited on would only run into the cap.
 set -uo pipefail
 usage="usage: evidence-video [--check <text>] [--case <+|−>] [--expected <text>] <id> <command> [args...]"
@@ -36,6 +36,9 @@ fi
 dir="${EVIDENCE_DIR:-$("$HOME/.agents/bin/reports" path evidence)}" \
   || { echo "evidence-video: \`reports path evidence\` gave no directory; EVIDENCE_DIR names one to save into" >&2; exit 74; }
 max=${EVIDENCE_VIDEO_MAX:-90}
+# vhs's start: its browser and terminal, before the tape's first Wait. The grace covers it and the tape's sleeps, and is
+# the "plus 90 seconds" the skill tells a caller to add to its command timeout.
+ready_wait=30 grace=90
 if [[ ! $max =~ ^[1-9][0-9]*$ ]]; then
   echo "evidence-video: EVIDENCE_VIDEO_MAX is a whole number of seconds (got '$max')" >&2
   exit 64
@@ -107,7 +110,7 @@ Env PS1 "$ "
 Hide
 Type "$tmp/run"
 Enter
-Wait+Screen@30s /evidence-video: ready $nonce/
+Wait+Screen@${ready_wait}s /evidence-video: ready $nonce/
 Show
 Sleep 1s
 Enter
@@ -119,11 +122,11 @@ TAPE
 VHS_PUBLISH=false vhs -q "$tmp/check.tape" > "$tmp/vhs.log" 2>&1 &
 vhs_pid=$!
 # The tape's Wait is the cap; this bounds a vhs that hangs before it gets there (its browser, ttyd).
-deadline=$((SECONDS + max + 90))
+deadline=$((SECONDS + max + grace))
 while kill -0 "$vhs_pid" 2>/dev/null && [ $SECONDS -lt $deadline ]; do sleep 0.2; done
 if kill -0 "$vhs_pid" 2>/dev/null; then
   kill "$vhs_pid"
-  echo "vhs failed to finish within $((max + 90)) seconds" >> "$tmp/vhs.log"
+  echo "vhs failed to finish within $((max + grace)) seconds" >> "$tmp/vhs.log"
 fi
 wait "$vhs_pid"
 vhs_status=$?
