@@ -350,6 +350,14 @@ def a_last_line_longer_than_the_screen_still_fits_it(base):
     assert printed.rstrip("\n").endswith("x"), printed[-100:]
 
 
+def the_reprint_keeps_only_the_last_lines_that_fit(base):
+    program = re.search(r"awk -v rows=\$\(\(rows - 3\)\) -v cols=\$cols %q %q\\n' '(.*?)' \"\$tmp/screen\"", read(RECORDER), re.S).group(1)
+    screen = os.path.join(base, "screen")
+    open(screen, "w").write("".join(f"\033[1;33mline {i}\033[0m\n" for i in range(1, 101)))
+    printed = subprocess.run(["awk", "-v", "rows=20", "-v", "cols=80", program, screen], capture_output=True, text=True).stdout
+    assert printed.splitlines() == [f"\033[1;33mline {i}\033[0m" for i in range(81, 101)], printed
+
+
 def real_vhs_cap_stops_the_check(base):
     need_real_vhs()
     token = f"real-cap-{os.getpid()}-{time.time_ns()}"
@@ -400,6 +408,7 @@ for t in kit_home.selected([a_check_leaves_its_log_and_video_and_exits_with_its_
                             a_vhs_that_times_out_before_the_check_starts_is_a_vhs_failure,
                             a_check_that_reads_its_input_gets_none_and_goes_on, real_vhs_records_output_longer_than_its_screen,
                             real_vhs_runs_a_check_whose_header_is_taller_than_its_screen, a_last_line_longer_than_the_screen_still_fits_it,
+                            the_reprint_keeps_only_the_last_lines_that_fit,
                             nothing_is_ever_uploaded, real_vhs_records_the_check_until_it_ends, real_vhs_cap_stops_the_check,
                             kit_validate_sends_its_own_checks_to_the_recorder,
                             the_video_opens_on_a_header_and_highlights_steps_but_the_log_stays_plain,
