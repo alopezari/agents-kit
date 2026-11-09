@@ -117,19 +117,19 @@ script_start() {
 record_tape() {
   VHS_PUBLISH=false vhs -q "$tmp/check.tape" > "$tmp/vhs.log" 2>&1 &
   vhs_pid=$!
-  deadline=$((SECONDS + $1 + grace))
+  deadline=$((SECONDS + $1 + grace)) overran=
   while kill -0 "$vhs_pid" 2>/dev/null && [ $SECONDS -lt $deadline ]; do sleep 0.2; done
   if kill -0 "$vhs_pid" 2>/dev/null; then
     kill "$vhs_pid"
-    echo "vhs failed to finish within $(($1 + grace)) seconds" >> "$tmp/vhs.log"
+    # Not in vhs.log: vhs still writes there at its own offset, over a line appended to it.
+    overran="vhs failed to finish within $(($1 + grace)) seconds"
   fi
   wait "$vhs_pid"
   vhs_status=$?
 }
 vhs_failed() {
   rm -f "$video"
-  reason=$(grep -m1 "^vhs failed to finish within" "$tmp/vhs.log" ||
-    grep -v "vhs\.charm\.sh" "$tmp/vhs.log" | grep -m1 -iE "fail|error|invalid" | cut -c1-300)
+  reason=${overran:-$(grep -v "vhs\.charm\.sh" "$tmp/vhs.log" | grep -m1 -iE "fail|error|invalid" | cut -c1-300)}
   echo "evidence-video: no video: vhs failed (exit $vhs_status)${reason:+: $reason}" >&2
   exit 74
 }
@@ -201,7 +201,7 @@ END {
     for _ in $(seq "$(wc -l < "$tmp/lines")"); do printf 'Enter\nSleep 750ms\n'; done
     printf 'Enter\nSleep 4s\n'
   } > "$tmp/check.tape" || exit 74
-  record_tape 60
+  record_tape 150  # the tape plays 60 s; under a loaded machine vhs took over 150 s to render it
   [ $vhs_status = 0 ] || vhs_failed
   # The marker before the video, so a replay is never left looking live; a failed move removes it with the video.
   if [ ! -s "$tmp/video.webm" ] \

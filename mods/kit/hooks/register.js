@@ -355,7 +355,7 @@ const RUNNER_PROMPT = [
   'Check, Case and Expected it gives, adding `--replay` when the spawn prompt marks the check as long, so its output',
   'and its video are saved. Give a live run a command timeout of at least',
   'EVIDENCE_VIDEO_MAX (90 by default) plus 90 seconds. A replay has no cap: it runs the check in full before',
-  'recording, so give it the time the check takes plus 180 seconds, or run it in the background when that is longer',
+  'recording, so give it the time the check takes plus 270 seconds, or run it in the background when that is longer',
   'than the tool allows. A check that needs setup is a script that sets up, runs and cleans up, which you',
   'write in `$EV/checks/`, outside the working tree, and run by its path from the working tree (EV is',
   '`~/.agents/bin/reports path evidence`; inside `.git` the evidence records no content): it stays with the',

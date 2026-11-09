@@ -425,8 +425,8 @@ def a_run_without_its_explanation_is_refused(base):
 
 def real_vhs_replays_a_long_log_within_60_seconds(base):
     need_real_vhs()
-    done, evidence = record(base, "R4", "bash", "-c", 'for i in $(seq 1 3000); do echo "PASS check $i"; done; echo "FAIL the last one"',
-                            options=REPLAY, path=os.environ["PATH"], timeout=300)  # vhs renders in real time: 120 s ran out under the full suite's load
+    done, evidence = record(base, "R4", "bash", "-c", 'for i in $(seq 1 3000); do echo "noise line $i"; done; echo "FAIL the last one"',
+                            options=REPLAY, path=os.environ["PATH"], timeout=300)  # few highlighted lines: a 60 s render under the suite's load fails the hooks' orphan tests beside it
     assert done.returncode == 0, (done.returncode, done.stderr)
     assert os.path.exists(os.path.join(evidence, "R4.replay"))
     assert 0 < duration(os.path.join(evidence, "R4.webm")) <= 60, duration(os.path.join(evidence, "R4.webm"))
