@@ -234,6 +234,10 @@ def without_vhs_the_check_runs_on_bin_evidence_alone(base):
     assert "evidence-video: no video: vhs is not installed" in done.stderr, done.stderr
     assert "ran" in done.stdout and header_exit(os.path.join(evidence, "N1.txt")) == 3
     assert not os.path.exists(os.path.join(evidence, "N1.webm")), "an older run's video is left beside this run's log"
+    open(os.path.join(evidence, "N1.replay"), "w").write("an older replay's marker")
+    done, _ = record(base, "N1", "bash", "-c", "echo ran; exit 3", evidence=evidence, path="/usr/bin:/bin", options=REPLAY)
+    assert done.returncode == 3 and "vhs is not installed" in done.stderr, (done.returncode, done.stderr)
+    assert sorted(os.listdir(evidence)) == ["N1.txt"], ("a replay without vhs left more than its log", os.listdir(evidence))
 
 
 def old_files(evidence, check_id):
@@ -366,14 +370,26 @@ def a_replay_runs_past_the_live_cap(base):
 
 def a_replay_shows_a_multiline_command_and_a_raw_log_as_plain_lines(base):
     tape = os.path.join(base, "tape.txt")
-    done, evidence = record(base, "L8", "bash", "-c", "printf 'PASS \\033[2Jcleared\\rback\\n'\nprintf '%s\\n' 'x\\ny'",
+    done, evidence = record(base, "L8", "bash", "-c", "printf 'PASS \\033[2Jcleared\\rback\\n'\nprintf '%s\\n' 'x\\ny'\n"
+                            "printf 'note: \\033creset \\033]8;;u\\033\\\\link\\033]8;;\\033\\\\ end\\n'",
                             options=REPLAY, STUB_VHS_TAPE=tape)
     assert done.returncode == 0, (done.returncode, done.stderr)
     screen = read(os.path.join(evidence, "L8.webm"))
     assert "\033[2J" not in screen and "\r" not in screen, "a log's control sequences reached the replay's screen"
-    assert "PASS clearedback" in screen, screen
+    assert "PASS clearedback" in screen and "note: reset link end" in screen, screen
+    assert "\033c" not in screen and "\033]" not in screen, "an escape other than CSI reached the replay's screen"
     step = re.search(r"step: (.*)", screen).group(1)
     assert r"printf '\''%s\n'\'' '\''x\ny'\''" in step, f"the command lost its backslashes or its one line: {step}"
+
+
+def a_replay_reads_no_result_or_step_from_its_command_and_ends_on_a_short_frame(base):
+    command = "".join(f"# comment {n}\n" for n in range(40)) + "cat >/dev/null <<'EOF'\nFAIL never printed\nstep: never taken\nEOF\necho 'PASS printed'"
+    done, evidence = record(base, "L9", "bash", "-c", command, options=REPLAY)
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    screen = read(os.path.join(evidence, "L9.webm"))
+    assert "FAIL line" not in screen and "step: $ bash -c" in screen, "the command's own text was replayed as a result or a step"
+    last_frame = screen[screen.rindex("L9 · + case"):]
+    assert "the check exited 0" in last_frame and len(last_frame.splitlines()) <= 8, ("the last frame doesn't fit the screen", last_frame)
 
 
 def a_stepless_log_replays_its_command_as_its_step(base):
@@ -561,7 +577,8 @@ for t in kit_home.selected([a_check_leaves_its_log_and_video_and_exits_with_its_
                             a_replay_keeps_the_exit_code_and_says_it_is_a_replay, a_long_log_replays_its_failures_within_60_seconds,
                             a_stepless_log_replays_its_command_as_its_step, a_live_run_removes_the_replay_marker,
                             a_late_fail_displaces_an_earlier_pass_and_ends_the_replay, a_replay_runs_past_the_live_cap,
-                            a_replay_shows_a_multiline_command_and_a_raw_log_as_plain_lines,
+                            a_replay_reads_no_result_or_step_from_its_command_and_ends_on_a_short_frame,
+                     a_replay_shows_a_multiline_command_and_a_raw_log_as_plain_lines,
                             a_replay_whose_vhs_fails_keeps_the_log_and_exits_74, a_run_without_its_explanation_is_refused,
                             real_vhs_replays_a_long_log_within_60_seconds]):
     test(t)

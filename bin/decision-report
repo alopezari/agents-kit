@@ -1912,7 +1912,10 @@ def check_blocks(c):
     """Each check's disclosure, evidence inside it: shown in full even when an earlier check, or the notes, showed the same file."""
     page, scripts = c.page, os.path.join(c.page.root, "checks")
     c.missing_files = {}
-    videos = review_stamp.usable_videos(c.evidence)
+    try:
+        videos = review_stamp.usable_videos(c.evidence)
+    except OSError:  # an unreadable directory, or a file a running check just removed: no video is shown as usable
+        videos = []
     c.without_video = [row for row in c.rows if row["result"] in ("PASS", "FAIL")
                        and not review_stamp.names_a_file(row["observed"], videos)]  # as the validate stamp reads them
     unfilmed = {row["anchor"] for row in c.without_video}
@@ -2031,11 +2034,9 @@ def log_and_video_tabs(page, row, blocks, scripts):
         radios = "".join(f'<input type="radio" class="t-{tab}" name="{name}" id="{tab_id}"{" checked" if on else ""}>'
                          f'<label for="{tab_id}">{labels[tab]}</label>'
                          for tab, on in (("video", not log_first), ("log", log_first)) if (tab_id := page.new_id(f"{name}-{tab}")))
-        caption = (f'<p class="meta">A replay of {esc(os.path.basename(stem))}.txt, recorded after the check ran in full: '
-                   "not a live recording.</p>" if replay else "")
         out.append(f'<fieldset class="tabs"><legend class="vh">Evidence of {esc(row["id"])}: the {"replay" if replay else "video"} '
                    f'and the log of {esc(os.path.basename(stem))}</legend>'
-                   f'{radios}<div class="pane p-video">{caption}{pairs[stem]["video"]}</div><div class="pane p-log">{pairs[stem]["log"]}</div></fieldset>')
+                   f'{radios}<div class="pane p-video">{pairs[stem]["video"]}</div><div class="pane p-log">{pairs[stem]["log"]}</div></fieldset>')
     return out
 
 
@@ -3295,7 +3296,7 @@ summary:hover::after{border-color:var(--ok)}
 .tabs>label:hover{border-color:var(--dim);color:var(--fg)}
 .tabs>input:checked+label{border-color:var(--fg);color:var(--fg);font-weight:700;text-decoration:underline;text-underline-offset:4px}
 .tabs>input:focus-visible+label{outline:2px solid var(--ok);outline-offset:2px}
-.tabs>.pane{display:none;flex-basis:100%;min-width:0}.tabs>.pane>.file{margin-top:0}.tabs>.pane>.meta{margin:.5rem 0}
+.tabs>.pane{display:none;flex-basis:100%;min-width:0}.tabs>.pane>.file{margin-top:0}
 .t-video:checked~.p-video,.t-log:checked~.p-log{display:block}
 .fields{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.1rem .8rem;font-size:.82rem;color:var(--muted);margin:0}
 .fields dd{margin:0;overflow-wrap:anywhere}

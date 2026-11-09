@@ -1358,6 +1358,7 @@ def a_replay_says_so_and_a_check_without_a_video_is_your_call(base):
     assert replay, "the replay and its log aren't tabs"
     video_tab = next(iter(replay[1]))
     assert "replay" in video_tab.lower() and "log" in video_tab.lower(), ("the tab doesn't say it is a replay of the log", replay[1])
+    assert text(check_block(markup, "U1")).count("not a live recording") == 1, "the replay's caption isn't shown once"
     os.remove(os.path.join(evidence, "U1.replay"))
     assert "replay" not in text(tab_group(check_block(generate(repo, base, gh)[1], "U1"))[0]).lower(), \
         "the page read the marker once and kept it"
