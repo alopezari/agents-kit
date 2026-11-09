@@ -1910,6 +1910,9 @@ def check_blocks(c):
     """Each check's disclosure, evidence inside it: shown in full even when an earlier check, or the notes, showed the same file."""
     page, scripts = c.page, os.path.join(c.page.root, "checks")
     c.missing_files = {}
+    videos = review_stamp.usable_videos(c.evidence)
+    c.without_video = [row for row in c.rows if row["result"] in ("PASS", "FAIL")
+                       and not review_stamp.names_a_file(row["observed"], videos)]  # as the validate stamp reads them
 
     def test_rows(at):
         return "".join(f'<tr><td><code>{esc(name)}</code></td><td>{state(result, "need" if result == "FAIL" else "ok")}</td>'
@@ -1972,7 +1975,8 @@ def check_blocks(c):
                        + "</details></details>")
         acs = " ".join(f'<a class="ac" href="#ac-{n}">AC{n}</a>' for n in row["acs"]) or (esc(row["ac"]) or state("no AC", "dim"))
         kind = CASE_WORDS.get(row["case"].strip("*_ "), row["case"])
-        meta = " · ".join(part for part in (esc(kind), f"proves {acs}", f"evidence {row['fresh']}") if part)
+        meta = " · ".join(part for part in (esc(kind), f"proves {acs}", f"evidence {row['fresh']}",
+                                            state("no video", "need") if any(r is row for r in c.without_video) else "") if part)
         outcome = RESULT_WORDS.get(row["result"], row["result"])
         expected = page.inline(row["expected"]) if row["expected"] and row["expected"].strip() else not_recorded_word()
         observed = page.inline(row["observed"])
@@ -1995,7 +1999,8 @@ def check_blocks(c):
 
 def log_and_video_tabs(page, row, blocks, scripts):
     """The check's evidence blocks, with a log and a playable video of the same stem as Video and Log tabs where the
-    first of the two stood; the Log tab is selected unless the check passed."""
+    first of the two stood; the Log tab is selected unless the check passed. A video bin/evidence-video --replay made,
+    which leaves <stem>.replay beside it, is labeled as a replay of the log, read on every build."""
     def kind(real):
         if real is None or not os.path.isfile(real) or os.path.dirname(real) == scripts:
             return None
@@ -2018,11 +2023,16 @@ def log_and_video_tabs(page, row, blocks, scripts):
         shown.add(stem)
         name = page.new_id(f"tabs-{row['id']}")
         log_first = row["result"] != "PASS"
+        replay = os.path.isfile(stem + ".replay")
+        labels = {"video": "Replay of the log" if replay else "Video", "log": "Log"}
         radios = "".join(f'<input type="radio" class="t-{tab}" name="{name}" id="{tab_id}"{" checked" if on else ""}>'
-                         f'<label for="{tab_id}">{tab.capitalize()}</label>'
+                         f'<label for="{tab_id}">{labels[tab]}</label>'
                          for tab, on in (("video", not log_first), ("log", log_first)) if (tab_id := page.new_id(f"{name}-{tab}")))
-        out.append(f'<fieldset class="tabs"><legend class="vh">Evidence of {esc(row["id"])}: the video and the log of {esc(os.path.basename(stem))}</legend>'
-                   f'{radios}<div class="pane p-video">{pairs[stem]["video"]}</div><div class="pane p-log">{pairs[stem]["log"]}</div></fieldset>')
+        caption = (f'<p class="meta">A replay of {esc(os.path.basename(stem))}.txt, recorded after the check ran in full: '
+                   "not a live recording.</p>" if replay else "")
+        out.append(f'<fieldset class="tabs"><legend class="vh">Evidence of {esc(row["id"])}: the {"replay" if replay else "video"} '
+                   f'and the log of {esc(os.path.basename(stem))}</legend>'
+                   f'{radios}<div class="pane p-video">{caption}{pairs[stem]["video"]}</div><div class="pane p-log">{pairs[stem]["log"]}</div></fieldset>')
     return out
 
 
@@ -2421,6 +2431,9 @@ def verdict_reasons(c):
             calls.append((f"#{row['anchor']}", f"{row['id']} did not run", page.inline(row["check"])))
         for name, why_unread in c.missing_files.get(row["anchor"], []):
             calls.append((f"#{row['anchor']}", f"{row['id']} names {name}, which {why_unread}", esc(name)))
+    for row in c.without_video:
+        calls.append((f"#{row['anchor']}", f"{row['id']}'s video evidence is missing",
+                      "Its Evidence names no video (a non-empty .webm or .mp4 in the evidence directory): the validate stamp refuses it."))
     on_another = [row["id"] for row in c.rows if row["fresh"] == "stale"]
     if on_another and not c.stale_problems:  # a stale_problem already stops the merge
         calls.append(("#freshness", f"{sentence_list(on_another)} ran on another commit", "Their evidence doesn't cover what you would merge."))
@@ -2534,7 +2547,7 @@ def hero(c, title, stops, calls, notes):
     fresh_words = [row.get("fresh") for row in c.rows]
     validation_state = source_state(c, "validation", "validate")
     test_word = ("Clear" if c.validation_ok and validation_state is None and c.stamps["validate"] == "current" and not fails and not not_run and "stale" not in fresh_words and "unknown" not in fresh_words
-                 and not c.not_run_types and not c.uncovered and not c.missing_files and not c.unread_results else "Read this")
+                 and not c.not_run_types and not c.uncovered and not c.missing_files and not c.without_video and not c.unread_results else "Read this")
     if c.review:
         kinds = {outcome: sum(e[0] == outcome for e in c.entries) for outcome in REVIEW_OUTCOMES}
         reviewed = f'{kinds["Fixed"]} fixed, {kinds["Rejected"]} rejected, {kinds["Open"]} left open.'

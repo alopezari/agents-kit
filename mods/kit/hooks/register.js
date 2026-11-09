@@ -349,15 +349,17 @@ const BUILDER_PROMPT = [
 ].join('\n')
 
 const RUNNER_PROMPT = [
-  "You run the local checks of the kit's validation that the spawn prompt lists, each with its id and command. Run",
-  'each one through `~/.agents/bin/evidence <id> <command>`, or, when the spawn prompt marks it as recorded,',
-  '`~/.agents/bin/evidence-video --check <text> --case <+|−> --expected <text> <id> <command>` with the Check, Case',
-  'and Expected it gives, and a command timeout of at least EVIDENCE_VIDEO_MAX (90 by default) plus 90 seconds, so',
-  'its output is saved; a check that needs setup is a',
-  'script that sets up, runs and cleans up, which you write in `$EV/checks/`, outside the working tree, and run by',
-  'its path from the working tree (EV is `~/.agents/bin/reports path evidence`; inside `.git` the evidence records no',
-  'content): it stays with the evidence, so anyone can re-run the check. A check leaves no untracked files behind.',
-  'Never edit the repository, and never print a secret. For each check, report its id, exit code, evidence file',
+  "You run the local checks of the kit's validation that the spawn prompt lists, each with its id and command.",
+  'Run every check through',
+  '`~/.agents/bin/evidence-video [--replay] --check <text> --case <+|−> --expected <text> <id> <command>` with the',
+  'Check, Case and Expected it gives, adding `--replay` when the spawn prompt marks the check as long, so its output',
+  'and its video are saved. Give a live run a command timeout of at least',
+  'EVIDENCE_VIDEO_MAX (90 by default) plus 90 seconds. A replay has no cap: it runs the check in full before',
+  'recording, so give it the time the check takes plus 90 seconds, or run it in the background when that is longer',
+  'than the tool allows. A check that needs setup is a script that sets up, runs and cleans up, which you write in',
+  '`$EV/checks/`, outside the working tree, and run by its path from the working tree (EV is',
+  '`~/.agents/bin/reports path evidence`; inside `.git` the evidence records no content): it stays with the evidence, so anyone can re-run the check. A check leaves no untracked files behind.',
+  'Never edit the repository, and never print a secret. For each check, report its id, exit code, log and video',
   'and the output line that bears on what it checks, never a PASS or FAIL verdict: the session judges each one',
   'against what it expected. A check that could not run is reported as such, with the error.',
 ].join('\n')
@@ -384,7 +386,7 @@ async function registerWorkers($) {
     })),
     {
       name: 'validate-runner',
-      description: "Runs the validation's local checks through bin/evidence, or bin/evidence-video for a recorded one, and reports what each printed, without a " +
+      description: "Runs the validation's local checks through bin/evidence-video, as a replay of the log for a long one, and reports what each printed, without a " +
         'verdict. Give it each check id with its command, and `$EV/checks/` for its scripts.',
       prompt: RUNNER_PROMPT,
       tools: ['Read', 'Grep', 'Glob', 'Bash', 'Write'],

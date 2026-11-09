@@ -34,7 +34,7 @@ def sh(cwd, *cmd, env=None):
 
 def stamp(repo, kind):
     """Write a stamp as the kit does: verify kinds only come from the verify runner, which records them in-process,
-    and validate needs a report with evidence that covers SPEC's criterion and the test types triage selects."""
+    and validate needs a report with evidence (a log and a video per check) that covers SPEC's criterion and the test types triage selects."""
     if kind.startswith("verify"):
         code = f"import sys; sys.path.insert(0, {os.path.dirname(STAMP)!r}); import review_stamp as r; r.record_verify({kind!r}, r.fingerprint())"
         return sh(repo, "python3", "-c", code)
@@ -43,12 +43,14 @@ def stamp(repo, kind):
         types = json.loads(sh(repo, os.path.expanduser("~/.agents/bin/triage"), "--json"))["tests"]
         with open(sh(repo, reports, "path", "validation"), "w") as fh:
             fh.write("| # | AC | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
-                     "| A1 | AC1 | app runs | + | exit 0 | PASS | a1.txt |\n| A2 | AC1 | bad input refused | \u2212 | exit 2 | PASS | a1.txt |\n"
+                     "| A1 | AC1 | app runs | + | exit 0 | PASS | a1.txt a1.webm |\n| A2 | AC1 | bad input refused | \u2212 | exit 2 | PASS | a1.txt a1.webm |\n"
                      "\n## Test types\n\n| Type | Ran | Evidence |\n|---|---|---|\n" + "".join(f"| {t} | yes | a1.txt |\n" for t in types))
         evidence = sh(repo, reports, "path", "evidence")
         assert os.path.isdir(evidence), f"no evidence directory from {reports}: {evidence!r}"
         with open(os.path.join(evidence, "a1.txt"), "w") as fh:
             fh.write("$ python3 app.py\nexit 0\n")
+        with open(os.path.join(evidence, "a1.webm"), "wb") as fh:
+            fh.write(b"\x1aE\xdf\xa3 webm")
         with open(os.path.join(evidence, "environment.txt"), "w") as fh:
             fh.write("# in /x, 2026-10-26 09:00:00 +0100, exit 0, commit none\n$ ~/.agents/bin/evidence-env\n\nbranch: feat\n")
     return sh(repo, "python3", STAMP, "write", "--kind", kind)

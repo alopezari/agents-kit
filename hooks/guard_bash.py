@@ -558,11 +558,11 @@ def shell_code(command):
     return re.sub(r"['\"]", ";", command) if RUNS_QUOTED_TEXT.search(masked) else masked
 
 
-# bin/evidence <id> and bin/evidence-video [--check|--case|--expected <text>]... <id> run the rest of their line. A
-# one-character lookbehind, with its path cut in Python: a path pattern tried after every separator was quadratic on a
-# long line.
-EVIDENCE_RUNNER = re.compile(r"(?<![^\s;&|(`/])evidence(?:-video(?P<options>(?:\s+--(?:check|case|expected)\s+"
-                             r"(?:'[^']*'|\"(?:[^\"\\]|\\.)*\"|\\.|[^\s'\"\\])+)*))?"
+# bin/evidence <id> and bin/evidence-video [--replay] [--check|--case|--expected <text>]... <id> run the rest of their
+# line. A one-character lookbehind, with its path cut in Python: a path pattern tried after every separator was
+# quadratic on a long line.
+EVIDENCE_RUNNER = re.compile(r"(?<![^\s;&|(`/])evidence(?:-video(?P<options>(?:\s+(?:--replay|--(?:check|case|expected)\s+"
+                             r"(?:'[^']*'|\"(?:[^\"\\]|\\.)*\"|\\.|[^\s'\"\\])+))*))?"
                              r"\s+(?P<quote>['\"]?)[A-Za-z0-9][\w.-]*(?P=quote)\s+")
 
 
