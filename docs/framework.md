@@ -6,7 +6,7 @@ The kit gives every coding agent you use the same way of working: one set of ins
 
 ## At a glance
 
-- **2 harnesses** share one `AGENTS.md`, 8 skills and 6 hook scripts.
+- **2 harnesses** share one `AGENTS.md`, 9 skills and 6 hook scripts.
 - **22 guard rules** block irreversible or outward-facing shell commands before they run.
 - **Stop checks** run after every turn that edited files: leftovers, weakened tests, secrets (when gitleaks is installed), files outside the spec's Change map, then the repo's verify. After a turn that pushed, they also ask about the pushed commit's CI when it failed, is still running or can't be read (`bin/ci-wait`). Every stop also tells the user, once and without blocking, about orphaned processes that keep burning CPU.
 - **6 stacks** are verified automatically when a repo has no hand-written verify.
@@ -203,6 +203,7 @@ A repository that needs more (a Docker stack, known failing tests, project rules
 | `kit-spec` | core | Turn an issue or request into a short spec with checkable acceptance criteria before building, so the work and the review are judged against what was actually asked. Use when starting work on a Linear or GitHub issue, or on any request bigger than a small, unambiguous change. |
 | `kit-validate` | core | Validate a change end to end before it goes to review. Runs the full unit suite (in Docker if the repo needs it), exercises every acceptance criterion against the local environment with scripts covering positive and negative cases, kept with the evidence, and writes a step-by-step checks guide for whatever it couldn't run: optional steps the user can run before the merge, and the steps after it. Use for behavior changes before opening a PR, or when asked to test a change. |
 | `kit-write-pr-description` | core | Write short, blunt, human-sounding pull request titles and descriptions that lead with functional impact and keep technical detail at architectural altitude, based on the actual code changes, repository context, issue requirements, validation evidence, and the repository's configured PR template. Use when opening, updating, or preparing a pull request. |
+| `security-audit` | https://github.com/cloudflare/security-audit-skill.git, `skills/security-audit` at c1c8a8c | Audit a codebase for security vulnerabilities on request, or answer a security question with its guidance. |
 
 Harnesses pick a skill by its description; you can also call one by name (`/kit-spec` in Claude Code).
 
@@ -429,6 +430,7 @@ The kit is modular: the core holds nothing tied to one employer, client or proje
 - Code comments
 - Skills and instructions
 - Design
+- Security audits
 - Communication
 
 ## Install and maintain

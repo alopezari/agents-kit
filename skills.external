@@ -1,3 +1,4 @@
 # name source what-it-is-for: third-party skills installed from their source. source is a git URL, or <url>@<commit>#<folder> for one skill folder of a repo pinned to a commit
 clarity https://github.com/addyosmani/clarity.git Draft, rewrite or review prose other people will read, so it is specific and sounds like its author without inventing facts.
 impeccable https://github.com/pbakaus/impeccable.git@508d7e8955de3b3caf2d8676e85206723d41a887#.claude/skills/impeccable Design, critique, audit and polish frontend interfaces with a consistent visual direction, and keep an existing brand.
+security-audit https://github.com/cloudflare/security-audit-skill.git@c1c8a8c1471069fb0e188eeaff69b8e8db6564a8#skills/security-audit Audit a codebase for security vulnerabilities on request, or answer a security question with its guidance.
