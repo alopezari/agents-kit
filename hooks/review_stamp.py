@@ -600,8 +600,8 @@ def stale_evidence(lines, evidence):
         shown = ", ".join(listed[:10]) + (f" and {len(listed) - 10} more" if len(listed) > 10 else "")
         if code:
             checks = [n for n in names if n != ENVIRONMENT_RECORD]
-            again = ([f"Run {'those checks' if len(checks) > 1 else 'that check'} again through bin/evidence and update "
-                      "their rows."] if checks else []) + ([f"Record the environment again: {RECORD_ENVIRONMENT_COMMAND}"]
+            again = ([f"Run {'those checks' if len(checks) > 1 else 'that check'} again through bin/evidence-video (with "
+                      "--replay for a long one) and update their rows."] if checks else []) + ([f"Record the environment again: {RECORD_ENVIRONMENT_COMMAND}"]
                                                            if ENVIRONMENT_RECORD in names else [])
             problems.append(f"{named} ran on content the working tree no longer has: {shown} changed since, and aren't "
                             "tests. " + " ".join(again))
@@ -875,7 +875,7 @@ def suite_problems(evidence):
             return []
     return ([f"The suite overlay {shown} asks for a green run of the repo's full suite on the code as it is now, and "
              f"{evidence} holds none. Run one of its commands from the repo root:"]
-            + [f"  ~/.agents/bin/evidence-video --replay --check 'the full suite' --case + --expected 'exit 0' suite {c}"
+            + [f"  ~/.agents/bin/evidence-video --replay --check 'the full unit suite' --case + --expected 'a green run' suite {c}"
                for c in commands] + reasons)
 
 

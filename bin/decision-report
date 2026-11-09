@@ -606,7 +606,9 @@ class Page:
         block_id = self.new_id("file-" + os.path.basename(real))
         if ext in PLAYABLE:
             self.shown[real] = block_id
-            return (f'<div class="file video" id="{block_id}"><video controls preload="metadata" aria-label="{esc(os.path.basename(real))}">'
+            replay = (f'<p class="meta">A replay of {esc(os.path.splitext(os.path.basename(real))[0])}.txt, recorded after the '
+                      'check ran in full: not a live recording.</p>' if os.path.isfile(os.path.splitext(real)[0] + ".replay") else "")
+            return (f'<div class="file video" id="{block_id}">{replay}<video controls preload="metadata" aria-label="{esc(os.path.basename(real))}">'
                     f'<source src="{esc(file_href(real))}" type="{PLAYABLE[ext]}">{link}</video>'
                     f'<p class="name">{link} <span class="size">{size} bytes</span></p></div>')
         if ext in VIDEOS:
@@ -1913,6 +1915,7 @@ def check_blocks(c):
     videos = review_stamp.usable_videos(c.evidence)
     c.without_video = [row for row in c.rows if row["result"] in ("PASS", "FAIL")
                        and not review_stamp.names_a_file(row["observed"], videos)]  # as the validate stamp reads them
+    unfilmed = {row["anchor"] for row in c.without_video}
 
     def test_rows(at):
         return "".join(f'<tr><td><code>{esc(name)}</code></td><td>{state(result, "need" if result == "FAIL" else "ok")}</td>'
@@ -1976,7 +1979,7 @@ def check_blocks(c):
         acs = " ".join(f'<a class="ac" href="#ac-{n}">AC{n}</a>' for n in row["acs"]) or (esc(row["ac"]) or state("no AC", "dim"))
         kind = CASE_WORDS.get(row["case"].strip("*_ "), row["case"])
         meta = " · ".join(part for part in (esc(kind), f"proves {acs}", f"evidence {row['fresh']}",
-                                            state("no video", "need") if any(r is row for r in c.without_video) else "") if part)
+                                            state("no video", "need") if row["anchor"] in unfilmed else "") if part)
         outcome = RESULT_WORDS.get(row["result"], row["result"])
         expected = page.inline(row["expected"]) if row["expected"] and row["expected"].strip() else not_recorded_word()
         observed = page.inline(row["observed"])
@@ -2431,9 +2434,6 @@ def verdict_reasons(c):
             calls.append((f"#{row['anchor']}", f"{row['id']} did not run", page.inline(row["check"])))
         for name, why_unread in c.missing_files.get(row["anchor"], []):
             calls.append((f"#{row['anchor']}", f"{row['id']} names {name}, which {why_unread}", esc(name)))
-    for row in c.without_video:
-        calls.append((f"#{row['anchor']}", f"{row['id']}'s video evidence is missing",
-                      "Its Evidence names no video (a non-empty .webm or .mp4 in the evidence directory): the validate stamp refuses it."))
     on_another = [row["id"] for row in c.rows if row["fresh"] == "stale"]
     if on_another and not c.stale_problems:  # a stale_problem already stops the merge
         calls.append(("#freshness", f"{sentence_list(on_another)} ran on another commit", "Their evidence doesn't cover what you would merge."))
@@ -2456,6 +2456,14 @@ def verdict_reasons(c):
         calls.append(("#freshness", "an output can't be read, so the evidence's freshness is unknown", esc(c.freshness_unread)))
     for n in c.uncovered:
         calls.append((f"#ac-{n}", f"AC{n} has no check", f"AC{n} has no check."))
+    # A row whose missing file is its video already has a reason above.
+    unfilmed = [row for row in c.without_video
+                if not any(name.lower().endswith(review_stamp.VIDEO_EXTENSIONS) for name, _ in c.missing_files.get(row["anchor"], []))]
+    if unfilmed:
+        ids = [row["id"] for row in unfilmed]
+        calls.append((f"#{unfilmed[0]['anchor']}", f"video evidence is missing for {sentence_list(ids)}",
+                      "Each Evidence cell names no usable video (a non-empty .webm or .mp4 in the evidence directory), so a validate "
+                      "stamp taken now refuses it. Record each with bin/evidence-video."))
     without_impact = [finding for _, finding, impact, _, _ in c.open_items if impact_missing(impact, OPEN_IMPACT)]
     gaps = [gap for gap, fields, _ in c.not_proven if impact_missing(fields, GAP_IMPACT)]
     if without_impact or gaps:
@@ -3287,7 +3295,7 @@ summary:hover::after{border-color:var(--ok)}
 .tabs>label:hover{border-color:var(--dim);color:var(--fg)}
 .tabs>input:checked+label{border-color:var(--fg);color:var(--fg);font-weight:700;text-decoration:underline;text-underline-offset:4px}
 .tabs>input:focus-visible+label{outline:2px solid var(--ok);outline-offset:2px}
-.tabs>.pane{display:none;flex-basis:100%;min-width:0}.tabs>.pane>.file{margin-top:0}
+.tabs>.pane{display:none;flex-basis:100%;min-width:0}.tabs>.pane>.file{margin-top:0}.tabs>.pane>.meta{margin:.5rem 0}
 .t-video:checked~.p-video,.t-log:checked~.p-log{display:block}
 .fields{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.1rem .8rem;font-size:.82rem;color:var(--muted);margin:0}
 .fields dd{margin:0;overflow-wrap:anywhere}

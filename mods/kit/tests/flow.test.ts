@@ -797,9 +797,11 @@ test('the validate runner runs checks on Sonnet, writes no edits to the repo and
   expect(runner.omitClaudeMd).toBeUndefined()
   expect(runner.prompt).toContain('bin/evidence')
   expect(runner.prompt).toContain('outside the working tree')
-  expect(runner.prompt).toContain('write in `$EV/checks/`')
+  expect(runner.prompt).toContain('`~/.agents/bin/evidence-video [--replay] --check <text>')
+  expect(runner.prompt).toContain('plus 180 seconds')
+  expect(runner.prompt).toContain('write in\n`$EV/checks/`')
   expect(runner.description).toContain('`$EV/checks/`')
-  expect(runner.prompt).toContain('report its id, exit code, evidence file\nand the output line')
+  expect(runner.prompt).toContain('report its id, exit code, log and video\nand the output line')
   expect(runner.prompt).toContain('never a PASS or FAIL')
 })
 

@@ -5,15 +5,15 @@
 # `precondition:`, `note:`, `PASS` and `FAIL` lines highlighted; the log keeps bin/evidence's plain output. A run without
 # a non-blank --check, --case and --expected is refused (exit 64): no video opens without its explanation.
 # Leaves bin/evidence's <id>.txt and a <id>.webm of the same run in the evidence directory bin/evidence uses, prints
-# the log, and exits with the check's code as the log's header records it. Both files are removed before the run, so a
-# log and a video never come from different runs.
+# the log, and exits with the check's code as the log's header records it. Both files, and a replay's marker, are removed
+# before the run, so a log and a video never come from different runs.
 # Without vhs it runs bin/evidence alone and says there is no video. Exits 74 when vhs fails, no log was written, or
 # bin/evidence's own exit differs from the one its log records (it failed after the check ran); and 124, with neither file, when the check runs past EVIDENCE_VIDEO_MAX seconds (90 by default): the
 # check is stopped there, and --replay runs it in full. The check's stdin is /dev/null, as a prompt it waited on would only run into the cap.
 # --replay, for a check of any length (a full suite, a mutation run): runs bin/evidence uncapped, then records a replay of
-# its saved log, labeled as one, of at most 60 seconds: the header, the log's highlighted lines (every FAIL first, then
-# the rest in order, 40 at most, and how many were left out; the command as its one step when it printed none) and its
-# last 20 lines. It leaves <id>.replay beside the video, which a live run of the same id removes. When vhs fails it
+# its saved log, labeled as one, of at most 60 seconds: the header, the log's highlighted lines in order (40 at most, every
+# FAIL kept before any other, and how many were left out; the command as its one step when it printed none), its last 20
+# lines, and a last frame with the header, the check's exit code and its first FAIL. It leaves <id>.replay beside the video, which a live run of the same id removes. When vhs fails it
 # exits 74 and keeps the log.
 set -uo pipefail
 usage="usage: evidence-video [--replay] --check <text> --case <+|−> --expected <text> <id> <command> [args...]"
@@ -148,50 +148,63 @@ exit_as_logged() {
 }
 
 if [ -n "$replay" ]; then
-  # The check runs here, uncapped, and its output reaches the caller as it comes; the video only replays the log.
-  EVIDENCE_DIR=$dir "$evidence" "$id" "$@" < /dev/null | tee "$tmp/output"
-  status=${PIPESTATUS[0]}
+  # The check runs here, uncapped, and its output reaches the caller as it comes; the video only replays the saved log.
+  EVIDENCE_DIR=$dir "$evidence" "$id" "$@" < /dev/null
+  status=$?
   if [ ! -f "$log" ]; then
     echo "evidence-video: no video and no log: bin/evidence wrote no $log" >&2
     exit 74
   fi
-  # 1 + 40 highlighted lines, the left-out line, the last 20 under their label: at most 63 lines at half a second each,
-  # plus the tape's 7 seconds of pauses, keep the replay under 60 seconds whatever the log's length.
-  awk -v shown="$shown" -v most=40 -v last=20 -v width=240 '
-function cut(l) { return length(l) > width ? substr(l, 1, width - 1) "…" : l }
-{ line[NR] = $0
-  if ($0 ~ /^[[:space:]]*(step|precondition|note):/ || $0 ~ /^[[:space:]]*(PASS|FAIL)([^[:alnum:]]|$)/) marked[++n] = NR
-  if ($0 ~ /^[[:space:]]*FAIL([^[:alnum:]]|$)/) failed[NR] = 1
-  if ($0 ~ /^[[:space:]]*step:/) stepped = 1 }
-END { kept = 0
-  for (i = 1; i <= n && kept < most; i++) if (marked[i] in failed) { keep[marked[i]] = 1; kept++ }
-  for (i = 1; i <= n && kept < most; i++) if (!(marked[i] in keep)) { keep[marked[i]] = 1; kept++ }
-  if (!stepped) print "step: " cut(shown)
-  for (i = 1; i <= NR; i++) if (i in keep) print cut(line[i])
-  if (n > kept) printf "\033[2m… %d more highlighted lines left out: the log keeps them\033[0m\n", n - kept
+  # Streams the log keeping only what it shows: up to 40 FAIL lines, the first 40 other highlighted lines, the last 20.
+  # A replay shows at most 1 + 40 + 1 + 1 + 20 lines; with the tape's pauses (see below) it stays under 60 seconds.
+  # Control sequences other than colours are dropped: a progress bar's cursor moves would rewrite the replay's screen.
+  one_line=${shown//$'\n'/ }
+  shown=${one_line//$'\r'/ } awk -v most=40 -v last=20 -v width=240 -v summary="$tmp/summary" '
+function clean(l) {
+  gsub(/\033\][^\007]*\007/, "", l); gsub(/\033\[[0-9;?]*[@-ln-~]/, "", l); gsub(/[\001-\010\013-\032\034-\037\177]/, "", l)
+  return length(l) > width ? substr(l, 1, width - 1) "…\033[0m" : l }
+NR == 1 && match($0, /, exit [0-9]+/) { exited = substr($0, RSTART + 7, RLENGTH - 7) }
+{ tail[NR % last] = clean($0) }
+/^[[:space:]]*step:/ { stepped = 1 }
+/^[[:space:]]*FAIL([^[:alnum:]]|$)/ { if (nf < most) { fline[++nf] = clean($0); fno[nf] = NR }; fails++; marked++; next }
+/^[[:space:]]*(step|precondition|note):/ || /^[[:space:]]*PASS([^[:alnum:]]|$)/ {
+  if (no < most) { oline[++no] = clean($0); ono[no] = NR }; marked++ }
+END {
+  if (!stepped) print "step: " clean(ENVIRON["shown"])
+  keep_o = most - nf; if (keep_o > no) keep_o = no
+  for (f = o = 1; f <= nf || o <= keep_o; )
+    if (o > keep_o || (f <= nf && fno[f] < ono[o])) print fline[f++]; else print oline[o++]
+  if (marked > nf + keep_o) printf "\033[2m… %d more highlighted lines left out: the log keeps them\033[0m\n", marked - nf - keep_o
   printf "\033[2mthe log'"'"'s last %d lines:\033[0m\n", last
-  for (i = (NR > last ? NR - last + 1 : 1); i <= NR; i++) print cut(line[i]) }' "$tmp/output" | awk "$highlight" > "$tmp/lines" \
+  for (i = (NR > last ? NR - last + 1 : 1); i <= NR; i++) print tail[i % last]
+  printf "%s\n", (exited == "" ? "the log records no exit code" : "the check exited " exited) > summary
+  if (fails) printf "%d FAIL line%s, the first:\n%s\n", fails, (fails == 1 ? "" : "s"), fline[1] > summary
+}' "$log" | awk "$highlight" > "$tmp/lines" \
     || { echo "evidence-video: couldn't build the replay of $log" >&2; exit 74; }
   {
     script_start
     printf 'cat %q\n' "$tmp/screen"
-    # One line per keystroke, so the tape paces the replay.
+    # One line per keystroke, so the tape paces the replay; the last keystroke brings back the header and the result,
+    # so the video's last frame says what it replayed and how the check ended.
     printf 'while IFS= read -r line <&3; do read -rs; printf "%%s\\n" "$line"; done 3< %q\n' "$tmp/lines"
+    printf 'read -rs; clear; cat %q; awk %q %q\n' "$tmp/screen" "$highlight" "$tmp/summary"
   } > "$tmp/run" && chmod +x "$tmp/run" || exit 74
+  # At most 63 lines at 750 ms, the 3 s pauses and the last frame: 1 + 3 + 47.25 + 0.75 + 4 = 56 seconds.
   {
     tape_start
     printf 'Sleep 3s\n'
-    for _ in $(seq "$(wc -l < "$tmp/lines")"); do printf 'Enter\nSleep 500ms\n'; done
-    printf 'Sleep 3s\n'
+    for _ in $(seq "$(wc -l < "$tmp/lines")"); do printf 'Enter\nSleep 750ms\n'; done
+    printf 'Enter\nSleep 4s\n'
   } > "$tmp/check.tape" || exit 74
   record_tape 60
   [ $vhs_status = 0 ] || vhs_failed
-  if [ ! -s "$tmp/video.webm" ] || ! mv "$tmp/video.webm" "$video"; then
-    rm -f "$video"
+  # The marker before the video, so a replay is never left looking live; a failed move removes it with the video.
+  if [ ! -s "$tmp/video.webm" ] \
+    || ! echo "a replay of $id.txt, recorded after the check ran" > "$marker" || ! mv "$tmp/video.webm" "$video"; then
+    rm -f "$video" "$marker"
     echo "evidence-video: no video: vhs wrote none (the log is kept: $log)" >&2
     exit 74
   fi
-  echo "a replay of $id.txt, recorded after the check ran" > "$marker" || { rm -f "$video"; exit 74; }
   exit_as_logged "$status"
 fi
 

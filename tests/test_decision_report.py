@@ -1341,6 +1341,10 @@ def a_log_or_video_alone_or_with_another_stem_is_not_tabs(base):
     assert '<pre class="out tail">' in two and "<video controls" in two
     assert "<video controls" in check_block(markup, "S3")
     assert '<fieldset class="tabs"' not in markup
+    put(os.path.join(evidence, "S3.replay"), "")
+    _, markup = generate(repo, base)
+    assert "a replay of s3.txt" in text(check_block(markup, "S3")).lower(), "a replay alone doesn't say it is one"
+    assert "replay" not in text(check_block(markup, "S2")).lower(), "a live video alone reads as a replay"
 
 def a_replay_says_so_and_a_check_without_a_video_is_your_call(base):
     repo, evidence, gh = ready_branch(base)
@@ -1367,6 +1371,25 @@ def a_replay_says_so_and_a_check_without_a_video_is_your_call(base):
     assert "no video" not in text(check_block(markup, "A9")), "a check that didn't run needs no video"
     assert "no video" not in text(check_block(markup, "A1"))
     assert_verdict(markup, "Your call", "M1", "evidence is missing")
+    assert panel_of(markup)["Testing"][1] == "Read this", "a check without a video left the Testing row clear"
+    assert "video evidence is missing for M1" in why_of(markup), why_of(markup)
+
+    put(os.path.join(evidence, "M1.webm"), b"")
+    report_edit(repo, "validation", rows, ready_rows(evidence).replace("| PASS: 21/21 killed |", "| FAIL: 20/21 killed |"))
+    stamp(repo, "validate")
+    _, markup = generate(repo, base, gh)
+    assert "no video" in text(check_block(markup, "M1")), "an empty video, on a FAIL row, counted as a video"
+    calls = [text(item) for item in re.findall(r"<li>.*?</li>", re.search(r'<ul id="calls">(.*?)</ul>', markup, re.S).group(1), re.S)]
+    assert sum("M1" in call for call in calls) == 1, ("an empty video gave M1 other than one reason", calls)
+    os.remove(os.path.join(evidence, "M1.webm"))
+    _, markup = generate(repo, base, gh)
+    calls = [text(item) for item in re.findall(r"<li>.*?</li>", re.search(r'<ul id="calls">(.*?)</ul>', markup, re.S).group(1), re.S)]
+    assert [call for call in calls if "M1" in call and "M1.webm" in call] and sum("M1" in call for call in calls) == 1, \
+        ("a missing video gave M1 other than its one reason", calls)
+
+
+def why_of(markup):
+    return text(re.search(r'<details[^>]*id="verdict-why".*?</details>', markup, re.S).group(0))
 
 
 def a_suite_output_lists_its_tests(base):

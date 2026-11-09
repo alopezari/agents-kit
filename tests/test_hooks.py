@@ -2414,9 +2414,9 @@ def remove_suite_overlay():
 def validate_stamp_needs_a_full_suite_run(base):
     repo, evidence, written, run, refused = suite_fixture(base, "feat/suite")
     try:
-        said = refused("~/.agents/repos/repo/suite", "tests/run.sh", "bin/evidence-video --replay --check 'the full suite' "
-                       "--case + --expected 'exit 0' suite tests/run.sh")
-        assert "--expected 'exit 0' suite make  check" in said, said
+        said = refused("~/.agents/repos/repo/suite", "tests/run.sh", "bin/evidence-video --replay --check 'the full unit suite' "
+                       "--case + --expected 'a green run' suite tests/run.sh")
+        assert "--expected 'a green run' suite make  check" in said, said
         for command in (["tests/run.sh"], ["./tests/run.sh"], ["bash", "tests/run.sh"], ["bash", "./tests/run.sh"]):
             assert run("S1", *command).returncode == 0
             written()

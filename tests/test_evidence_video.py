@@ -340,6 +340,42 @@ def a_long_log_replays_its_failures_within_60_seconds(base):
     assert "line 5000" in screen and "line 4981" in screen, "the log's last 20 lines aren't shown"
 
 
+def a_late_fail_displaces_an_earlier_pass_and_ends_the_replay(base):
+    script = os.path.join(base, "late.py")
+    with open(script, "w") as fh:  # the FAIL is past the first 40 highlighted lines and before the last 20
+        fh.write("for n in range(1, 5001):\n"
+                 "    print('FAIL the late one' if n == 4900 else f'PASS check {n}' if n % 16 == 0 and n // 16 <= 300 else f'line {n}')\n")
+    tape = os.path.join(base, "tape.txt")
+    done, evidence = record(base, "L6", "python3", script, options=REPLAY, STUB_VHS_TAPE=tape)
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    assert sleeps(tape) <= 60, f"the replay plays for {sleeps(tape)}s"
+    screen = read(os.path.join(evidence, "L6.webm"))
+    replayed, _, last_frame = screen.partition("the log's last 20 lines:")
+    passes = re.findall(r"\033\[32mPASS check (\d+)\033\[0m", replayed)
+    assert len(passes) == 39 and passes[-1] == "624", "the FAIL didn't take the place of the 40th PASS"
+    assert replayed.index("PASS check 624") < replayed.index("\033[31mFAIL the late one"), "the replay doesn't keep the log's order"
+    assert "the check exited 0" in last_frame and "1 FAIL line, the first:" in last_frame, last_frame
+    assert last_frame.rindex("replay of the saved log L6.txt") > last_frame.rindex("line 5000"), "the last frame lost the header"
+
+
+def a_replay_runs_past_the_live_cap(base):
+    done, evidence = record(base, "L7", "bash", "-c", "sleep 2; echo finished; exit 5", options=REPLAY, EVIDENCE_VIDEO_MAX="1")
+    assert done.returncode == 5 and "finished" in read(os.path.join(evidence, "L7.txt")), (done.returncode, done.stderr)
+    assert sorted(os.listdir(evidence)) == ["L7.replay", "L7.txt", "L7.webm"], os.listdir(evidence)
+
+
+def a_replay_shows_a_multiline_command_and_a_raw_log_as_plain_lines(base):
+    tape = os.path.join(base, "tape.txt")
+    done, evidence = record(base, "L8", "bash", "-c", "printf 'PASS \\033[2Jcleared\\rback\\n'\nprintf '%s\\n' 'x\\ny'",
+                            options=REPLAY, STUB_VHS_TAPE=tape)
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    screen = read(os.path.join(evidence, "L8.webm"))
+    assert "\033[2J" not in screen and "\r" not in screen, "a log's control sequences reached the replay's screen"
+    assert "PASS clearedback" in screen, screen
+    step = re.search(r"step: (.*)", screen).group(1)
+    assert r"printf '\''%s\n'\'' '\''x\ny'\''" in step, f"the command lost its backslashes or its one line: {step}"
+
+
 def a_stepless_log_replays_its_command_as_its_step(base):
     done, evidence = record(base, "L3", "bash", "-c", "echo hello", options=REPLAY)
     assert done.returncode == 0, done.stderr
@@ -524,6 +560,8 @@ for t in kit_home.selected([a_check_leaves_its_log_and_video_and_exits_with_its_
                             an_option_without_its_value_is_a_usage_error,
                             a_replay_keeps_the_exit_code_and_says_it_is_a_replay, a_long_log_replays_its_failures_within_60_seconds,
                             a_stepless_log_replays_its_command_as_its_step, a_live_run_removes_the_replay_marker,
+                            a_late_fail_displaces_an_earlier_pass_and_ends_the_replay, a_replay_runs_past_the_live_cap,
+                            a_replay_shows_a_multiline_command_and_a_raw_log_as_plain_lines,
                             a_replay_whose_vhs_fails_keeps_the_log_and_exits_74, a_run_without_its_explanation_is_refused,
                             real_vhs_replays_a_long_log_within_60_seconds]):
     test(t)
