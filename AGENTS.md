@@ -132,14 +132,16 @@ My instructions override skill guidance. Skills are adaptable procedures: apply 
 
 ## Security audits
 
-- Run the `security-audit` skill's full audit mode only when I ask for an audit: of the whole repository, or of the scope I name (paths, a subsystem, the diff between two refs) as its scoped run. Nothing starts one on its own, and kit-review and its lenses don't load or follow the skill: the Security lens stays the per-PR check until a separate, measured change says otherwise.
-- Use profile `quick` with a strict `budget` of 20 agent invocations, unless I name another profile (`standard`, `deep`) or budget. An audit I asked for may launch the agents its budget funds: the subagent rule under Autonomy doesn't limit it.
-- Before starting, tell me the scope, profile and budget, and the one measurement there is: a `quick` run with budget 20 on ai-review-cli (2026-11-09) cost about $27 at list price for the skill plus $13 for two advisor calls, about $40 and 37 minutes in all. A run's real cost varies with the repository, the harness and advisor use.
-- Never spend past the budget without asking me. When it can't fund the skill's required phases or the validation of every candidate, report the run as incomplete the way the skill does (`run_status: "incomplete"` with its reason), never as complete.
-- No target code runs without the sandbox the skill requires, which this machine doesn't have: audit source only, and leave what needs running as `needs_validation`.
+- Run the `security-audit` skill's full audit mode only when I ask for a security audit or a full security review: of the whole repository, or of the scope I name (paths, a subsystem, the diff between two refs) as its scoped run. When it's unclear whether I want one, ask.
+- While reviewing a change I didn't ask you to audit (kit-review, a review lens, a cross-model pass, a replay of one), don't load or follow the skill: the Security lens stays the per-PR check.
 - Outside an audit I asked for, its guidance may answer a security question, without launching its agents.
-- For each `confirmed` finding, offer to open an issue (writing to Linear still needs my approval through the guard), and when the finding is a pattern a diff can repeat, propose a check for kit-review's Security lens to catch it.
-- The kit pins the skill to a reviewed commit: never update it outside a kit PR.
+- Use profile `quick` unless I name `standard` or `deep`, and a strict `budget` of 20 agent invocations whatever the profile, unless I name another. The subagent rule under Autonomy doesn't limit how many agents an audit I asked for launches within its budget.
+- Before starting, tell me the scope, profile and budget, and the last measured run: a `quick` run with budget 20 on ai-review-cli (2026-11-09) cost about $27 at list price for the skill plus $13 for two advisor calls, about $40 and 37 minutes in all. A run's real cost varies with the repository, the harness and advisor use; for `standard` or `deep`, say that no run was measured and that it costs more.
+- Never spend past the budget without asking me. When it can't fund the skill's required phases or the validation of every candidate, report the run as incomplete the way the skill does (`run_status: "incomplete"` with its reason), never as complete.
+- Approve no sandbox for target code, Codex's included, unless I approve one for that run: audit source only, tell every agent the audit launches that no target code runs, and leave what needs running as `needs_validation`.
+- Record a secret the audit finds by its location and type, never its value, in the run's files and in any issue.
+- For each `confirmed` finding, offer to open an issue in Linear or another private tracker, never a public one, and without reproduction payloads (writing to Linear still needs my approval through the guard). When the finding is a pattern a diff can repeat, propose a check for kit-review's Security lens to catch it.
+- The kit pins the skill to a reviewed commit: never update it, or install another copy (`npx skills add`, as its README says), outside a kit PR.
 
 ## Communication
 
