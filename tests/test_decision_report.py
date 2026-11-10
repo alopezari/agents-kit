@@ -869,7 +869,7 @@ def a_template_heading_is_not_the_first_paragraph(base):
     assert headline(markup, "fix") == "The cart applies a coupon once.", headline(markup, "fix")
     write(repo, "pr-body", "## Summary\n\n#123 is fixed here.\nMore.\n")
     _, markup = generate(repo, base)
-    assert headline(markup, "fix") == "#123 is fixed here. More.", "an issue reference was taken for a heading"
+    assert headline(markup, "fix") == "#123 is fixed here.", "an issue reference was taken for a heading"
 
 
 def the_validation_notes_keep_their_code(base):
@@ -1315,15 +1315,20 @@ def tab_group(block):
 
 
 def a_failed_checks_raw_evidence_folds_but_its_outcome_stays_open(base):
-    repo, _ = full_branch(base)
-    _, markup = generate(repo, base)
-    block = check_block(markup, "A2")
-    assert all(" open" in fold for fold in enclosing_folds(markup, 'id="check-A2"')), "the failed check is folded away"
+    repo, evidence, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("| one discount line | PASS |", "| one discount line | FAIL |"))
+    put(os.path.join(evidence, "checks", "A1.sh"), "#!/bin/sh\nmake A1\n")
+    _, markup = generate(repo, base, gh)
+    block = check_block(markup, "A1")
+    assert all(" open" in fold for fold in enclosing_folds(markup, 'id="check-A1"')), "the failed check is folded away"
     outcome = block[:block.find('<details class="raw"')]
     assert "<dt>Expected</dt>" in outcome and "<dt>Actual</dt>" in outcome, "the outcome sits inside the evidence fold"
-    raw = re.search(r'<details class="raw">(.*?)<summary>(.*?)</summary>', block, re.S)
-    assert raw and " open" not in raw.group(1) and re.match(r"Evidence: \d+ files?$", raw.group(2)), block[:800]
-    assert '<pre class="out' not in outcome, "the failed check's log shows before its fold"
+    for shown in ("<pre", "<video", '<fieldset class="tabs"', "A1.sh"):
+        assert shown not in outcome, f"{shown} shows before the fold"
+    raw = re.search(r'<details class="raw">(.*?)<summary>(.*?)</summary>(.*)', block, re.S)
+    assert raw and " open" not in raw.group(1), block[:800]
+    assert raw.group(2) == "Evidence: 3 files", raw.group(2)
+    for folded in ("<pre", "<video", '<fieldset class="tabs"', "A1.sh"):
+        assert folded in raw.group(3), f"{folded} is not in the fold"
 
 
 def a_log_and_its_video_show_as_tabs_log_first_unless_passed(base):
@@ -3645,7 +3650,7 @@ def the_review_section_says_who_and_what_each_lens_is_for(base):
     assert "handled at src/cart.py:80" in said, "a rejection keeps its reason"
 
 
-def the_review_funnel_shares_one_scale_and_explains_the_difference(base):
+def the_review_counts_what_held_up_and_explains_the_difference(base):
     repo, _, gh = ready_branch(base)
     report_edit(repo, "review", "| Tests | claude | 1 | 1 | open=1 |", "| Tests | claude | 1 | 0 | wrong=1 |")  # confirmed differs from the report's lines
     stamp(repo, "review")
@@ -4634,7 +4639,7 @@ REDESIGN_TESTS = (the_page_holds_its_parts_in_order, a_branch_with_nothing_still
                   a_missing_scene_costs_only_its_figure, two_scenes_leave_no_duplicate_id, the_pause_rule_covers_the_progress_bar,
                   a_scene_holds_still_without_motion, old_notes_without_a_scene_carry_no_player, a_figure_series_with_a_scene_stops_at_it,
                   the_ship_skill_example_scene_plays,
-                  the_review_section_says_who_and_what_each_lens_is_for, the_review_funnel_shares_one_scale_and_explains_the_difference,
+                  the_review_section_says_who_and_what_each_lens_is_for, the_review_counts_what_held_up_and_explains_the_difference,
                   an_open_finding_shows_its_impact_or_says_it_is_missing, a_legacy_review_keeps_its_findings, a_missing_review_report_is_named,
                   a_stale_review_is_named_in_its_section, reconstructed_counts_are_flagged, the_criteria_map_to_their_proof_and_a_gap_shows,
                   every_link_on_the_page_lands_inside_a_fold_it_can_open, a_guide_step_already_passed_is_not_to_do,
@@ -4728,21 +4733,21 @@ def the_rail_never_shows_skipped_or_unread_work_as_passed(base):
         "not-run": (rows("| one discount line | PASS |", "| one discount line | NOT RUN |"), None, "Validate", ("not run", "1 of 5 checks did not run", "wait")),
         "no-video": (nothing, None, "Validate", None),
         "stale": (lambda repo, evidence: put(stamp_file(repo, "validate"), "an older change\n"), None, "Validate",
-                  ("stale", "the stamp doesn't cover this commit", "wait")),
-        "missing": (lambda repo, evidence: os.remove(path_of(repo, "validation")), None, "Validate", ("missing", "no validation report", "wait")),
+                  ("stale", "the stamp doesn't cover this commit", "fail")),
+        "missing": (lambda repo, evidence: os.remove(path_of(repo, "validation")), None, "Validate", ("missing", "no validation report", "fail")),
         "validate-off": (phase_off("validate"), None, "Validate", ("switched off", "", "off")),
         "review-off": (phase_off("review"), None, "Review", ("switched off", "", "off")),
         "review-stale": (lambda repo, evidence: put(stamp_file(repo, "review"), "an older change\n"), None, "Review",
-                         ("stale", "the stamp doesn't cover this commit", "wait")),
-        "review-missing": (lambda repo, evidence: os.remove(path_of(repo, "review")), None, "Review", ("missing", "no review report", "wait")),
+                         ("stale", "the stamp doesn't cover this commit", "fail")),
+        "review-missing": (lambda repo, evidence: os.remove(path_of(repo, "review")), None, "Review", ("missing", "no review report", "fail")),
         "lens-down": (lambda repo, evidence: (report_edit(repo, "review", "| Tests | claude | 1 | 1 | open=1 |", "| Tests | claude | 1 | 1 | open=1 |\n| Security | codex | not run: exit 1 | — | — |"),
                                               stamp(repo, "review")), None, "Review", ("not run", "the codex Security lens did not run", "wait")),
         "spec-missing": (lambda repo, evidence: os.remove(path_of(repo, "spec")), None, "Spec", ("missing", "no spec", "wait")),
         "ci-failed": (nothing, lambda gh, repo: gh["checks"][git(repo, "rev-parse", "HEAD")]["check_runs"][0].update(conclusion="failure"), "CI", ("failed", "", "fail")),
         "ci-pending": (nothing, lambda gh, repo: gh["checks"][git(repo, "rev-parse", "HEAD")]["check_runs"][0].update(status="in_progress", conclusion=None),
-                       "CI", ("pending", "", "wait")),
+                       "CI", ("pending", "", "fail")),
         "ci-unread": (nothing, lambda gh, repo: gh.update(api_error=True), "CI", None),
-        "no-pr": (nothing, lambda gh, repo: gh.pop("pr"), "CI", ("missing", "no PR yet", "wait")),
+        "no-pr": (nothing, lambda gh, repo: gh.pop("pr"), "CI", ("missing", "no PR yet", "fail")),
         "ci-off": (phase_off("ci"), None, "CI", ("switched off", "", "off")),
         "no-ci": (nothing, lambda gh, repo: gh.update(checks={}, no_ci={"defaultBranchRef": {"target": {"statusCheckRollup": None}}, "parent": {"statusCheckRollup": None},
                                                                      "pullRequests": {"nodes": []}}), "CI", ("not needed", "this repository runs no CI", "off")),
@@ -4756,7 +4761,7 @@ def the_rail_never_shows_skipped_or_unread_work_as_passed(base):
             continue
         got = rail_for(name, change, gh_change)[step]
         if name == "ci-unread":
-            assert got[0] == "unavailable" and got[2] == "wait" and "bad gateway" in got[1], (name, got)
+            assert got == ("unavailable", "can't be read", "fail"), (name, got)  # the error itself is the verdict's reason
             continue
         assert got == want, (name, got)
 
@@ -4845,7 +4850,8 @@ def the_test_map_draws_one_row_per_layer_with_named_chips(base):
 def the_review_matrix_counts_each_lens_and_says_unknown(base):
     repo, _, gh = ready_branch(base)
     rows = review_matrix(generate(repo, base, gh)[1])
-    assert rows == [("Correctness", {"Fixed": "3", "Rejected": "1", "Open": "0", "Pre-existing": "0", "Not run": "Ran"}),
+    # claude's Correctness row gives outcomes for 3 of its 4 findings: the columns it leaves out are unknown, not 0
+    assert rows == [("Correctness", {"Fixed": "3", "Rejected": "unknown", "Open": "unknown", "Pre-existing": "unknown", "Not run": "Ran"}),
                     ("Tests", {"Fixed": "0", "Rejected": "0", "Open": "1", "Pre-existing": "0", "Not run": "Ran"})], rows
     here = in_dir(base, "unknown")
     repo, _, gh = ready_branch(here)
@@ -4855,8 +4861,16 @@ def the_review_matrix_counts_each_lens_and_says_unknown(base):
     markup = generate(repo, here, gh)[1]
     rows = dict(review_matrix(markup))
     assert rows["Tests"] == {"Fixed": "unknown", "Rejected": "unknown", "Open": "unknown", "Pre-existing": "unknown", "Not run": "Ran"}, rows
+    here = in_dir(base, "partial")
+    repo, _, gh = ready_branch(here)
+    report_edit(repo, "review", "| Tests | claude | 1 | 1 | open=1 |", "| Tests | claude | 3 | 2 | fixed=1 |")
+    stamp(repo, "review")
+    partial = dict(review_matrix(generate(repo, here, gh)[1]))["Tests"]
+    assert partial == {"Fixed": "1", "Rejected": "unknown", "Open": "unknown", "Pre-existing": "unknown", "Not run": "Ran"}, \
+        f"outcomes that cover 1 of 3 findings read as zero elsewhere: {partial}"
+    rows = dict(review_matrix(markup))
     assert rows["Security"]["Not run"] == "codex: exit 1" and rows["Security"]["Fixed"] == "—", rows
-    assert rows["Correctness"] == {"Fixed": "2", "Rejected": "1", "Open": "0", "Pre-existing": "0", "Not run": "codex: timed out"}, \
+    assert rows["Correctness"] == {"Fixed": "2", "Rejected": "1", "Open": "unknown", "Pre-existing": "unknown", "Not run": "codex: timed out"}, \
         f"a lens's model that didn't run hides behind the one that did: {rows}"
     assert 'id="review-open-1"' in markup, "an open finding left the page"
 
@@ -4909,11 +4923,91 @@ def both_themes_follow_the_system(base):
     assert "<script" not in markup and "coral" not in style.lower()
 
 
+def the_rail_agrees_with_the_verdict_on_a_guide_step_the_ac_column_and_the_spec_switch(base):
+    here = in_dir(base, "guide-failed")
+    repo, _, gh = ready_branch(here)
+    write(repo, "checks-guide", READY_GUIDE + "\n## Results (2026-10-26)\n\n| Step | Result | Evidence |\n|---|---|---|\n| M1 | FAIL | two lines |\n")
+    markup = generate(repo, here, gh)[1]
+    assert_verdict(markup, "Not ready", "checks guide step M1 failed")
+    assert rail_of(markup)["Validate"] == ("blocks", "checks guide step M1 failed", "fail"), rail_of(markup)["Validate"]
+
+    here = in_dir(base, "no-ac")
+    repo, evidence, gh = ready_branch(here)
+    report_edit(repo, "validation", "| # | AC | Level |", "| # | Level |")
+    report_edit(repo, "validation", "|---|---|---|---|---|---|---|---|", "|---|---|---|---|---|---|---|")
+    report_edit(repo, "validation", ready_rows(evidence), re.sub(r"^(\| \w+ )\| AC[^|]* ", r"\1", ready_rows(evidence), flags=re.M))
+    stamp(repo, "validate")
+    markup = generate(repo, here, gh)[1]
+    assert_verdict(markup, "Your call", "no check names a criterion")
+    assert rail_of(markup)["Validate"] == ("your call", "no check names a criterion", "wait"), rail_of(markup)["Validate"]
+
+    here = in_dir(base, "spec-off")
+    repo, _, gh = ready_branch(here)
+    sh(repo, "python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", "spec")
+    markup = generate(repo, here, gh)[1]
+    assert rail_of(markup)["Spec"] == ("switched off", "", "off"), rail_of(markup)["Spec"]
+    assert "spec" not in verdict_of(markup).lower(), verdict_of(markup)
+
+
+def a_regression_cell_keeps_its_words_and_chips_only_what_has_a_result(base):
+    guide = READY_GUIDE.replace("## Before the merge (optional)\n", "## Before the merge (optional)\n\n### M0. Get access\n- **Where:** you\n- **Expected:** a login.\n\n"
+                                                                         "### M2. Pay on a tablet\n- **Where:** you\n- **Expected:** one line.\n\n")
+    notes = READY_NOTES.replace("| Checkout | It reads the cart total | A1 |", "| Checkout | It reads the cart total | A1 and the full suite |\n"
+                                "| Login | It reads the session | M0 |\n| Error log | It logs a refusal | P1 |\n| Tablet | It draws the cart | M2 |")
+    repo, _, gh = ready_branch(base, notes=notes)
+    write(repo, "checks-guide", guide + "\n## Results (2026-10-26)\n\n| Step | Result | Evidence |\n|---|---|---|\n| M0 | PASS | in |\n| M2 | PASS | one line |\n")
+    table = re.search(r'<table class="mx" id="regressions">(.*?)</table>', generate(repo, base, gh)[1], re.S).group(1)
+    rows = {text(name): cell for name, cell in re.findall(r'<tr><th scope="row">(.*?)</th><td[^>]*>.*?</td><td[^>]*>(.*?)</td></tr>', table, re.S)}
+    assert chips_in(rows["Checkout"]) == [("p", "check-A1", "Passed", "Coupon applied once", "A1")], rows["Checkout"]
+    assert '<p class="m">the full suite</p>' in rows["Checkout"], "the cell's words beside the chip are lost"
+    assert not chips_in(rows["Login"]) and text(rows["Login"]) == "M0", "a setup step reads as a check"
+    assert not chips_in(rows["Error log"]) and text(rows["Error log"]) == "P1", "a step with no result reads as a check"
+    assert chips_in(rows["Tablet"]) == [("p", "todo-M2", "Passed", "Pay on a tablet", "M2")], rows["Tablet"]
+
+
+def before_and_after_keep_what_surrounds_the_table(base):
+    block = ("### Before and after\nA refresh is the case that changed.\n\n```text\n| Case | Before | After |\n|---|---|---|\n| fenced | no | no |\n```\n\n"
+             "| Case | Before | After | Why |\n|---|---|---|---|\n| Refresh the cart | Two discounts | One discount | the cart remembers |\n\n"
+             "![One discount line.](step2.svg)\n\n")
+    repo, _, gh = ready_branch(base, notes=READY_NOTES.replace("### Worked example", block + "### Worked example"))
+    markup = generate(repo, base, gh)[1]
+    paired = re.search(r'<table class="ba"[^>]*>(.*?)</table>', markup, re.S)
+    assert paired and "fenced" not in paired.group(1), "the fenced table was drawn as the pair"
+    cells = [text(cell) for cell in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", re.search(r"<tbody>(.*?)</tbody>", paired.group(1), re.S).group(1))]
+    assert cells == ["Refresh the cart", "Two discounts", "One discount", "the cart remembers"], cells
+    for kept in ("A refresh is the case that changed.", "| fenced | no | no |", 'alt="One discount line."'):
+        assert kept in markup, f"{kept} was dropped"
+
+
+def check_names_keep_their_underscores_and_stay_short(base):
+    long_name = "Coupon " + "very " * 40 + "long"
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("| Coupon applied once |", "| `apply_coupon_once` holds |")
+                                  .replace("| Receipt names the coupon |", f"| {long_name} |"))
+    drawn = test_map(generate(repo, base, gh)[1])["End to end"]
+    assert drawn[0][3] == "apply_coupon_once holds live", drawn[0]
+    name = drawn[2][3].removesuffix(" live")
+    assert name.endswith("…") and len(name) <= 121, name
+
+
+def the_verdict_shows_eight_chips_then_a_count(base):
+    failed = lambda ev: re.sub(r"\| (PASS[^|]*) \| \[output\]", "| FAIL | [output]", ready_rows(ev))  # noqa: E731
+    repo, _, gh = ready_with_rows(base, lambda ev: failed(ev) + "".join(f"| B{n} | AC1 | unit | Extra {n} | + | ok | FAIL | none |\n" for n in range(6)))
+    markup = generate(repo, base, gh)[1]
+    box = re.search(r'<div class="verdict-box (\w+)"[^>]*>(.*?)</div>', markup, re.S).group(2)
+    chips = chips_in(box)
+    assert len(chips) == 8 and chips[-1][:2] == ("s", "stops") and re.fullmatch(r"\d+ more", chips[-1][2]), chips
+    assert enclosing_folds(markup, '<ul id="stops"')[-1].startswith(' class="why"'), "the count links outside the reasons"
+
+
 DIAGRAM_TESTS = (the_rail_reads_each_phase_from_its_source, the_rail_never_shows_skipped_or_unread_work_as_passed,
                  the_verdict_lists_each_reason_as_a_chip_led_by_its_name, the_hero_keeps_stability_experience_and_undo_short,
                  the_cut_blocks_are_gone_and_the_absences_that_matter_stay, the_test_map_draws_one_row_per_layer_with_named_chips,
                  the_review_matrix_counts_each_lens_and_says_unknown, the_regression_matrix_chips_a_check_with_a_result,
-                 before_and_after_are_paired_only_when_recorded, a_criterion_is_shown_by_its_text, both_themes_follow_the_system)
+                 before_and_after_are_paired_only_when_recorded, a_criterion_is_shown_by_its_text, both_themes_follow_the_system,
+                 the_rail_agrees_with_the_verdict_on_a_guide_step_the_ac_column_and_the_spec_switch,
+                 a_regression_cell_keeps_its_words_and_chips_only_what_has_a_result, before_and_after_keep_what_surrounds_the_table,
+                 check_names_keep_their_underscores_and_stay_short,
+                 the_verdict_shows_eight_chips_then_a_count)
 
 
 TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,

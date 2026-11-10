@@ -8,8 +8,8 @@ solution as cards with a headline and key facts and the agent's prose folded, te
 with long lists folded behind their count; then a footer with merge and ship, the reports as annexes, the pull request's
 quality signals from quality.jsonl and its identifiers. Testing is drawn as a test map of named checks per layer, review
 as a lens matrix and regressions as a matrix; a fact the notes leave out is left off unless the field is required. It
-follows the system's light or dark theme. A check that failed or did not run shows its evidence open. Figures the
-notes name are embedded in place, and an SVG is only ever an image. An animated figure is a scene file: its allowlisted shapes, text and timing are validated and compiled here into inline SVG and CSS,
+follows the system's light or dark theme. A check that failed or did not run shows its outcome open and its
+log, video and script folded below it. Figures the notes name are embedded in place, and an SVG is only ever an image. An animated figure is a scene file: its allowlisted shapes, text and timing are validated and compiled here into inline SVG and CSS,
 with no-script controls, and a refused one costs only that figure. References
 link: the PR, its commits and file:line to GitHub, https URLs, and local reports and evidence by file://. A branch that
 answers a question instead of shipping a change gets the investigation page, below.
@@ -70,6 +70,7 @@ ci_wait.GH_TIMEOUT = GH_TIMEOUT = 20
 CSP = "default-src 'none'; img-src file: data:; media-src file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
 TEXT_LIMIT = 200 * 1024
 CRITERION_WORDS = 12
+LABEL_CHARS = 120  # a chip's name or a criterion's label, repeated wherever a matrix names it: its full text is in its own block
 NAMED_CHECKS = 2
 NAMED_CRITERIA = 2
 IMAGE_LIMIT = 2 * 1024 * 1024
@@ -161,6 +162,7 @@ RECONSTRUCTED = re.compile(r"\breconstructed\b", re.I)
 SETUP_STEPS = ("M0", "S0", "P0")  # a guide's setup: access and exports, not a test
 LONG_LIST = 5  # a passing list longer than this starts collapsed
 VERDICT_REASONS = 3  # how many reasons the verdict's sentence names before "and N more"
+VERDICT_CHIPS = 8  # how many reasons the verdict shows as chips; past it, the last chip counts the rest
 MAX_DOTS = 200
 VERDICT_RULE = ("Not ready: CI failed, running, missing or unread; the local HEAD differs from the PR's; the PR is merged or closed; a check or verify failed; "
                 "a missing or stale review or validation; or an item marked as blocking. "
@@ -178,19 +180,6 @@ ALWAYS_LAYERS = ("unit", "integration", "e2e", "mutation", "manual")
 LAYER_NAMES = {"unit": "Unit", "integration": "Integration", "e2e": "End to end", "mutation": "Mutation", "manual": "By hand",
                "property": "Property-based", "regex": "Regex timing", "design": "Design", "a11y": "Accessibility",
                "query budget": "Query budget", "migration": "Migration", OTHER_LEVEL: "Other", NO_LEVEL: "Layer not recorded"}
-LAYER_MEANS = {"unit": "One piece of code at a time, usually with fake inputs. Fast, and blind to how the pieces work together.",
-               "integration": "Several real pieces working together, without the whole program around them.",
-               "e2e": "The real program from start to finish, on a real machine, the way it actually runs.",
-               "mutation": "Plants bugs on purpose, to find out whether the other tests would notice.",
-               "manual": "A person follows the steps in the real product and looks at the result.",
-               "property": "Throws many generated inputs at a rule that must always hold.",
-               "regex": "Times a pattern against its worst-case input so it can't hang.",
-               "design": "Looks at the rendered page against the design.",
-               "a11y": "Checks the page works with a keyboard and a screen reader.",
-               "query budget": "Counts the database queries a path makes against a limit.",
-               "migration": "Runs the data or schema change on a copy and checks the result.",
-               OTHER_LEVEL: "The report names a level this page doesn't know.",
-               NO_LEVEL: "The report gives this check no level."}
 LENS_COLUMNS = ("Lens", "What it checks", "Model", "Findings", "Confirmed", "Outcomes")
 SHIP_SECTIONS = (("deploy", "Deploy"), ("smoke", "Smoke checks"), ("rollback", "Rollback"), ("installed", "Installed on this machine"))
 ANNEXES = (("spec", "Spec"), ("decision-notes", "Decision notes"), ("pr-body", "PR body"), ("verify", "Verify report"),
@@ -1673,6 +1662,14 @@ def counted(n, word):
     return f"{n} {word}{'s' * (n != 1)}"
 
 
+def shortened(text):
+    """Plain text cut to LABEL_CHARS at a word, for a label a matrix repeats."""
+    if len(text) <= LABEL_CHARS:
+        return text
+    cut = text[:LABEL_CHARS].rsplit(" ", 1)[0] or text[:LABEL_CHARS]
+    return cut.rstrip(" ,;:.") + "…"
+
+
 def not_recorded_word():
     return state("Not recorded", "dim")
 
@@ -1685,19 +1682,7 @@ def section(sid, title, body):
 def fold(title, count, inner, opened=False, inner_id=None):
     """A long list behind its count."""
     anchor = f' id="{inner_id}"' if inner_id else ""
-    return (f'<details class="more"{" open" if opened else ""}><summary><b>{esc(title)}</b> <span class="n">{count}</span> '
-            f'<span class="hint"></span></summary><div class="inner"{anchor}>{inner}</div></details>')
-
-
-def fact_list(page, facts, labels, judged=(), absent="Not recorded"):
-    """A fact sheet: each label with what the notes say, or what's missing named. `judged` labels are the agent's judgment."""
-    def label(name):
-        return f'{esc(name)}<span class="judg">Agent&#x27;s judgment</span>' if name in judged else esc(name)
-
-    def value(name):
-        said = facts.get(name)
-        return page.inline(said) if said else esc(absent(name) if callable(absent) else absent)
-    return '<dl class="facts">' + "".join(f"<dt>{label(name)}</dt><dd>{value(name)}</dd>" for name in labels) + "</dl>"
+    return (f'<details class="more"{" open" if opened else ""}><summary><b>{esc(title)}</b> <span class="n">{count}</span></summary><div class="inner"{anchor}>{inner}</div></details>')
 
 
 def impact_cell(label, value):
@@ -1803,6 +1788,8 @@ def read_change(page, page_path, evidence, off, phases_error, paths, texts, whys
             c.named_in.setdefault(name.strip(), []).append(int(number.group(1)))
     c.ac_known = c.validation_ok and any(row["ac_column"] for row in c.rows)
     c.criteria_numbers = [(int(found.group(1)), found.group(2)) for found in (re.match(r"(\d{1,6})\.\s*(.*)", item) for item in c.criteria or []) if found]
+    c.criteria_said = dict(c.criteria_numbers)
+    c.rows_by_id = {row["id"]: row for row in c.rows}
     c.uncovered = [n for n, _ in c.criteria_numbers if c.ac_known and not any(n in row["acs"] for row in c.rows)]
     c.not_proven = not_proven_items(texts["validation"]) if c.validation_ok else []
     c.open_items = [(n, *labelled_parts(entry, OPEN_FIELDS), entry) for n, (_, _, entry) in
@@ -1846,6 +1833,11 @@ def agent_prose(page, text, prefix):
     return f'<p class="by">Written by the agent</p>{page.markdown(text, prefix, top=4, figures=True)}' if text else ""
 
 
+def lead_sentence(paragraph):
+    """A card's headline when the notes give none: the paragraph's first sentence, the whole paragraph staying in the fold."""
+    return first_sentence(" ".join(paragraph.split()))[0] if paragraph else paragraph
+
+
 def key_facts(page, facts, labels, judged=()):
     """The facts worth reading before the fold, only those recorded: an empty optional field draws nothing."""
     said = [(name, facts[name]) for name in labels if facts.get(name)]
@@ -1857,7 +1849,7 @@ def problem_section(c):
     page, notes = c.page, c.notes or {}
     prose = "\n\n".join(part for part in (c.problem_text, notes.get("task")) if part)
     story = agent_prose(page, prose, "problem")
-    headline = (c.problem_facts.get("Headline") or first_paragraph(c.problem_text) or first_paragraph(notes.get("task") or "")
+    headline = (c.problem_facts.get("Headline") or lead_sentence(first_paragraph(c.problem_text) or first_paragraph(notes.get("task") or ""))
                 or (c.goal.group(1) if c.goal else ""))
     unwritten = (f'<p class="by">{"The spec&#x27;s goal. " if c.goal and not c.problem_facts.get("Headline") else ""}'
                  f"What went wrong, in the agent&#x27;s words: {not_recorded_word()}</p>") if headline and not prose else ""
@@ -1872,12 +1864,12 @@ def problem_section(c):
 
 
 def chip_for_check(c, said):
-    """A regression's check as a chip when it names a check or a guide step with a result, else None."""
-    by_id = {row["id"]: row for row in c.rows}
+    """A regression's check as a chip when it names a check, or a guide step past setup with a recorded result, else None."""
     token = said.strip("*_` .")
-    if token in by_id and by_id[token]["result"] in ("PASS", "FAIL", "NOT RUN"):
-        return row_chip(by_id[token])
-    if token in c.guide:
+    row = c.rows_by_id.get(token)
+    if row and row["result"] in ("PASS", "FAIL", "NOT RUN"):
+        return row_chip(row)
+    if token in c.guide and token not in SETUP_STEPS and c.guide[token]["result"]:
         return step_chip(token, c.guide[token])
     return None
 
@@ -1885,10 +1877,13 @@ def chip_for_check(c, said):
 def regression_matrix(c, text):
     """The notes' table of where a regression could show up: each system with its reason, and what checked it as a chip or as the notes' words."""
     page = c.page
+    heading = "<h3>Where a regression could show up</h3>"
+    if not text:
+        return ""
     table = [cells for cells in (review_stamp.table_cells(line) for line in text.split("\n")) if cells]
     rules = [line for line in text.split("\n") if TABLE_RULE.match(line)]
     if len(table) < 2 or not rules:
-        return page.markdown(text, "regressions", top=4) if text else ""
+        return heading + page.markdown(text, "regressions", top=4)
     names = [cell.strip("*_ ").lower() for cell in table[0]]
     rows = [cells for cells in table[1:] if not TABLE_RULE.match("|".join(cells)) and not all(TABLE_RULE.match(cell) for cell in cells)]
 
@@ -1900,39 +1895,57 @@ def regression_matrix(c, text):
         said = cell(cells, "what checked it").strip()
         if not said or said.strip("*_ .").lower() == "not checked":
             return '<td class="e">Not checked</td>'
-        parts = [part for part in re.split(r"[,;]| and ", said) if part.strip()]
+        parts = [part.strip() for part in re.split(r"[,;]| and ", said) if part.strip()]
         chips = [chip_for_check(c, part) for part in parts]
-        if all(chips):
-            return f'<td class="h"><div class="chips">{"".join(chips)}</div></td>'
-        return f"<td>{page.inline(said)}</td>"
+        if not any(chips):
+            return f"<td>{page.inline(said)}</td>"
+        words = [page.inline(part) for part, found in zip(parts, chips) if not found]
+        return (f'<td class="h"><div class="chips">{"".join(found for found in chips if found)}</div>'
+                + (f'<p class="m">{"; ".join(words)}</p>' if words else "") + "</td>")
     body = "".join(f'<tr><th scope="row">{page.inline(cell(cells, "system"))}</th><td class="m">{page.inline(cell(cells, "why it could regress"))}</td>'
                    f"{checked(cells)}</tr>" for cells in rows)
-    return ('<h3>Where a regression could show up</h3><p class="src">Agent&#x27;s judgment, from the spec&#x27;s change map and a search of the code.</p>'
-            '<div class="scroll" tabindex="0" role="region" aria-label="Table: where a regression could show up"><table class="mx" id="regressions"><thead><tr>'
+    drawn = ('<div class="scroll" tabindex="0" role="region" aria-label="Table: where a regression could show up"><table class="mx" id="regressions"><thead><tr>'
             '<th scope="col">What could break</th><th scope="col">Why it could</th><th scope="col">What checked it</th></tr></thead>'
             f"<tbody>{body}</tbody></table></div>")
+    if not page.charge(drawn):  # each chip repeats a check's name: past the total, the notes' own table stands in
+        drawn = page.markdown(text, "regressions", top=4)
+    return heading + '<p class="src">Agent&#x27;s judgment, from the spec&#x27;s change map and a search of the code.</p>' + drawn
 
 
 def before_after(page, text):
-    """The notes' before and after: paired cells from a table with Before and After columns, else what the notes drew."""
+    """The notes' before and after as they wrote it, its first table with Before and After columns drawn as paired cells."""
     if not text:
         return ""
-    table = [cells for cells in (review_stamp.table_cells(line) for line in text.split("\n")) if cells]
-    names = [cell.strip("*_ ").lower() for cell in table[0]] if table else []
-    if "before" in names and "after" in names:
-        before, after = names.index("before"), names.index("after")
-        label = next((i for i in range(len(names)) if i not in (before, after)), None)
-        rows = [cells for cells in table[1:] if not all(TABLE_RULE.match(cell) for cell in cells if cell.strip())]
-        get = lambda cells, at: page.inline(cells[at]) if at is not None and at < len(cells) else ""  # noqa: E731
-        drawn = ('<div class="scroll" tabindex="0" role="region" aria-label="Table: before and after"><table class="ba"><thead><tr>'
-                 + (f'<th scope="col">{page.inline(table[0][label])}</th>' if label is not None else "")
-                 + '<th scope="col">Before</th><th scope="col">After</th></tr></thead><tbody>'
-                 + "".join("<tr>" + (f'<th scope="row">{get(cells, label)}</th>' if label is not None else "")
-                           + f'<td class="b">{get(cells, before)}</td><td class="a">{get(cells, after)}</td></tr>' for cells in rows)
-                 + "</tbody></table></div>")
-    else:
-        drawn = page.markdown(text, "before-after", top=4, figures=True)
-    return f"<h3>Before and after</h3>{drawn}"
+    lines = [(line, fenced) for line, fenced in review_stamp.outside_fences(text)]
+    first = last = None
+    for n, (line, fenced) in enumerate(lines):
+        cells = None if fenced else review_stamp.table_cells(line)
+        names = [cell.strip("*_ ").lower() for cell in cells or []]
+        if "before" in names and "after" in names and n + 1 < len(lines) and TABLE_RULE.match(lines[n + 1][0]):
+            first = last = n
+            while last + 1 < len(lines) and not lines[last + 1][1] and review_stamp.table_cells(lines[last + 1][0]):
+                last += 1
+            break
+    if first is None:
+        return f'<h3>Before and after</h3>{page.markdown(text, "before-after", top=4, figures=True)}'
+    table = [review_stamp.table_cells(line) for line, _ in lines[first:last + 1]]
+    names = [cell.strip("*_ ").lower() for cell in table[0]]
+    before, after = names.index("before"), names.index("after")
+    others = [at for at in range(len(names)) if at not in (before, after)]
+    label, extra = (others[0], others[1:]) if others else (None, [])
+    rows = [cells for cells in table[2:] if not all(TABLE_RULE.match(cell) for cell in cells if cell.strip())]
+    get = lambda cells, at: page.inline(cells[at]) if at < len(cells) else ""  # noqa: E731
+    drawn = ('<div class="scroll" tabindex="0" role="region" aria-label="Table: before and after"><table class="ba"><thead><tr>'
+             + (f'<th scope="col">{page.inline(table[0][label])}</th>' if label is not None else "")
+             + '<th scope="col">Before</th><th scope="col">After</th>' + "".join(f'<th scope="col">{page.inline(table[0][at])}</th>' for at in extra)
+             + "</tr></thead><tbody>"
+             + "".join("<tr>" + (f'<th scope="row">{get(cells, label)}</th>' if label is not None else "")
+                       + f'<td class="b">{get(cells, before)}</td><td class="a">{get(cells, after)}</td>'
+                       + "".join(f'<td class="m">{get(cells, at)}</td>' for at in extra) + "</tr>" for cells in rows)
+             + "</tbody></table></div>")
+    around = ["\n".join(line for line, _ in part) for part in (lines[:first], lines[last + 1:])]
+    return ("<h3>Before and after</h3>" + (page.markdown(around[0], "before-after", top=4, figures=True) if around[0].strip() else "")
+            + drawn + (page.markdown(around[1], "before-after", top=4, figures=True) if around[1].strip() else ""))
 
 
 def solution_section(c):
@@ -1948,8 +1961,8 @@ def solution_section(c):
         story = ""
     experience = (f'<h4>Your experience</h4>{page.markdown(notes["users"], "users", top=4)}' if notes.get("users") else "")
     rest = key_facts(page, c.solution_facts, ("For you", "Connects to", "To undo", "Rejected"))
-    inner = story + experience + (rest.replace('<dl class="kf">', '<dl class="kf" id="undo">', 1) if c.solution_facts.get("To undo") else rest)
-    headline = c.solution_facts.get("Headline") or (first_paragraph(prose) if prose else para)
+    inner = story + experience + rest
+    headline = c.solution_facts.get("Headline") or lead_sentence(first_paragraph(prose) if prose else para)
     box = (f'<div class="box sol"><div class="body" id="fix"><h3>The solution</h3>'
            + (f'<p class="hl">{page.inline(headline, links=False)}</p>' if headline else f"<p>{not_recorded_word()}</p>")
            + key_facts(page, c.solution_facts, ("Time added", "If it fails"))
@@ -1994,7 +2007,7 @@ def check_blocks(c):
 
     outputs = {}  # realpath of a text output: its (steps, result lines, runner tests), and the row that lists its tests
     for row in c.rows:
-        blocks, steps, said, tests, partial, listed_in, unread = [], [], [], [], False, [], False
+        blocks, notices, steps, said, tests, partial, listed_in, unread = [], [], [], [], [], False, [], False
         row["fresh"] = evidence_freshness(page, row, c.merged_tree, scripts)
         files = named_files(page, row)
         row["method"] = method_of(row, files)
@@ -2003,6 +2016,8 @@ def check_blocks(c):
                           else "is not a file" if not os.path.isfile(real) else "can't be read" if not os.access(real, os.R_OK) else None)
             if why_unread:
                 c.missing_files.setdefault(row["anchor"], []).append((os.path.basename(named), why_unread))
+                notices.append(page.file_block(named, real, again=True))  # shown above the fold: a file that isn't there is no evidence to fold
+                continue
             blocks.append((real, page.file_block(named, real, again=True)))
             unread = unread or real in page.past
             if real in page.lines and os.path.dirname(real) != scripts:
@@ -2014,6 +2029,7 @@ def check_blocks(c):
                     tests, partial = tests + found_tests, partial or real in page.cut
                 elif found_tests and owner is not row:
                     listed_in.append(owner)  # a suite output several checks cite counts its tests once, at its first
+        shown = len(blocks)
         blocks = log_and_video_tabs(page, row, blocks, scripts)
         row["tests"] = (len(tests), sum(result == "FAIL" for _, _, result in tests), partial)
         fits = page.charge(*steps, *said, *(section + name for section, name, _ in tests))
@@ -2068,8 +2084,9 @@ def check_blocks(c):
             f'<dt>Actual</dt><dd>{actual}' + (f" {observed}" if observed else "")
             + "".join(f'<span class="said">{esc(line)}</span>' for line in said) + runner
             + f'</dd><dt>Source</dt><dd>{page.path(c.paths["validation"], c.paths["validation"] + ":" + str(row["line"]))}</dd></dl>'
-            + (f'<details class="raw"><summary>Evidence: {len(blocks)} {"file" if len(blocks) == 1 else "files"}</summary>{"".join(blocks)}</details>'
-               if blocks else state("no evidence named", "dim")) + '</div></details>')
+            + "".join(notices)
+            + (f'<details class="raw"><summary>Evidence: {counted(shown, "file")}</summary>{"".join(blocks)}</details>'
+               if blocks else "" if row["anchor"] in c.missing_files else state("no evidence named", "dim")) + '</div></details>')
 
 
 def method_of(row, files):
@@ -2292,6 +2309,9 @@ def coverage_matrix(c):
         rows_html.append(f'<tr id="ac-{n}"><th scope="row">{page.inline(first)}</th>{impact_cell("How it is checked", promise)}{proof}</tr>')
     table = ('<table class="grid-impact stack matrix"><thead><tr><th scope="col">Criterion</th><th scope="col">How it is checked</th><th scope="col">Run for real</th>'
              f'<th scope="col">Test suite</th><th scope="col">Bugs planted</th></tr></thead><tbody>{"".join(rows_html)}</tbody></table>')
+    if not page.charge(table):  # rows × criteria chips: past the total, the validation report in the annex stands in
+        return (f'<p>{state("too large", "need")} the table of what proves each criterion doesn&#x27;t fit the page; '
+                '<a href="#annex-validation">the validation report</a> has it</p>')
     return fold("What had to be true, and what proves it", len(rows_html), table, opened=bool(c.uncovered) or not c.ac_known)
 
 
@@ -2313,7 +2333,7 @@ def testing_section(c):
     else:
         environment = ""
     return section("testing", "Testing", freshness + fresh_list + tally(c) + test_map(c) + automated_part(c) + manual_part(c) + todo_part(c)
-                   + coverage_matrix(c) + environment)
+                   + c.coverage + environment)
 
 
 # Review
@@ -2322,8 +2342,9 @@ LENS_OUTCOME_COLUMNS = {"fixed": "Fixed", "wrong": "Rejected", "intentional": "R
                         "pre-existing": "Pre-existing", "minor": "Minor"}
 
 
-def lens_outcomes(cell):
-    """{column: count} from a Lenses row's Outcomes cell, or None when the cell is blank or can't be read: then no count is known."""
+def lens_outcomes(cell, findings):
+    """{column: count} from a Lenses row's Outcomes cell, or None when the cell is blank or can't be read: then no count is known.
+    When the outcomes add up to fewer than the row's findings, a column the cell leaves out is None: the rest went somewhere unknown."""
     pairs = [part.strip() for part in cell.split(",") if part.strip()]
     found = [re.fullmatch(r"([a-z-]+)\s*=\s*(\d{1,9})", pair.lower()) for pair in pairs]
     if not pairs or not all(found) or any(one.group(1) not in LENS_OUTCOME_COLUMNS for one in found):
@@ -2332,6 +2353,8 @@ def lens_outcomes(cell):
     for one in found:
         column = LENS_OUTCOME_COLUMNS[one.group(1)]
         counts[column] = counts.get(column, 0) + int(one.group(2))
+    if sum(counts.values()) < int(findings):
+        counts = {column: counts.get(column) for column in set(LENS_OUTCOME_COLUMNS.values())}
     return counts
 
 
@@ -2342,7 +2365,7 @@ def review_matrix(c):
     by_lens = {}
     for lens in c.lenses:
         by_lens.setdefault(lens["lens"], []).append(lens)
-    read = {name: [lens_outcomes(lens["outcomes"]) for lens in models if lens not in c.failed_lenses] for name, models in by_lens.items()}
+    read = {name: [lens_outcomes(lens["outcomes"], lens["findings"]) for lens in models if lens not in c.failed_lenses] for name, models in by_lens.items()}
     columns = ["Fixed", "Rejected", "Open", "Pre-existing"] + (["Minor"] if any(counts and counts.get("Minor") for ran in read.values() for counts in ran) else [])
 
     def cells(models, ran):
@@ -2352,8 +2375,8 @@ def review_matrix(c):
             return "".join('<td class="e">—</td>' for _ in columns) + f'<td class="w">{why}</td>'
         out = ""
         for column in columns:
-            n = None if any(counts is None for counts in ran) else sum(counts.get(column, 0) for counts in ran)
-            tone = "u" if n is None else "e" if n == 0 else "h" if column in ("Fixed", "Open") else ""
+            n = None if any(counts is None or counts.get(column, 0) is None for counts in ran) else sum(counts.get(column, 0) for counts in ran)
+            tone = "u" if n is None else "e" if n == 0 else "h" if column == "Fixed" else "w" if column == "Open" else ""
             attribute = f' class="{tone}"' if tone else ""
             out += f'<td{attribute}>{"unknown" if n is None else n}</td>'
         return out + (f'<td class="w">{why}</td>' if failed else '<td class="e">Ran</td>')
@@ -2573,8 +2596,12 @@ def verdict_reasons(c):
     for row in c.rows:
         if row["result"] == "NOT RUN":
             calls.append((f"#{row['anchor']}", f"{row['words']} did not run", f"{esc(row['id'])}: {page.inline(row['check'])}", ("Not run", row["name"], row["id"])))
-        for name, why_unread in c.missing_files.get(row["anchor"], []):
-            calls.append((f"#{row['anchor']}", f"“{row['words']}” names {name}, which {why_unread}", esc(name)))
+    unreadable = [(row, name, why_unread) for row in c.rows for name, why_unread in c.missing_files.get(row["anchor"], [])]
+    if len(unreadable) > NAMED_CHECKS:  # one reason for them all, each named in its detail
+        calls.append((f"#{unreadable[0][0]['anchor']}", f"{counted(len(unreadable), 'file')} the checks name can't be read",
+                      "; ".join(f"“{esc(row['words'])}” names {esc(name)}, which {why_unread}" for row, name, why_unread in unreadable) + "."))
+    else:
+        calls += [(f"#{row['anchor']}", f"“{row['words']}” names {name}, which {why_unread}", esc(name)) for row, name, why_unread in unreadable]
     on_another = [f'“{row["words"]}”' for row in c.rows if row["fresh"] == "stale"]
     if on_another and not c.stale_problems:  # a stale_problem already stops the merge
         calls.append(("#freshness", f"{checks_named(on_another)} ran on another commit",
@@ -2604,9 +2631,10 @@ def verdict_reasons(c):
                 if not any(name.lower().endswith(review_stamp.VIDEO_EXTENSIONS) for name, _ in c.missing_files.get(row["anchor"], []))]
     if unfilmed:
         names = [f'“{row["words"]}”' for row in unfilmed]
-        calls.append((f"#{unfilmed[0]['anchor']}", f"video evidence is missing for {sentence_list(names)}",
+        calls.append((f"#{unfilmed[0]['anchor']}", f"video evidence is missing for {checks_named(names)}",
                       "Each Evidence cell names no usable video (a non-empty .webm or .mp4 in the evidence directory), so a validate "
-                      "stamp taken now refuses it. Record each with bin/evidence-video."))
+                      "stamp taken now refuses it. Record each with bin/evidence-video."
+                      + (f" {esc(sentence_list(names))}." if len(names) > NAMED_CHECKS else "")))
     without_impact = [finding for _, finding, impact, _, _ in c.open_items if impact_missing(impact, OPEN_IMPACT)]
     gaps = [gap for gap, fields, _ in c.not_proven if impact_missing(fields, GAP_IMPACT)]
     if without_impact or gaps:
@@ -2665,17 +2693,17 @@ def ready_sentence(c):
 
 
 def plain(markdown_text):
-    """A report's short text as words for a sentence: its emphasis and code marks dropped."""
-    return re.sub(r"[`*_]+", "", " ".join((markdown_text or "").split()))
+    """A report's short text as words for a sentence: its emphasis and code marks dropped, a snake_case name's underscores kept."""
+    return re.sub(r"[`*]+|(?<!\w)_+|_+(?!\w)", "", " ".join((markdown_text or "").split()))
 
 
 def criterion_words(c, n):
     """A criterion by its first sentence, never by its number, cut to CRITERION_WORDS words: the coverage table holds it whole."""
-    said = dict(c.criteria_numbers).get(n)
+    said = c.criteria_said.get(n)
     if not said:
         return f"criterion {n}"
     words = first_sentence(" ".join(said.split()))[0].split()
-    return " ".join(words[:CRITERION_WORDS]) + ("…" if len(words) > CRITERION_WORDS else "")
+    return shortened(" ".join(words[:CRITERION_WORDS]) + ("…" if len(words) > CRITERION_WORDS else ""))
 
 
 def chip(href, tone, word, name, cid="", tags=()):
@@ -2686,24 +2714,47 @@ def chip(href, tone, word, name, cid="", tags=()):
 
 def row_chip(row, tags=()):
     tone, word = {"PASS": ("p", "Passed"), "FAIL": ("f", "Failed"), "NOT RUN": ("s", "Not run")}.get(row["result"], ("s", "Not counted"))
-    return chip(row["anchor"], tone, word, row["name"], row["id"], tags)
+    return chip(row["anchor"], tone, word, esc(shortened(row["words"])), row["id"], tags)
 
 
 def step_chip(step, info, tags=()):
     tone, word = {"PASS": ("p", "Passed"), "FAIL": ("f", "Failed")}.get(info["result"], ("s", "To do"))
-    return chip(f"todo-{step}", tone, word, esc(info["name"]), step, tags)
+    return chip(f"todo-{step}", tone, word, esc(shortened(info["name"])), step, tags)
+
+
+RAIL_SOURCES = {  # the links of the verdict's reasons each rail step answers for
+    "spec": ("#annex-spec",),
+    "review": ("#review", "#annex-review"),
+    "validate": ("#testing", "#freshness", "#limits", "#ac-", "#check-", "#guide-", "#todo", "#annex-validation", "#annex-checks-guide"),
+    "ci": ("#footer",),
+}
 
 
 def rail_steps(c, stops, calls):
-    """(name, link, word, detail, tone) for spec, review, validate and CI, each from its own source, then the owner's call."""
+    """(name, link, word, detail, tone) for spec, review, validate and CI, each from its own source, then the owner's call.
+    A step never reads passed while the verdict holds a reason from its sources, and one the verdict's stops come from is red."""
     def criteria():
         n = len(c.criteria_numbers)
         return f'{n} criteri{"on" if n == 1 else "a"}' if n else "no numbered criteria"
 
-    if c.spec_text is not None:
-        spec = ("written", criteria(), "pass" if c.criteria_numbers else "wait")
+    def held(phase):
+        for reasons, word, tone in ((stops, "blocks", "fail"), (calls, "your call", "wait")):
+            for href, phrase, *_ in reasons:
+                if href.startswith(RAIL_SOURCES[phase]):
+                    return word, esc(phrase), tone
+        return None
+
+    def toned(phase, step):
+        word, detail, tone = step
+        stopped = tone not in ("off", "pass") and any(href.startswith(RAIL_SOURCES[phase]) for href, *_ in stops)
+        return word, detail, "fail" if stopped else tone
+
+    if "spec" in c.off:
+        spec = ("switched off", "", "off")
+    elif c.spec_text is not None:
+        spec = (held("spec") or ("written", criteria(), "pass")) if c.criteria_numbers else ("written", criteria(), "wait")
     elif c.spec_read_why and not c.spec_read_why.startswith("no report"):
-        spec = ("unavailable", esc(c.spec_read_why), "wait")
+        spec = ("unavailable", "can&#x27;t be read", "wait")
     else:
         spec = ("missing", "no spec", "wait")
 
@@ -2713,7 +2764,7 @@ def rail_steps(c, stops, calls):
             return ("switched off", "", "off") if why == "phase off" else ("not needed", "nothing it would check changed", "off")
         if why:
             why = why[len("unavailable: "):]
-            return ("missing", f"no {label} report", "wait") if why.startswith("no report") else ("unavailable", esc(why), "wait")
+            return ("missing", f"no {label} report", "wait") if why.startswith("no report") else ("unavailable", "can&#x27;t be read", "wait")
         word = c.stamps[phase]
         if word == "stale":
             return "stale", "the stamp doesn&#x27;t cover this commit", "wait"
@@ -2727,6 +2778,7 @@ def rail_steps(c, stops, calls):
               or (("not run", esc(f'the {lens_down[0]["model"]} {lens_down[0]["lens"]} lens did not run'), "wait") if lens_down else None)
               or (("not run", "a reviewer did not run", "wait") if c.failed_reviewers else None)
               or (("open", f'{counted(len(c.open_items), "finding")} left open', "wait") if c.open_items else None)
+              or held("review")
               or ("passed", f"{fixed} fixed" if fixed else "", "pass"))
 
     total, fails, not_run = len(c.rows), c.counts["FAIL"], c.counts["NOT RUN"]
@@ -2744,11 +2796,12 @@ def rail_steps(c, stops, calls):
                 or (("unavailable", "a result the page can&#x27;t count", "wait") if c.unread_results else None)
                 or (("unavailable", "which commit the evidence ran on is unknown", "wait")
                     if c.freshness_unread or any(row["fresh"] == "unknown" and row["result"] in ("PASS", "FAIL") for row in c.rows) else None)
+                or held("validate")
                 or ("passed", f'{total - not_run - fails} of {counted(total, "check")} passed', "pass"))
 
     ci = {"PASS": ("passed", "", "pass"), "FAIL": ("failed", "", "fail"), "pending": ("pending", "", "wait"), "missing": ("missing", "no checks yet", "wait"),
           "no CI": ("not needed", "this repository runs no CI", "off"), "CI phase off": ("switched off", "", "off"),
-          "no PR yet": ("missing", "no PR yet", "wait")}.get(c.ci_word, ("unavailable", esc(c.ci_detail or c.ci_word), "wait"))
+          "no PR yet": ("missing", "no PR yet", "wait")}.get(c.ci_word, ("unavailable", "can&#x27;t be read", "wait"))
 
     if c.decisions:
         yours = counted(len(c.decisions), "decision")
@@ -2756,7 +2809,8 @@ def rail_steps(c, stops, calls):
         yours = f'{counted(len(stops) + len(calls), "reason")} to read'
     else:
         yours = "nothing to decide"
-    return (("Spec", "annex-spec", *spec), ("Review", "review", *review), ("Validate", "testing", *validate), ("CI", "footer", *ci),
+    return (("Spec", "annex-spec", *toned("spec", spec)), ("Review", "review", *toned("review", review)),
+            ("Validate", "testing", *toned("validate", validate)), ("CI", "footer", *toned("ci", ci)),
             ("Your call", "decide", yours, "", "you"))
 
 
@@ -2788,6 +2842,9 @@ def hero(c, title, stops, calls, notes):
     choices = (f' <a href="#decide">{counted(len(c.decisions), "choice")} {"are" if len(c.decisions) != 1 else "is"} yours.</a>' if c.decisions else "")
     chips = [reason_chip(href, phrase, True, *named) for href, phrase, _, *named in stops] + \
             [reason_chip(href, phrase, False, *named) for href, phrase, _, *named in calls]
+    if len(chips) > VERDICT_CHIPS:
+        hidden_from = "stops" if len(stops) >= VERDICT_CHIPS else "calls"  # the list holding the first chip left out
+        chips = chips[:VERDICT_CHIPS - 1] + [chip(hidden_from, "s", f"{len(chips) - VERDICT_CHIPS + 1} more", "in Why this verdict")]
     verdict = (f'<div class="verdict-box {"fail" if stops else "wait" if calls else "pass"}"><p class="verdict"><strong>{esc(word)}:</strong> {said}.{choices}</p>'
                + (f'<ul class="chips" aria-label="What decides it">{"".join(f"<li>{one}</li>" for one in chips)}</ul>' if chips else "") + "</div>")
     listed = "".join(
@@ -2922,7 +2979,7 @@ def change_footer(c):
 
 def build(page_path, evidence):
     page = Page(evidence)
-    page.ids.update(("main", "footer", "environment", "problem", "fix", "undo", "testing", "review", "limits", "decide", "freshness", "automated",
+    page.ids.update(("main", "footer", "environment", "problem", "fix", "testing", "review", "limits", "decide", "freshness", "automated",
                      "manual", "todo", "regressions", "test-map", "review-matrix", "review-open", "review-not-run", "review-lenses", "verdict-why", "merge-note", "ship-steps"))
     off, phases_error = phase_switches.phases_off_or_error(os.getcwd())
     kinds = ("decision-notes", "pr-body", "verify", "review", "validation", "checks-guide", "follow-pr")
@@ -2946,6 +3003,7 @@ def build(page_path, evidence):
     # Built in the order that spends the embed budget: the notes' figures, then the evidence, then the annexes
     problem = problem_section(c)
     fix, drawn = solution_section(c)
+    c.coverage = coverage_matrix(c)
     check_blocks(c)
     testing = testing_section(c)
     review = review_section(c)
@@ -3281,9 +3339,9 @@ li.sub{margin-left:1.25rem}
 .ship{border-left:1px solid var(--line);padding-left:1rem;margin:0 0 1.25rem}
 .ship h4{margin-top:0}
 video{max-width:100%;height:auto;border:1px solid var(--line);display:block;background:var(--surface)}
-.more>summary,.earlier>summary,.runner>summary,.raw>summary{cursor:pointer;color:var(--muted);margin:.5rem 0;font-size:.875rem}
+.more>summary,.earlier>summary,.runner>summary{cursor:pointer;color:var(--muted);margin:.5rem 0;font-size:.875rem}
 .sum .more>summary{font-family:var(--mono);margin:0 0 .25rem;padding:.25rem 0}
-.more>summary,.earlier>summary,.runner>summary,.raw>summary,.items .group>summary{padding:.75rem 0}
+.more>summary,.earlier>summary,.runner>summary,.items .group>summary{padding:.75rem 0}
 .items a.go,.sum a.go{display:inline-block;padding:.75rem .5rem;margin:-.75rem -.25rem}
 .toc ol a{display:inline-block;padding:.75rem .25rem}
 .annex{border-top:1px solid var(--line)}
@@ -3415,6 +3473,7 @@ code{font:400 .86em var(--mono);background:var(--sunk);padding:.06em .3em;border
 .verdict a{color:inherit;text-decoration-color:currentColor}
 .verdict-box .chips{list-style:none;margin:0;padding:0}
 .verdict-box .lc{background:var(--bg);border-color:var(--bg)}
+.verdict-box :focus-visible{outline-color:var(--bg)}
 .why{font-size:14px;color:var(--soft)}.why>summary{cursor:pointer;font-weight:600;color:var(--text)}
 .why-h{font-weight:600;margin:.6rem 0 0;color:var(--text)}.why ul{margin:.4rem 0 0;padding-inline-start:1.1rem;display:grid;gap:.3rem}
 .lc{--k:var(--faint);display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:0 6px;font-size:13px;line-height:1.45;padding:3px 8px;border-radius:6px;border:1px solid var(--k);background:var(--card);color:var(--text);text-decoration:none;max-width:100%}
@@ -3456,7 +3515,7 @@ a.lc:hover{box-shadow:inset 0 0 0 1px var(--k)}
 details.more{border-top:1px solid var(--line);font-size:14px}
 details.more>summary{cursor:pointer;padding:.55rem 0;color:var(--blue);font-weight:600}
 details.more>summary b{font-weight:600}details.more>summary .n{font:400 12px var(--mono);color:var(--faint);margin-inline-start:4px}
-details.more>.inner{display:grid;gap:.6rem;padding-bottom:.8rem}
+details.more>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;padding-bottom:.8rem}
 .box details.more{margin-top:10px}
 .scroll,.table{overflow-x:auto;max-width:100%}
 .ba,.mx{width:100%;border-collapse:separate;border-spacing:4px;font-size:14px}
@@ -3467,7 +3526,7 @@ details.more>.inner{display:grid;gap:.6rem;padding-bottom:.8rem}
 .ba td,.mx td{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:7px 9px;vertical-align:middle}
 .ba td.b{background:transparent;border-style:dashed;color:var(--soft)}
 .ba td.a{border-color:var(--pass);box-shadow:inset 0 0 0 1px var(--pass)}
-.mx td.m{color:var(--soft)}
+.ba td.m,.mx td.m,.mx td p.m{color:var(--soft)}.mx td p.m{font-size:13px;margin-top:4px}
 .mx td.e{background:transparent;border-style:dashed;color:var(--faint)}
 .mx td.u{background:transparent;border-style:dotted;color:var(--wait);font-style:italic}
 .mx td.w{border-color:var(--wait);color:var(--wait)}
@@ -3493,12 +3552,15 @@ details.more>.inner{display:grid;gap:.6rem;padding-bottom:.8rem}
 .map .ran{font-size:12.5px;color:var(--faint)}
 .map .none{font-size:13px;color:var(--soft);padding:8px 0;border-top:1px dashed var(--line);max-width:none}
 .check{border-top:1px solid var(--line)}
-.check>summary{display:flex;flex-wrap:wrap;gap:.2rem .6rem;align-items:baseline;padding:.65rem 0;cursor:pointer}
+.check>summary{display:flex;flex-wrap:wrap;gap:.2rem .6rem;align-items:baseline;padding:.65rem 0;cursor:pointer;list-style:none}
+.check>summary::-webkit-details-marker{display:none}
+.check>summary::after{content:"";order:-1;width:7px;height:7px;border:solid var(--faint);border-width:0 2px 2px 0;transform:rotate(-45deg);align-self:center;flex:none}
+.check>summary:dir(rtl)::after{transform:rotate(135deg)}.check[open]>summary::after{transform:rotate(45deg)}
 .check>summary h4{margin:0;font-size:14.5px}
 .check>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;padding-bottom:1rem;scroll-margin-top:2rem}
-.check>.inner:target,.crit li:target{outline:1px solid var(--you);outline-offset:.4rem;border-radius:4px}
+.check>.inner:target{outline:1px solid var(--you);outline-offset:.4rem;border-radius:4px}
 .cid{font:400 12px var(--mono);color:var(--faint)}
-.res{font:700 13px var(--mono);white-space:nowrap;color:var(--pass)}.res.need{color:var(--wait)}.res.fail{color:var(--fail)}.res.dim{color:var(--faint)}
+.res{font:700 13px var(--mono);white-space:nowrap;color:var(--pass)}.res.fail{color:var(--fail)}.res.dim{color:var(--faint)}
 .chip{display:inline-block;font:600 11px/1.6 var(--mono);padding:0 .4rem;border:1px solid var(--line);border-radius:4px;white-space:nowrap;color:var(--soft)}
 .chip.todo{border-style:dashed;color:var(--wait);border-color:var(--wait)}
 .check dl{display:grid;grid-template-columns:5.2rem minmax(0,1fr);gap:.2rem .6rem;margin:0;font-size:14px}
@@ -3511,7 +3573,7 @@ details.more>.inner{display:grid;gap:.6rem;padding-bottom:.8rem}
 .dots li{width:.85rem;height:.85rem;border-radius:50%;background:var(--pass)}.dots .miss{background:transparent;box-shadow:inset 0 0 0 2px var(--faint)}
 .g{display:flex;gap:.55rem;align-items:baseline}.g .n{font:400 13px var(--mono);color:var(--faint)}
 .g.need{color:var(--wait)}.g.ok{color:var(--pass)}
-.find{list-style:none;margin:0;padding:0;display:grid}.find li{padding:.6rem 0;border-top:1px solid var(--line)}
+.find{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:minmax(0,1fr)}.find li{padding:.6rem 0;border-top:1px solid var(--line);overflow-wrap:anywhere}
 .fr{color:var(--soft);font-size:14px;margin-top:.15rem}
 .lenses,.grid-impact{width:100%;border-collapse:collapse;font-size:14px}
 .lenses th,.lenses td,.grid-impact th,.grid-impact td{text-align:start;vertical-align:top;padding:.5rem .7rem .5rem 0;border-bottom:1px solid var(--line);font-weight:400}
@@ -3519,25 +3581,25 @@ details.more>.inner{display:grid;gap:.6rem;padding-bottom:.8rem}
 .lenses tbody th,.grid-impact tbody th{font-weight:600}
 .matrix .none{color:var(--wait)}
 .crit{font-size:13px;color:var(--soft)}.crit>summary{cursor:pointer}
-.todo-step{border-top:1px solid var(--line);padding:.7rem 0;display:grid;gap:.3rem}
+.todo-step{border-top:1px solid var(--line);padding:.7rem 0;display:grid;grid-template-columns:minmax(0,1fr);gap:.3rem}
 .todo-step h4{display:flex;flex-wrap:wrap;gap:.5rem;align-items:baseline;margin:0}
-.owner{font:600 12px var(--mono);color:var(--soft)}.owned{display:grid;gap:.3rem;padding-inline-start:1.3rem}
-.decision{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--you);border-radius:var(--r);padding:12px 14px;display:grid;gap:.45rem}
+.owner{font:600 12px var(--mono);color:var(--soft)}.owned{display:grid;grid-template-columns:minmax(0,1fr);gap:.3rem;padding-inline-start:1.3rem}
+.decision{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--you);border-radius:var(--r);padding:12px 14px;display:grid;grid-template-columns:minmax(0,1fr);gap:.45rem}
 .decision h3{margin:0}
 .opts{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:8px}
 .opts li{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px}
 .opts b{font:700 13px var(--mono);color:var(--you);margin-inline-end:.4rem}
 .default{color:var(--soft);font-size:14px}
 .fig{display:block;width:100%;height:auto;margin-block:.4rem}.fig img{max-width:100%;height:auto;display:block;margin-inline:auto}
-.strip{display:grid;gap:1.2rem;margin:.3rem 0;background:var(--sunk);border:1px solid var(--line);border-radius:var(--r);padding:1rem}
+.strip{display:grid;grid-template-columns:minmax(0,1fr);gap:1.2rem;margin:.3rem 0;background:var(--sunk);border:1px solid var(--line);border-radius:var(--r);padding:1rem}
 .strip-title{font-weight:650}
-.frame{margin:0;display:grid;gap:.6rem}
+.frame{margin:0;display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem}
 .frame img{display:block;width:100%;max-width:34rem;height:auto;margin-inline:auto}
 .frame figcaption{font-size:14.5px}
 .frame .stepno{display:block;font:600 12px var(--mono);color:var(--soft)}
 .stepl{list-style:none;margin:0;padding:0;display:grid;gap:.4rem}
-.stepl li{padding-inline-start:.75rem;border-left:3px solid transparent;font-size:14px}
-.file{margin:.6rem 0 0;display:grid;gap:.35rem;min-width:0}
+.stepl li{padding-inline-start:.75rem;border-inline-start:3px solid transparent;font-size:14px}
+.file{margin:.6rem 0 0;display:grid;grid-template-columns:minmax(0,1fr);gap:.35rem;min-width:0}
 .file img,.file video{max-width:100%;height:auto;display:block}
 .file .name{font-size:13px;margin:0}.file .size{color:var(--faint);font-size:12px}
 .file figcaption{font-size:13px;color:var(--soft)}
@@ -3561,7 +3623,7 @@ details.more>.inner{display:grid;gap:.6rem;padding-bottom:.8rem}
 .table th,.table td{text-align:start;vertical-align:top;padding:.35rem .7rem .35rem 0;border-bottom:1px solid var(--line)}
 .absent{color:var(--soft)}.absent .k{font-weight:600}
 .ship{margin-top:.6rem}.ship h4{margin:0 0 .25rem}
-footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);display:grid;gap:.8rem;color:var(--soft);font-size:14px}
+footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr);gap:.8rem;color:var(--soft);font-size:14px}
 footer>details>summary{cursor:pointer;font-weight:600;color:var(--text)}
 .annex{margin-top:.4rem}.annex>summary{cursor:pointer}.annex summary code{overflow-wrap:anywhere}.annex-body{padding:.5rem 0;min-width:0;overflow-wrap:anywhere}
 .sum,.ids{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.2rem .9rem;margin:0;font-size:13px}
@@ -3570,9 +3632,9 @@ footer>details>summary{cursor:pointer;font-weight:600;color:var(--text)}
 @media (max-width:640px){
 body{padding:24px 16px 48px}
 .rail{grid-template-columns:minmax(0,1fr)}
-.rail li{display:grid;grid-template-columns:32px minmax(0,1fr);gap:0 12px;padding-bottom:12px}
+.rail li{padding-bottom:12px}
 .rail li::after{top:36px;bottom:0;inset-inline:15px auto;width:2px;height:auto}
-.rail a{display:contents}
+.rail a{display:grid;grid-template-columns:32px minmax(0,1fr);gap:0 12px}
 .rail .dot{grid-row:span 2;margin:0}
 .three,.ps{grid-template-columns:minmax(0,1fr)}
 .map .row{grid-template-columns:minmax(0,1fr);gap:4px}
@@ -3583,7 +3645,10 @@ body{padding:24px 16px 48px}
 .grid-impact.stack td[data-l]::before{content:attr(data-l) ": ";color:var(--soft)}
 pre.cmd{white-space:pre-wrap;overflow-wrap:anywhere}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-@media print{body{background:#fff;color:#000}details::details-content{content-visibility:visible;display:block}details:not([open])>*:not(summary){display:block}.tabs>label{display:none}.tabs>.pane{display:block}}
+@media print{:root{--bg:#FFFFFF;--card:#FFFFFF;--sunk:#F4F4F5;--line:#D4D4D8;--text:#000000;--soft:#3F3F46;--faint:#52525B;
+--blue:#1B4ED8;--teal:#0F766E;--amber:#B45309;--violet:#9333EA;--rose:#D21B43;--lime:#4D7C0F;--pass:#047857;--fail:#C42029;--wait:#B45309;--you:#1B4ED8}
+.verdict-box,.dot,.bar i,.dots li{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+body{background:#fff;color:#000}details::details-content{content-visibility:visible;display:block}details:not([open])>*:not(summary){display:block}.tabs>label{display:none}.tabs>.pane{display:block}}
 """
 
 

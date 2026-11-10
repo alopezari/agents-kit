@@ -110,7 +110,7 @@ One sentence: what this change could do to the running system.
 One sentence: what the user sees differently.
 
 ## The problem
-Headline: the problem, as the section's title
+Headline: the problem in one sentence, the card's lead
 Background: what this project is, what the affected part does and the situation that led to the problem, in plain words
 Who it hits: who, and how many if a source says
 What they see: what happens to them, as they would describe it
@@ -121,7 +121,7 @@ If we wait: only what a source names; left out, the page leaves it off
 What went wrong, in prose, with its figures in place.
 
 ## The solution
-Headline: the solution, as the section's title
+Headline: the solution in one sentence, the card's lead
 For you: what changes for the owner
 Time added: to the path this runs on
 Connects to: what it reads, calls or writes
