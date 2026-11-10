@@ -4713,6 +4713,21 @@ def the_rail_reads_each_phase_from_its_source(base):
     assert rail["Your call"] == ("1 decision", "", "you"), rail["Your call"]
 
 
+def criterion_links_land_when_the_coverage_table_does_not_fit(base):
+    repo, evidence = full_branch(base)
+    figures = ""
+    sizes = [1900] * 11 + [25] * 60 + [1] * 40  # KB: the notes' figures spend the 20 MB total to within 1 KB before the coverage table
+    for n, size in enumerate(sizes):
+        put(os.path.join(evidence, f"fig{n:03d}.png"), PNG + bytes([n % 256]) * (size * 1024))
+        figures += f"\n![figure {n}](fig{n:03d}.png)\n"
+    write(repo, "decision-notes", NOTES.replace("## What it changes for users", figures + "\n## What it changes for users"))
+    _, markup = generate(repo, base)
+    assert "doesn&#x27;t fit the page" in markup, "the coverage table still fits: the test spends too little"
+    targets = set(re.findall(r'\bid="([^"]+)"', markup))
+    links = re.findall(r'href="#(ac-\d+)"', markup)
+    assert links and not [link for link in links if link not in targets], sorted(set(links) - targets)
+
+
 def the_rail_never_shows_skipped_or_unread_work_as_passed(base):
     def rail_for(name, change, gh_change=None):
         here = in_dir(base, name)
@@ -4748,6 +4763,7 @@ def the_rail_never_shows_skipped_or_unread_work_as_passed(base):
                        "CI", ("pending", "", "fail")),
         "ci-unread": (nothing, lambda gh, repo: gh.update(api_error=True), "CI", None),
         "no-pr": (nothing, lambda gh, repo: gh.pop("pr"), "CI", ("missing", "no PR yet", "fail")),
+        "pr-closed": (nothing, lambda gh, repo: gh["pr"].update(state="CLOSED"), "CI", ("blocks", "the PR is already closed", "fail")),
         "ci-off": (phase_off("ci"), None, "CI", ("switched off", "", "off")),
         "no-ci": (nothing, lambda gh, repo: gh.update(checks={}, no_ci={"defaultBranchRef": {"target": {"statusCheckRollup": None}}, "parent": {"statusCheckRollup": None},
                                                                      "pullRequests": {"nodes": []}}), "CI", ("not needed", "this repository runs no CI", "off")),
@@ -4999,7 +5015,7 @@ def the_verdict_shows_eight_chips_then_a_count(base):
     assert enclosing_folds(markup, '<ul id="stops"')[-1].startswith(' class="why"'), "the count links outside the reasons"
 
 
-DIAGRAM_TESTS = (the_rail_reads_each_phase_from_its_source, the_rail_never_shows_skipped_or_unread_work_as_passed,
+DIAGRAM_TESTS = (the_rail_reads_each_phase_from_its_source, the_rail_never_shows_skipped_or_unread_work_as_passed, criterion_links_land_when_the_coverage_table_does_not_fit,
                  the_verdict_lists_each_reason_as_a_chip_led_by_its_name, the_hero_keeps_stability_experience_and_undo_short,
                  the_cut_blocks_are_gone_and_the_absences_that_matter_stay, the_test_map_draws_one_row_per_layer_with_named_chips,
                  the_review_matrix_counts_each_lens_and_says_unknown, the_regression_matrix_chips_a_check_with_a_result,

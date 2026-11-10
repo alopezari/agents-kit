@@ -2310,8 +2310,9 @@ def coverage_matrix(c):
     table = ('<table class="grid-impact stack matrix"><thead><tr><th scope="col">Criterion</th><th scope="col">How it is checked</th><th scope="col">Run for real</th>'
              f'<th scope="col">Test suite</th><th scope="col">Bugs planted</th></tr></thead><tbody>{"".join(rows_html)}</tbody></table>')
     if not page.charge(table):  # rows × criteria chips: past the total, the validation report in the annex stands in
+        targets = "".join(f'<li id="ac-{n}">{esc(criterion_words(c, n))}</li>' for n, _ in c.criteria_numbers)  # check and verdict links land here
         return (f'<p>{state("too large", "need")} the table of what proves each criterion doesn&#x27;t fit the page; '
-                '<a href="#annex-validation">the validation report</a> has it</p>')
+                f'<a href="#annex-validation">the validation report</a> has it</p><ol class="crit">{targets}</ol>')
     return fold("What had to be true, and what proves it", len(rows_html), table, opened=bool(c.uncovered) or not c.ac_known)
 
 
@@ -2802,6 +2803,8 @@ def rail_steps(c, stops, calls):
     ci = {"PASS": ("passed", "", "pass"), "FAIL": ("failed", "", "fail"), "pending": ("pending", "", "wait"), "missing": ("missing", "no checks yet", "wait"),
           "no CI": ("not needed", "this repository runs no CI", "off"), "CI phase off": ("switched off", "", "off"),
           "no PR yet": ("missing", "no PR yet", "wait")}.get(c.ci_word, ("unavailable", "can&#x27;t be read", "wait"))
+    if ci[2] == "pass":
+        ci = held("ci") or ci
 
     if c.decisions:
         yours = counted(len(c.decisions), "decision")
