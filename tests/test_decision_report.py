@@ -1314,6 +1314,18 @@ def tab_group(block):
     return found.group(0), checked, {re.search(r'name="([^"]+)"', radio).group(1) for radio in radios}
 
 
+def a_failed_checks_raw_evidence_folds_but_its_outcome_stays_open(base):
+    repo, _ = full_branch(base)
+    _, markup = generate(repo, base)
+    block = check_block(markup, "A2")
+    assert all(" open" in fold for fold in enclosing_folds(markup, 'id="check-A2"')), "the failed check is folded away"
+    outcome = block[:block.find('<details class="raw"')]
+    assert "<dt>Expected</dt>" in outcome and "<dt>Actual</dt>" in outcome, "the outcome sits inside the evidence fold"
+    raw = re.search(r'<details class="raw">(.*?)<summary>(.*?)</summary>', block, re.S)
+    assert raw and " open" not in raw.group(1) and re.match(r"Evidence: \d+ files?$", raw.group(2)), block[:800]
+    assert '<pre class="out' not in outcome, "the failed check's log shows before its fold"
+
+
 def a_log_and_its_video_show_as_tabs_log_first_unless_passed(base):
     repo, evidence = full_branch(base)
     for name, result in (("T1", "PASS"), ("T2", "FAIL"), ("T3", "NOT RUN")):
@@ -4948,6 +4960,7 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      the_notes_embed_each_file_under_its_first_part, the_answer_needs_more_than_its_confidence,
                      a_marker_inside_a_longer_fence_is_not_the_mode, a_kept_script_the_evidence_names_shows_once,
                      notes_over_the_limit_keep_the_change_page, a_file_a_row_names_three_ways_shows_once,
+                     a_failed_checks_raw_evidence_folds_but_its_outcome_stays_open,
                      a_log_and_its_video_show_as_tabs_log_first_unless_passed, a_second_video_of_the_same_stem_stays_beside_the_tabs,
                      a_log_or_video_alone_or_with_another_stem_is_not_tabs,
                      a_replay_says_so_and_a_check_without_a_video_is_your_call) + REDESIGN_TESTS + GUARD_TESTS + DIAGRAM_TESTS)
