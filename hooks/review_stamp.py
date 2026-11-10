@@ -600,8 +600,8 @@ def stale_evidence(lines, evidence):
         shown = ", ".join(listed[:10]) + (f" and {len(listed) - 10} more" if len(listed) > 10 else "")
         if code:
             checks = [n for n in names if n != ENVIRONMENT_RECORD]
-            again = ([f"Run {'those checks' if len(checks) > 1 else 'that check'} again through bin/evidence and update "
-                      "their rows."] if checks else []) + ([f"Record the environment again: {RECORD_ENVIRONMENT_COMMAND}"]
+            again = ([f"Run {'those checks' if len(checks) > 1 else 'that check'} again through bin/evidence-video (with "
+                      "--replay for a long one) and update their rows."] if checks else []) + ([f"Record the environment again: {RECORD_ENVIRONMENT_COMMAND}"]
                                                            if ENVIRONMENT_RECORD in names else [])
             problems.append(f"{named} ran on content the working tree no longer has: {shown} changed since, and aren't "
                             "tests. " + " ".join(again))
@@ -611,10 +611,20 @@ def stale_evidence(lines, evidence):
     return problems, warnings
 
 
-def unbacked_rows(lines, evidence):
-    """The PASS/FAIL rows whose Evidence cell names no saved file, as "<first cell>: <evidence cell>"."""
-    return [f"{first}: {cell or '(empty)'}" for first, result, cell, backed, *_ in result_rows(lines, evidence)
-            if result in ("PASS", "FAIL") and not backed]
+VIDEO_EXTENSIONS = (".webm", ".mp4")
+
+
+def usable_videos(evidence):
+    """The videos a check's Evidence cell can name: the non-empty .webm and .mp4 files of the evidence directory."""
+    return [name for name in evidence_files(evidence) if name.endswith(VIDEO_EXTENSIONS)]
+
+
+def rows_without_video(lines, evidence):
+    """The PASS/FAIL rows whose Evidence cell names no usable video, as "<first cell>: <evidence cell>". A video named
+    below the table, not in the row, isn't the row's."""
+    videos = usable_videos(evidence)
+    return [f"{first}: {cell or '(empty)'}" for first, result, cell, *_ in result_rows(lines, evidence)
+            if result in ("PASS", "FAIL") and not names_a_file(cell, videos)]
 
 
 def rows_without_expected(lines, evidence):
@@ -865,12 +875,13 @@ def suite_problems(evidence):
             return []
     return ([f"The suite overlay {shown} asks for a green run of the repo's full suite on the code as it is now, and "
              f"{evidence} holds none. Run one of its commands from the repo root:"]
-            + [f"  ~/.agents/bin/evidence suite {c}" for c in commands] + reasons)
+            + [f"  ~/.agents/bin/evidence-video --replay --check 'the full unit suite' --case + --expected 'a green run' suite {c}"
+               for c in commands] + reasons)
 
 
 def validation_report_problems():
     """Why the validation report can't back a validate stamp: it's missing, PASS/FAIL rows whose Evidence cell names no
-    non-empty file of the evidence directory, an empty recording, output recorded on content that changed since in
+    usable video of the evidence directory, an empty recording, output recorded on content that changed since in
     files other than tests (stale_evidence), a criterion of the spec without its PASS and negative rows, a test type
     triage selects that its Test types table leaves out, or, where the repo has a suite overlay, no green run of the
     full suite on the code as it is now. Empty when it can."""
@@ -887,10 +898,15 @@ def validation_report_problems():
     except OSError as error:  # every check below lists it
         return [f"Can't list the evidence directory {evidence}: {error.strerror}."]
     lines, problems = text.splitlines(), []
-    missing = unbacked_rows(lines, evidence)
+    missing = rows_without_video(lines, evidence)
     if missing:
-        problems += [f"These PASS/FAIL rows name no saved evidence in {evidence} (`bin/evidence <id> <command>` for "
-                     "output, a screenshot for a UI state):"] + missing
+        problems += [f"These PASS/FAIL rows name no usable video in {evidence} (a non-empty .webm or .mp4 there, named in "
+                     "the row's Evidence cell). Record a command's check with `~/.agents/bin/evidence-video --check <text> "
+                     "--case <+|\u2212> --expected <text> <id> <command>` (with --replay for a long one: the full suite, a "
+                     "mutation run), a browser check with `agent-browser record start`, and name its video in the row:"]
+        if not shutil.which("vhs"):
+            problems.append("vhs isn't installed, so bin/evidence-video records no video: run ~/.agents/install.sh.")
+        problems += missing
     unexpected = rows_without_expected(lines, evidence)
     if unexpected:
         problems += ["These PASS/FAIL rows say nothing of the result expected. Add an Expected column "

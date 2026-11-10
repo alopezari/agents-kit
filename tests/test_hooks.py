@@ -90,6 +90,12 @@ def test_types_section(cwd, evidence="a1.txt"):
     return test_types_table((name, "yes", evidence) for name in selected_test_types(cwd))
 
 
+def record_video(evidence, name):
+    """A non-empty video in the evidence directory, as the validate stamp asks of every PASS/FAIL row."""
+    with open(os.path.join(evidence, name), "wb") as fh:
+        fh.write(b"\x1aE\xdf\xa3")
+
+
 def record_environment(evidence):
     """The environment record the validate stamp asks for, as bin/evidence saves it from a run that exited 0; its header
     names no commit, so no content change makes it stale."""
@@ -106,9 +112,10 @@ def write_stamp(cwd, kind, equals=False):
         evidence = subprocess.run([reports, "path", "evidence"], cwd=cwd, capture_output=True, text=True).stdout.strip()
         assert os.path.isdir(evidence), f"no evidence directory from {reports}: {evidence!r}"
         with open(path, "w") as fh:
-            fh.write("| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n| A1 | app runs | + | exit 0 | PASS | a1.txt |\n" + test_types_section(cwd))
+            fh.write("| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n| A1 | app runs | + | exit 0 | PASS | a1.txt a1.webm |\n" + test_types_section(cwd))
         with open(os.path.join(evidence, "a1.txt"), "w") as fh:
             fh.write("$ python3 app.py\nexit 0\n")
+        record_video(evidence, "a1.webm")
         record_environment(evidence)
     flags = [f"--kind={kind}"] if equals else ["--kind", kind]
     return subprocess.run(["python3", H + "review_stamp.py", "write", *flags], cwd=cwd, capture_output=True, text=True)
@@ -241,6 +248,10 @@ def guard_blocks_irreversible(base):
             f"the recorder's options don't hide it: {cmd}"
         assert guard(f"~/.agents/bin/evidence-video --expected \"exit 2 and \\\"unknown pack\\\"\" --check 'it'\\''s' A1 {cmd}") \
             == "deny", f"quotes inside an option's value don't hide it: {cmd}"
+        assert guard(f"~/.agents/bin/evidence-video --replay --check 'the suite' --case + --expected 'exit 0' A1 {cmd}") \
+            == "deny", f"a replay runs it in full: {cmd}"
+        assert guard(f"~/.agents/bin/evidence-video --check 'the suite' --replay --case + --expected 'exit 0' A1 {cmd}") \
+            == "deny", f"--replay between the other options: {cmd}"
     assert guard("cd /tmp && evidence B2 sudo ls") == "deny"
     # The shell runs a substitution in an option's value before the recorder starts.
     for options in ['--check "$(sudo ls)"', '--expected "refuses `sudo ls`"', '--case $(sudo ls)']:
@@ -249,6 +260,7 @@ def guard_blocks_irreversible(base):
         assert guard(wrapped) == "deny", wrapped
     assert guard("~/.agents/bin/evidence A1 git status") == "allow"
     assert guard("~/.agents/bin/evidence-video --check 'git state' A1 git status") == "allow"
+    assert guard("~/.agents/bin/evidence-video --replay --check 'git state' --case + --expected 'exit 0' A1 git status") == "allow"
     # `git checkout -q -- .` slipped past and took uncommitted fixes with it.
     for cmd in ["git checkout -q -- .", "git checkout -f .", "git restore --worktree .", "git restore --source=HEAD~1 .",
                 "git restore -s HEAD .", "git checkout -- ./", "git checkout --conflict=merge ."]:
@@ -1459,6 +1471,8 @@ def pr_gate_review_and_validation(base):
     assert guard("env X=1 evidence A1 gh pr create --fill", repo) == "deny"
     assert guard(f"cd {repo} && ~/.agents/bin/evidence-video --check 'opens a PR' A1 gh pr create --fill", repo) == "deny", \
         "the PR gate sees through the recorder"
+    assert guard(f"cd {repo} && ~/.agents/bin/evidence-video --replay --check 'opens a PR' A1 gh pr create --fill", repo) \
+        == "deny", "the PR gate sees through a replay"
     write_stamp(repo, "validate")
     assert guard("gh pr create --fill", repo) == "allow"
     assert guard("gh pr new --fill", repo) == "allow", "gh's alias passes the same gate"
@@ -1631,9 +1645,10 @@ def validate_stamp_needs_evidence(base):
     assert done.returncode == 2 and "validation report" in done.stderr and not stamped(), done
     with open(os.path.join(evidence, "empty.png"), "w"):
         pass
+    record_video(evidence, "A1.webm")
     with open(report, "w") as fh:
         fh.write("A. CLI\n\n| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n"
-                 "| A1 | exits 3 | − | exit 3 | PASS | [output](evidence-x/A1.txt) |\n"
+                 "| A1 | exits 3 | − | exit 3 | PASS | [output](evidence-x/A1.txt) [video](evidence-x/A1.webm) |\n"
                  "| A2 | prints | + | prints it | PASS | printed it, rc=0 |\n"
                  "| A3 | staging only | + | | NOT RUN | needs staging |\n\n"
                  "B. UI\n\n| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n"
@@ -1650,12 +1665,13 @@ def validate_stamp_needs_evidence(base):
     assert done.returncode == 2 and named == {"A2", "B1", "B2", "B3", "B4", "B5", "B6", "C1", "D1"} and not stamped(), done.stderr
     with open(os.path.join(evidence, "b1.png"), "wb") as fh:
         fh.write(b"\x89PNG")
+    record_video(evidence, "b1.webm")
     record_environment(evidence)
     with open(report, "w") as fh:
         fh.write("| # | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n"
-                 "| A1 | exits 3 | − | exit 3 | PASS | `A1.txt` |\n| A3 | staging only | + | | NOT RUN | needs staging |\n"
-                 "| B1 | page | + | page shown | FAIL | ![page](evidence-x/b1.png) |\n"
-                 f"| B2 | linked by absolute path, as validate writes it | + | rc=0 | PASS | [output]({evidence}/A1.txt) |\n"
+                 "| A1 | exits 3 | − | exit 3 | PASS | `A1.txt` `A1.webm` |\n| A3 | staging only | + | | NOT RUN | needs staging |\n"
+                 "| B1 | page | + | page shown | FAIL | ![page](evidence-x/b1.png) [video](evidence-x/b1.webm) |\n"
+                 f"| B2 | linked by absolute path, as validate writes it | + | rc=0 | PASS | [output]({evidence}/A1.txt) [video]({evidence}/A1.webm) |\n"
                  + test_types_section(repo, "A1.txt"))
     done = write_validate()
     assert done.returncode == 0 and stamped(), done.stderr
@@ -1716,7 +1732,7 @@ def evidence_header(path):
 
 def validate_stamp_refuses_stale_evidence(base):
     repo, attempt = validation_fixture(base, "feat/stale")
-    row = validation_row("A1", "", "+", "PASS", "[output](a1.txt)")
+    row = validation_row("A1", "", "+", "PASS", "[output](a1.txt) [video](a1.webm)")
     evidence = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "evidence"], cwd=repo,
                               capture_output=True, text=True).stdout.strip()
 
@@ -1781,13 +1797,14 @@ def validate_stamp_refuses_stale_evidence(base):
     refused("app.py")  # a rename into tests/ still removes app.py
     check()
     commit({"app.py": "x = 6\n"})
-    refused("app.py", rows=validation_row("A1", "", "+", "FAIL", "[output](a1.txt)"))  # a FAIL also rests on its run
-    stamped(rows=validation_row("A1", "", "+", "NOT RUN", "[output](a1.txt)"))  # a row that didn't run cites nothing
+    refused("app.py", rows=validation_row("A1", "", "+", "FAIL", "[output](a1.txt) [video](a1.webm)"))  # a FAIL also rests on its run
+    stamped(rows=validation_row("A1", "", "+", "NOT RUN", "[output](a1.txt) [video](a1.webm)"))  # a row that didn't run cites nothing
     check("a1", "bash", "-c", f"echo ran\n# in {repo}, 2026-10-25 10:00:00 +0200, exit 0")
     commit({"app.py": "x = 5\n"})
     refused("app.py")  # a script line shaped like the header doesn't hide the real one
     check("a2")
-    both = validation_row("A1", "", "+", "PASS", "[output](a1.txt)") + validation_row("A2", "", "+", "PASS", "[output](a2.txt)")
+    record_video(evidence, "a2.webm")
+    both = validation_row("A1", "", "+", "PASS", "[output](a1.txt) [video](a1.webm)") + validation_row("A2", "", "+", "PASS", "[output](a2.txt) [video](a2.webm)")
     assert "a2.txt" not in refused("app.py", rows=both), "a check run on the current content isn't out of date"
     os.remove(os.path.join(evidence, "a2.txt"))
 
@@ -2056,10 +2073,43 @@ def validate_stamp_refuses_empty_recordings(base):
     assert done.returncode == 0, done.stderr
 
 
+def validate_stamp_needs_a_video_per_check(base):
+    repo, attempt = validation_fixture(base, "feat/videos")
+    evidence = subprocess.run([os.path.expanduser("~/.agents/bin/reports"), "path", "evidence"], cwd=repo,
+                              capture_output=True, text=True).stdout.strip()
+    for name, content in (("a2.txt", b"$ true\nexit 0\n"), ("a2.webm", b""), ("a3.txt", b"$ true\nexit 0\n"),
+                          ("a3.mp4", b"\x00\x00\x00\x18ftyp"), ("below.webm", b"\x1aE\xdf\xa3")):
+        with open(os.path.join(evidence, name), "wb") as fh:
+            fh.write(content)
+    log_only = validation_row("A1", "", "+", "PASS", "[output](a1.txt)")
+    empty_video = validation_row("A2", "", "−", "FAIL", "[output](a2.txt) [video](a2.webm)")
+    with_video = validation_row("A3", "", "+", "PASS", "[output](a3.txt) [video](a3.mp4)")
+    not_run = validation_row("A4", "", "+", "NOT RUN", "needs staging")
+    below = "\n[video](below.webm)\n"
+
+    done = attempt(log_only + empty_video + with_video + not_run + below, criteria=None)
+    listed = done.stderr[done.stderr.find("no usable video"):]
+    assert done.returncode == 2 and "no usable video" in done.stderr, done.stderr
+    assert "A1:" in listed and "A2:" in listed and "A3:" not in listed and "A4:" not in listed, listed
+    assert "evidence-video" in listed and "record start" in listed, ("the refusal says how to record each kind", listed)
+    os.remove(os.path.join(evidence, "a2.webm"))
+    done = attempt(with_video + not_run, criteria=None)
+    assert done.returncode == 0, done.stderr
+
+    tools = os.path.join(base, "tools")  # this machine's PATH without vhs: python3 and git, and the system's
+    os.makedirs(tools)
+    for name, target in (("python3", sys.executable), ("git", shutil.which("git"))):
+        os.symlink(target, os.path.join(tools, name))
+    attempt(log_only, criteria=None)
+    without_vhs = subprocess.run(["python3", H + "review_stamp.py", "write", "--kind", "validate"], cwd=repo, capture_output=True,
+                                 text=True, env={**os.environ, "PATH": f"{tools}:/usr/bin:/bin"})
+    assert without_vhs.returncode == 2 and "install.sh" in without_vhs.stderr, without_vhs.stderr
+
+
 def validation_fixture(base, branch):
     """(repo, attempt): attempt(rows, criteria, types, head) saves a spec whose Acceptance criteria are the lines of
     criteria (none when criteria is None) and a report of rows with the Test types table, then runs the validate stamp
-    write. The evidence directory holds a1.txt."""
+    write. The evidence directory holds a1.txt and its video a1.webm."""
     repo = new_repo(base)
     git(repo, "switch", "-q", "-c", branch)
     open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
@@ -2069,6 +2119,7 @@ def validation_fixture(base, branch):
     spec = subprocess.run([KIT + "/skills/kit-spec/path.sh"], cwd=repo, capture_output=True, text=True).stdout.strip()
     with open(os.path.join(evidence, "a1.txt"), "w") as fh:
         fh.write("$ python3 app.py\nexit 0\n")
+    record_video(evidence, "a1.webm")
     record_environment(evidence)
 
     def attempt(rows, criteria=("1. One. \u2014 verify: tests/a.py", "2. Two. \u2014 verify: tests/b.py"), types=None,
@@ -2084,7 +2135,7 @@ def validation_fixture(base, branch):
     return repo, attempt
 
 
-def validation_row(number, acs, case, result, evidence="a1.txt", expected="exit 0"):
+def validation_row(number, acs, case, result, evidence="a1.txt a1.webm", expected="exit 0"):
     return f"| {number} | {acs} | check | {case} | {expected} | {result} | {evidence} |\n"
 
 
@@ -2363,8 +2414,9 @@ def remove_suite_overlay():
 def validate_stamp_needs_a_full_suite_run(base):
     repo, evidence, written, run, refused = suite_fixture(base, "feat/suite")
     try:
-        said = refused("~/.agents/repos/repo/suite", "tests/run.sh", "bin/evidence suite tests/run.sh")
-        assert "bin/evidence suite make  check" in said, said
+        said = refused("~/.agents/repos/repo/suite", "tests/run.sh", "bin/evidence-video --replay --check 'the full unit suite' "
+                       "--case + --expected 'a green run' suite tests/run.sh")
+        assert "--expected 'a green run' suite make  check" in said, said
         for command in (["tests/run.sh"], ["./tests/run.sh"], ["bash", "tests/run.sh"], ["bash", "./tests/run.sh"]):
             assert run("S1", *command).returncode == 0
             written()
@@ -5569,7 +5621,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
-         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
+         a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_needs_a_video_per_check, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
          validate_stamp_refuses_a_suite_run_that_doesnt_count, validate_stamp_suite_overlay_edge_cases,
           stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, evidence_env_keeps_its_bounds, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, report_paths_asks_one_reports_process_for_all_kinds, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once, the_stop_message_forbids_working_around_a_check_and_names_no_heading,

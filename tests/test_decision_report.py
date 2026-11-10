@@ -457,6 +457,11 @@ class Tags(html.parser.HTMLParser):
         self.tags.append((tag, attrs))
 
 
+def evidence_tab(attrs):
+    """Whether a tag's attributes are a check's Video or Log tab radio, which switches evidence and moves nothing."""
+    return dict(attrs).get("class") in ("t-video", "t-log")
+
+
 def tags(page):
     parser = Tags()
     parser.feed(page)
@@ -830,7 +835,7 @@ def prose_names_no_file_it_lacks(base):
     repo, evidence = full_branch(base)
     with open(path_of(repo, "validation"), "a") as fh:
         fh.write("\n## E. Prose\n\n| # | AC | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|\n"
-                 "| E1 | AC1 | prose evidence | + | a 200 | PASS | took ~3s, README.md updated, GET /api/cart 200; see A1.txt |\n")
+                 "| E1 | AC1 | prose evidence | + | a 200 | PASS | took ~3s, README.md updated, GET /api/cart 200; see A1.txt and run.webm |\n")
     _, markup = generate(repo, base)
     block = text(check_block(markup, "E1"))
     assert "missing" not in block and "not read" not in block, block
@@ -1336,6 +1341,57 @@ def a_log_or_video_alone_or_with_another_stem_is_not_tabs(base):
     assert '<pre class="out tail">' in two and "<video controls" in two
     assert "<video controls" in check_block(markup, "S3")
     assert '<fieldset class="tabs"' not in markup
+    put(os.path.join(evidence, "S3.replay"), "")
+    _, markup = generate(repo, base)
+    assert "a replay of s3.txt" in text(check_block(markup, "S3")).lower(), "a replay alone doesn't say it is one"
+    assert "replay" not in text(check_block(markup, "S2")).lower(), "a live video alone reads as a replay"
+
+def a_replay_says_so_and_a_check_without_a_video_is_your_call(base):
+    repo, evidence, gh = ready_branch(base)
+    put(os.path.join(evidence, "U1.replay"), "a replay of U1.txt, recorded after the check ran\n")
+    _, markup = generate(repo, base, gh)
+    assert_verdict(markup, "Ready")
+    live = tab_group(check_block(markup, "A1"))
+    assert live and list(live[1]) == ["Video", "Log"] and "replay" not in text(live[0]).lower(), \
+        "a live video's tabs read as before"
+    replay = tab_group(check_block(markup, "U1"))
+    assert replay, "the replay and its log aren't tabs"
+    video_tab = next(iter(replay[1]))
+    assert "replay" in video_tab.lower() and "log" in video_tab.lower(), ("the tab doesn't say it is a replay of the log", replay[1])
+    assert text(check_block(markup, "U1")).count("not a live recording") == 1, "the replay's caption isn't shown once"
+    os.remove(os.path.join(evidence, "U1.replay"))
+    assert "replay" not in text(tab_group(check_block(generate(repo, base, gh)[1], "U1"))[0]).lower(), \
+        "the page read the marker once and kept it"
+
+    rows = ready_rows(evidence).replace(f" [video]({evidence}/M1.webm)", "") + \
+        f"| A9 | AC2 | e2e | Needs staging | + | shown | NOT RUN | needs the payment sandbox |\n"
+    report_edit(repo, "validation", ready_rows(evidence), rows)
+    stamp(repo, "validate")
+    _, markup = generate(repo, base, gh)
+    assert "no video" in text(check_block(markup, "M1")), "a check without a video doesn't say so"
+    assert "no video" not in text(check_block(markup, "A9")), "a check that didn't run needs no video"
+    assert "no video" not in text(check_block(markup, "A1"))
+    assert_verdict(markup, "Your call", "M1", "evidence is missing")
+    assert panel_of(markup)["Testing"][1] == "Read this", "a check without a video left the Testing row clear"
+    assert "video evidence is missing for M1" in why_of(markup), why_of(markup)
+
+    put(os.path.join(evidence, "M1.webm"), b"")
+    report_edit(repo, "validation", rows, ready_rows(evidence).replace("| PASS: 21/21 killed |", "| FAIL: 20/21 killed |"))
+    stamp(repo, "validate")
+    _, markup = generate(repo, base, gh)
+    assert "no video" in text(check_block(markup, "M1")), "an empty video, on a FAIL row, counted as a video"
+    calls = [text(item) for item in re.findall(r"<li>.*?</li>", re.search(r'<ul id="calls">(.*?)</ul>', markup, re.S).group(1), re.S)]
+    assert sum("M1" in call for call in calls) == 1, ("an empty video gave M1 other than one reason", calls)
+    os.remove(os.path.join(evidence, "M1.webm"))
+    _, markup = generate(repo, base, gh)
+    calls = [text(item) for item in re.findall(r"<li>.*?</li>", re.search(r'<ul id="calls">(.*?)</ul>', markup, re.S).group(1), re.S)]
+    assert [call for call in calls if "M1" in call and "M1.webm" in call] and sum("M1" in call for call in calls) == 1, \
+        ("a missing video gave M1 other than its one reason", calls)
+
+
+def why_of(markup):
+    return text(re.search(r'<details[^>]*id="verdict-why".*?</details>', markup, re.S).group(0))
+
 
 def a_suite_output_lists_its_tests(base):
     repo, evidence = full_branch(base)
@@ -2677,11 +2733,11 @@ def stamp_file(repo, kind):
 
 
 def ready_rows(evidence):
-    return f"""| A1 | AC1 | e2e | Coupon applied once | + | one discount line | PASS | [output]({evidence}/A1.txt) |
-| A2 | AC2 | e2e | Tampered total refused | − | exit 1 | PASS | [output]({evidence}/A2.txt), [shot]({evidence}/shot.png) |
+    return f"""| A1 | AC1 | e2e | Coupon applied once | + | one discount line | PASS | [output]({evidence}/A1.txt) [video]({evidence}/A1.webm) |
+| A2 | AC2 | e2e | Tampered total refused | − | exit 1 | PASS | [output]({evidence}/A2.txt) [video]({evidence}/A2.webm), [shot]({evidence}/shot.png) |
 | A3 | AC3 | e2e | Receipt names the coupon | + | the coupon's name | PASS: the receipt prints ONE | [output]({evidence}/A3.txt), [video]({evidence}/run.webm) |
-| U1 | AC1, AC2 | unit | The suite | + | all pass | PASS | [output]({evidence}/U1.txt) |
-| M1 | AC1 | mutation | Planted bugs | − | every one killed | PASS: 21/21 killed | [output]({evidence}/M1.txt) |
+| U1 | AC1, AC2 | unit | The suite | + | all pass | PASS | [output]({evidence}/U1.txt) [video]({evidence}/U1.webm) |
+| M1 | AC1 | mutation | Planted bugs | − | every one killed | PASS: 21/21 killed | [output]({evidence}/M1.txt) [video]({evidence}/M1.webm) |
 """
 
 
@@ -2699,6 +2755,8 @@ def ready_branch(base, notes=READY_NOTES, rows=None):
     for name, body in (("A1", "precondition: a cart\nstep: apply the coupon\nline: one discount\nPASS AC1 one line\n"), ("A2", "exit 1 on a tampered total\n"),
                        ("A3", "ONE on the receipt\n"), ("U1", "== cart\nok a test\n"), ("M1", "killed one\n")):
         output(evidence, f"{name}.txt", f"make {name}", body, repo, current)
+        if name != "A3":  # A3's video is run.webm
+            put(os.path.join(evidence, f"{name}.webm"), b"\x1aE\xdf\xa3 not really a video")
     output(evidence, "environment.txt", "evidence-env", "php 8.3\n", repo, current)
     put(os.path.join(evidence, "shot.png"), PNG)
     put(os.path.join(evidence, "run.webm"), b"\x1aE\xdf\xa3 not really a video")
@@ -3115,7 +3173,7 @@ def a_figure_series_is_a_static_strip(base):
     assert "A shopper applies a coupon." in text(strip) and "A refresh applies it again." in text(strip), "the captions are text"
     assert strip.find("A shopper applies") < strip.find("A refresh applies"), "the frames keep their order"
     assert len(re.findall(r'<img src="data:image/svg\+xml', strip)) == 2
-    assert not [1 for tag, _ in tags(markup) if tag == "input"], "nothing moves, so nothing needs a control"
+    assert not [1 for tag, attrs in tags(markup) if tag == "input" and not evidence_tab(attrs)], "nothing moves, so nothing needs a control"
     style = re.search(r"<style>(.*?)</style>", markup, re.S).group(1)
     assert "@keyframes" not in style and "animation" not in style, "the page's stylesheet moves nothing"
 
@@ -3475,7 +3533,7 @@ def old_notes_without_a_scene_carry_no_player(base):
     for piece in (".player", ".copy-", "@keyframes", "animation", ".prog"):
         assert piece not in style, piece
     assert 'class="player"' not in markup and '<figure class="strip"' in markup, "an image series stays the still strip"
-    assert not [1 for tag, _ in tags(markup) if tag in ("input", "svg")]
+    assert not [1 for tag, attrs in tags(markup) if tag in ("input", "svg") and not evidence_tab(attrs)]
 
 
 def a_figure_series_with_a_scene_stops_at_it(base):
@@ -3701,7 +3759,7 @@ def evidence_shown_earlier_is_shown_again(base):
 
 def two_tests_citing_one_file_each_show_it(base):
     repo, evidence, gh = ready_branch(base)
-    report_edit(repo, "validation", f"[output]({evidence}/A2.txt), ", f"[output]({evidence}/A1.txt), ")
+    report_edit(repo, "validation", f"[output]({evidence}/A2.txt) ", f"[output]({evidence}/A1.txt) ")
     _, markup = generate(repo, base, gh)
     assert "PASS AC1 one line" in check_block(markup, "A2"), "evidence named twice is shown twice"
 
@@ -4297,7 +4355,7 @@ def a_huge_svg_costs_no_time(base):
 
 
 def a_check_naming_no_file_is_your_call(base):
-    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace(f"[output]({ev}/A1.txt)", "looks good"))
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace(f"[output]({ev}/A1.txt) [video]({ev}/A1.webm)", "looks good"))
     markup = generate(repo, base, gh)[1]
     assert_verdict(markup, "Your call", "A1")
     assert "Every check&#x27;s evidence covers" not in markup
@@ -4597,7 +4655,8 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      a_marker_inside_a_longer_fence_is_not_the_mode, a_kept_script_the_evidence_names_shows_once,
                      notes_over_the_limit_keep_the_change_page, a_file_a_row_names_three_ways_shows_once,
                      a_log_and_its_video_show_as_tabs_log_first_unless_passed, a_second_video_of_the_same_stem_stays_beside_the_tabs,
-                     a_log_or_video_alone_or_with_another_stem_is_not_tabs) + REDESIGN_TESTS + GUARD_TESTS)
+                     a_log_or_video_alone_or_with_another_stem_is_not_tabs,
+                     a_replay_says_so_and_a_check_without_a_video_is_your_call) + REDESIGN_TESTS + GUARD_TESTS)
 
 
 def run_test(test):

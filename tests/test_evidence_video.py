@@ -46,17 +46,27 @@ check = subprocess.Popen(["bash", "-c", typed[0].strip("'\"")], stdin=subprocess
 screen = []
 threading.Thread(target=lambda: [screen.append(c.decode(errors="replace")) for c in iter(lambda: check.stdout.read1(4096), b"")],
                  daemon=True).start()
-# Each Wait in order; an Enter after one is sent once it matched, as the terminal's keystroke.
-for seconds, pattern, enter in re.findall(r"^Wait\+Screen@(\d+)s /(.*)/$((?:\n(?!Wait).*)*?\nEnter$)?", tape, re.M):
-    deadline = time.time() + int(seconds)
-    while not re.search(pattern, "".join(screen)):
-        if time.time() > deadline:
-            print(f"failed to execute command: timeout waiting for /{pattern}/", file=sys.stderr)
-            sys.exit(1)
-        time.sleep(0.05)
-    if enter:
+# The tape's commands in order: each Wait polls the screen, and an Enter after the first Wait is the terminal's keystroke
+# (the one before it runs the typed script, which the stub ran already). Sleeps don't wait: the tests read them from the tape.
+waited = False
+for command in tape.splitlines():
+    wait = re.match(r"Wait\+Screen@(\d+)s /(.*)/$", command)
+    if wait:
+        waited = True
+        deadline = time.time() + int(wait.group(1))
+        while not re.search(wait.group(2), "".join(screen)):
+            if time.time() > deadline:
+                print(f"failed to execute command: timeout waiting for /{wait.group(2)}/", file=sys.stderr)
+                sys.exit(1)
+            time.sleep(0.05)
+    elif command == "Enter" and waited:
         check.stdin.write(b"\n")
         check.stdin.flush()
+try:
+    check.wait(timeout=10)  # the script prints its last lines once the tape's last keystroke reaches it
+except subprocess.TimeoutExpired:
+    pass
+time.sleep(0.2)  # the reader thread's last chunk
 if os.environ.get("STUB_VHS_MODE") == "late":
     print("failed to execute command: timeout waiting for the marker, just after the check ended", file=sys.stderr)
     sys.exit(1)
@@ -79,14 +89,19 @@ def stub_path(base):
     return bin_dir + os.pathsep + os.environ["PATH"]
 
 
-def record(base, check_id, *command, options=(), evidence=None, path=None, recorder=RECORDER, input=None, **env):
+# Every run names its check, case and expectation: the recorder refuses one without them.
+EXPLAINED = ("--check", "the check", "--case", "+", "--expected", "what it asserts")
+REPLAY = ("--replay", *EXPLAINED)
+
+
+def record(base, check_id, *command, options=EXPLAINED, evidence=None, path=None, recorder=RECORDER, input=None, timeout=120, **env):
     """(the recorder's run, the evidence directory), run from base/work."""
     evidence = evidence or os.path.join(base, "evidence dir")
     work = os.path.join(base, "work")
     os.makedirs(evidence, exist_ok=True)
     os.makedirs(work, exist_ok=True)
     run_env = {**os.environ, "EVIDENCE_DIR": evidence, "PATH": path or stub_path(base), **env}
-    done = subprocess.run([recorder, *options, check_id, *command], cwd=work, capture_output=True, text=True, env=run_env, input=input, timeout=120)
+    done = subprocess.run([recorder, *options, check_id, *command], cwd=work, capture_output=True, text=True, env=run_env, input=input, timeout=timeout)
     return done, evidence
 
 
@@ -219,6 +234,10 @@ def without_vhs_the_check_runs_on_bin_evidence_alone(base):
     assert "evidence-video: no video: vhs is not installed" in done.stderr, done.stderr
     assert "ran" in done.stdout and header_exit(os.path.join(evidence, "N1.txt")) == 3
     assert not os.path.exists(os.path.join(evidence, "N1.webm")), "an older run's video is left beside this run's log"
+    open(os.path.join(evidence, "N1.replay"), "w").write("an older replay's marker")
+    done, _ = record(base, "N1", "bash", "-c", "echo ran; exit 3", evidence=evidence, path="/usr/bin:/bin", options=REPLAY)
+    assert done.returncode == 3 and "vhs is not installed" in done.stderr, (done.returncode, done.stderr)
+    assert sorted(os.listdir(evidence)) == ["N1.txt"], ("a replay without vhs left more than its log", os.listdir(evidence))
 
 
 def old_files(evidence, check_id):
@@ -253,7 +272,7 @@ def the_cap_stops_the_check_and_leaves_nothing(base):
     done, evidence = record(base, "C1", "python3", "-c", STUBBORN.format(seconds=30), token, EVIDENCE_VIDEO_MAX="2")
     assert done.returncode == 124, (done.returncode, done.stderr)
     assert time.time() - started < 20, "the cap didn't stop it"
-    for words in ("stopped at the cap", "may have partly run", "bin/evidence"):
+    for words in ("stopped at the cap", "may have partly run", "--replay"):
         assert words in done.stderr, (words, done.stderr)
     assert os.listdir(evidence) == [], os.listdir(evidence)
     time.sleep(0.5)
@@ -284,6 +303,133 @@ def bin_evidence_failing_after_its_log_is_not_a_pass(base):
     os.chmod(os.path.join(fake_bin, "evidence"), 0o755)
     done, _ = record(base, "E1", "true", recorder=os.path.join(fake_bin, "evidence-video"))
     assert done.returncode == 74 and "bin/evidence exited 74" in done.stderr, (done.returncode, done.stderr)
+
+
+def sleeps(tape):
+    """The seconds a tape's Sleep commands add up to."""
+    return sum(float(n) / (1000 if unit == "ms" else 1) for n, unit in re.findall(r"^Sleep (\d+(?:\.\d+)?)(ms|s)$", read(tape), re.M))
+
+
+# The replay of a long check's saved log
+
+def a_replay_keeps_the_exit_code_and_says_it_is_a_replay(base):
+    done, evidence = record(base, "L1", "bash", "-c", 'echo "step: run the suite"; echo "PASS one"; echo "FAIL two"; exit 3',
+                            options=REPLAY)
+    assert done.returncode == 3, (done.returncode, done.stderr)
+    assert header_exit(os.path.join(evidence, "L1.txt")) == 3 and "FAIL two" in done.stdout, done.stdout
+    screen = read(os.path.join(evidence, "L1.webm"))
+    assert "\033[1;36mL1 \u00b7 + case \u00b7 the check\033[0m" in screen and "expected: what it asserts" in screen, screen
+    assert "replay of the saved log L1.txt" in screen, screen
+    for line, style in (("step: run the suite", "1;33"), ("PASS one", "32"), ("FAIL two", "31")):
+        assert f"\033[{style}m{line}\033[0m" in screen, (line, screen)
+    assert os.path.getsize(os.path.join(evidence, "L1.replay")) > 0, "no marker tells the page the video is a replay"
+    assert sorted(os.listdir(evidence)) == ["L1.replay", "L1.txt", "L1.webm"], os.listdir(evidence)
+
+
+def a_long_log_replays_its_failures_within_60_seconds(base):
+    script = os.path.join(base, "long.py")
+    with open(script, "w") as fh:
+        fh.write("for n in range(1, 5001):\n"
+                 "    print('FAIL the tenth line' if n == 10 else f'PASS check {n}' if n % 16 == 0 and n // 16 <= 300 else f'line {n}')\n")
+    tape = os.path.join(base, "tape.txt")
+    done, evidence = record(base, "L2", "python3", script, options=REPLAY, STUB_VHS_TAPE=tape)
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    assert len(read(os.path.join(evidence, "L2.txt")).splitlines()) > 5000, "the log keeps every line"
+    assert sleeps(tape) <= 60, f"the replay plays for {sleeps(tape)}s"
+    screen = read(os.path.join(evidence, "L2.webm"))
+    assert "\033[31mFAIL the tenth line\033[0m" in screen, "the replay dropped the FAIL"
+    shown = re.findall(r"\033\[32mPASS check \d+\033\[0m", screen)
+    assert 0 < len(shown) <= 39 + 20, len(shown)
+    assert re.search(r"\b261 more .*left out", screen), "no line says how many highlighted lines were left out"
+    assert "line 5000" in screen and "line 4981" in screen, "the log's last 20 lines aren't shown"
+
+
+def a_late_fail_displaces_an_earlier_pass_and_ends_the_replay(base):
+    script = os.path.join(base, "late.py")
+    with open(script, "w") as fh:  # the FAIL is past the first 40 highlighted lines and before the last 20
+        fh.write("for n in range(1, 5001):\n"
+                 "    print('FAIL the late one' if n == 4900 else f'PASS check {n}' if n % 16 == 0 and n // 16 <= 300 else f'line {n}')\n")
+    tape = os.path.join(base, "tape.txt")
+    done, evidence = record(base, "L6", "python3", script, options=REPLAY, STUB_VHS_TAPE=tape)
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    assert sleeps(tape) <= 60, f"the replay plays for {sleeps(tape)}s"
+    screen = read(os.path.join(evidence, "L6.webm"))
+    replayed, _, last_frame = screen.partition("the log's last 20 lines:")
+    passes = re.findall(r"\033\[32mPASS check (\d+)\033\[0m", replayed)
+    assert len(passes) == 39 and passes[-1] == "624", "the FAIL didn't take the place of the 40th PASS"
+    assert replayed.index("PASS check 624") < replayed.index("\033[31mFAIL the late one"), "the replay doesn't keep the log's order"
+    assert "the check exited 0" in last_frame and "1 FAIL line, the first:" in last_frame, last_frame
+    assert last_frame.rindex("replay of the saved log L6.txt") > last_frame.rindex("line 5000"), "the last frame lost the header"
+
+
+def a_replay_runs_past_the_live_cap(base):
+    done, evidence = record(base, "L7", "bash", "-c", "sleep 2; echo finished; exit 5", options=REPLAY, EVIDENCE_VIDEO_MAX="1")
+    assert done.returncode == 5 and "finished" in read(os.path.join(evidence, "L7.txt")), (done.returncode, done.stderr)
+    assert sorted(os.listdir(evidence)) == ["L7.replay", "L7.txt", "L7.webm"], os.listdir(evidence)
+
+
+def a_replay_shows_a_multiline_command_and_a_raw_log_as_plain_lines(base):
+    tape = os.path.join(base, "tape.txt")
+    done, evidence = record(base, "L8", "bash", "-c", "printf 'PASS \\033[2Jcleared\\rback\\n'\nprintf '%s\\n' 'x\\ny'\n"
+                            "printf 'note: \\033creset \\033]8;;u\\033\\\\link\\033]8;;\\033\\\\ end\\n'",
+                            options=REPLAY, STUB_VHS_TAPE=tape)
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    screen = read(os.path.join(evidence, "L8.webm"))
+    assert "\033[2J" not in screen and "\r" not in screen, "a log's control sequences reached the replay's screen"
+    assert "PASS clearedback" in screen and "note: reset link end" in screen, screen
+    assert "\033c" not in screen and "\033]" not in screen, "an escape other than CSI reached the replay's screen"
+    step = re.search(r"step: (.*)", screen).group(1)
+    assert r"printf '\''%s\n'\'' '\''x\ny'\''" in step, f"the command lost its backslashes or its one line: {step}"
+
+
+def a_replay_reads_no_result_or_step_from_its_command_and_ends_on_a_short_frame(base):
+    command = "".join(f"# comment {n}\n" for n in range(40)) + "cat >/dev/null <<'EOF'\nFAIL never printed\nstep: never taken\nEOF\necho 'PASS printed'"
+    done, evidence = record(base, "L9", "bash", "-c", command, options=REPLAY)
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    screen = read(os.path.join(evidence, "L9.webm"))
+    assert "FAIL line" not in screen and "step: $ bash -c" in screen, "the command's own text was replayed as a result or a step"
+    last_frame = screen[screen.rindex("L9 · + case"):]
+    assert "the check exited 0" in last_frame and len(last_frame.splitlines()) <= 8, ("the last frame doesn't fit the screen", last_frame)
+
+
+def a_stepless_log_replays_its_command_as_its_step(base):
+    done, evidence = record(base, "L3", "bash", "-c", "echo hello", options=REPLAY)
+    assert done.returncode == 0, done.stderr
+    assert "\033[1;33mstep: $ bash -c 'echo hello'\033[0m" in read(os.path.join(evidence, "L3.webm")), read(os.path.join(evidence, "L3.webm"))
+
+
+def a_live_run_removes_the_replay_marker(base):
+    done, evidence = record(base, "L4", "true", options=REPLAY)
+    assert done.returncode == 0 and os.path.exists(os.path.join(evidence, "L4.replay")), done.stderr
+    done, _ = record(base, "L4", "true")
+    assert done.returncode == 0 and sorted(os.listdir(evidence)) == ["L4.txt", "L4.webm"], os.listdir(evidence)
+
+
+def a_replay_whose_vhs_fails_keeps_the_log_and_exits_74(base):
+    done, evidence = record(base, "L5", "bash", "-c", "echo ran; exit 2", options=REPLAY, STUB_VHS_MODE="fail")
+    assert done.returncode == 74 and "vhs failed" in done.stderr, (done.returncode, done.stderr)
+    assert header_exit(os.path.join(evidence, "L5.txt")) == 2 and sorted(os.listdir(evidence)) == ["L5.txt"], os.listdir(evidence)
+
+
+def a_run_without_its_explanation_is_refused(base):
+    explained = dict(zip(EXPLAINED[::2], EXPLAINED[1::2]))
+    for mode in ((), ("--replay",)):
+        for name in explained:
+            for value in (None, "", "   "):
+                given = [part for option, text in explained.items() if option != name or value is not None
+                         for part in (option, text if option != name else value)]
+                done, evidence = record(base, "U3", "true", options=(*mode, *given))
+                assert done.returncode == 64 and "usage: evidence-video" in done.stderr, (mode, name, value, done.returncode, done.stderr)
+                assert os.listdir(evidence) == [], os.listdir(evidence)
+
+
+def real_vhs_replays_a_long_log_within_60_seconds(base):
+    need_real_vhs()
+    done, evidence = record(base, "R4", "bash", "-c", 'for i in $(seq 1 3000); do echo "noise line $i"; done; echo "FAIL the last one"',
+                            options=REPLAY, path=os.environ["PATH"], timeout=300)  # few highlighted lines: a 60 s render under the suite's load fails the hooks' orphan tests beside it
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    assert os.path.exists(os.path.join(evidence, "R4.replay"))
+    assert 0 < duration(os.path.join(evidence, "R4.webm")) <= 60, duration(os.path.join(evidence, "R4.webm"))
 
 
 def a_check_that_reads_its_input_gets_none_and_goes_on(base):
@@ -340,7 +486,7 @@ def real_vhs_records_output_longer_than_its_screen(base):
 def real_vhs_runs_a_check_whose_header_is_taller_than_its_screen(base):
     need_real_vhs()
     check = "a check described at length, " * 60
-    done, evidence = record(base, "R3", "echo", "ran", options=("--check", check, "--expected", "exit 0"), path=os.environ["PATH"])
+    done, evidence = record(base, "R3", "echo", "ran", options=("--check", check, "--case", "+", "--expected", "exit 0"), path=os.environ["PATH"])
     assert done.returncode == 0, (done.returncode, done.stderr)
     assert "ran" in read(os.path.join(evidence, "R3.txt"))
 
@@ -378,19 +524,30 @@ def real_vhs_cap_stops_the_check(base):
 def kit_validate_sends_its_own_checks_to_the_recorder(base):
     skill = read(os.path.join(KIT, "skills", "kit-validate", "SKILL.md"))
     step = skill[skill.index("\n## 4. "):skill.index("\n## 5. ")]
-    for needle in ("`~/.agents/bin/evidence-video <id> <command> [args...]`", "CLI, API and database checks", "`EVIDENCE_VIDEO_MAX`",
-                   "The full suite, mutation runs and the checks guide's steps stay on `bin/evidence`",
+    for needle in ("Run every check through `~/.agents/bin/evidence-video", "`EVIDENCE_VIDEO_MAX`",
+                   "`--replay` for the full suite, mutation runs and any check past the cap",
                    "`--check <text> --case <+|−> --expected <text>`", "`precondition:`, `step:` and `note:` lines, and `PASS` and `FAIL` ones", "the first three under Steps and the last two under Actual", "`sleep 1`"):
         assert needle in step, needle
+    assert "stay on `bin/evidence`" not in skill, "the skill still keeps some checks off the recorder"
+    suite = skill[skill.index("\n## 3. "):skill.index("\n## 4. ")]
+    assert "--replay" in suite and "unit-suite-verify.md" not in suite, "step 3 still reuses the verify report, which has no video"
+    report = skill[skill.index("\n## 5. "):skill.index("\n## 6. ")]
+    assert "screenshots in addition, never instead" in report and "not below the table" in report, \
+        "the skill doesn't say each row's video goes in its own Evidence cell"
     assert re.search(r"\[output\]\([^)]*/A1\.txt\) \[video\]\([^)]*/A1\.webm\)", skill), "the Evidence cell example links no log and video pair"
-    assert "marking the ones step 4 records with `bin/evidence-video`" in skill, "the skill doesn't tell the runner which checks to record"
+    assert "marking the long ones for `--replay`" in skill, "the skill doesn't tell the runner which checks to replay"
     runner = read(os.path.join(KIT, "mods", "kit", "hooks", "register.js"))
     runner = runner[runner.index("const RUNNER_PROMPT"):runner.index("].join", runner.index("const RUNNER_PROMPT"))]
-    assert "`~/.agents/bin/evidence-video --check <text> --case <+|−> --expected <text> <id> <command>`" in runner, \
+    assert "Run every check through" in runner and "`~/.agents/bin/evidence <id>" not in runner, \
+        "kit:validate-runner's prompt still runs some checks without a video"
+    assert "`~/.agents/bin/evidence-video [--replay] --check <text> --case <+|−> --expected <text> <id> <command>`" in runner, \
         "kit:validate-runner's prompt doesn't name the recorder with its options"
     assert "EVIDENCE_VIDEO_MAX (90 by default) plus 90 seconds" in runner, "the runner isn't told the command timeout"
+    assert "A replay has no cap" in runner, "the runner would cut a replay at the live cap"
     assert "plus 90 seconds" in step, "the skill doesn't give the command timeout"
-
+    ship = read(os.path.join(KIT, "skills", "kit-ship", "SKILL.md"))
+    assert re.search(r"marked as yours, through `~/\.agents/bin/evidence-video`[^\n]*`--replay`[^\n]*Results table", ship), \
+        "kit-ship doesn't record the agent's after-merge steps"
 
 def test(fn):
     with tempfile.TemporaryDirectory(prefix="agents-test-evidence-video-") as base:
@@ -416,7 +573,14 @@ for t in kit_home.selected([a_check_leaves_its_log_and_video_and_exits_with_its_
                             nothing_is_ever_uploaded, real_vhs_records_the_check_until_it_ends, real_vhs_cap_stops_the_check,
                             kit_validate_sends_its_own_checks_to_the_recorder,
                             the_video_opens_on_a_header_and_highlights_steps_but_the_log_stays_plain,
-                            an_option_without_its_value_is_a_usage_error]):
+                            an_option_without_its_value_is_a_usage_error,
+                            a_replay_keeps_the_exit_code_and_says_it_is_a_replay, a_long_log_replays_its_failures_within_60_seconds,
+                            a_stepless_log_replays_its_command_as_its_step, a_live_run_removes_the_replay_marker,
+                            a_late_fail_displaces_an_earlier_pass_and_ends_the_replay, a_replay_runs_past_the_live_cap,
+                            a_replay_reads_no_result_or_step_from_its_command_and_ends_on_a_short_frame,
+                     a_replay_shows_a_multiline_command_and_a_raw_log_as_plain_lines,
+                            a_replay_whose_vhs_fails_keeps_the_log_and_exits_74, a_run_without_its_explanation_is_refused,
+                            real_vhs_replays_a_long_log_within_60_seconds]):
     test(t)
 
 failed = [(n, e) for n, e, _ in RESULTS if e]

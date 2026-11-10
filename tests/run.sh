@@ -214,12 +214,13 @@ interrupted() { for pid in "${pids[@]}"; do end_tree "$pid"; done; wait; exit "$
 trap 'interrupted 129' HUP
 trap 'interrupted 130' INT
 trap 'interrupted 143' TERM
-# The doctor runs first, on its own: it bounds each tool's --version, and with every other section running a working
-# semgrep took 13-27 s to answer on a CI runner, against 1.5 s alone.
+# The doctor and the mod's tests run first, each on its own: the doctor bounds each tool's --version, and with every
+# other section running a working semgrep took 13-27 s to answer on a CI runner, against 1.5 s alone; the mod's tests
+# have a 5 s limit each, and tests that take 17 ms alone took over 5.5 s there.
 pids=() alone=()
 for n in "${!picked[@]}"; do
   i=${picked[$n]}
-  if [ "${names[$i]}" = doctor ]; then section_doctor >"$out/$i" 2>&1; alone[$n]=$?; fi
+  case ${names[$i]} in doctor|mods) "section_${names[$i]}" >"$out/$i" 2>&1; alone[$n]=$? ;; esac
 done
 for n in "${!picked[@]}"; do
   i=${picked[$n]}
