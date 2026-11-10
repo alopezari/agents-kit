@@ -351,7 +351,7 @@ def verdict_items(page, list_id):
 def listed(page, name):
     """The items of one of the investigation page's summary lists, or on the change page what took over from it: blockers
     are what stops the merge, decisions what needs the owner's call and the decisions they own, warnings the rest."""
-    if '<div class="panel">' in page:
+    if '<header class="hero">' in page:
         if name == "blockers":
             return verdict_items(page, "stops")
         if name == "warnings":
@@ -413,10 +413,30 @@ def annex(page, kind):
 
 
 def layer_row(page, name):
-    """One row of the layers table, as text."""
-    found = re.search(rf'<tr><th scope="row"><span class="layername">{name}</span></th>(.*?)</tr>', page, re.S)
-    assert found, f"no {name} row in the layers table"
+    """One layer's row of the test map, as text."""
+    found = re.search(rf'<div class="row"><span class="lay">{name}</span><div class="chips">(.*?)</div></div>', page, re.S)
+    assert found, f"no {name} row in the test map"
     return text(found.group(1))
+
+
+def layer_ids(page, name):
+    """The ids of the checks on one layer's row of the test map, in order."""
+    found = re.search(rf'<div class="row"><span class="lay">{name}</span><div class="chips">(.*?)</div></div>', page, re.S)
+    assert found, f"no {name} row in the test map"
+    return re.findall(r'<span class="id">(.*?)</span>', found.group(1))
+
+
+def tally_of(page):
+    return text(re.search(r'<p class="tally">.*?</p>', page, re.S).group(0))
+
+
+def rail_links(page):
+    return re.findall(r'href="#([\w-]+)"', re.search(r'<ol class="rail".*?</ol>', page, re.S).group(0))
+
+
+def headline(page, part):
+    """The headline of the problem or the solution card."""
+    return text(re.search(r'<p class="hl">(.*?)</p>', page_part(page, part), re.S).group(1))
 
 
 def layer_groups(page):
@@ -648,7 +668,7 @@ def sections_come_in_order_with_the_notes(base):
     criteria = re.findall(r'<tr[^>]*id="ac-(\d+)">(.*?)</tr>', one, re.S)
     assert [n for n, _ in criteria] == ["1", "2", "3"], criteria
     first = text(criteria[0][1])
-    assert "A1 PASS" in first and "A2 FAIL" in first and "A3" not in first, first
+    assert "Passed Coupon applied once A1" in first and "Failed Tampered total refused A2" in first and "A3" not in first, first
     assert "No check" in text(criteria[2][1]) and "No check" not in first, criteria
     five = text(section(markup, 5))
     assert "Goal: a shopper gets one discount per coupon" in five
@@ -701,8 +721,7 @@ def decide_names_every_item(base):
     review = text(section(markup, 3))
     assert "2 fixed, 1 rejected, 1 open, 1 already there" in review, review[:600]
     assert "security lens" in text(re.search(r'id="review-not-run">(.*?)</dd>', markup, re.S).group(1))
-    assert "1 failed and 1 did not run" in text(section(markup, 2)), text(section(markup, 2))[:400]
-    assert any(label == "Testing" and "2 of 4 checks passed" in body for label, body, _ in panel_rows(markup)), panel_rows(markup)
+    assert tally_of(markup).startswith("4 checks in the validation report: 2 passed, 1 failed, 1 did not run."), tally_of(markup)
     stamps = footer_value(markup, "Stamps")
     assert "review stamp missing" in stamps and "validate stamp missing" in stamps, stamps
     assert footer_value(markup, "Verify").startswith("PASS"), footer_value(markup, "Verify")
@@ -847,11 +866,10 @@ def a_template_heading_is_not_the_first_paragraph(base):
     repo, _ = full_branch(base, notes=False)
     write(repo, "pr-body", "## Summary\n<!-- what it does -->\n\nThe cart applies a coupon once.\n\nSecond paragraph.\n")
     _, markup = generate(repo, base)
-    solution = text(page_part(markup, "fix"))
-    assert "How it works The cart applies a coupon once." in solution, solution[:300]
+    assert headline(markup, "fix") == "The cart applies a coupon once.", headline(markup, "fix")
     write(repo, "pr-body", "## Summary\n\n#123 is fixed here.\nMore.\n")
     _, markup = generate(repo, base)
-    assert "How it works #123 is fixed here." in text(page_part(markup, "fix")), "an issue reference was taken for a heading"
+    assert headline(markup, "fix") == "#123 is fixed here. More.", "an issue reference was taken for a heading"
 
 
 def the_validation_notes_keep_their_code(base):
@@ -869,7 +887,7 @@ def each_check_row_carries_its_evidence(base):
     _, markup = generate(repo, base)
     block = check_block(markup, "A1")
     words = text(block)
-    for part in ("A1", "Coupon applied once", "AC1", "one discount line", "one line seen", "Passed", "make test-cart",
+    for part in ("A1", "Coupon applied once", "proves A coupon applies once.", "one discount line", "one line seen", "Passed", "make test-cart",
                  repo, "2026-10-26 10:00:00 +0000", "Exit 0", git(repo, "rev-parse", "HEAD")[:12], working_tree(repo)[:12],
                  "ok 12 rows", "make test-cart # kept script"):
         assert part in words, (part, words[:1200])
@@ -1033,16 +1051,15 @@ def the_summary_comes_first_in_order(base):
     repo, _ = full_branch(base)
     _, markup = generate(repo, base)
     main = markup[markup.index('<main id="main">'):]
-    assert main.index('<header class="hero"') < main.index('<details class="sec"'), "a section comes before the control panel"
-    rows = panel_rows(markup)
-    assert [label for label, _, _ in rows] == ["The problem", "Stability", "Your experience", "Testing", "Code review", "Not proven", "Undo", "Your decisions"], rows
+    assert main.index('<header class="hero"') < main.index('<section class="sec"'), "a section comes before the hero"
+    assert list(rail_of(markup)) == ["Spec", "Review", "Validate", "CI", "Your call"], rail_of(markup)
     assert re.findall(r'<ul id="(stops|calls|notes)">', markup) == ["stops", "calls", "notes"]
-    assert rows[0][1].startswith("The task must stop a second discount for one coupon."), rows[0]
+    assert headline(markup, "problem") == "The task must stop a second discount for one coupon.", headline(markup, "problem")
     fix = text(page_part(markup, "fix"))
     assert "The change adds a guard in src/cart.py:2" in fix, fix[:400]
     assert "Where it sits" in fix and "A shopper sees one discount line" in fix, "the rest of the notes isn't under the solution"
     assert "Written by the agent" in fix
-    for _, _, href in rows:
+    for href in rail_links(markup):
         assert f'id="{href}"' in markup, href
     assert parts_of(markup) == CHANGE_PARTS, parts_of(markup)
 
@@ -1101,7 +1118,7 @@ def a_failure_is_never_folded_away(base):
     repo, evidence = full_branch(base)
     _, markup = generate(repo, base)
     for part in parts_of(markup):
-        assert "open" in enclosing_folds(markup, f'<div class="body" id="{part}"')[-1], part
+        assert all("open" in fold for fold in enclosing_folds(markup, f'<div class="body" id="{part}"')), part
     assert "open" in enclosing_folds(markup, 'id="check-A2"')[-1], "a FAIL check is folded away"
     assert "open" not in enclosing_folds(markup, 'id="check-A1"')[-1], "a passing check isn't folded"
     write(repo, "validation", f"""# Validation
@@ -1115,7 +1132,7 @@ def a_failure_is_never_folded_away(base):
     assert [b for b in listed(markup, "blockers") if "A1" in b], listed(markup, "blockers")
     os.remove(path_of(repo, "review"))
     _, markup = generate(repo, base)
-    assert "open" in enclosing_folds(markup, '<div class="body" id="review"')[-1], "the review is unavailable and its section is closed"
+    assert all("open" in fold for fold in enclosing_folds(markup, '<div class="body" id="review"')), "the review is unavailable and its section is closed"
     assert any("the review is missing" in b for b in listed(markup, "blockers")), listed(markup, "blockers")
     review = text(page_part(markup, "review"))
     assert ("unavailable" in review or "not recorded" in review) and not re.search(r"Fixed 0|Open 0|0 fixed", review), review[:400]
@@ -1140,10 +1157,10 @@ def the_tests_line_counts_each_level(base):
     write(repo, "validation", report.replace("| unit | yes | [A1]({evidence}/A1.txt) |".format(evidence=evidence),
                                              f"| unit | yes | [A1]({evidence}/A1.txt) |\n| a11y | no | no screen reader here |"))
     _, markup = generate(repo, base)
-    assert re.search(r"\b1 A1\b", layer_row(markup, "Unit")), layer_row(markup, "Unit")
-    assert re.search(r"\b3 A2 A3 A4\b", layer_row(markup, "Layer not recorded")), layer_row(markup, "Layer not recorded")
-    assert "1 failed and 1 did not run" in text(section(markup, 2))
-    assert "a11y not run: no screen reader here" in layer_row(markup, "Accessibility"), layer_row(markup, "Accessibility")
+    assert layer_ids(markup, "Unit") == ["A1"], layer_row(markup, "Unit")
+    assert layer_ids(markup, "Layer not recorded") == ["A2", "A3", "A4"], layer_row(markup, "Layer not recorded")
+    assert tally_of(markup).startswith("4 checks in the validation report: 2 passed, 1 failed, 1 did not run."), tally_of(markup)
+    assert "Not run a11y tests: no screen reader here" in layer_row(markup, "Accessibility"), layer_row(markup, "Accessibility")
     os.remove(path_of(repo, "validation"))
     _, markup = generate(repo, base)
     testing = text(section(markup, 2))
@@ -1170,14 +1187,14 @@ def levels_come_from_the_level_column(base):
     _, markup = generate(repo, base)
     one = section(markup, 1)
     head = re.search(r'<table class="grid-impact stack matrix"><thead>(.*?)</thead>', one, re.S)
-    assert head and text(head.group(1)) == "Criterion Promise Run for real Test suite Bugs planted", head and text(head.group(1))
+    assert head and text(head.group(1)) == "Criterion How it is checked Run for real Test suite Bugs planted", head and text(head.group(1))
     rows = {n: body for n, body in re.findall(r'<tr[^>]*id="ac-(\d+)">(.*?)</tr>', one, re.S)}
     cells = lambda n: [text(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", rows[n], re.S)]
-    assert cells("1")[1:] == ["A2 FAIL", "A1 PASS", "None"], cells("1")
-    assert cells("2")[1:] == ["A2 FAIL", "None", "None"], cells("2")
+    assert cells("1")[1:] == ["Failed Tampered total refused A2", "Passed Coupon applied once A1", "None"], cells("1")
+    assert cells("2")[1:] == ["Failed Tampered total refused A2", "None", "None"], cells("2")
     assert 'href="#check-A1"' in rows["1"] and 'href="#check-A2"' in rows["1"], rows["1"]
     assert "No check" in text(rows["3"]), rows["3"]
-    assert any("AC3" in d and "no check" in d for d in listed(markup, "decisions")), listed(markup, "decisions")
+    assert any("no check proves “The receipt names the coupon”" in d for d in listed(markup, "decisions")), listed(markup, "decisions")
     two = section(markup, 2)
     assert layer_groups(markup) == ["e2e"], layer_groups(markup)
     assert two.index('id="check-A1"') < two.index('id="manual"') < two.index('id="level-e2e"') < two.index('id="check-A2"')
@@ -1219,6 +1236,24 @@ def a_check_opens_to_steps_expected_actual_evidence(base):
     assert "noise" not in actual
     assert "one discount line after refresh" in text(re.search(r"<dt>Expected</dt><dd>(.*?)</dd>", block, re.S).group(1))
     assert "Not recorded" in text(re.search(r"<dt>Steps</dt><dd>(.*?)</dd>", check_block(markup, "A1"), re.S).group(1))
+
+
+def a_check_proving_many_criteria_counts_them(base):
+    repo, evidence = full_branch(base)
+    output(evidence, "W1.txt", "make all", "ok\n", repo, working_tree(repo))
+    output(evidence, "W2.txt", "make two", "ok\n", repo, working_tree(repo))
+    add_rows(repo, f"| W1 | AC1, AC2, AC3 | all three | + | ok | PASS | [output]({evidence}/W1.txt) |\n"
+                   f"| W2 | AC1, AC2 | two | + | ok | PASS | [output]({evidence}/W2.txt) |\n")
+    _, markup = generate(repo, base)
+    many = check_block(markup, "W1")
+    meta = text(re.search(r'<p class="meta">(.*?)</p>', many, re.S).group(1))
+    assert "proves 3 criteria" in meta and "A coupon applies once." not in meta, f"three criteria aren't counted: {meta}"
+    which = re.search(r'<details class="crit"><summary>which criteria</summary>(.*?)</details>', many, re.S)
+    assert which and all(f'href="#ac-{n}"' in which.group(1) for n in (1, 2, 3)) and "The receipt names the coupon." in text(which.group(1)), \
+        "the counted criteria aren't one click away by their text"
+    two = text(re.search(r'<p class="meta">(.*?)</p>', check_block(markup, "W2"), re.S).group(1))
+    assert re.search(r"proves A coupon applies once\. ?; A tampered total is refused\.", two) and "criteria" not in two, \
+        f"two criteria aren't named in line: {two}"
 
 
 def a_long_log_shows_its_tail(base):
@@ -1371,9 +1406,9 @@ def a_replay_says_so_and_a_check_without_a_video_is_your_call(base):
     assert "no video" in text(check_block(markup, "M1")), "a check without a video doesn't say so"
     assert "no video" not in text(check_block(markup, "A9")), "a check that didn't run needs no video"
     assert "no video" not in text(check_block(markup, "A1"))
-    assert_verdict(markup, "Your call", "M1", "evidence is missing")
-    assert panel_of(markup)["Testing"][1] == "Read this", "a check without a video left the Testing row clear"
-    assert "video evidence is missing for M1" in why_of(markup), why_of(markup)
+    assert_verdict(markup, "Your call", "Planted bugs", "evidence is missing")
+    assert rail_of(markup)["Validate"] == ("not run", "1 of 6 checks did not run", "wait"), rail_of(markup)["Validate"]
+    assert "video evidence is missing for “Planted bugs”" in why_of(markup), why_of(markup)
 
     put(os.path.join(evidence, "M1.webm"), b"")
     report_edit(repo, "validation", rows, ready_rows(evidence).replace("| PASS: 21/21 killed |", "| FAIL: 20/21 killed |"))
@@ -1381,7 +1416,7 @@ def a_replay_says_so_and_a_check_without_a_video_is_your_call(base):
     _, markup = generate(repo, base, gh)
     assert "no video" in text(check_block(markup, "M1")), "an empty video, on a FAIL row, counted as a video"
     calls = [text(item) for item in re.findall(r"<li>.*?</li>", re.search(r'<ul id="calls">(.*?)</ul>', markup, re.S).group(1), re.S)]
-    assert sum("M1" in call for call in calls) == 1, ("an empty video gave M1 other than one reason", calls)
+    assert sum("Planted bugs" in call for call in calls) == 1, ("an empty video gave M1 other than one reason", calls)
     os.remove(os.path.join(evidence, "M1.webm"))
     _, markup = generate(repo, base, gh)
     calls = [text(item) for item in re.findall(r"<li>.*?</li>", re.search(r'<ul id="calls">(.*?)</ul>', markup, re.S).group(1), re.S)]
@@ -1405,7 +1440,10 @@ def a_suite_output_lists_its_tests(base):
     runner = re.search(r'<details class="runner">(.*?)</details>', block, re.S)
     assert runner, "AC3: no test-runner list"
     summary_line = text(re.search(r"<summary>(.*?)</summary>", runner.group(1), re.S).group(1))
-    assert "3 tests" in summary_line and "1 FAIL" in summary_line and "AC1" in summary_line, summary_line
+    assert "3 tests" in summary_line and "1 FAIL" in summary_line, summary_line
+    meta = text(re.search(r'<p class="meta">(.*?)</p>', block, re.S).group(1))
+    assert "proves A coupon applies once." in meta and "A coupon applies once." not in summary_line, \
+        f"the criterion isn't named once, beside the check: {meta} / {summary_line}"
     def rows_of(markup):
         return [[text(c) for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.S)]
                 for r in re.findall(r"<tr>(.*?)</tr>", markup, re.S) if "<td" in r]
@@ -1415,13 +1453,13 @@ def a_suite_output_lists_its_tests(base):
     assert rows_of(head.split('<p class="runner-h">')[0]) == [["cart", "2", "1"], ["refunds", "1", "0"]], rows_of(head.split('<p class="runner-h">')[0])
     parts = dict(re.findall(r'<p class="runner-h">(.*?)</p>(.*?)(?=<p class="runner-h">|$)', head, re.S))
     assert list(parts) == ["Failures", "Named in the spec"], list(parts)
-    assert rows_of(parts["Failures"]) == [["tampered_total", "FAIL", "AC2"]], rows_of(parts["Failures"])
+    assert rows_of(parts["Failures"]) == [["tampered_total", "FAIL", "A tampered total is refused."]], rows_of(parts["Failures"])
     assert [r[0] for r in rows_of(parts["Named in the spec"])] == ["tampered_total", "refund_issued"], parts["Named in the spec"]
     groups = re.findall(r'<p class="runner-h">(.*?)</p>', every.group(1))
     assert groups == ["cart", "refunds"], groups
-    assert rows_of(every.group(1)) == [["coupon_once", "ok", ""], ["tampered_total", "FAIL", "AC2"], ["refund_issued", "ok", "AC2"]]
+    assert rows_of(every.group(1)) == [["coupon_once", "ok", ""], ["tampered_total", "FAIL", "A tampered total is refused."], ["refund_issued", "ok", "A tampered total is refused."]]
     assert "<details class=\"runner\">" not in check_block(markup, "A1"), "AC3: `ok 12 rows` outside a section was read as a test"
-    assert "(3 tests in the runner output, 1 FAIL)" in text(section(markup, 2)), text(section(markup, 2))[:500]
+    assert "3 tests in the runner output, 1 failed" in text(section(markup, 2)), text(section(markup, 2))[:500]
 
 
 # v2 AC4: the review per lens
@@ -1565,7 +1603,8 @@ def the_skills_ask_for_the_new_formats(base):
     assert "## Lenses" in review and "| Lens | Model | Findings | Confirmed | Outcomes |" in review
     ship = read("skills", "kit-ship", "SKILL.md")
     assert "Background:" in ship and "Where a regression could show up" in ship and "Recommendation:" in ship
-    assert "control panel" in read("docs", "framework.md").split("**`bin/decision-report`**", 1)[1][:2000]
+    page = read("docs", "framework.md").split("**`bin/decision-report`**", 1)[1][:2000]
+    assert "a rail of spec, review, validate and CI" in page and "control panel" not in page, "the reference describes the old page"
 
 
 # v2 review fixes
@@ -1643,8 +1682,8 @@ def test_types_heading_and_ran_in_any_form(base):
     write(repo, "validation", report.replace("## Test types", "## Test Types").replace(
         f"| unit | yes | [A1]({evidence}/A1.txt) |", f"| unit | yes | [A1]({evidence}/A1.txt) |\n| a11y | `no` | no screen reader |"))
     _, markup = generate(repo, base)
-    assert re.search(r"\b1 A1\b", layer_row(markup, "Unit")), layer_row(markup, "Unit")
-    assert "a11y not run: no screen reader" in layer_row(markup, "Accessibility"), layer_row(markup, "Accessibility")
+    assert layer_ids(markup, "Unit") == ["A1"], layer_row(markup, "Unit")
+    assert "Not run a11y tests: no screen reader" in layer_row(markup, "Accessibility"), layer_row(markup, "Accessibility")
 
 
 def levels_map_aliases_and_stay_bounded(base):
@@ -1656,7 +1695,7 @@ def levels_map_aliases_and_stay_bounded(base):
     _, markup = generate(repo, base)
     groups = layer_groups(markup)
     assert len(groups) <= 14 and "other" in groups, groups
-    assert len(re.findall(r'<span class="layername">', section(markup, 2))) <= 14, "a report can widen the layers table without bound"
+    assert len(re.findall(r'<span class="lay">', section(markup, 2))) <= 14, "a report can widen the test map without bound"
     for check, name in (("Y1", "Accessibility"), ("Y2", "Design"), ("Y3", "Query budget"), ("X7", "Other")):
         assert layer_chip(markup, check) == name, (check, layer_chip(markup, check))
 
@@ -1669,7 +1708,7 @@ def a_shared_suite_output_counts_once(base):
                    f"| U2 | AC2 | unit | the suite again | + | all ok | FAIL | [output]({evidence}/U1.txt) |\n",
              header="| # | AC | Level | Check | Case | Expected | Result | Evidence |")
     _, markup = generate(repo, base)
-    assert "(3 tests in the runner output, 1 FAIL)" in layer_row(markup, "Unit"), layer_row(markup, "Unit")
+    assert "3 tests in the runner output, 1 failed" in layer_row(markup, "Unit"), layer_row(markup, "Unit")
     second = check_block(markup, "U2")
     assert 'class="runner"' not in second and 'href="#check-U1"' in second, second[:800]
 
@@ -1708,7 +1747,7 @@ def a_comment_before_the_first_paragraph_is_skipped(base):
     write(repo, "decision-notes", NOTES.replace("## What the task must do\n",
                                                 "## What the task must do\n<!-- one paragraph\nthat works alone -->\n"))
     _, markup = generate(repo, base)
-    problem = panel_rows(markup)[0][1]
+    problem = headline(markup, "problem")
     assert problem.startswith("The task must stop a second discount"), problem
 
 
@@ -1884,26 +1923,27 @@ PYRAMID_ROWS = """# Validation
 """
 
 
-def the_layers_table_holds_each_test_in_order(base):
+def the_test_map_holds_each_test_in_order(base):
     repo, _ = full_branch(base)
     write(repo, "validation", PYRAMID_ROWS)
     _, markup = generate(repo, base)
     two = section(markup, 2)
-    named = [text(n) for n in re.findall(r'<span class="layername">(.*?)</span>', two)]
-    assert named == ["Unit", "Integration", "End to end", "Mutation", "By hand", "Accessibility"], named
+    named = [text(n) for n in re.findall(r'<span class="lay">(.*?)</span>', two)]
+    assert named == ["Unit", "Integration", "End to end", "By hand", "Accessibility"], named
+    assert text(re.search(r'<p class="none">.*?</p>', two, re.S).group(0)) == "None in this change: Mutation.", two
     assert layer_groups(markup) == ["e2e", "a11y"], layer_groups(markup)
-    for name, count in (("Unit", "2 A1 A5"), ("Integration", "1 A4"), ("End to end", "1 A3"), ("Accessibility", "1 A2")):
-        assert count in layer_row(markup, name), (name, layer_row(markup, name))
-    assert "f-lvl-" not in markup, "the layers table left a filter behind"
+    for name, ids in (("Unit", ["A1", "A5"]), ("Integration", ["A4"]), ("End to end", ["A3"]), ("Accessibility", ["A2"])):
+        assert layer_ids(markup, name) == ids, (name, layer_row(markup, name))
+    assert "f-lvl-" not in markup, "the test map left a filter behind"
 
 
 def a_layer_without_tests_says_so(base):
     repo, _ = full_branch(base)
     write(repo, "validation", PYRAMID_ROWS.replace("| e2e |", "| unit |").replace("| integration |", "| unit |"))
     _, markup = generate(repo, base)
-    for name in ("End to end", "Integration"):
-        assert "None in this change" in layer_row(markup, name), (name, layer_row(markup, name))
-    assert "None in this change" not in layer_row(markup, "Unit"), layer_row(markup, "Unit")
+    none = text(re.search(r'<p class="none">.*?</p>', section(markup, 2), re.S).group(0))
+    assert none == "None in this change: Integration, End to end, Mutation.", none
+    assert layer_ids(markup, "Unit") == ["A1", "A3", "A4", "A5"], layer_row(markup, "Unit")
 
 
 def the_coverage_shows_each_criterion_short(base):
@@ -1912,11 +1952,11 @@ def the_coverage_shows_each_criterion_short(base):
                                             "1. A coupon applies once. A refresh never adds a second one, nor does `a.b()`. — verify: test."))
     _, markup = generate(repo, base)
     row = re.search(r'<tr[^>]*id="ac-1">(.*?)</tr>', section(markup, 1), re.S).group(1)
-    cell = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)[0]
-    assert text(cell.split('<details class="crit">')[0]) == "A coupon applies once.", cell
-    fold = re.search(r'<details class="crit"><summary>(.*?)</summary>(.*?)</details>', cell, re.S)
-    assert fold and text(fold.group(2)).startswith("A refresh never adds a second one, nor does a.b()"), cell
-    assert re.search(r'<a class="chip" href="#check-A1">A1 ', row), row
+    criterion = re.search(r'<th scope="row">(.*?)</th>', row, re.S).group(1)
+    assert text(criterion) == "A coupon applies once.", criterion
+    fold = re.search(r'<details class="crit"><summary>(.*?)</summary>(.*?)</details>', row, re.S)
+    assert fold and text(fold.group(2)).startswith("A refresh never adds a second one, nor does a.b()"), row
+    assert re.search(r'<a class="lc p" href="#check-A1"><b>Passed</b>Coupon applied once<span class="id">A1</span></a>', row), row
     short = re.search(r'<tr[^>]*id="ac-3">(.*?)</tr>', section(markup, 1), re.S).group(1)
     assert '<summary>the rest</summary>' in row and "<summary>how it&#x27;s checked</summary>" in short, short
 
@@ -1930,11 +1970,11 @@ def a_level_not_run_shows_once(base):
     write(repo, "validation", report.replace("| unit | yes | [A1]", "| a11y | no | no screen reader here (A9) |\n| unit | yes | [A1]"))
     _, markup = generate(repo, base)
     row = layer_row(markup, "Accessibility")
-    assert row.count("a11y") == 1 and "a11y not run (1 check): no screen reader here" in row, row
+    assert row.count("a11y") == 1 and "Not run a11y tests: no screen reader here" in row, row
     skipped = "| e2e | no | no browser here |\n"
     write(repo, "validation", report.replace("| unit | yes | [A1]", skipped * 2 + "| unit | yes | [A1]"))
     testing = text(section(generate(repo, base)[1], 2))
-    assert testing.count("e2e not run") == 1, testing[:800]
+    assert testing.count("Not run e2e tests") == 1, testing[:800]
 
 
 def the_review_line_counts_lenses_and_rounds_apart(base):
@@ -2797,7 +2837,7 @@ def report_edit(repo, kind, old, new):
 
 
 def page_part(page, name):
-    for chunk in re.split(r'(?=<details class="sec")|(?=<footer)', page):
+    for chunk in re.split(r'(?=<section class="sec")|(?=<div class="box (?:prob|sol)")|(?=<footer)', page):
         if f'<div class="body" id="{name}"' in chunk:
             return chunk
     raise AssertionError(f"no section {name}")
@@ -2821,13 +2861,6 @@ def verdict_of(page):
     return text(found.group(1))
 
 
-def panel_rows(page):
-    found = re.search(r'<div class="panel"[^>]*>(.*?)</div>', page, re.S)
-    assert found, "no control panel"
-    return [(text(label), text(body), href) for href, label, body in
-            re.findall(r'<a href="#([\w-]+)"><b>(.*?)</b><span>(.*?)</span>', found.group(1), re.S)]
-
-
 def embedded_svgs(page):
     return [base64.b64decode(data) for data in re.findall(r'src="data:image/svg\+xml;base64,([^"]+)"', page)]
 
@@ -2841,7 +2874,7 @@ def assert_verdict(markup, word, *words):
 
 # AC1, and the owner's order: Testing before Code review
 
-PAGE_ORDER = ("<h1", 'class="lead"', 'class="verdict"', 'class="panel"', 'id="problem"', 'id="fix"', 'id="testing"', 'id="review"', 'id="limits"',
+PAGE_ORDER = ("<h1", 'class="lead"', 'class="verdict"', 'class="rail"', 'id="problem"', 'id="fix"', 'id="testing"', 'id="review"', 'id="limits"',
               'id="decide"', "<footer")
 
 
@@ -2856,8 +2889,8 @@ def the_page_holds_its_parts_in_order(base):
     assert_page_order(markup)
     assert "<h1>Each coupon counts once</h1>" in markup
     assert "A shopper who refreshes the cart keeps one discount." in text(re.search(r'<p class="lead">.*?</p>', markup, re.S).group(0))
-    assert [label for label, _, _ in panel_rows(markup)] == ["The problem", "Stability", "Your experience", "Testing", "Code review", "Not proven", "Undo",
-                                                             "Your decisions"], panel_rows(markup)
+    assert list(rail_of(markup)) == ["Spec", "Review", "Validate", "CI", "Your call"], rail_of(markup)
+    assert list(cards_of(markup)) == ["Stability", "Your experience", "Undo"], cards_of(markup)
 
 
 def a_branch_with_nothing_still_has_its_parts_in_order(base):
@@ -2901,7 +2934,7 @@ def a_fail_row_is_not_ready(base):
     report_edit(repo, "validation", "| exit 1 | PASS |", "| exit 1 | **FAIL** |")
     stamp(repo, "validate")
     _, markup = generate(repo, base, gh)
-    assert_verdict(markup, "Not ready", "A2 failed")
+    assert_verdict(markup, "Not ready", "Tampered total refused failed")
 
 
 def a_failed_guide_step_is_not_ready(base):
@@ -2984,7 +3017,7 @@ def a_not_run_row_is_your_call(base):
     report_edit(repo, "validation", "| exit 1 | PASS |", "| exit 1 | NOT RUN |")
     stamp(repo, "validate")
     _, markup = generate(repo, base, gh)
-    assert_verdict(markup, "Your call", "A2 did not run")
+    assert_verdict(markup, "Your call", "Tampered total refused did not run")
 
 
 def an_open_finding_without_its_impact_is_your_call(base):
@@ -3060,8 +3093,8 @@ def the_first_screen_holds_no_status_tokens(base):
     first = re.search(r'<header class="hero">(.*?)</header>', markup, re.S).group(1)
     first = re.sub(r'<details[^>]*id="verdict-why".*?</details>', "", first, flags=re.S)  # a fold, past the first screen
     assert not re.search(r" [·|•] ", text(first)), text(first)
-    assert panel_rows(markup), "no panel to read"
-    for label, body, _ in panel_rows(markup):
+    assert cards_of(markup), "no cards to read"
+    for label, body in cards_of(markup).items():
         assert body and body.endswith((".", "?", "!")), (label, body)
         assert not re.search(r"\.\s+[A-Z]", body), f"more than one sentence: {label}: {body}"
 
@@ -3073,7 +3106,7 @@ def the_problem_carries_its_fact_sheet(base):
     _, markup = generate(repo, base, gh)
     part = page_part(markup, "problem")
     said = text(part)
-    assert "A refresh gave a second discount" in text(re.search(r"<h2.*?</h2>", part, re.S).group(0))
+    assert headline(markup, "problem") == "A refresh gave a second discount", headline(markup, "problem")
     for label, value in (("Who it hits", "Shoppers who refresh"), ("What they see", "Two discount lines"), ("How bad", "Harmful."),
                          ("How often", "Rare."), ("If we wait", "Each refresh can still")):
         found = re.search(rf"<dt>{label}.*?</dt><dd>(.*?)</dd>", part, re.S)
@@ -3086,28 +3119,28 @@ def a_background_comes_before_the_problem(base):
     repo, _, gh = ready_branch(base)
     _, markup = generate(repo, base, gh)
     part = page_part(markup, "problem")
-    in_order(part, "Shop sells things online", "A refresh ran the coupon step twice", "Who it hits")
+    in_order(part, "Who it hits", "Shop sells things online", "A refresh ran the coupon step twice")
 
 
-def missing_facts_read_not_recorded(base):
+def missing_facts_are_left_out(base):
     repo, _, gh = ready_branch(base, notes="## The problem\nA refresh ran twice.\n\n## The solution\nThe cart stores it.\n")
     _, markup = generate(repo, base, gh)
-    problem, fix = page_part(markup, "problem"), page_part(markup, "fix")
-    for label in ("Some background first", "Who it hits", "What they see", "How bad", "How often"):
-        assert re.search(rf"{label}(?:\W|Agent.s judgment)*Not recorded", text(problem)), label
-    assert "No deadline recorded" in text(problem), "an urgency no source names"
-    for label in ("For you", "Time added", "Connects to", "If it fails", "To undo", "Rejected", "Worked example", "Architecture map",
-                  "Where a regression could show up"):
-        assert re.search(rf"{label}(?:\W|Agent.s judgment)*Not recorded", text(fix)), label
-    panel = dict((label, body) for label, body, _ in panel_rows(markup))
-    assert panel["Stability"] == "Not recorded." and panel["Your experience"] == "Not recorded." and panel["Undo"] == "Not recorded.", panel
+    problem, fix = text(page_part(markup, "problem")), text(page_part(markup, "fix"))
+    for label in ("Some background first", "Who it hits", "What they see", "How bad", "How often", "If we wait", "No deadline", "Not recorded"):
+        assert label not in problem, (label, problem)
+    for label in ("For you", "Time added", "Connects to", "If it fails", "To undo", "Rejected", "Worked example", "Before and after", "Not recorded"):
+        assert label not in fix, (label, fix)
+    change = text(re.search(r'<section class="sec"><h2>The change</h2>.*?</section>', markup, re.S).group(0))
+    assert "Architecture map" not in change and "Where a regression could show up" not in change, change
+    assert cards_of(markup) == {}, cards_of(markup)
+    assert headline(markup, "problem") == "A refresh ran twice." and headline(markup, "fix") == "The cart stores it."
 
 
 def the_solution_carries_its_fact_sheet_and_map(base):
     repo, _, gh = ready_branch(base)
     _, markup = generate(repo, base, gh)
     part = page_part(markup, "fix")
-    assert "The cart remembers each coupon" in text(re.search(r"<h2.*?</h2>", part, re.S).group(0))
+    assert headline(markup, "fix") == "The cart remembers each coupon", headline(markup, "fix")
     for label, value in (("For you", "Nothing to do"), ("Time added", "No measurable"), ("Connects to", "The cart only"), ("If it fails", "refused and logged"),
                          ("To undo", "Revert"), ("Rejected", "A database lock")):
         found = re.search(rf"<dt>{label}.*?</dt><dd>(.*?)</dd>", part, re.S)
@@ -3589,7 +3622,7 @@ def the_review_section_says_who_and_what_each_lens_is_for(base):
     stamp(repo, "review")
     _, markup = generate(repo, base, gh)
     part = review_section(markup)
-    assert part.startswith('<details class="sec" open'), "the review is open by default"
+    assert part.startswith('<section class="sec">'), "the review is never folded away"
     said = text(part)
     assert "claude" in said and "codex" in said, said[:400]
     assert "Correctness" in said and "Tests" in said
@@ -3606,12 +3639,9 @@ def the_review_funnel_shares_one_scale_and_explains_the_difference(base):
     stamp(repo, "review")
     _, markup = generate(repo, base, gh)
     part = review_section(markup)
-    funnel = re.search(r'<div class="funnel".*?</div>\s*(?:<p|<dl|<h3)', part, re.S)
-    assert funnel, "no funnel"
-    widths = [float(w) for w in re.findall(r"--w:([\d.]+)%", funnel.group(0))]
-    assert widths == [100.0, round(4 / 7 * 100, 1), round(5 / 7 * 100, 1)], widths  # raised 7, confirmed 4, report lines 5
     said = text(part)
-    assert re.search(r"\b3\b[^.]*not confirmed", said), "the difference is explained from the counts"
+    assert "The lenses raised 7, and 4 held up when checked against the code." in said, said[:500]
+    assert "The report's lines differ from the confirmed count" in said, "the difference is explained"
     assert re.search(r"2 fixed, 1 rejected, 1 open, 1 already there", said), said[:500]
 
 
@@ -3637,7 +3667,7 @@ def a_legacy_review_keeps_its_findings(base):
         assert words in part, words
     assert "Impact not recorded" in part
     assert "per-lens counts not recorded" in part.lower(), part[:500]
-    assert 'class="funnel"' in review_section(markup) and "Not recorded" in part, "raised and confirmed are named as not recorded, not invented"
+    assert 'id="review-matrix"' not in review_section(markup) and "The lenses raised" not in part, "raised and confirmed are not invented"
     assert_verdict(markup, "Your call")
 
 
@@ -3680,14 +3710,14 @@ def the_criteria_map_to_their_proof_and_a_gap_shows(base):
     assert 'href="#check-A1"' in one and 'href="#check-U1"' in one and 'href="#check-M1"' in one, one
     three = re.search(r'<tr id="ac-3">.*?</tr>', part, re.S).group(0)
     assert "No check" in text(three), three
-    assert_verdict(markup, "Your call", "AC3")
+    assert_verdict(markup, "Your call", "no check proves “The receipt names the coupon”")
 
 
 def every_link_on_the_page_lands_inside_a_fold_it_can_open(base):
     repo, _ = full_branch(base)
     _, markup = generate(repo, base)
     targets = set(re.findall(r'href="#([^"]+)"', markup))
-    assert {"problem", "fix", "testing", "review", "limits", "decide"} <= targets, targets
+    assert {"testing", "review", "limits", "decide", "check-A1", "todo-M1"} <= targets, targets
     for target in targets:
         assert re.search(rf'\bid="{re.escape(target)}"', markup), f"nothing at #{target}"
         # A browser opens a closed <details> for a link to something inside it, not for a link to the <details> itself.
@@ -3698,10 +3728,10 @@ def a_guide_step_already_passed_is_not_to_do(base):
     repo, _ = full_branch(base)
     _, markup = generate(repo, base)
     assert re.search(r'<p[^>]*id="todo-M2"[^>]*>.*?already passed', markup), "no record of the passed step"
-    row = re.search(r"<tr[^>]*>(?:(?!</tr>).)*By hand.*?</tr>", markup, re.S).group(0)
-    assert 'class="chip" href="#todo-M2"' in row and 'class="chip todo" href="#todo-M2"' not in row, row
-    assert 'class="chip todo" href="#todo-P1"' in row, row
-    assert re.search(r'class="count">1<', row), f"a passed step counts as a test: {row}"
+    row = re.search(r'<div class="row"><span class="lay">By hand</span>.*?</div></div>', markup, re.S).group(0)
+    assert '<a class="lc p" href="#todo-M2"><b>Passed</b>' in row, row
+    assert '<a class="lc s" href="#todo-P1"><b>To do</b>' in row, row
+    assert "4 steps in the checks guide: 1 passed, 1 failed, 2 to do by hand." in tally_of(markup), tally_of(markup)
 
 
 def the_automated_part_is_short_and_says_what_it_did_not_measure(base):
@@ -3712,10 +3742,10 @@ def the_automated_part_is_short_and_says_what_it_did_not_measure(base):
     said = text(part.group(0))
     assert re.search(r"On this machine\s+Passed", said) and re.search(r"In CI\s+Passed", said) and "21 of 21" in said, said
     assert "PASS" not in said, f"the verdict said twice: {said}"
-    assert re.search(r"Coverage\s+Not measured", said), said
+    assert "Coverage" not in said, f"coverage nobody measured is left off: {said}"
     report_edit(repo, "validation", "PASS: 21/21 killed", "PASS")
     _, markup = generate(repo, base, gh)
-    assert re.search(r"Planted bugs\s+Not measured", text(re.search(r'<div id="automated".*?</dl>', markup, re.S).group(0))), "no killed count, no invented one"
+    assert "Planted bugs" not in text(re.search(r'<div id="automated".*?</dl>', markup, re.S).group(0)), "no killed count, no invented one"
     report_edit(repo, "verify", "# Verify: PASS", "# Verify: FAIL")
     _, markup = generate(repo, base, gh)
     said = text(re.search(r'<div id="automated".*?</dl>', markup, re.S).group(0))
@@ -3847,16 +3877,13 @@ def the_layers_overview_names_each_level_present(base):
     repo, evidence, gh = ready_branch(base)
     report_edit(repo, "validation", "\n## Test types", f"| N1 |  |  | no level | + | x | PASS | [o]({evidence}/A1.txt) |\n\n## Test types")
     _, markup = generate(repo, base, gh)
-    table = re.search(r'<table class="layers".*?</table>', testing_section(markup), re.S)
-    assert table, "no layers overview"
-    rows = [(text(name), cells) for name, cells in re.findall(r'<tr><th scope="row">(.*?)</th>(.*?)</tr>', table.group(0), re.S)]
-    names = [name for name, _ in rows]
-    assert names[:5] == ["Unit", "Integration", "End to end", "Mutation", "By hand"] and names[5:] == ["Layer not recorded"], names
-    by_name = dict(rows)
-    assert '<span class="count">3</span>' in by_name["End to end"] and '<span class="count">1</span>' in by_name["Unit"], by_name["End to end"]
-    assert "None in this change" in text(by_name["Integration"]), "a layer with nothing in it says so"
-    assert '<span class="count">1</span>' in by_name["Layer not recorded"]
-    assert all(len(text(cells).split()) > 4 for _, cells in rows), "each level has its plain definition"
+    part = testing_section(markup)
+    names = re.findall(r'<div class="row"><span class="lay">(.*?)</span>', part)
+    assert names == ["Unit", "End to end", "Mutation", "By hand", "Layer not recorded"], names
+    assert layer_ids(markup, "End to end") == ["A1", "A2", "A3"] and layer_ids(markup, "Unit") == ["U1"], layer_ids(markup, "End to end")
+    assert '<p class="none">None in this change: Integration.</p>' in part, "a layer with nothing in it says so"
+    assert layer_ids(markup, "Layer not recorded") == ["N1"]
+    assert 'class="layers"' not in part, "the layer definitions table is cut"
 
 
 def manual_tests_are_grouped_under_their_layer(base):
@@ -3918,7 +3945,7 @@ def a_not_run_check_and_an_uncovered_criterion_are_gaps(base):
     report_edit(repo, "validation", "| exit 1 | PASS |", "| exit 1 | NOT RUN |")
     _, markup = generate(repo, base, gh)
     said = text(limits_section(markup))
-    assert "A2" in said and "AC3" in said, said
+    assert "Tampered total refused" in said and "No check proves “The receipt names the coupon”" in said, said
 
 
 def a_decision_shows_options_cost_recommendation_and_what_merging_accepts(base):
@@ -3937,7 +3964,7 @@ def no_decisions_say_so_and_merge_is_no_decision(base):
     repo, _, gh = ready_branch(base, notes=notes)
     _, markup = generate(repo, base, gh)
     assert "No decisions needed" in text(page_part(markup, "decide"))
-    assert dict((label, body) for label, body, _ in panel_rows(markup))["Your decisions"] == "No decisions needed."
+    assert rail_of(markup)["Your call"] == ("nothing to decide", "", "you"), rail_of(markup)
 
 
 def a_legacy_decision_keeps_its_text_and_its_merge_note_moves(base):
@@ -3995,20 +4022,21 @@ def old_notes_keep_their_narrative(base):
     assert "The task must stop a second discount" in text(page_part(markup, "problem"))
     fix = page_part(markup, "fix")
     assert "adds a guard" in text(fix) and "apply_coupon" in fix
-    panel = dict((label, body) for label, body, _ in panel_rows(markup))
-    assert panel["Your experience"] == "A shopper sees one discount line."
+    assert cards_of(markup)["Your experience"] == "A shopper sees one discount line.", cards_of(markup)
     assert "one FAIL on the phone check" in text(page_part(markup, "decide"))
     assert "Written by the agent" in text(page_part(markup, "problem"))
 
 
 # The owner's folds
 
-def every_section_is_an_open_fold(base):
+def no_section_is_folded_away(base):
     repo, _, gh = ready_branch(base)
     _, markup = generate(repo, base, gh)
-    assert markup.count('<details class="sec" open>') == 6, "every section starts open"
+    assert markup.count('<section class="sec">') == 5 and '<details class="sec"' not in markup, "a section is a fold"
     assert re.findall(r'<div class="body" id="(\w+)">', markup) == ["problem", "fix", "testing", "review", "limits", "decide"]
-    for _, _, href in panel_rows(markup):
+    for part in parts_of(markup):
+        assert not enclosing_folds(markup, f'<div class="body" id="{part}"'), part
+    for href in rail_links(markup):
         assert f'id="{href}"' in markup, href
     assert not re.search(r'<details[^>]*\bid="(problem|fix|testing|review|limits|decide|undo|check-[^"]*)"', markup), "a link to an id on <details> doesn't open it"
 
@@ -4045,13 +4073,6 @@ def a_list_past_the_threshold_folds(base):
 
 READY_GAP = "- The receipt on a thermal printer — If it goes wrong: a shopper can't read the coupon's name — Worst case: support answers a question — Checked by: P1, after the merge"
 READY_DECISION = "  Accepts: A.\n"
-
-
-def panel_of(markup):
-    """{label: (body, the word at its end)}."""
-    found = re.search(r'<div class="panel"[^>]*>(.*?)</div>', markup, re.S)
-    assert found, "no control panel"
-    return {text(label): (text(body), text(word)) for label, body, word in re.findall(r"<b>(.*?)</b><span>(.*?)</span><i[^>]*>(.*?)</i>", found.group(1), re.S)}
 
 
 def ready_with_rows(base, change):
@@ -4123,12 +4144,12 @@ def the_sentinels_still_mean_nothing_to_say(base):
     stamp(repo, "validate")
     markup = generate(repo, base, gh)[1]
     assert_verdict(markup, "Ready")
-    assert "No gap recorded." in panel_of(markup)["Not proven"][0]
+    assert text(page_part(markup, "limits")).startswith("Not proven No gap recorded."), text(page_part(markup, "limits"))[:200]
     for n, word in enumerate(("None", "None.", "Nothing to decide.", "N/A")):
         here = os.path.join(base, str(n))
         repo, _, gh = ready_branch(here, notes=READY_NOTES[:READY_NOTES.index("## Decisions")] + f"## Decisions\n{word}\n")
         markup = generate(repo, here, gh)[1]
-        assert "No decisions needed." in panel_of(markup)["Your decisions"][0], word
+        assert rail_of(markup)["Your call"][0] == "nothing to decide", (word, rail_of(markup))
 
 
 def every_way_of_writing_blocking_blocks(base):
@@ -4203,7 +4224,7 @@ def evidence_that_names_no_commit_is_your_call(base):
     with open(os.path.join(evidence, "A1.txt"), "w") as fh:
         fh.write("no header\n")
     stamp(repo, "validate")
-    assert_verdict(generate(repo, base, gh)[1], "Your call", "A1")
+    assert_verdict(generate(repo, base, gh)[1], "Your call", "Coupon applied once")
 
 
 def a_check_whose_only_evidence_is_a_video_is_not_flagged_for_freshness(base):
@@ -4248,7 +4269,7 @@ def a_merged_or_closed_pr_is_not_ready(base):
 
 def evidence_outside_the_directory_is_your_call(base):
     repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace(f"[output]({ev}/A1.txt)", "[output](/etc/hosts)"))
-    assert_verdict(generate(repo, base, gh)[1], "Your call", "A1")
+    assert_verdict(generate(repo, base, gh)[1], "Your call", "Coupon applied once")
 
 
 def criteria_no_check_names_are_your_call(base):
@@ -4269,33 +4290,33 @@ def the_rule_on_the_page_says_what_the_code_does(base):
 
 # The control panel says what the sources say
 
-def the_panel_values_come_from_their_sources(base):
+def the_rail_and_cards_come_from_their_sources(base):
     repo, _, gh = ready_branch(base)
-    panel = panel_of(generate(repo, base, gh)[1])
-    assert panel["Code review"] == ("2 fixed, 1 rejected, 1 left open.", "Read this"), panel["Code review"]
-    assert panel["Undo"][0] == "Revert the pull request.", panel["Undo"]
-    assert panel["Your experience"][0] != panel["Stability"][0], panel
-    assert panel["Not proven"] == ("1 gap recorded, each named with what it would mean for you.", "Read this"), panel["Not proven"]
-    assert panel["Testing"][1] == "Clear", panel["Testing"]
+    markup = generate(repo, base, gh)[1]
+    rail, cards = rail_of(markup), cards_of(markup)
+    assert rail["Review"] == ("open", "1 finding left open", "wait"), rail["Review"]
+    assert cards["Undo"] == "Revert the pull request.", cards
+    assert cards["Your experience"] != cards["Stability"], cards
+    assert rail["Validate"] == ("passed", "5 of 5 checks passed", "pass"), rail["Validate"]
 
 
-def the_panel_turns_on_a_failure_and_on_missing_sources(base):
+def the_rail_turns_on_a_failure_and_on_missing_sources(base):
     repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("| one discount line | PASS |", "| one discount line | FAIL |"))
-    panel = panel_of(generate(repo, base, gh)[1])
-    assert panel["Testing"][1] == "Read this" and "1 failed" in panel["Testing"][0], panel["Testing"]
+    rail = rail_of(generate(repo, base, gh)[1])
+    assert rail["Validate"] == ("failed", "1 of 5 checks failed", "fail"), rail["Validate"]
     here = os.path.join(base, "gone")
     os.makedirs(here)
     repo, _, gh = ready_branch(here)
     report_edit(repo, "validation", " — Worst case: support answers a question", "")
     stamp(repo, "validate")
-    panel = panel_of(generate(repo, here, gh)[1])
-    assert "each named" not in panel["Not proven"][0], panel["Not proven"]
+    markup = generate(repo, here, gh)[1]
+    assert "thermal printer a shopper can't read the coupon's name Impact not recorded" in text(page_part(markup, "limits")), text(page_part(markup, "limits"))[:400]
     here = os.path.join(base, "none")
     os.makedirs(here)
     repo, _, gh = ready_branch(here)
     os.remove(path_of(repo, "validation"))
-    panel = panel_of(generate(repo, here, gh)[1])
-    assert panel["Not proven"][0] == "Not recorded." and panel["Not proven"][1] == "Read this", panel["Not proven"]
+    rail = rail_of(generate(repo, here, gh)[1])
+    assert rail["Validate"][0] == "missing" and rail["Validate"][2] != "pass", rail["Validate"]
 
 
 def a_not_run_check_is_not_counted_as_run(base):
@@ -4303,15 +4324,19 @@ def a_not_run_check_is_not_counted_as_run(base):
     markup = generate(repo, base, gh)[1]
     lead = text(re.search(r'<div id="manual">.*?</p>', markup, re.S).group(0))
     assert "ran 2 tests" in lead and "2 passed" in lead and "1 did not run" in lead, lead
-    assert_verdict(markup, "Your call", "A1")
+    assert_verdict(markup, "Your call", "Coupon applied once")
 
 
 def a_panel_row_holds_no_nested_link(base):
     notes = READY_NOTES.replace("To undo: Revert the pull request.", "To undo: Revert https://github.com/acme/shop/pull/7 now.")
     repo, _, gh = ready_branch(base, notes=notes)
-    panel = re.search(r'<div class="panel">.*?</div>', generate(repo, base, gh)[1], re.S).group(0)
-    for row in re.findall(r"<a href=.*?</a>\s*(?=<a href=|</div>)", panel, re.S):
-        assert row.count("<a ") == 1, row
+    markup = generate(repo, base, gh)[1]
+    first_screen = markup[:markup.index('<section class="sec"')]
+    assert "pull/7" in first_screen, "the undo line isn't on the first screen"
+    inside = 0
+    for tag in re.findall(r"<a\b|</a>", first_screen):
+        inside += 1 if tag == "<a" else -1
+        assert inside in (0, 1), "a link sits inside another link on the first screen"
 
 
 def a_funnel_with_no_counts_shows_no_zeros(base):
@@ -4320,8 +4345,11 @@ def a_funnel_with_no_counts_shows_no_zeros(base):
         body = fh.read()
     write(repo, "review", re.sub(r"(?m)^\| (\w+) \| (\w+) \| \d+ \| \d+ \|.*$", r"| \1 | \2 | not run: exit 1 | — | — |", body))
     stamp(repo, "review")
-    funnel = text(re.search(r'<div class="funnel">.*?</div></div>', generate(repo, base, gh)[1], re.S).group(0))
-    assert funnel.startswith("Not recorded findings raised"), funnel
+    part = review_section(generate(repo, base, gh)[1])
+    matrix = re.search(r'<table class="mx num" id="review-matrix">.*?</table>', part, re.S).group(0)
+    rows = [text(r) for r in re.findall(r"<tr><th scope=\"row\">.*?</tr>", matrix, re.S)]
+    assert rows == ["Correctness — — — — claude: exit 1; codex: exit 1", "Tests — — — — claude: exit 1"], rows
+    assert "The lenses raised" not in text(part), "a count no lens reported was invented"
 
 
 def a_caught_planted_bug_and_a_survivor_look_different(base):
@@ -4336,7 +4364,7 @@ def an_output_that_cannot_be_read_is_your_call(base):
     unreadable = os.path.join(evidence, "A1.txt")
     os.chmod(unreadable, 0)
     try:
-        assert_verdict(generate(repo, base, gh)[1], "Your call", "A1")
+        assert_verdict(generate(repo, base, gh)[1], "Your call", "Coupon applied once")
     finally:
         os.chmod(unreadable, 0o644)
 
@@ -4357,7 +4385,7 @@ def a_huge_svg_costs_no_time(base):
 def a_check_naming_no_file_is_your_call(base):
     repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace(f"[output]({ev}/A1.txt) [video]({ev}/A1.webm)", "looks good"))
     markup = generate(repo, base, gh)[1]
-    assert_verdict(markup, "Your call", "A1")
+    assert_verdict(markup, "Your call", "Coupon applied once")
     assert "Every check&#x27;s evidence covers" not in markup
 
 
@@ -4406,12 +4434,12 @@ def a_reviewer_that_failed_on_a_not_run_line_is_your_call(base):
     stamp(repo, "review")
     markup = generate(repo, base, gh)[1]
     assert_verdict(markup, "Your call", "timed out twice")
-    assert panel_of(markup)["Code review"][1] == "Read this", panel_of(markup)
+    assert rail_of(markup)["Review"][2] != "pass", rail_of(markup)["Review"]
 
 
-def a_panel_row_is_not_clear_when_it_holds_the_verdicts_reason(base):
+def a_rail_step_is_not_passed_when_it_holds_the_verdicts_reason(base):
     def word_of(markup, label):
-        return panel_of(markup)[label][1]
+        return "Clear" if rail_of(markup)[{"Testing": "Validate", "Code review": "Review"}[label]][2] == "pass" else "Read this"
 
     def broken(name, change):
         here = os.path.join(base, name)
@@ -4456,7 +4484,7 @@ def no_decisions_needed_is_no_decision(base):
     repo, _, gh = ready_branch(base, notes=READY_NOTES[:READY_NOTES.index("## Decisions")] + "## Decisions\nNo decisions needed.\n")
     markup = generate(repo, base, gh)[1]
     assert_verdict(markup, "Ready")
-    assert panel_of(markup)["Your decisions"][0] == "No decisions needed.", panel_of(markup)
+    assert rail_of(markup)["Your call"] == ("nothing to decide", "", "you"), rail_of(markup)
 
 
 def a_result_the_page_cannot_read_is_your_call(base):
@@ -4464,7 +4492,7 @@ def a_result_the_page_cannot_read_is_your_call(base):
         here = os.path.join(base, word.replace(" ", ""))
         os.makedirs(here)
         repo, _, gh = ready_with_rows(here, lambda ev: ready_rows(ev).replace("one discount line | PASS |", f"one discount line | {word} |"))
-        assert_verdict(generate(repo, here, gh)[1], "Your call", "A1", word)
+        assert_verdict(generate(repo, here, gh)[1], "Your call", "Coupon applied once", word)
 
 
 def a_huge_count_costs_no_time_and_breaks_nothing(base):
@@ -4516,7 +4544,7 @@ def a_deeply_nested_scene_costs_only_itself(base):
         here = os.path.join(base, str(depth))
         os.makedirs(here)
         markup = scene_page(here, {"deep": '{"title":"Deep","alt":"Deep","seconds":' + "[" * depth + "]" * depth + ',"height":100,"shapes":[],"steps":[]}'})
-        assert '<div class="panel">' in markup and "deep.scene.json" in markup and "scene-refused" in markup, depth
+        assert '<ol class="rail"' in markup and "deep.scene.json" in markup and "scene-refused" in markup, depth
 
 
 def refused_scenes_share_the_embed_budget(base):
@@ -4577,7 +4605,7 @@ def the_player_names_its_controls_for_any_state(base):
     assert 'role="group"' in player
 
 
-GUARD_TESTS = (no_ci_and_the_ci_phase_off_are_not_stops, a_failed_verify_is_not_ready_and_one_that_checked_nothing_is_your_call, each_missing_impact_field_is_your_call, every_old_way_of_naming_a_gap_is_listed, a_real_gap_starting_with_none_or_nothing_is_kept, the_sentinels_still_mean_nothing_to_say, every_way_of_writing_blocking_blocks, blocking_no_does_not_block, a_decision_starting_with_merge_keeps_its_blocking_mark, a_second_decisions_heading_adds_to_the_first, an_unreadable_report_is_your_call, evidence_on_another_commit_is_your_call, evidence_that_names_no_commit_is_your_call, a_check_whose_only_evidence_is_a_video_is_not_flagged_for_freshness, a_lens_that_failed_is_your_call_unless_switched_off, a_report_with_no_lenses_table_does_not_say_every_lens_ran, a_test_type_marked_not_run_is_your_call, a_merged_or_closed_pr_is_not_ready, evidence_outside_the_directory_is_your_call, criteria_no_check_names_are_your_call, the_rule_on_the_page_says_what_the_code_does, the_panel_values_come_from_their_sources, the_panel_turns_on_a_failure_and_on_missing_sources, a_not_run_check_is_not_counted_as_run, a_panel_row_holds_no_nested_link, a_funnel_with_no_counts_shows_no_zeros, a_caught_planted_bug_and_a_survivor_look_different, an_output_that_cannot_be_read_is_your_call, a_huge_svg_costs_no_time, a_check_naming_no_file_is_your_call, a_screenshot_is_not_claimed_to_cover_a_commit, a_full_gap_named_with_an_old_label_counts_once, the_same_old_gap_in_a_section_and_on_a_line_counts_once, a_wrapped_open_line_keeps_its_blocking_mark, a_reviewer_that_failed_on_a_not_run_line_is_your_call, a_panel_row_is_not_clear_when_it_holds_the_verdicts_reason, no_decisions_needed_is_no_decision, a_result_the_page_cannot_read_is_your_call, a_huge_count_costs_no_time_and_breaks_nothing, animated_svg_stays_still_however_it_is_written, a_figure_past_its_limit_never_links_to_a_page, a_deeply_nested_scene_costs_only_itself, refused_scenes_share_the_embed_budget, only_the_first_scenes_start_playing_and_a_page_holds_a_bounded_number, a_mismatched_fence_forges_no_heading, the_phone_rule_for_commands_is_on_every_page, every_disclosure_shows_it_opens, the_player_names_its_controls_for_any_state)
+GUARD_TESTS = (no_ci_and_the_ci_phase_off_are_not_stops, a_failed_verify_is_not_ready_and_one_that_checked_nothing_is_your_call, each_missing_impact_field_is_your_call, every_old_way_of_naming_a_gap_is_listed, a_real_gap_starting_with_none_or_nothing_is_kept, the_sentinels_still_mean_nothing_to_say, every_way_of_writing_blocking_blocks, blocking_no_does_not_block, a_decision_starting_with_merge_keeps_its_blocking_mark, a_second_decisions_heading_adds_to_the_first, an_unreadable_report_is_your_call, evidence_on_another_commit_is_your_call, evidence_that_names_no_commit_is_your_call, a_check_whose_only_evidence_is_a_video_is_not_flagged_for_freshness, a_lens_that_failed_is_your_call_unless_switched_off, a_report_with_no_lenses_table_does_not_say_every_lens_ran, a_test_type_marked_not_run_is_your_call, a_merged_or_closed_pr_is_not_ready, evidence_outside_the_directory_is_your_call, criteria_no_check_names_are_your_call, the_rule_on_the_page_says_what_the_code_does, the_rail_and_cards_come_from_their_sources, the_rail_turns_on_a_failure_and_on_missing_sources, a_not_run_check_is_not_counted_as_run, a_panel_row_holds_no_nested_link, a_funnel_with_no_counts_shows_no_zeros, a_caught_planted_bug_and_a_survivor_look_different, an_output_that_cannot_be_read_is_your_call, a_huge_svg_costs_no_time, a_check_naming_no_file_is_your_call, a_screenshot_is_not_claimed_to_cover_a_commit, a_full_gap_named_with_an_old_label_counts_once, the_same_old_gap_in_a_section_and_on_a_line_counts_once, a_wrapped_open_line_keeps_its_blocking_mark, a_reviewer_that_failed_on_a_not_run_line_is_your_call, a_rail_step_is_not_passed_when_it_holds_the_verdicts_reason, no_decisions_needed_is_no_decision, a_result_the_page_cannot_read_is_your_call, a_huge_count_costs_no_time_and_breaks_nothing, animated_svg_stays_still_however_it_is_written, a_figure_past_its_limit_never_links_to_a_page, a_deeply_nested_scene_costs_only_itself, refused_scenes_share_the_embed_budget, only_the_first_scenes_start_playing_and_a_page_holds_a_bounded_number, a_mismatched_fence_forges_no_heading, the_phone_rule_for_commands_is_on_every_page, every_disclosure_shows_it_opens, the_player_names_its_controls_for_any_state)
 
 
 REDESIGN_TESTS = (the_page_holds_its_parts_in_order, a_branch_with_nothing_still_has_its_parts_in_order, a_clean_branch_reads_ready, a_failed_ci_is_not_ready,
@@ -4586,7 +4614,7 @@ REDESIGN_TESTS = (the_page_holds_its_parts_in_order, a_branch_with_nothing_still
                   a_local_head_past_the_pr_is_not_ready, a_blocking_open_finding_is_not_ready, a_blocking_gap_is_not_ready, a_blocking_decision_is_not_ready,
                   a_not_run_row_is_your_call, an_open_finding_without_its_impact_is_your_call, a_gap_without_its_impact_is_your_call, a_phase_off_never_blocks,
                   an_unreadable_guide_is_your_call, missing_decision_notes_are_your_call, the_first_screen_holds_no_status_tokens, the_problem_carries_its_fact_sheet, a_background_comes_before_the_problem,
-                  missing_facts_read_not_recorded, the_solution_carries_its_fact_sheet_and_map, a_blank_regression_check_reads_not_checked, the_skills_document_the_new_notes,
+                  missing_facts_are_left_out, the_solution_carries_its_fact_sheet_and_map, a_blank_regression_check_reads_not_checked, the_skills_document_the_new_notes,
                   a_figure_embeds_in_place, an_svg_stays_an_inert_image, a_figure_series_is_a_static_strip, a_single_image_is_not_a_series,
                   an_svg_with_its_own_motion_holds_still, print_shows_the_folds_content, a_lost_frame_costs_that_frame,
                   a_scene_plays_in_place, a_scene_keeps_one_attribute_of_each_kind, a_scene_slides_a_shape_to_its_final_place, a_hostile_scene_is_refused, markup_in_a_scene_is_only_ever_text,
@@ -4605,9 +4633,275 @@ REDESIGN_TESTS = (the_page_holds_its_parts_in_order, a_branch_with_nothing_still
                   a_gap_shows_what_the_user_would_see, old_prose_gaps_read_impact_not_recorded, notes_bullets_in_a_validation_report_are_gaps, no_gap_says_so,
                   a_not_run_check_and_an_uncovered_criterion_are_gaps, a_decision_shows_options_cost_recommendation_and_what_merging_accepts,
                   no_decisions_say_so_and_merge_is_no_decision, a_legacy_decision_keeps_its_text_and_its_merge_note_moves, an_unreadable_image_costs_that_image,
-                  an_escaped_backtick_in_a_cell_reads_as_a_backtick, a_result_keeps_its_detail, old_notes_keep_their_narrative, every_section_is_an_open_fold,
+                  an_escaped_backtick_in_a_cell_reads_as_a_backtick, a_result_keeps_its_detail, old_notes_keep_their_narrative, no_section_is_folded_away,
                   long_lists_start_folded_with_their_count, what_blocks_the_merge_stays_open, a_list_past_the_threshold_folds)
 
+
+
+# The diagrams: a rail under the verdict, chips led by a check's name, matrices that say unknown, two themes
+
+def rail_of(markup):
+    """{step: (state word, detail, tone)}, from the rail under the verdict."""
+    found = re.search(r'<ol class="rail"[^>]*>(.*?)</ol>', markup, re.S)
+    assert found, "no rail"
+    return {text(name): (text(word), text(detail), tone) for tone, name, word, detail in
+            re.findall(r'<li class="(\w+)">.*?<span class="nm">(.*?)</span><span class="say"><b>(.*?)</b>(.*?)</span></a>', found.group(1), re.S)}
+
+
+def cards_of(markup):
+    """{title: sentence}, the short cards under the rail."""
+    hero_markup = re.search(r'<header class="hero">.*?</header>', markup, re.S).group(0)
+    return {text(title): text(body) for title, body in re.findall(r'<div class="box[^"]*"><h2>(.*?)</h2><p>(.*?)</p></div>', hero_markup, re.S)}
+
+
+def chips_in(markup):
+    """Each chip as (tone, link, result word, name, id)."""
+    return [(tone, href, text(word), text(name), text(cid)) for tone, href, word, name, cid in
+            re.findall(r'<a class="lc (\w)" href="#([\w-]+)"><b>(.*?)</b>(.*?)(?:<span class="id">(.*?)</span>.*?)?</a>', markup, re.S)]
+
+
+def test_map(markup):
+    """{layer: [chip]}, from the test map."""
+    assert 'id="test-map"' in markup, "no test map"
+    return {text(name): chips_in(row) for name, row in map_rows(markup)}
+
+
+def map_rows(markup):
+    return re.findall(r'<div class="row"><span class="lay">(.*?)</span><div class="chips">(.*?)</div></div>', markup, re.S)
+
+
+def review_matrix(markup):
+    """[(lens, {column: cell})], from the review's matrix."""
+    found = re.search(r'<table class="mx num" id="review-matrix">(.*?)</table>', markup, re.S)
+    assert found, "no review matrix"
+    columns = [text(cell) for cell in re.findall(r'<th scope="col">(.*?)</th>', found.group(1), re.S)][1:]
+    return [(text(name), dict(zip(columns, [text(cell) for cell in re.findall(r"<td[^>]*>(.*?)</td>", cells, re.S)])))
+            for name, cells in re.findall(r'<tr><th scope="row">(.*?)</th>(.*?)</tr>', found.group(1), re.S)]
+
+
+def in_dir(base, name):
+    here = os.path.join(base, name)
+    os.makedirs(here)
+    return here
+
+
+def the_rail_reads_each_phase_from_its_source(base):
+    repo, _, gh = ready_branch(base)
+    rail = rail_of(generate(repo, base, gh)[1])
+    assert list(rail) == ["Spec", "Review", "Validate", "CI", "Your call"], rail
+    assert rail["Spec"] == ("written", "3 criteria", "pass"), rail["Spec"]
+    assert rail["Review"] == ("open", "1 finding left open", "wait"), rail["Review"]
+    assert rail["Validate"] == ("passed", "5 of 5 checks passed", "pass"), rail["Validate"]
+    assert rail["CI"] == ("passed", "", "pass"), rail["CI"]
+    assert rail["Your call"] == ("1 decision", "", "you"), rail["Your call"]
+
+
+def the_rail_never_shows_skipped_or_unread_work_as_passed(base):
+    def rail_for(name, change, gh_change=None):
+        here = in_dir(base, name)
+        repo, evidence, gh = ready_branch(here)
+        change(repo, evidence)
+        if gh_change:
+            gh_change(gh, repo)
+        return rail_of(generate(repo, here, gh)[1])
+
+    def rows(old, new):
+        return lambda repo, evidence: (report_edit(repo, "validation", ready_rows(evidence), ready_rows(evidence).replace(old, new)), stamp(repo, "validate"))
+
+    def phase_off(phase):
+        return lambda repo, _: sh(repo, "python3", os.path.join(KIT, "hooks", "phase_switches.py"), "set", "off", phase)
+    nothing = lambda repo, evidence: None  # noqa: E731
+    expected = {
+        "failed": (rows("| one discount line | PASS |", "| one discount line | FAIL |"), None, "Validate", ("failed", "1 of 5 checks failed", "fail")),
+        "not-run": (rows("| one discount line | PASS |", "| one discount line | NOT RUN |"), None, "Validate", ("not run", "1 of 5 checks did not run", "wait")),
+        "no-video": (nothing, None, "Validate", None),
+        "stale": (lambda repo, evidence: put(stamp_file(repo, "validate"), "an older change\n"), None, "Validate",
+                  ("stale", "the stamp doesn't cover this commit", "wait")),
+        "missing": (lambda repo, evidence: os.remove(path_of(repo, "validation")), None, "Validate", ("missing", "no validation report", "wait")),
+        "validate-off": (phase_off("validate"), None, "Validate", ("switched off", "", "off")),
+        "review-off": (phase_off("review"), None, "Review", ("switched off", "", "off")),
+        "review-stale": (lambda repo, evidence: put(stamp_file(repo, "review"), "an older change\n"), None, "Review",
+                         ("stale", "the stamp doesn't cover this commit", "wait")),
+        "review-missing": (lambda repo, evidence: os.remove(path_of(repo, "review")), None, "Review", ("missing", "no review report", "wait")),
+        "lens-down": (lambda repo, evidence: (report_edit(repo, "review", "| Tests | claude | 1 | 1 | open=1 |", "| Tests | claude | 1 | 1 | open=1 |\n| Security | codex | not run: exit 1 | — | — |"),
+                                              stamp(repo, "review")), None, "Review", ("not run", "the codex Security lens did not run", "wait")),
+        "spec-missing": (lambda repo, evidence: os.remove(path_of(repo, "spec")), None, "Spec", ("missing", "no spec", "wait")),
+        "ci-failed": (nothing, lambda gh, repo: gh["checks"][git(repo, "rev-parse", "HEAD")]["check_runs"][0].update(conclusion="failure"), "CI", ("failed", "", "fail")),
+        "ci-pending": (nothing, lambda gh, repo: gh["checks"][git(repo, "rev-parse", "HEAD")]["check_runs"][0].update(status="in_progress", conclusion=None),
+                       "CI", ("pending", "", "wait")),
+        "ci-unread": (nothing, lambda gh, repo: gh.update(api_error=True), "CI", None),
+        "no-pr": (nothing, lambda gh, repo: gh.pop("pr"), "CI", ("missing", "no PR yet", "wait")),
+        "ci-off": (phase_off("ci"), None, "CI", ("switched off", "", "off")),
+        "no-ci": (nothing, lambda gh, repo: gh.update(checks={}, no_ci={"defaultBranchRef": {"target": {"statusCheckRollup": None}}, "parent": {"statusCheckRollup": None},
+                                                                     "pullRequests": {"nodes": []}}), "CI", ("not needed", "this repository runs no CI", "off")),
+    }
+    for name, (change, gh_change, step, want) in expected.items():
+        if name == "no-video":
+            here = in_dir(base, name)
+            repo, evidence, gh = ready_with_rows(here, lambda ev: ready_rows(ev).replace(f" [video]({ev}/A1.webm)", ""))
+            got = rail_of(generate(repo, here, gh)[1])[step]
+            assert got == ("missing", "no video for “Coupon applied once”", "wait"), (name, got)
+            continue
+        got = rail_for(name, change, gh_change)[step]
+        if name == "ci-unread":
+            assert got[0] == "unavailable" and got[2] == "wait" and "bad gateway" in got[1], (name, got)
+            continue
+        assert got == want, (name, got)
+
+
+def the_verdict_lists_each_reason_as_a_chip_led_by_its_name(base):
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("| one discount line | PASS |", "| one discount line | FAIL |"))
+    markup = generate(repo, base, gh)[1]
+    box = re.search(r'<div class="verdict-box (\w+)"[^>]*>(.*?)</div>', markup, re.S)
+    assert box and box.group(1) == "fail", box and box.group(1)
+    chips = chips_in(box.group(2))
+    assert ("f", "check-A1", "Failed", "Coupon applied once", "A1") in chips, chips
+    assert ("w", "review-open-1", "Your call", "open finding: two currencies collapse", "") not in chips, "a finding that doesn't block is not a reason"
+    assert "Coupon applied once failed" in verdict_of(markup) and "A1 failed" not in verdict_of(markup), verdict_of(markup)
+    here = in_dir(base, "ready")
+    repo, _, gh = ready_branch(here)
+    markup = generate(repo, here, gh)[1]
+    box = re.search(r'<div class="verdict-box (\w+)"[^>]*>(.*?)</div>', markup, re.S)
+    assert box.group(1) == "pass" and not chips_in(box.group(2)), box.group(0)
+
+
+def the_hero_keeps_stability_experience_and_undo_short(base):
+    repo, _, gh = ready_branch(base)
+    cards = cards_of(generate(repo, base, gh)[1])
+    assert cards == {"Stability": "It adds one check on the cart path, and a refused coupon leaves the total as it was.",
+                     "Your experience": "A shopper sees one discount line, and nothing else moves.", "Undo": "Revert the pull request."}, cards
+    here = in_dir(base, "unrecorded")
+    notes = re.sub(r"## Stability\n.*?\n\n## Your experience\n.*?\n\n", "", READY_NOTES, flags=re.S).replace("To undo: Revert the pull request.\n", "")
+    repo, _, gh = ready_branch(here, notes=notes)
+    markup = generate(repo, here, gh)[1]
+    assert cards_of(markup) == {}, cards_of(markup)
+    assert "Not recorded" not in re.search(r'<header class="hero">.*?</header>', markup, re.S).group(0), "an empty optional field is still drawn"
+
+
+def the_cut_blocks_are_gone_and_the_absences_that_matter_stay(base):
+    notes = READY_NOTES.replace("How often: Rare. One support ticket on record.\n", "")
+    repo, _, gh = ready_branch(base, notes=notes)
+    markup = generate(repo, base, gh)[1]
+    for gone in ('class="panel"', 'class="layers"', 'class="layername"', 'class="eyebrow"', "<hgroup", 'class="funnel"', "Which layer each test belongs to"):
+        assert gone not in markup, gone
+    assert "<dt>How often" not in markup, "an optional field with nothing recorded is still drawn"
+    # an output's own lines, quoted in <pre> or as a runner line, may name AC1: that is the evidence, not the page's label
+    main = re.sub(r'<pre[^>]*>.*?</pre>|<span class="said">.*?</span>', "", markup[markup.index("<main"):markup.index("<footer")], flags=re.S)
+    assert not re.search(r"\bAC\d", text(main)), re.findall(r".{40}\bAC\d.{20}", text(main))
+    prose = re.search(r'<div class="body" id="problem">.*?(?=<div class="body" id="fix">)', markup, re.S).group(0)
+    assert "A refresh ran the coupon step twice." in prose and enclosing_folds(prose, "A refresh ran the coupon step twice.")[-1].startswith(' class="more"'), \
+        "the agent's prose is not behind a fold"
+    assert '<p class="hl">A refresh gave a second discount</p>' in prose, "the headline is not the problem's one-line card"
+    here = in_dir(base, "absent")
+    repo, evidence, gh = ready_with_rows(here, lambda ev: ready_rows(ev).replace("| exit 1 | PASS |", "| exit 1 | NOT RUN |")
+                                         .replace(f" [video]({ev}/U1.webm)", ""))
+    with open(os.path.join(evidence, "A1.txt")) as fh:
+        output = fh.read()
+    with open(os.path.join(evidence, "A1.txt"), "w") as fh:
+        fh.write(re.sub(r"tree \w+$", "tree 1111111111111111111111111111111111111111", output, count=1, flags=re.M))
+    stamp(repo, "validate")
+    markup = generate(repo, here, gh)[1]
+    testing = text(page_part(markup, "testing")).lower()
+    for kept in ("not run", "no video", "stale"):
+        assert kept in testing, kept
+
+
+def the_test_map_draws_one_row_per_layer_with_named_chips(base):
+    repo, evidence, gh = ready_branch(base)
+    put(os.path.join(evidence, "A2.replay"), "")
+    markup = generate(repo, base, gh)[1]
+    drawn = test_map(markup)
+    assert list(drawn) == ["Unit", "End to end", "Mutation", "By hand"], list(drawn)
+    assert drawn["End to end"][0] == ("p", "check-A1", "Passed", "Coupon applied once live", "A1"), drawn["End to end"]
+    assert drawn["End to end"][1][3] == "Tampered total refused replay", drawn["End to end"]
+    assert drawn["By hand"] == [("s", "todo-M1", "To do", "Pay on a phone by hand", "M1"), ("s", "todo-P1", "To do", "Watch the error log by hand", "P1")], drawn["By hand"]
+    tally = text(re.search(r'<p class="tally"[^>]*>.*?</p>', markup, re.S).group(0))
+    assert tally == "5 checks in the validation report: 5 passed, 0 failed, 0 did not run. 2 steps in the checks guide, to do by hand.", tally
+    here = in_dir(base, "mixed")
+    repo, evidence, gh = ready_with_rows(here, lambda ev: ready_rows(ev).replace("| one discount line | PASS |", "| one discount line | FAIL |")
+                                        .replace("| exit 1 | PASS |", "| exit 1 | NOT RUN |"))
+    report_edit(repo, "validation", "Receipt names the coupon", "Receipt shows the coupon")
+    markup = generate(repo, here, gh)[1]
+    drawn = test_map(markup)
+    assert drawn["End to end"][0][:3] == ("f", "check-A1", "Failed") and drawn["End to end"][1][:3] == ("s", "check-A2", "Not run"), drawn["End to end"]
+    tally = text(re.search(r'<p class="tally"[^>]*>.*?</p>', markup, re.S).group(0))
+    assert tally.startswith("5 checks in the validation report: 3 passed, 1 failed, 1 did not run."), tally
+    for chip in re.findall(r'<a class="lc \w" href="#([\w-]+)"', "".join(row for _, row in map_rows(markup))):
+        assert f'id="{chip}"' in markup, f"chip {chip} links to nothing"
+
+
+def the_review_matrix_counts_each_lens_and_says_unknown(base):
+    repo, _, gh = ready_branch(base)
+    rows = review_matrix(generate(repo, base, gh)[1])
+    assert rows == [("Correctness", {"Fixed": "3", "Rejected": "1", "Open": "0", "Pre-existing": "0", "Not run": "Ran"}),
+                    ("Tests", {"Fixed": "0", "Rejected": "0", "Open": "1", "Pre-existing": "0", "Not run": "Ran"})], rows
+    here = in_dir(base, "unknown")
+    repo, _, gh = ready_branch(here)
+    report_edit(repo, "review", "| Tests | claude | 1 | 1 | open=1 |", "| Tests | claude | 1 | 1 |  |\n| Security | codex | not run: exit 1 | — | — |")
+    report_edit(repo, "review", "| Correctness | codex | 2 | 1 | fixed=1 |", "| Correctness | codex | not run: timed out | — | — |")
+    stamp(repo, "review")
+    markup = generate(repo, here, gh)[1]
+    rows = dict(review_matrix(markup))
+    assert rows["Tests"] == {"Fixed": "unknown", "Rejected": "unknown", "Open": "unknown", "Pre-existing": "unknown", "Not run": "Ran"}, rows
+    assert rows["Security"]["Not run"] == "codex: exit 1" and rows["Security"]["Fixed"] == "—", rows
+    assert rows["Correctness"] == {"Fixed": "2", "Rejected": "1", "Open": "0", "Pre-existing": "0", "Not run": "codex: timed out"}, \
+        f"a lens's model that didn't run hides behind the one that did: {rows}"
+    assert 'id="review-open-1"' in markup, "an open finding left the page"
+
+
+def the_regression_matrix_chips_a_check_with_a_result(base):
+    notes = READY_NOTES.replace("| Receipt | It prints the coupon | Not checked |", "| Receipt | It prints the coupon | Not checked |\n| Tax | It reads the total | the full suite |\n| Log | It grows | |")
+    repo, _, gh = ready_branch(base, notes=notes)
+    table = re.search(r'<table class="mx" id="regressions">(.*?)</table>', generate(repo, base, gh)[1], re.S)
+    assert table, "no regression matrix"
+    rows = {text(name): cell for name, cell in re.findall(r'<tr><th scope="row">(.*?)</th><td[^>]*>.*?</td><td[^>]*>(.*?)</td></tr>', table.group(1), re.S)}
+    assert chips_in(rows["Checkout"]) == [("p", "check-A1", "Passed", "Coupon applied once", "A1")], rows["Checkout"]
+    assert text(rows["Receipt"]) == "Not checked" and text(rows["Tax"]) == "the full suite" and text(rows["Log"]) == "Not checked", rows
+    assert "It reads the cart total" in table.group(1), "a system lost its reason"
+
+
+def before_and_after_are_paired_only_when_recorded(base):
+    table = "### Before and after\n| Case | Before | After |\n|---|---|---|\n| Refresh the cart | Two discounts | One discount |\n\n"
+    repo, _, gh = ready_branch(base, notes=READY_NOTES.replace("### Worked example", table + "### Worked example"))
+    markup = generate(repo, base, gh)[1]
+    paired = re.search(r'<table class="ba"[^>]*>(.*?)</table>', markup, re.S)
+    assert paired, "no before and after"
+    assert [tuple(text(cell) for cell in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", row)) for row in re.findall(r"<tbody>.*?<tr>(.*?)</tr>", paired.group(1), re.S)] == \
+        [("Refresh the cart", "Two discounts", "One discount")], paired.group(1)
+    here = in_dir(base, "figures")
+    figures = "### Before and after\n![Two discount lines.](step1.svg)\n![One discount line.](step2.svg)\n\n"
+    repo, _, gh = ready_branch(here, notes=READY_NOTES.replace("### Worked example", figures + "### Worked example"))
+    markup = generate(repo, here, gh)[1]
+    assert 'class="ba"' not in markup and markup.count('alt="One discount line."') == 1, "figures are not shown as figures"
+    here = in_dir(base, "neither")
+    repo, _, gh = ready_branch(here)
+    assert "Before and after" not in generate(repo, here, gh)[1], "a before and after drawn from nothing"
+
+
+def a_criterion_is_shown_by_its_text(base):
+    repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("| A3 | AC3 |", "| A3 | AC1 |"))
+    markup = generate(repo, base, gh)[1]
+    assert "A coupon applies once." in text(re.search(r'<p class="meta">.*?</p>', check_block(markup, "A1"), re.S).group(0)), check_block(markup, "A1")[:600]
+    rows = [text(row) for row in re.findall(r'<tr id="ac-\d+"><th scope="row">(.*?)</th>', markup, re.S)]
+    assert rows == ["A coupon applies once.", "A tampered total is refused.", "The receipt names the coupon."], rows
+    assert_verdict(markup, "Your call", "no check proves “The receipt names the coupon”")
+
+
+def both_themes_follow_the_system(base):
+    repo, _, gh = ready_branch(base)
+    markup = generate(repo, base, gh)[1]
+    style = re.search(r"<style>(.*?)</style>", markup, re.S).group(1)
+    assert "color-scheme:light dark" in style and "@media (prefers-color-scheme:dark)" in style, "one theme only"
+    for token in ("--bg:#FCFCFC", "--bg:#0A0A0A", "--fail:#C42029", "--fail:#FB414A"):
+        assert token in style, token
+    assert "<script" not in markup and "coral" not in style.lower()
+
+
+DIAGRAM_TESTS = (the_rail_reads_each_phase_from_its_source, the_rail_never_shows_skipped_or_unread_work_as_passed,
+                 the_verdict_lists_each_reason_as_a_chip_led_by_its_name, the_hero_keeps_stability_experience_and_undo_short,
+                 the_cut_blocks_are_gone_and_the_absences_that_matter_stay, the_test_map_draws_one_row_per_layer_with_named_chips,
+                 the_review_matrix_counts_each_lens_and_says_unknown, the_regression_matrix_chips_a_check_with_a_result,
+                 before_and_after_are_paired_only_when_recorded, a_criterion_is_shown_by_its_text, both_themes_follow_the_system)
 
 
 TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
@@ -4626,7 +4920,7 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      the_summary_comes_first_in_order, the_summary_falls_back_to_the_spec_and_pr_body, the_three_lists_hold_their_items,
                      a_failure_is_never_folded_away, the_review_line_names_a_skipped_reviewer, the_tests_line_counts_each_level,
                      levels_come_from_the_level_column, levels_fall_back_to_test_types, a_check_opens_to_steps_expected_actual_evidence,
-                     a_long_log_shows_its_tail, a_video_plays_inline, a_suite_output_lists_its_tests, the_review_shows_each_lens,
+                     a_long_log_shows_its_tail, a_check_proving_many_criteria_counts_them, a_video_plays_inline, a_suite_output_lists_its_tests, the_review_shows_each_lens,
                      a_review_without_lenses_says_not_recorded, merge_and_ship_reads_ship_md, a_partial_or_missing_ship_md,
                      reports_are_annexes_without_built_from, the_skills_ask_for_the_new_formats,
                      runner_lines_take_linear_time, hostile_text_in_the_new_parts_renders_inert,
@@ -4637,7 +4931,7 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      coverage_without_an_ac_column_is_not_recorded, a_merge_order_item_is_not_the_merge_note,
                      a_check_id_with_punctuation_gets_its_level, lens_names_split_in_linear_time,
                      report_copies_past_the_total_leave_nothing_embedded, references_link_to_github_and_local_files,
-                     a_missing_verify_report_says_how_to_make_it, an_autolink_takes_linear_time, the_layers_table_holds_each_test_in_order,
+                     a_missing_verify_report_says_how_to_make_it, an_autolink_takes_linear_time, the_test_map_holds_each_test_in_order,
                      a_layer_without_tests_says_so, the_coverage_shows_each_criterion_short, a_level_not_run_shows_once,
                      the_review_line_counts_lenses_and_rounds_apart, a_merge_item_in_the_notes_is_the_recommendation,
                      several_nits_show_one_per_line, references_link_only_what_the_pr_head_holds,
@@ -4656,7 +4950,7 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      notes_over_the_limit_keep_the_change_page, a_file_a_row_names_three_ways_shows_once,
                      a_log_and_its_video_show_as_tabs_log_first_unless_passed, a_second_video_of_the_same_stem_stays_beside_the_tabs,
                      a_log_or_video_alone_or_with_another_stem_is_not_tabs,
-                     a_replay_says_so_and_a_check_without_a_video_is_your_call) + REDESIGN_TESTS + GUARD_TESTS)
+                     a_replay_says_so_and_a_check_without_a_video_is_your_call) + REDESIGN_TESTS + GUARD_TESTS + DIAGRAM_TESTS)
 
 
 def run_test(test):
