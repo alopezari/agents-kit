@@ -421,14 +421,17 @@ def dangerous_rm_targets(targets, here, cwd, unquoted_variable=False):
             return f"Recursive delete of an unresolved or wildcard path: {target}"
         for place in {here or cwd, cwd}:
             path = os.path.realpath(os.path.join(place, target))
-            if path in ("/", home) or any(d == path or d.startswith(path + os.sep) for d in shell_dirs):
+            if path in ("/", home) or cwd.startswith(path + os.sep) or path == cwd:
                 return f"Recursive delete of {path}, which contains the working directory or home."
-            inside_cwd = path.startswith(cwd + os.sep)
-            inside_tmp = any(path == r or path.startswith(r + os.sep) for r in SAFE_RM_ROOTS)
+            if path.startswith(cwd + os.sep) or any(path == r or path.startswith(r + os.sep) for r in SAFE_RM_ROOTS):
+                continue
             # A symlink named __pycache__ resolves to what it points at, which is what rm -rf path/ deletes.
             resolved_cache = cache and os.path.basename(path) in CACHE_FOLDERS
-            if not (inside_cwd or inside_tmp or resolved_cache or in_linked_worktree(path)):
+            if not (resolved_cache or in_linked_worktree(path)):
                 return f"Recursive delete outside the working directory: {path}"
+            # Only these allowances trust the tracked folder: a popd it misses then denies, as before, no more.
+            if any(d == path or d.startswith(path + os.sep) for d in shell_dirs):
+                return f"Recursive delete of {path}, which contains the folder the shell is in."
     return None
 
 
@@ -1688,8 +1691,8 @@ SED_PRINT = re.compile(rf"\s*(?:{SED_ADDRESS}(?:,{SED_ADDRESS})?)?p\s*")
 
 
 def sed_only_prints(segment):
-    """Whether a sed segment runs with -n and only print scripts, so it writes nothing. GNU sed reads options after
-    the files too, so every word is checked."""
+    """Whether a sed segment runs with -n and only print scripts, so it writes nothing. GNU sed reads an option after
+    a file as an option and BSD sed as a file, so any option there counts as a write."""
     try:
         tokens = shlex.split(HARMLESS_REDIRECT.sub(" ", segment))
     except ValueError:
@@ -1700,6 +1703,8 @@ def sed_only_prints(segment):
         option = re.fullmatch(r"-([nEr]*)(e?)", word)
         if options_end or not word.startswith("-") or word == "-":
             operands.append(word)
+        elif operands:
+            return False
         elif word == "--":
             options_end = True
         elif option and (option.group(1) or option.group(2)):

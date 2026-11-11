@@ -386,7 +386,8 @@ def guard_allows_worktree_and_cache_deletes(base):
                 "rm -rf ${PWD}/sub", 'rm -rf "$X/.pytest_cache" "$Y/.mypy_cache/" "$Z/.ruff_cache"',
                 f"rm -rf {main}/bin/__pycache__"]:
         assert guard_here(cmd, elsewhere) == "allow", f"a worktree or a cache: {cmd}"
-    for cmd in ['rm -rf "$EV/checks/__pycache__"', 'rm -rf "$PWD/.cachetest"', "rm -rf bin/__pycache__"]:
+    for cmd in ['rm -rf "$EV/checks/__pycache__"', 'rm -rf "$PWD/.cachetest"', "rm -rf bin/__pycache__",
+                "pushd bin && make && popd && rm -rf bin", "cd bin && make || rm -rf bin"]:
         assert guard_here(cmd, linked) == "allow", f"from inside the worktree: {cmd}"
     for cmd in [f"rm -rf {main}/bin", f"rm -rf {main}", "rm -rf ~", "rm -rf /", "rm -rf .", f"rm -rf {elsewhere}",
                 f"rm -rf {bare}", f"rm -rf {linked} /usr/lib", f"rm -rf {linked} && git push --force origin side",
@@ -4152,7 +4153,8 @@ def impeccable_files_in_a_shared_repo_need_the_user_first(base):
                     "sed -n s/a/b/w DESIGN.md x", "sed -n -f script PRODUCT.md", "sed -e s/a/b/ PRODUCT.md",
                     "find .impeccable -fprint0 x", "sed -n -e 1p x -e 'w DESIGN.md'", "sed -n 1p -i PRODUCT.md",
                     "sed -n -i 1p PRODUCT.md", "sed -n 1p PRODUCT.md -i", "d=.impeccable>PRODUCT.md", "X=a>DESIGN.md",
-                    'D=".impeccable"; mkdir -p "$D"', 'OUT=DESIGN.md; cat t > "$OUT"', "D=.impeccable; touch ${D}/x"]:
+                    'D=".impeccable"; mkdir -p "$D"', 'OUT=DESIGN.md; cat t > "$OUT"', "D=.impeccable; touch ${D}/x",
+                    "sed -n 'w DESIGN.md' /dev/null -e 1p", "sed -n 's/a/b/w DESIGN.md' -e 1p /dev/null"]:
         assert shell(command) == "deny", command
     for name, inp in [("Edit", {"file_path": os.path.join(shared, ".gitignore"), "old_string": "", "new_string": "PRODUCT.md"}),
                       ("apply_patch", {"input": "*** Begin Patch\n*** Update File: notes.md\n*** Move to: PRODUCT.md\n*** End Patch"})]:
