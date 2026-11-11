@@ -44,18 +44,18 @@
 <script type="module">
   import mermaid from "{{mermaid_url}}";
   // Mermaid bakes these into its SVGs, so the diagrams keep the scheme in force at load until the page reloads.
-  const colours = matchMedia("(prefers-color-scheme: dark)").matches
-    ? { bg: "#0A0A0A", surface: "#111111", line: "#232323", text: "#F5F5F5", dim: "#8A8A8A", accent: "#4F7FF5" }
-    : { bg: "#FCFCFC", surface: "#FFFFFF", line: "#E4E4E7", text: "#27272A", dim: "#6B6B75", accent: "#1B4ED8" };
+  const token = (name) => getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
   mermaid.initialize({
     startOnLoad: true,
     theme: "base",
+    look: "classic",
     securityLevel: "strict",
     themeVariables: {
-      background: colours.surface, primaryColor: colours.bg, primaryTextColor: colours.text,
-      primaryBorderColor: colours.accent, lineColor: colours.dim, secondaryColor: colours.surface,
-      tertiaryColor: colours.surface, clusterBkg: colours.bg, clusterBorder: colours.line,
-      edgeLabelBackground: colours.surface, fontFamily: "JetBrains Mono, monospace", fontSize: "14px"
+      background: token("surface"), primaryColor: token("bg"), primaryTextColor: token("text"),
+      primaryBorderColor: token("accent"), lineColor: token("dim"), secondaryColor: token("surface"),
+      tertiaryColor: token("surface"), clusterBkg: token("bg"), clusterBorder: token("dim"),
+      edgeLabelBackground: token("surface"), useGradient: false, dropShadow: "none",
+      fontFamily: "JetBrains Mono, monospace", fontSize: "14px"
     }
   });
 </script>

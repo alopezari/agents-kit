@@ -3388,7 +3388,7 @@ h2{font-size:20px;line-height:1.25}
 h3{font-size:15px;line-height:1.35;margin-top:1.1rem}
 h4{font-size:14.5px;line-height:1.4;margin-top:.9rem}
 h5{font-size:13.5px;line-height:1.4;margin:.8rem 0 .3rem}
-p,:is(main,footer) :is(ul,ol):not([class])>li,.reasons>li,.kf dd{margin:0;max-width:55ch}
+p,:is(main,footer) :is(ul,ol):not([class])>li,.reasons>li,.kf dd,.fresh li,.stepl li{margin:0;max-width:55ch}
 a{color:inherit;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:.2em}
 a:hover{text-decoration-color:currentColor}
 :focus-visible{outline:2px solid var(--you);outline-offset:2px;border-radius:4px}
@@ -3526,7 +3526,7 @@ details.more>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;p
 .owner{font:600 12px var(--mono);color:var(--soft)}.owned{display:grid;grid-template-columns:minmax(0,1fr);gap:.3rem;padding-inline-start:1.3rem}
 .decision{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--you);border-radius:var(--r);padding:12px 14px;display:grid;grid-template-columns:minmax(0,1fr);gap:.45rem}
 .decision h3{margin:0}
-.opts{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:8px}
+.opts{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,55ch));gap:8px}
 .opts li{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px}
 .opts b{font:700 13px var(--mono);color:var(--you);margin-inline-end:.4rem}
 .default{color:var(--soft);font-size:14px}

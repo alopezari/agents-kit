@@ -12,7 +12,7 @@
 <g><rect class="fill-bg stroke-dim" x="1138" y="80" width="20" height="20" stroke-width="2" stroke-dasharray="3 3"></rect><text x="1148" y="50" text-anchor="middle" font-weight="700">deploy</text><text class="fill-dim" x="1148" y="134" text-anchor="middle" font-size="11">ship, if asked:</text><text class="fill-dim" x="1148" y="149" text-anchor="middle" font-size="11">deploy, install</text></g>
 <path class="stroke-dim" d="M215 72 C 215 20, 371 20, 371 72" fill="none" stroke-dasharray="3 4"></path>
 <text class="fill-dim" x="293" y="16" text-anchor="middle" font-size="11">finding confirmed → fix</text>
-<line class="stroke-line" x1="40" y1="200" x2="1176" y2="200" stroke-dasharray="6 6"></line>
+<line class="stroke-dim" x1="40" y1="200" x2="1176" y2="200" stroke-dasharray="6 6"></line>
 <text class="fill-dim" x="40" y="190" font-size="11">AUTOMATIC</text>
 <rect class="fill-bg stroke-line" x="40" y="226" width="1136" height="40"></rect>
 <text class="fill-accent" x="56" y="251">guard_bash · guard_mcp</text><text class="fill-dim" x="1160" y="251" text-anchor="end">every command · shared-system writes need your approval</text>

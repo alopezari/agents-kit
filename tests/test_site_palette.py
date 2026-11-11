@@ -11,9 +11,9 @@ KIT = os.path.realpath(os.path.expanduser("~/.agents"))
 SITE = os.path.join(KIT, "site", "src")
 # Site token → the decision page's token for the same role.
 ROLES = {"bg": "bg", "surface": "card", "line": "line", "text": "text", "body": "soft", "muted": "soft", "dim": "faint",
-         "accent": "blue", "human": "amber"}
+         "accent": "blue", "human": "amber", "pass": "pass"}
 OLD_HEX = ("0E100F", "161917", "2A2E2B", "E8E6DF", "CFCDC5", "B5B3AB", "8A8F88", "C6EC5A", "E2F7A6", "FF9B73")
-OLD_RGB = ((198, 236, 90), (255, 155, 115))
+OLD_RGB = [tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) for h in OLD_HEX]
 DIAGRAMS = ("flow.svg", "flow-narrow.svg", "architecture.svg", "loop.svg")
 HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 
@@ -64,12 +64,12 @@ for theme, site, page in (("light", site_light, page_light), ("dark", site_dark,
 
 allowed = set(page_light.values()) | set(page_dark.values()) | {site_light.get("accent-hover"), site_dark.get("accent-hover")}
 old_colour = re.compile("|".join([rf"#{h}\b" for h in OLD_HEX]
-                                 + [rf"rgba?\(\s*{r}\s*,\s*{g}\s*,\s*{b}\b" for r, g, b in OLD_RGB]), re.I)
+                                 + [rf"rgba?\(\s*{r}[\s,]+{g}[\s,]+{b}\b" for r, g, b in OLD_RGB]), re.I)
 for path in sorted(glob.glob(os.path.join(SITE, "**", "*"), recursive=True)):
     if not os.path.isfile(path):
         continue
     name = os.path.relpath(path, KIT)
-    for n, line in enumerate(open(path).read().splitlines(), 1):
+    for n, line in enumerate(re.sub(r'href="#[^"]*"', "", open(path).read()).splitlines(), 1):
         for found in old_colour.findall(line):
             failures.append(f"{name}:{n}: old colour {found}")
         for found in HEX.findall(line):
@@ -83,9 +83,31 @@ for diagram in DIAGRAMS:
     if literal:
         failures.append(f"site/src/svg/{diagram} has literal colours: {sorted(set(literal))}")
 
+    for used in sorted(set(re.findall(r"\b((?:fill|stroke)-[\w-]+)", " ".join(re.findall(r'class="([^"]*)"', svg))))):
+        if not re.search(rf"\.{used}\s*\{{", styles):
+            failures.append(f"site/src/svg/{diagram} uses .{used}, which styles.css doesn't define")
+
 favicon = open(os.path.join(SITE, "favicon.svg")).read()
-if not re.search(r"<style>.*@media\s*\(prefers-color-scheme:\s*dark\)", favicon, re.S):
-    failures.append("favicon.svg has no dark colours of its own under prefers-color-scheme: dark")
+favicon_light, _, favicon_dark = favicon.partition("prefers-color-scheme:dark")
+for theme, part, site in (("light", favicon_light, site_light), ("dark", favicon_dark, site_dark)):
+    for element, role in (("rect", "bg"), ("text", "accent")):
+        found = re.search(rf"\b{element}\{{fill:(#[0-9a-fA-F]{{6}})", part)
+        if not found or found.group(1).upper() != site.get(role):
+            failures.append(f"favicon.svg's {theme} {element} is {found and found.group(1)}, the site's --{role} is {site.get(role)}")
+
+for page in ("index.html", "docs.html"):
+    markup = open(os.path.join(SITE, page)).read()
+    for theme, site in (("light", site_light), ("dark", site_dark)):
+        found = re.search(rf'<meta name="theme-color" content="(#[0-9a-fA-F]{{6}})" media="\(prefers-color-scheme: {theme}\)">', markup)
+        if not found or found.group(1).upper() != site.get("bg"):
+            failures.append(f"{page}'s {theme} theme-color is {found and found.group(1)}, the site's --bg is {site.get('bg')}")
+
+mermaid = re.search(r"mermaid\.initialize\((.*?)\);", open(os.path.join(SITE, "docs.html")).read(), re.S).group(1)
+for needed in ('getPropertyValue', 'useGradient: false', 'dropShadow: "none"', 'look: "classic"'):
+    if needed not in mermaid and needed not in open(os.path.join(SITE, "docs.html")).read():
+        failures.append(f"docs.html's Mermaid setup lacks {needed}")
+if HEX.search(mermaid):
+    failures.append("docs.html's Mermaid setup copies colours instead of reading the page's tokens")
 
 for failure in failures:
     print(f"FAIL {failure}")

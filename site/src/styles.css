@@ -9,6 +9,7 @@
   --accent: #1B4ED8;
   --accent-hover: #1E40AF;
   --human: #B45309;
+  --pass: #047857;
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   --sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --gutter: 80px;
@@ -27,6 +28,7 @@
     --accent: #4F7FF5;
     --accent-hover: #7C9EF7;
     --human: #FBBF24;
+    --pass: #34D399;
   }
 }
 
@@ -50,6 +52,7 @@ img, svg { max-width: 100%; }
 .site-nav a { color: var(--text); text-decoration: none; }
 .site-nav a:hover { color: var(--accent); }
 .site-nav .cta { border: 1px solid var(--accent); color: var(--accent); padding: 10px 18px; font-family: var(--mono); font-size: 14px; }
+.site-nav .cta:hover { color: var(--accent-hover); border-color: var(--accent-hover); }
 
 /* Landing */
 .eyebrow { font-family: var(--mono); font-size: 14px; color: var(--accent); margin: 0; }
@@ -68,7 +71,7 @@ img, svg { max-width: 100%; }
 .terminal .foot { padding: 12px 18px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; }
 .prompt { color: var(--dim); user-select: none; }
 .blocked { color: var(--human); }
-.pass { color: var(--accent); }
+.pass { color: var(--pass); }
 .comment { color: var(--dim); }
 
 .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--line); margin: 0; }
@@ -118,7 +121,7 @@ img, svg { max-width: 100%; }
 
 .profiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 40px; }
 .profiles > div { background: var(--surface); padding: 24px; display: flex; flex-direction: column; gap: 8px; }
-.profiles code { color: var(--accent); font-size: 15px; }
+.profiles code { color: var(--text); font-size: 15px; }
 .profiles p { font-size: 15px; }
 
 .site-footer { display: flex; justify-content: space-between; gap: 24px; padding: 40px var(--gutter); border-top: 1px solid var(--line); font-family: var(--mono); font-size: 13px; color: var(--dim); flex-wrap: wrap; }
@@ -143,7 +146,7 @@ img, svg { max-width: 100%; }
 .prose li { margin: 6px 0; }
 .prose strong { color: var(--text); }
 .prose em { color: var(--text); }
-.prose :not(pre) > code { font-size: 0.86em; color: var(--accent); background: var(--surface); border: 1px solid var(--line); padding: 1px 6px; overflow-wrap: anywhere; }
+.prose :not(pre) > code { font-size: 0.86em; color: var(--text); background: var(--surface); border: 1px solid var(--line); padding: 1px 6px; overflow-wrap: anywhere; }
 .prose pre { background: var(--surface); border: 1px solid var(--line); padding: 20px 24px; overflow-x: auto; font-size: 14px; line-height: 1.8; }
 .prose pre code { color: var(--text); }
 .prose .table-wrap { overflow-x: auto; margin: 20px 0; border: 1px solid var(--line); }
