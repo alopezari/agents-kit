@@ -1,0 +1,2 @@
+- The landing page, the docs and their diagrams and favicon use the decision page's palette: light by default, dark when your system asks for it, with a blue accent and amber for the steps that are yours.
+- The decision page's paragraphs, list items, card definitions, lead and verdict hold a reading width, so a long note on a wide screen no longer runs into lines too long to follow back.

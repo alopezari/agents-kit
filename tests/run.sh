@@ -133,9 +133,12 @@ section_docs() {
   return $f
 }
 section_site() {
+  local f=0
   node_deps site || return 1
   if node ~/.agents/site/build.mjs >/dev/null; then echo "ok   landing and docs build from the current sources"
-  else return 1; fi
+  else f=1; fi
+  python3 test_site_palette.py || f=1
+  return $f
 }
 section_version() {
   local f=0 version

@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Docs · agents-kit</title>
 <meta name="description" content="How agents-kit works: install, the life of a task, hooks, the shell guard, verify, skills, tools, scheduled jobs and profiles.">
-<meta name="theme-color" content="#0E100F">
+<meta name="theme-color" content="#FCFCFC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0A0A0A" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -42,15 +43,19 @@
 </footer>
 <script type="module">
   import mermaid from "{{mermaid_url}}";
+  // Mermaid bakes these into its SVGs, so the diagrams keep the scheme in force at load until the page reloads.
+  const token = (name) => getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
   mermaid.initialize({
     startOnLoad: true,
     theme: "base",
+    look: "classic",
     securityLevel: "strict",
     themeVariables: {
-      background: "#161917", primaryColor: "#0E100F", primaryTextColor: "#E8E6DF",
-      primaryBorderColor: "#C6EC5A", lineColor: "#8A8F88", secondaryColor: "#161917",
-      tertiaryColor: "#161917", clusterBkg: "#0E100F", clusterBorder: "#2A2E2B",
-      edgeLabelBackground: "#161917", fontFamily: "JetBrains Mono, monospace", fontSize: "14px"
+      background: token("surface"), primaryColor: token("bg"), primaryTextColor: token("text"), titleColor: token("text"),
+      primaryBorderColor: token("accent"), lineColor: token("dim"), secondaryColor: token("surface"),
+      tertiaryColor: token("surface"), clusterBkg: token("bg"), clusterBorder: token("dim"),
+      edgeLabelBackground: token("surface"), useGradient: false, dropShadow: "none",
+      fontFamily: "JetBrains Mono, monospace", fontSize: "14px"
     }
   });
 </script>
