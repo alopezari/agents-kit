@@ -16,6 +16,7 @@ import resource
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.parse
 
 KIT = os.path.realpath(os.path.expanduser("~/.agents"))
@@ -2685,6 +2686,10 @@ def a_lead_that_is_not_prose_keeps_its_blocks(base):
     repo, _ = investigation_branch(base, notes=notes)
     _, markup = generate(repo, base)
     question = element(markup, "question")
+    notes = INVESTIGATION_NOTES.replace("Why do checkout totals drift by a cent?", "### Why do totals drift?")
+    repo, _ = investigation_branch(in_dir(base, "heading"), notes=notes)
+    _, heading_page = generate(repo, base)
+    assert "<h2" in element(heading_page, "question") and "<h4" not in element(heading_page, "question"), "a heading lead skips levels under the title"
     assert question.count("<li>") == 2 and "- Why" not in text(question), f"AC2: a question written as a list lost its items: {question}"
     assert "<code>round_total()</code>" in element(markup, "answer") and ".verdict-box code{background:var(--bg);color:var(--fg)}" in markup, \
         "AC1: code in the answer's box takes the box's colour on its own background"
@@ -2710,6 +2715,19 @@ def each_results_word_and_tone_stays_as_it_was(base):
         "fixed": "Fixed", "wrong": "Rejected", "intentional": "Rejected", "minor": "Minor", "pre-existing": "Pre-existing",
         "open": "Open", "uncertain": "Open"}, module.LENS_OUTCOME_COLUMNS
     assert module.plain("a" + "_" * 40000 + "b [the trace](trace.txt) `x` **y**") == "a" + "_" * 40000 + "b the trace x y"
+    started = time.monotonic()
+    assert module.plain("[" * 40000 + "[a](b)") == "[" * 40000 + "a"
+    assert time.monotonic() - started < 1, "plain() rescans unmatched brackets"
+
+
+def a_full_embed_budget_still_names_criteria_in_words(base):
+    acs = " ".join(f"AC{n}" for n in range(1, 101))
+    rows = "| # | AC | Check | Expected | Result | Evidence |\n|---|---|---|---|---|---|\n" + "".join(
+        f"| F{n} | {acs} | trace {n} | one call | Supports | seen |\n" for n in range(1, 2001))  # 1 MB of report, a map past 20 MB
+    repo, _ = investigation_branch(base, rows=rows)
+    _, markup = generate(repo, base)
+    assert "the criteria the findings answer are past" in text(markup), "the budget wasn't spent: the test proves nothing"
+    assert finding_field(markup, "F1", "Criterion").startswith("criterion 1; criterion 2;"), "AC3: a spent budget shows a bare AC1"
 
 
 def one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation(base):
@@ -5318,7 +5336,7 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      missing_investigation_sections_are_blockers, blocks_that_need_a_change_do_not_apply,
                      findings_are_not_failures, the_investigation_page_uses_the_change_pages_stylesheet, the_first_screen_answers_the_question,
                      the_body_draws_cards_and_chips, removed_blocks_are_gone_and_absences_stay, the_answers_chips_past_six_say_where_the_rest_are, a_lead_that_is_not_prose_keeps_its_blocks,
-                     each_results_word_and_tone_stays_as_it_was, one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation, the_notes_embed_their_evidence, brief_counts_findings,
+                     each_results_word_and_tone_stays_as_it_was, a_full_embed_budget_still_names_criteria_in_words, one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation, the_notes_embed_their_evidence, brief_counts_findings,
                      the_skills_describe_the_investigation_notes, a_marker_on_an_empty_diff_gives_the_investigation_page,
                      the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert, hypotheses_keep_their_lists_and_subheadings,
                      the_notes_embed_each_file_under_its_first_part, the_answer_needs_more_than_its_confidence,

@@ -2718,7 +2718,7 @@ def ready_sentence(c):
 def plain(markdown_text):
     """A report's short text as words for a sentence: a link by its label, its emphasis and code marks dropped, a snake_case
     name's underscores kept. A run of underscores is matched from its first, or a long one is retried from each."""
-    words = re.sub(r"!?\[([^\]\n]*)\]\([^)\n]*\)", r"\1", " ".join((markdown_text or "").split()))
+    words = re.sub(r"!?\[([^\[\]\n]*)\]\([^)\n]*\)", r"\1", " ".join((markdown_text or "").split()))
     return re.sub(r"[`*]+|(?<!\w)_+|(?<!_)_+(?!\w)", "", words)
 
 
@@ -3092,7 +3092,7 @@ def lead_html(page, text, anchor, tag, attrs, before=""):
     """The first paragraph in <tag attrs>: inline when it is prose; as its blocks, in a div, when it opens a list, a heading, a quote,
     a table or a fenced block."""
     if BLOCK_START.match(text):
-        return f"<div {attrs}>{before}{page.markdown(text, anchor, top=4)}</div>"
+        return f"<div {attrs}>{before}{page.markdown(text, anchor, top=2)}</div>"
     return f"<{tag} {attrs}>{before}{page.inline(text) if text else 'Not recorded.'}</{tag}>"
 
 
@@ -3241,7 +3241,7 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
     map_html = finding_map(rows, labels)
     if not page.charge(map_html, *crits):  # one finding can name criteria by the thousand: the report holds them all
         map_html = f'<p>{state("linked", "dim")} the criteria the findings answer are past the 20 MB embedded in total: see the validation report</p>'
-        crits = [esc(shortened(plain(row["ac"]))) for row in rows]
+        crits = ["; ".join(f"criterion {n}" for n in row["acs"]) or esc(shortened(plain(row["ac"]))) for row in rows]
     blocks = []
     for row, crit in zip(rows, crits):
         files = "".join(page.file_block(named, real) for named, real in named_files(page, row))
