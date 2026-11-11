@@ -5209,6 +5209,21 @@ def both_themes_follow_the_system(base):
     assert "<script" not in markup and "coral" not in style.lower()
 
 
+def prose_stops_at_a_reading_width(base):
+    """Paragraphs, list items in the body and the footer, the cards' definitions, the lead and the answer box hold at most
+    72ch, so a long note on a 1440px screen doesn't run into a line the eye can't follow back."""
+    repo, _ = investigation_branch(in_dir(base, "long"), notes=VERBOSE_NOTES, rows=VERBOSE_ROWS)
+    markup = generate(repo, base, {})[1]
+    caps = {}
+    for selectors, width in re.findall(r"([^{}@]+)\{[^{}]*?max-width:([^;}]+)", stylesheet(markup)):
+        caps.update({selector.strip(): width for selector in re.split(r",(?![^()]*\))", selectors)})  # not the commas inside :is()
+    for prose in ("p", ":is(main,footer) :is(ul,ol):not([class])>li", ".reasons>li", ".kf dd"):
+        assert re.fullmatch(r"(\d+)ch", caps.get(prose, "")) and int(caps[prose][:-2]) <= 72, f"{prose} has no reading width: {caps.get(prose)}"
+    for prose in (".lead", ".verdict", ".tally"):  # each a <p>: a rule of its own may only narrow the cap
+        assert prose not in caps or (caps[prose].endswith("ch") and int(caps[prose][:-2]) <= 72), f"{prose} lifts the reading width: {caps[prose]}"
+        assert f'<p class="{prose[1:]}' in markup, f"no <p> is {prose} on the page"
+
+
 def the_rail_agrees_with_the_verdict_on_a_guide_step_the_ac_column_and_the_spec_switch(base):
     here = in_dir(base, "guide-failed")
     repo, _, gh = ready_branch(here)
@@ -5293,7 +5308,7 @@ DIAGRAM_TESTS = (the_rail_reads_each_phase_from_its_source, the_rail_never_shows
                  the_rail_agrees_with_the_verdict_on_a_guide_step_the_ac_column_and_the_spec_switch,
                  a_regression_cell_keeps_its_words_and_chips_only_what_has_a_result, before_and_after_keep_what_surrounds_the_table,
                  check_names_keep_their_underscores_and_stay_short,
-                 the_verdict_shows_eight_chips_then_a_count)
+                 the_verdict_shows_eight_chips_then_a_count, prose_stops_at_a_reading_width)
 
 
 TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bounds_what_it_embeds,
