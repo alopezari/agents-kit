@@ -2195,7 +2195,7 @@ def test_map(c):
         skipped = c.not_run_types.get(level)
         if not at and not guided and not skipped:
             continue
-        chips = [row_chip(row, check_tags(row, unfilmed)) for row in at] + [step_chip(step, info, ("by hand",)) for step, info in guided]
+        chips = [row_chip(row, check_tags(row, unfilmed)) for row in at] + [step_chip(step, info) for step, info in guided]
         if skipped:
             reason = c.page.inline(skipped["evidence"], links=False) or "no reason recorded"
             chips.append(f'<span class="lc s"><b>Not run</b>{esc(skipped["type"])} tests: {reason}</span>')
@@ -3457,15 +3457,16 @@ h1{font-size:clamp(26px,3.6vw,34px);line-height:1.15;letter-spacing:-.02em;max-w
 h2{font-size:20px;line-height:1.25}
 h3{font-size:15px;line-height:1.35;margin-top:1.1rem}
 h4{font-size:14.5px;line-height:1.4;margin-top:.9rem}
-p{margin:0;max-width:72ch}
+h5{font-size:13.5px;line-height:1.4;margin:.8rem 0 .3rem}
+p,main ul:not([class])>li{margin:0;max-width:65ch}
 a{color:inherit;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:.2em}
 a:hover{text-decoration-color:currentColor}
 :focus-visible{outline:2px solid var(--you);outline-offset:2px;border-radius:4px}
-code{font:400 .86em var(--mono);background:var(--sunk);padding:.06em .3em;border-radius:4px;overflow-wrap:anywhere}
+code{font:400 max(.86em,12.5px) var(--mono);background:var(--sunk);padding:.06em .3em;border-radius:4px;overflow-wrap:anywhere}
 .skip{position:absolute;inset-inline-start:-999px;top:0;background:var(--you);color:var(--bg);padding:.4rem .8rem;font-weight:650}.skip:focus{inset-inline-start:16px;top:8px}
 .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .ok{color:var(--pass)}.need{color:var(--wait)}.fail{color:var(--fail)}.dim{color:var(--faint)}
-.st{font:600 .78em/1.5 var(--mono);padding:0 .35rem;border:1px solid currentColor;border-radius:4px;white-space:nowrap}
+.st{font:600 12px/1.5 var(--mono);padding:0 .35rem;border:1px solid currentColor;border-radius:4px;white-space:nowrap}
 .st.ok{color:var(--pass)}.st.need{color:var(--wait)}.st.dim{color:var(--faint);border-style:dashed}.st.neutral{color:var(--soft)}
 .src,.by,.meta{color:var(--soft);font-size:13px}.by{color:var(--faint)}
 .hero{display:grid;gap:16px}
@@ -3482,7 +3483,7 @@ code{font:400 .86em var(--mono);background:var(--sunk);padding:.06em .3em;border
 .lc{--k:var(--faint);display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:0 6px;font-size:13px;line-height:1.45;padding:3px 8px;border-radius:6px;border:1px solid var(--k);background:var(--card);color:var(--text);text-decoration:none;max-width:100%}
 a.lc:hover{box-shadow:inset 0 0 0 1px var(--k)}
 .lc b{color:var(--k);font-weight:700}
-.lc .id,.lc .tag{font:400 11px/1.6 var(--mono);color:var(--faint)}
+.lc .id,.lc .tag{font:400 12px/1.6 var(--mono);color:var(--faint)}
 .lc .tag{border:1px solid var(--line);border-radius:4px;padding:0 4px;color:var(--soft)}
 .lc.p{--k:var(--pass)}.lc.f{--k:var(--fail)}.lc.w{--k:var(--wait)}
 .lc.s{border-style:dashed;color:var(--soft)}
@@ -3512,7 +3513,7 @@ a.lc:hover{box-shadow:inset 0 0 0 1px var(--k)}
 .box .hl{font-size:16px;font-weight:650;line-height:1.35;margin-bottom:4px;color:var(--text)}
 .kf{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:3px 12px;margin:8px 0 0;font-size:13.5px}
 .kf dt{color:var(--faint)}.kf dd{margin:0}
-.judg{display:block;color:var(--faint);font-size:11.5px}
+.judg{display:block;color:var(--faint);font-size:12px}
 .sec{display:grid;gap:12px}
 .sec>.body,.sec .body{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;scroll-margin-top:2rem}
 details.more{border-top:1px solid var(--line);font-size:14px}
@@ -3564,7 +3565,7 @@ details.more>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;p
 .check>.inner:target{outline:1px solid var(--you);outline-offset:.4rem;border-radius:4px}
 .cid{font:400 12px var(--mono);color:var(--faint)}
 .res{font:700 13px var(--mono);white-space:nowrap;color:var(--pass)}.res.fail{color:var(--fail)}.res.dim{color:var(--faint)}
-.chip{display:inline-block;font:600 11px/1.6 var(--mono);padding:0 .4rem;border:1px solid var(--line);border-radius:4px;white-space:nowrap;color:var(--soft)}
+.chip{display:inline-block;font:600 12px/1.6 var(--mono);padding:0 .4rem;border:1px solid var(--line);border-radius:4px;white-space:nowrap;color:var(--soft)}
 .chip.todo{border-style:dashed;color:var(--wait);border-color:var(--wait)}
 .check dl{display:grid;grid-template-columns:5.2rem minmax(0,1fr);gap:.2rem .6rem;margin:0;font-size:14px}
 .check dt{color:var(--faint)}.check dd{margin:0;min-width:0}

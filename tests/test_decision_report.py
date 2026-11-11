@@ -3140,7 +3140,7 @@ def a_background_comes_before_the_problem(base):
 
 
 def missing_facts_are_left_out(base):
-    repo, _, gh = ready_branch(base, notes="## The problem\nA refresh ran twice.\n\n## The solution\nThe cart stores it.\n")
+    repo, _, gh = ready_branch(base, notes="## The problem\nA refresh ran twice. The shopper saw two discounts.\n\n## The solution\nThe cart stores it.\n")
     _, markup = generate(repo, base, gh)
     problem, fix = text(page_part(markup, "problem")), text(page_part(markup, "fix"))
     for label in ("Some background first", "Who it hits", "What they see", "How bad", "How often", "If we wait", "No deadline", "Not recorded"):
@@ -4848,7 +4848,7 @@ def the_test_map_draws_one_row_per_layer_with_named_chips(base):
     assert list(drawn) == ["Unit", "End to end", "Mutation", "By hand"], list(drawn)
     assert drawn["End to end"][0] == ("p", "check-A1", "Passed", "Coupon applied once live", "A1"), drawn["End to end"]
     assert drawn["End to end"][1][3] == "Tampered total refused replay", drawn["End to end"]
-    assert drawn["By hand"] == [("s", "todo-M1", "To do", "Pay on a phone by hand", "M1"), ("s", "todo-P1", "To do", "Watch the error log by hand", "P1")], drawn["By hand"]
+    assert drawn["By hand"] == [("s", "todo-M1", "To do", "Pay on a phone", "M1"), ("s", "todo-P1", "To do", "Watch the error log", "P1")], drawn["By hand"]
     tally = text(re.search(r'<p class="tally"[^>]*>.*?</p>', markup, re.S).group(0))
     assert tally == "5 checks in the validation report: 5 passed, 0 failed, 0 did not run. 2 steps in the checks guide, to do by hand.", tally
     here = in_dir(base, "mixed")
