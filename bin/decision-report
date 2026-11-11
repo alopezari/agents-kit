@@ -192,7 +192,6 @@ MAKERS = {"spec": "the kit-spec skill writes it", "decision-notes": "kit-ship wr
           "review": "the kit-review skill writes it", "validation": "the kit-validate skill writes it",
           "checks-guide": "the kit-validate skill writes it", "follow-pr": "the kit-follow-pr skill writes it"}
 INVESTIGATION_SECTIONS = {1: "Hypotheses", 2: "Options", 3: "Not checked", 4: "Findings", 5: "Reports"}
-FINDING_WORDS = {"PASS": "as expected", "FAIL": "not as expected"}
 CONFIDENCE = re.compile(r"[*_]*Confidence[*_]*:(.*)", re.I)  # greedy: a lazy group before [*_.]* is quadratic
 CONFIDENCE_LEVEL = re.compile(r"[*_]*(high|medium|low)\b[*_]*[ \t]*(?:[—–:,;.-][ \t]*)?(.*)", re.I)
 HYPOTHESIS_PART = re.compile(r"(?:[-*+][ \t]+)?[*_]*(For|Against)[*_]*:[*_]*[ \t]*(.*)", re.I)
@@ -491,8 +490,32 @@ def state(word, tone):
     return f'<span class="st {tone}">{esc(word)}</span>'
 
 
-def result_tone(result):
-    return {"PASS": "ok", "FAIL": "need"}.get(result, "dim")
+# How a result reads where it shows, as (tone, word): None stands for any other result, a None word for the result's own.
+# A check chip and a step chip use the chip tones, the rest the state tones; a finding is never passed or failed.
+RESULT_LOOKS = {
+    "check chip": {"PASS": ("p", "Passed"), "FAIL": ("f", "Failed"), "NOT RUN": ("s", "Not run"), None: ("s", "Not counted")},
+    "step chip": {"PASS": ("p", "Passed"), "FAIL": ("f", "Failed"), None: ("s", "To do")},
+    "check block": {"PASS": ("ok", "Passed"), "FAIL": ("fail", None), None: ("dim", None)},
+    "check actual": {"PASS": (None, "As expected."), "NOT RUN": (None, "Did not run."), None: (None, "")},
+    "state": {"PASS": ("ok", None), "FAIL": ("need", None), None: ("dim", None)},
+    "finding": {"PASS": ("neutral", "as expected"), "FAIL": ("neutral", "not as expected"), "NOT RUN": ("dim", None), None: ("neutral", None)},
+}
+
+
+def result_look(context, result):
+    looks = RESULT_LOOKS[context]
+    tone, word = looks.get(result, looks[None])
+    return tone, result if word is None else word
+
+
+def result_state(context, result):
+    tone, word = result_look(context, result)
+    return state(word, tone)
+
+
+def is_replay(video):
+    """bin/evidence-video --replay leaves <stem>.replay next to the video it draws from a log."""
+    return os.path.isfile(os.path.splitext(video)[0] + ".replay")
 
 
 def heading(line, deepest=6):
@@ -601,7 +624,7 @@ class Page:
         if ext in PLAYABLE:
             self.shown[real] = block_id
             replay = (f'<p class="meta">A replay of {esc(os.path.splitext(os.path.basename(real))[0])}.txt, recorded after the '
-                      'check ran in full: not a live recording.</p>' if os.path.isfile(os.path.splitext(real)[0] + ".replay") else "")
+                      'check ran in full: not a live recording.</p>' if is_replay(real) else "")
             return (f'<div class="file video" id="{block_id}">{replay}<video controls preload="metadata" aria-label="{esc(os.path.basename(real))}">'
                     f'<source src="{esc(file_href(real))}" type="{PLAYABLE[ext]}">{link}</video>'
                     f'<p class="name">{link} <span class="size">{size} bytes</span></p></div>')
@@ -1625,7 +1648,6 @@ def verdict_of_change(stops, calls):
 # Rendering
 
 CASE_WORDS = {"+": "Checks that it works", "-": "Checks that it refuses", "−": "Checks that it refuses"}
-RESULT_WORDS = {"PASS": "Passed", "FAIL": "FAIL", "NOT RUN": "NOT RUN"}
 
 
 def not_recorded(kind, path):
@@ -2068,16 +2090,16 @@ def check_blocks(c):
         kind = CASE_WORDS.get(row["case"].strip("*_ "), row["case"])
         meta = " · ".join(part for part in (esc(kind), f"proves {acs}", f"evidence {row['fresh']}",
                                             state("no video", "need") if row["anchor"] in unfilmed else "") if part)
-        outcome = RESULT_WORDS.get(row["result"], row["result"])
+        outcome_tone, outcome = result_look("check block", row["result"])
         expected = page.inline(row["expected"]) if row["expected"] and row["expected"].strip() else not_recorded_word()
         observed = page.inline(row["observed"])
-        actual = page.inline(row["detail"]) if row["detail"] else {"PASS": "As expected.", "NOT RUN": "Did not run."}.get(row["result"]) or ("" if observed else not_recorded_word())
+        actual = page.inline(row["detail"]) if row["detail"] else result_look("check actual", row["result"])[1] or ("" if observed else not_recorded_word())
         steps_html = ("<ol>" + "".join(f"<li>{esc(step)}</li>" for step in steps) + "</ol>" if steps else
                       state("linked", "dim") + " past the 20 MB embedded in total: the steps and results are in the evidence below"
                       if over else not_recorded_word())
         row["block"] = (
             f'<details class="check"{"" if row["result"] == "PASS" else " open"}><summary>'
-            f'<span class="res {"fail" if row["result"] == "FAIL" else result_tone(row["result"])}">{esc(outcome)}</span>'
+            f'<span class="res {outcome_tone}">{esc(outcome)}</span>'
             f'<h4>{row["name"]}</h4><span class="cid">{esc(row["id"])}</span><span class="chip">{esc(LAYER_NAMES[row["level"]])}</span></summary>'
             f'<div class="inner" id="{row["anchor"]}"><p class="meta">{meta}</p>{which}<dl>'
             f'<dt>Steps</dt><dd>{steps_html}</dd><dt>Expected</dt><dd>{expected}</dd>'
@@ -2090,11 +2112,11 @@ def check_blocks(c):
 
 
 def method_of(row, files):
-    """How a check was recorded: by hand, a replay of its log (bin/evidence-video --replay leaves <stem>.replay), or a live video."""
+    """How a check was recorded: by hand, a replay of its log, or a live video."""
     if row["level"] == "manual":
         return "by hand"
     videos = [real for _, real in files if real and os.path.splitext(real)[1].lower() in PLAYABLE and os.path.isfile(real) and os.path.getsize(real)]
-    if any(os.path.isfile(os.path.splitext(video)[0] + ".replay") for video in videos):
+    if any(is_replay(video) for video in videos):
         return "replay"
     return "live" if videos else ""
 
@@ -2125,7 +2147,7 @@ def log_and_video_tabs(page, row, blocks, scripts):
         shown.add(stem)
         name = page.new_id(f"tabs-{row['id']}")
         log_first = row["result"] != "PASS"
-        replay = os.path.isfile(stem + ".replay")
+        replay = is_replay(real)
         labels = {"video": "Replay of the log" if replay else "Video", "log": "Log"}
         radios = "".join(f'<input type="radio" class="t-{tab}" name="{name}" id="{tab_id}"{" checked" if on else ""}>'
                          f'<label for="{tab_id}">{labels[tab]}</label>'
@@ -2217,7 +2239,7 @@ def automated_part(c):
     elif c.verify_word == "phase off":
         here = state("phase off", "dim")
     elif c.verify_word:
-        here = f'{state(RESULT_WORDS.get(c.verify_word, c.verify_word), "need")} {checks_run}'
+        here = f'{state(c.verify_word, "need")} {checks_run}'
     else:
         here = "Not recorded"
     ci = {"PASS": "Passed.", "FAIL": "Failed.", "pending": "Still running.", "missing": "No checks yet.", "no CI": "This repository runs no CI.",
@@ -2339,8 +2361,8 @@ def testing_section(c):
 
 # Review
 
-LENS_OUTCOME_COLUMNS = {"fixed": "Fixed", "wrong": "Rejected", "intentional": "Rejected", "rejected": "Rejected", "open": "Open", "uncertain": "Open",
-                        "pre-existing": "Pre-existing", "minor": "Minor"}
+LENS_OUTCOME_COLUMNS = {**{word: {"wrong": "Rejected", "intentional": "Rejected", "uncertain": "Open"}.get(word, word.capitalize())
+                           for word in quality_log_cli.OUTCOMES}, "rejected": "Rejected"}  # the column's own word, read as it always was
 
 
 def lens_outcomes(cell, findings):
@@ -2714,12 +2736,12 @@ def chip(href, tone, word, name, cid="", tags=()):
 
 
 def row_chip(row, tags=()):
-    tone, word = {"PASS": ("p", "Passed"), "FAIL": ("f", "Failed"), "NOT RUN": ("s", "Not run")}.get(row["result"], ("s", "Not counted"))
+    tone, word = result_look("check chip", row["result"])
     return chip(row["anchor"], tone, word, esc(shortened(row["words"])), row["id"], tags)
 
 
 def step_chip(step, info, tags=()):
-    tone, word = {"PASS": ("p", "Passed"), "FAIL": ("f", "Failed")}.get(info["result"], ("s", "To do"))
+    tone, word = result_look("step chip", info["result"])
     return chip(f"todo-{step}", tone, word, esc(shortened(info["name"])), step, tags)
 
 
@@ -2880,7 +2902,7 @@ def after_merge(c):
     elif steps:
         after = '<ol class="owned">' + "".join(
             f'<li><span class="owner">{esc(info["owner"])}</span> <a href="#guide-{esc(step)}"><code>{esc(step)}</code></a> '
-            f'{esc(info["name"])}: {state(info["result"] or "left", result_tone(info["result"] or ""))}{esc(info["date"])}</li>' for step, info in steps) + "</ol>"
+            f'{esc(info["name"])}: {result_state("state", info["result"] or "left")}{esc(info["date"])}</li>' for step, info in steps) + "</ol>"
     else:
         after = f'<p>{state("none", "dim")} the checks guide has no step after the merge</p>'
     ship = f'<h3 id="ship-steps">Ship steps</h3><p class="meta">from <code>{esc(c.ship_path)}</code></p>'
@@ -2958,7 +2980,7 @@ def change_footer(c):
     pushed = bool(pr) and (c.head == pr["headRefOid"] or bool(review_stamp.git("branch", "-r", "--contains", c.head)))
     head_html = page.commit(c.head, pushed) if re.fullmatch(r"[0-9a-f]{40,64}", c.head) else f"<code>{esc(c.head)}</code>"
     phases = f'{state("unavailable", "need")} {esc(c.phases_error)}' if c.phases_error else esc(phase_switches.describe(c.off))
-    verify_html = (state(c.verify_word, result_tone(c.verify_word)) if c.verify_word and c.verify_word != "phase off" else source_html(c, "verify", "verify"))
+    verify_html = (result_state("state", c.verify_word) if c.verify_word and c.verify_word != "phase off" else source_html(c, "verify", "verify"))
     now = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
     return (f'<footer id="footer">{after_merge(c)}{report_annexes(c)}'
             f'<dl class="sum"><div class="row"><dt id="sum-signals">Signals</dt><dd>{signals_line(pr, c.pr_error)}</dd></div></dl>'
@@ -3173,7 +3195,7 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
         expected = row["expected"]
         items.append(
             f'<li class="check" id="{row["anchor"]}"><details><summary><span class="cid">{esc(row["id"])}</span> '
-            f'{state(FINDING_WORDS.get(row["result"], row["result"]), "dim" if row["result"] == "NOT RUN" else "neutral")} '
+            f'{result_state("finding", row["result"])} '
             f'<span class="ac">{esc(row["ac"]) or state("no AC", "dim")}</span> '
             f'<span class="ctext">{page.inline(row["check"], links=False)}</span></summary><dl class="row">'
             f'<dt>Expected</dt><dd>{page.inline(expected) if expected and expected.strip() else state("not recorded", "dim")}</dd>'
@@ -3183,7 +3205,7 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
     s4 = (f'<ol class="checks">{"".join(items)}</ol>' if items else
           f'<p class="absent">{state("not recorded", "dim")} no findings table in <code>{esc(paths["validation"])}</code></p>')
     found_words = review_stamp.FINDINGS + ("NOT RUN", "PASS", "FAIL")
-    s4_meta = " · ".join(f"{n} {FINDING_WORDS.get(word, word)}" for word in found_words
+    s4_meta = " · ".join(f"{n} {result_look('finding', word)[1]}" for word in found_words
                          if (n := sum(row["result"] == word for row in rows))) or "no findings"
 
     # Reports, as annexes

@@ -396,6 +396,11 @@ def check_block(page, check_id):
     return page[start:end.start()]
 
 
+def finding_word(page, check_id):
+    """The result word an investigation shows for a finding."""
+    return re.search(r'<span class="st [^"]*">([^<]+)</span>', check_block(page, check_id)).group(1)
+
+
 def parts_of(page):
     """The change page's parts, in the order they come."""
     return re.findall(r'<div class="body" id="([\w-]+)"', page)
@@ -2472,6 +2477,19 @@ def findings_are_not_failures(base):
         "AC4: the gates' parser reads findings words"
     guide = "### M1. Look\n- **Where:** you\n\n## Results\n\n| Step | Result | Evidence |\n|---|---|---|\n| M1 | Supports | seen |\n"
     assert review_stamp.guide_steps(guide)["M1"]["result"] is None, "AC4: the checks guide reads a findings word"
+
+
+def one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation(base):
+    row = "| A1 | AC1 | e2e | Coupon applied once | + | one discount line | PASS | the discount line |"
+    here, there = in_dir(base, "change"), in_dir(base, "investigation")
+    repo, _, gh = ready_with_rows(here, lambda ev: ready_rows(ev).replace(ready_rows(ev).split("\n", 1)[0], row))
+    change = generate(repo, here, gh)[1]
+    assert [chip[2] for chips in test_map(change).values() for chip in chips if chip[4] == "A1"] == ["Passed"], test_map(change)
+    assert text(re.search(r'<span class="res [^"]*">(.*?)</span>', check_block(change, "A1")).group(1)) == "Passed", check_block(change, "A1")[:300]
+    header = "| # | AC | Level | Check | Case | Expected | Result | Evidence |\n|---|---|---|---|---|---|---|---|\n"
+    repo, _ = investigation_branch(there, rows=header + row + "\n")
+    investigation = generate(repo, there)[1]
+    assert finding_word(investigation, "A1") == "as expected", check_block(investigation, "A1")[:300]
 
 
 def the_notes_embed_their_evidence(base):
@@ -5065,7 +5083,7 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      signals_read_only_the_last_2_mb, an_investigation_is_chosen_by_the_marker_only,
                      an_empty_diff_only_suggests_the_mode, the_investigation_page_shows_each_section,
                      missing_investigation_sections_are_blockers, blocks_that_need_a_change_do_not_apply,
-                     findings_are_not_failures, the_notes_embed_their_evidence, brief_counts_findings,
+                     findings_are_not_failures, one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation, the_notes_embed_their_evidence, brief_counts_findings,
                      the_skills_describe_the_investigation_notes, a_marker_on_an_empty_diff_gives_the_investigation_page,
                      the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert, hypotheses_keep_their_lists_and_subheadings,
                      the_notes_embed_each_file_under_its_first_part, the_answer_needs_more_than_its_confidence,
