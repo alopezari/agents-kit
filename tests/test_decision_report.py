@@ -5226,8 +5226,8 @@ def prose_stops_at_a_reading_width(base):
     assert not lifted, f"these lift the reading width: {lifted}"
     assert ".opts{" in stylesheet(markup) and "minmax(14rem,1fr)" in stylesheet(markup).split(".opts{")[1].split("}")[0], \
         "option cards no longer share a row"  # a fixed maximum makes auto-fit count columns by it and stacks the cards
-    facts = re.search(r"\.facts\{[^}]*grid-template-columns:\S+ minmax\(0,(\d+)ch\)", stylesheet(markup))
-    assert facts and int(facts.group(1)) <= 72, "a fact's definition can run wider than a reading width"
+    facts = re.fullmatch(r"calc\(11rem \+ (\d+)ch\)", caps.get(".facts", ""))
+    assert facts and int(facts.group(1)) <= 72, f"a fact's definition can run wider than a reading width: {caps.get('.facts')}"
 
 
 def the_rail_agrees_with_the_verdict_on_a_guide_step_the_ac_column_and_the_spec_switch(base):

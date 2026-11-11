@@ -3506,7 +3506,7 @@ details.more>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;p
 .check dl{display:grid;grid-template-columns:5.2rem minmax(0,1fr);gap:.2rem .6rem;margin:0;font-size:14px}
 .check dt{color:var(--faint)}.check dd{margin:0;min-width:0}
 .ac{text-decoration:underline;text-decoration-style:dotted}
-.facts{display:grid;grid-template-columns:10rem minmax(0,55ch);gap:0 1rem;margin:0;border-top:1px solid var(--line);font-size:14px}
+.facts{display:grid;grid-template-columns:10rem minmax(0,1fr);max-width:calc(11rem + 55ch);gap:0 1rem;margin:0;border-top:1px solid var(--line);font-size:14px}
 .facts dt,.facts dd{padding:.5rem 0;border-bottom:1px solid var(--line);margin:0}
 .facts dt{color:var(--soft)}
 .dots{display:flex;flex-wrap:wrap;gap:.3rem;margin:.2rem 0 .3rem;list-style:none;padding:0}
