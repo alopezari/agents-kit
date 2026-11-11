@@ -7,7 +7,7 @@ related_targets: []
 
 # Decision page (`bin/reports html`)
 
-Scope: one generated, local, static HTML page per branch. Mode: Read. Audience: the kit's owner deciding a merge, who may not know the project; sometimes a colleague the page is forwarded to. The change page has its own stylesheet (`CHANGE_STYLE`); the investigation page keeps the site's palette and its own (`STYLE`) until it moves to the same look.
+Scope: one generated, local, static HTML page per branch. Mode: Read. Audience: the kit's owner deciding a merge, who may not know the project; sometimes a colleague the page is forwarded to. Both pages share one stylesheet (`CHANGE_STYLE`). The investigation page answers a question instead: the question as the lead, the answer in the verdict's box with its confidence, blocker and decision chips and a findings bar, then hypotheses, options, not checked, findings and decisions as cards and chips.
 
 ## Direction contract
 THESIS: a map of one decision: is this PR safe to merge, or is something missing that could compromise system stability or the user's experience? The verdict is taken in at a glance, and the flow and the evidence are drawn as diagrams rather than told in prose.

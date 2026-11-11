@@ -1,0 +1,1 @@
+- The investigation page takes the change page's look and themes: the question and its answer first, with the confidence, each blocker and each decision as a chip and a findings bar; hypotheses as cards with For and Against side by side, findings as a map of chips by criterion, and decisions as cards. The long parts fold, and one footer line says what doesn't apply.
