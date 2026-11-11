@@ -436,13 +436,15 @@ def guard_keeps_variables_through_heredocs_and_quoted_text(base):
                 "python3 $S/m.py $S",
                 scratch + "cat > $S/d.js <<JS\nconst S=process.argv[2];\nJS",
                 "python3 - <<'PY'\ns = '''it's'''\nPY\nSP=/tmp/x; rm -rf $SP/out; tool eval \"1+1\"",
-                "S=/tmp/x; sed -i 's/a:unset}/b/' $S/f; rm -rf $S/m"]:
+                "S=/tmp/x; sed -i 's/a:unset}/b/' $S/f; rm -rf $S/m",
+                "S=/tmp/x\n\"$T/tool\" - <<'EOF'\nS=/usr\nEOF\nrm -rf $S/lib"]:
         assert guard_reason(cmd) == "", f"the outer shell never runs that text: {cmd!r}"
     for cmd in ["S=/tmp/x\nbash <<'EOF'\nS=$HOME\nrm -rf $S/y\nEOF", "cat > f <<'EOF'\nT=/tmp/x\nEOF\nrm -rf $T/y",
                 "S=/tmp/x; read S; rm -rf $S", "S=/tmp/x; eval 'unset S'; rm -rf $S/y",
                 "S=/tmp/x; trap 'unset S' DEBUG; rm -rf $S/y"]:
         assert guard_reason(cmd) != "", f"a body's own delete, or a variable the shell changes: {cmd!r}"
     for middle in [". /dev/stdin <<'EOF'\nS=/usr\nEOF", "eval \"$(cat <<'EOF'\nS=/usr\nEOF\n)\"",
+                   "$c /dev/stdin <<'EOF'\nS=/usr\nEOF", "`echo source` /dev/stdin <<'EOF'\nS=/usr\nEOF",
                    "cat > f <<EOF\necho $((S=1))\nEOF", "cat > f <<EOF\n${S:=/usr}\nEOF",
                    "echo hi # see <<EOF\nS=/usr\nEOF", "x=$((1<<2))\nS=/usr\n2))",
                    "echo \"\ncat > f <<JS\n\"; S=/usr; echo \"\nJS\n\""]:
@@ -504,7 +506,7 @@ def guard_denials_name_the_rewrite(base):
     for reason in [unresolved, branch, plain, guard_reason("git push --force origin x"), guard_reason("sudo ls")]:
         assert "Nothing in this command ran" in reason, reason
         last = closing(reason)
-        assert "the user" in last and "the agent that started you" in last, last
+        assert "ask the user" in last and "the agent that started you" in last, last
 
 
 def guard_reads_code_not_text(base):

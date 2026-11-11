@@ -1380,7 +1380,9 @@ def blank_lines(text, numbers):
 
 
 # A command the current shell runs as its own code, at a command's start: a heredoc body it reads, or any text, may
-# then set its variables. A command name the shell only knows when it runs ($cmd) may be one.
+# then set its variables. A command name the shell only knows when it runs ($cmd) may be one, unless it is written
+# as a path ("$S/tool"): a name with a slash is a program's, never a builtin's.
+PROGRAM_PATH = re.compile(r"(?=[^/]*/)(?:\$\w+|\$\{\w+\}|[\w.@%+:,~/-])+")
 CURRENT_SHELL_RUNNER = re.compile(r"(?:^|[;&|(){}`\n])[ \t]*(?:(?:if|then|else|elif|do|while|until|time|!|command|builtin|"
                                   r"exec|nohup|\w+=[^\s;&|()]*)[ \t]+(?:-[^\s;&|()]*[ \t]+)*)*([^\s;&|()<>]+)")
 CURRENT_SHELL_RUNNERS = {"source", ".", "eval", "trap", "alias"}
@@ -1395,7 +1397,8 @@ def opaque_heredoc_lines(text):
     None when that can't be told for sure: a heredoc read_heredocs() can't read or that no delimiter line closes, a
     delimiter it may read another way, a header in a comment, a string, a $(…) or backticks or on a line with ((, $[
     or exec, a `<<` it doesn't take for a header, a body line ending in a backslash before the delimiter, an unquoted
-    body that may assign, or a source, ., eval, trap, alias or $cmd at a command's start anywhere in the text."""
+    body that may assign, or a source, ., eval, trap, alias or a $cmd that isn't a path at a command's start anywhere
+    in the text."""
     lines = text.split("\n")
     spans = heredoc_spans(lines)
     if spans is None:
@@ -1426,7 +1429,8 @@ def opaque_heredoc_lines(text):
                 return None  # a header in a string that spans lines
     for m in CURRENT_SHELL_RUNNER.finditer(blanked):
         word = re.sub(r"['\"\\]", "", m.group(1))
-        if word in CURRENT_SHELL_RUNNERS or ("$" in word or "`" in word) and not re.match(r"\w+\+?=", word):
+        named_at_run_time = ("$" in word or "`" in word) and not re.match(r"\w+\+?=", word)
+        if word in CURRENT_SHELL_RUNNERS or named_at_run_time and not PROGRAM_PATH.fullmatch(word):
             return None
     return frozenset(body)
 
