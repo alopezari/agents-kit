@@ -5217,15 +5217,17 @@ def prose_stops_at_a_reading_width(base):
     caps = {}
     for selectors, width in re.findall(r"([^{}@]+)\{[^{}]*?max-width:([^;}]+)", stylesheet(markup)):
         caps.update({selector.strip(): width for selector in re.split(r",(?![^()]*\))", selectors)})  # not the commas inside :is()
-    for prose in ("p", ":is(main,footer) :is(ul,ol):not([class])>li", ".reasons>li", ".kf dd", ".fresh li", ".stepl li"):
+    for prose in ("p", ":is(main,footer) :is(ul,ol):not([class])>li", ".reasons>li", ".kf dd", ".fresh li", ".stepl li", ".crit>li", ".owned>li", ".check dd", ".opts li"):
         assert re.fullmatch(r"(\d+)ch", caps.get(prose, "")) and int(caps[prose][:-2]) <= 72, f"{prose} has no reading width: {caps.get(prose)}"
     for prose in (".lead", ".verdict", ".tally"):  # each a <p>: a rule of its own may only narrow the cap
         assert prose not in caps or (caps[prose].endswith("ch") and int(caps[prose][:-2]) <= 72), f"{prose} lifts the reading width: {caps[prose]}"
         assert f'<p class="{prose[1:]}' in markup, f"no <p> is {prose} on the page"
-    lifted = [selector for selector, width in caps.items() if width.strip() == "none" and selector not in ("#freshness.stale", ".map .none")]
+    lifted = [selector for selector, width in caps.items() if width.strip() == "none" and selector != ".map .none"]
     assert not lifted, f"these lift the reading width: {lifted}"
-    options = re.search(r"\.opts\{[^}]*grid-template-columns:repeat\(auto-fit,minmax\(14rem,(\d+)ch\)\)", stylesheet(markup))
-    assert options and int(options.group(1)) <= 72, "an option card can run wider than a reading width"
+    assert ".opts{" in stylesheet(markup) and "minmax(14rem,1fr)" in stylesheet(markup).split(".opts{")[1].split("}")[0], \
+        "option cards no longer share a row"  # a fixed maximum makes auto-fit count columns by it and stacks the cards
+    facts = re.search(r"\.facts\{[^}]*grid-template-columns:\S+ minmax\(0,(\d+)ch\)", stylesheet(markup))
+    assert facts and int(facts.group(1)) <= 72, "a fact's definition can run wider than a reading width"
 
 
 def the_rail_agrees_with_the_verdict_on_a_guide_step_the_ac_column_and_the_spec_switch(base):

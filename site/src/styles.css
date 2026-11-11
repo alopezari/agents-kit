@@ -147,6 +147,7 @@ img, svg { max-width: 100%; }
 .prose strong { color: var(--text); }
 .prose em { color: var(--text); }
 .prose :not(pre) > code { font-size: 0.86em; color: var(--text); background: var(--surface); border: 1px solid var(--line); padding: 1px 6px; overflow-wrap: anywhere; }
+.prose a code { color: inherit; }
 .prose pre { background: var(--surface); border: 1px solid var(--line); padding: 20px 24px; overflow-x: auto; font-size: 14px; line-height: 1.8; }
 .prose pre code { color: var(--text); }
 .prose .table-wrap { overflow-x: auto; margin: 20px 0; border: 1px solid var(--line); }

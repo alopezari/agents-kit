@@ -102,10 +102,22 @@ for page in ("index.html", "docs.html"):
         if not found or found.group(1).upper() != site.get("bg"):
             failures.append(f"{page}'s {theme} theme-color is {found and found.group(1)}, the site's --bg is {site.get('bg')}")
 
-mermaid = re.search(r"mermaid\.initialize\((.*?)\);", open(os.path.join(SITE, "docs.html")).read(), re.S).group(1)
-for needed in ('getPropertyValue', 'useGradient: false', 'dropShadow: "none"', 'look: "classic"'):
-    if needed not in mermaid and needed not in open(os.path.join(SITE, "docs.html")).read():
+docs = open(os.path.join(SITE, "docs.html")).read()
+mermaid = re.search(r"mermaid\.initialize\((.*?)\);", docs, re.S).group(1)
+if "getPropertyValue" not in docs:
+    failures.append("docs.html's Mermaid setup doesn't read the page's tokens")
+for needed in ('useGradient: false', 'dropShadow: "none"', 'look: "classic"'):
+    if needed not in mermaid:
         failures.append(f"docs.html's Mermaid setup lacks {needed}")
+for name in re.findall(r'token\("([\w-]+)"\)', mermaid):
+    if name not in site_light or name not in site_dark:
+        failures.append(f"docs.html's Mermaid setup reads --{name}, which styles.css doesn't define in both themes")
+defined = set(re.findall(r"--([\w-]+)\s*:", styles))
+for root, _, names in os.walk(SITE):
+    for name in names:
+        for used in sorted(set(re.findall(r"var\(--([\w-]+)", open(os.path.join(root, name), errors="replace").read()))):
+            if used not in defined:
+                failures.append(f"{name} uses --{used}, which styles.css doesn't define")
 if HEX.search(mermaid):
     failures.append("docs.html's Mermaid setup copies colours instead of reading the page's tokens")
 
