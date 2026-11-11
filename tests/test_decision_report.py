@@ -308,17 +308,24 @@ def text(markup):
 
 def footer_fold(page, title):
     """One of the change page's footer folds, up to the next one or the footer's own lists."""
-    found = re.search(rf"<details><summary>{title}</summary>.*?(?=<details><summary>|<dl class=\"sum\">)", footer(page), re.S)
+    found = re.search(rf"<details><summary>{title}</summary>.*?(?=<details><summary>|<dl class=\"sum\">|<dl class=\"ids\">)", footer(page), re.S)
     assert found, f"no {title} in the footer"
     return found.group(0)
 
 
+INVESTIGATION_PARTS = {1: "hypotheses", 2: "options", 3: "not-checked", 4: "findings"}
+
+
+def investigated(page):
+    return '<p class="src">Investigation page for' in page
+
+
 def section(page, number):
-    """A section by the number it has on the investigation page, or by the part that took over on the change page: the
-    tests and the coverage are Testing, the review is Code review, then the footer's merge steps and its reports."""
-    found = re.search(rf'<details class="sec"[^>]* id="s0{number}".*?(?=<details class="sec"|</main>)', page, re.S)
-    if found:
-        return found.group(0)
+    """A section by the number it had on the investigation page (hypotheses, options, not checked, findings, then the
+    footer's reports), or by the part that took over on the change page: the tests and the coverage are Testing, the
+    review is Code review, then the footer's merge steps and its reports."""
+    if investigated(page):
+        return footer_fold(page, "Full reports") if number == 5 else page_part(page, INVESTIGATION_PARTS[number])
     if number in (1, 2):
         return page_part(page, "testing")
     if number == 3:
@@ -327,13 +334,16 @@ def section(page, number):
 
 
 def summary(page):
-    """The investigation page's summary, or the change page's quality signals."""
-    found = re.search(r'<section id="summary".*?</section>', page, re.S) or re.search(r'<dl class="sum">.*?</dl>', page, re.S)
+    """The investigation page's first screen, or the change page's quality signals."""
+    found = re.search(r'<header class="hero">.*?</header>' if investigated(page) else r'<dl class="sum">.*?</dl>', page, re.S)
     assert found, "no summary"
     return found.group(0)
 
 
 def summary_row_markup(page, name):
+    """On the investigation page the question or the answer with its fold, else a row of the change page's signals."""
+    if investigated(page):
+        return element(page, name) + (element(page, f"{name}-more") if f'id="{name}-more"' in page else "")
     found = re.search(rf'<div class="row"><dt id="sum-{name}">(.*?)(?=<div class="row">|</dl>)', summary(page), re.S)
     assert found, f"no {name} row in the summary"
     return found.group(1)
@@ -349,28 +359,16 @@ def verdict_items(page, list_id):
 
 
 def listed(page, name):
-    """The items of one of the investigation page's summary lists, or on the change page what took over from it: blockers
+    """On the investigation page its blockers or its decisions; on the change page what took over from them: blockers
     are what stops the merge, decisions what needs the owner's call and the decisions they own, warnings the rest."""
-    if '<header class="hero">' in page:
-        if name == "blockers":
-            return verdict_items(page, "stops")
-        if name == "warnings":
-            return verdict_items(page, "notes")
-        return verdict_items(page, "calls") + [text(found) for found in re.findall(r'<article class="decision">(.*?)</article>', page, re.S)]
-    markup = summary(page)
-    start = markup.find(f'<ol class="items" id="{name}-items">')
-    assert start >= 0, f"no {name} list in the summary"
-    items, depth, item_start = [], 0, None
-    for tag in re.finditer(r"<(/?)(ol|li)\b[^>]*>", markup[start:]):
-        closing, kind = tag.group(1), tag.group(2)
-        depth += -1 if closing else 1
-        if kind == "li" and depth == 2 and not closing:
-            item_start = tag.end()
-        elif kind == "li" and depth == 1 and closing:
-            items.append(text(markup[start:][item_start:tag.start()]))
-        elif depth == 0:
-            return items
-    raise AssertionError(f"the {name} list is not closed")
+    decisions = [text(found) for found in re.findall(r'<article class="decision">(.*?)</article>', page, re.S)]
+    if investigated(page):
+        return verdict_items(page, "blockers") if name == "blockers" else decisions if name == "decisions" else []
+    if name == "blockers":
+        return verdict_items(page, "stops")
+    if name == "warnings":
+        return verdict_items(page, "notes")
+    return verdict_items(page, "calls") + decisions
 
 
 def footer(page):
@@ -386,12 +384,11 @@ def footer_value(page, name):
 
 
 def check_block(page, check_id):
-    investigated = re.search(rf'<li class="check[^"]*" id="check-{check_id}">.*?</details></li>', page, re.S)
-    if investigated:
-        return investigated.group(0)
     anchor = page.find(f'id="check-{check_id}"')
     start = page.rfind('<details class="check', 0, anchor)
     assert anchor >= 0 and start >= 0, f"no block for {check_id}"
+    if investigated(page):
+        return closed_at(page, start)
     end = re.compile(r'<details class="(?:check|more|sec)|<h3|<h4|<footer').search(page, anchor)
     return page[start:end.start()]
 
@@ -2319,6 +2316,63 @@ FINDINGS_ROWS = """| # | AC | Check | Expected | Result | Evidence |
 """
 
 
+LONG = ("The cart, the tax module and the payment gateway each hold their own copy of the total, and each copy is "
+        "rounded by its own rule before it is compared with the others at the end of checkout.")
+VERBOSE_NOTES = f"""Mode: investigation
+
+## The question
+Why do checkout totals drift by a cent on long carts, and only for some currencies?
+
+{LONG}
+
+{LONG} ![before](before.png)
+
+## The answer
+Rounding runs twice: once per line and once on the total, so a long cart gathers a cent of drift. ![after](after.png)
+
+{LONG}
+
+{LONG} The trace is in [the trace](missing-trace.txt).
+
+Confidence: medium, the trace covers two currencies only
+
+## Hypotheses
+
+### H1. Rounding runs twice
+The cart rounds in two places.
+
+{LONG}
+
+{LONG}
+For: the trace shows two round() calls. {LONG}
+Against:
+
+### H2. The currency table is stale
+{LONG}
+For:
+Against: the table matches the bank's rates. {LONG}
+
+### H3. The tax module truncates
+{LONG}
+
+{LONG} See [the tax lines](missing-tax.txt).
+For: the tax lines end in a zero. {LONG}
+Against: the tax tests round. {LONG}
+
+## Options
+- Round once at the total: chosen, the bank rounds there. {LONG}
+- Round per line: rejected, it drifts on long carts. {LONG}
+
+## Not checked
+The refund path: it needs the payment sandbox. {LONG}
+
+## What you must decide
+""" + "".join(f"- Decision {n}: round the {n}th way. {LONG}\n  Unblocks: the fix in part {n}.\n" for n in range(1, 9))
+
+VERBOSE_ROWS = FINDINGS_ROWS + "".join(f"| F{n} | AC1 | a cart of {n} lines, {LONG} | totals match, {LONG} | PASS | totals match, {LONG} |\n"
+                                       for n in range(7, 15))
+
+
 def investigation_branch(base, notes=INVESTIGATION_NOTES, rows=FINDINGS_ROWS):
     """shop on feature/cart, its notes holding the marker and its validation findings rows."""
     repo = new_repo(base)
@@ -2335,18 +2389,23 @@ def element(page, element_id):
     """The markup of the element with that id, up to its own closing tag."""
     start = re.search(rf'<(\w+)\b[^>]*\bid="{re.escape(element_id)}"', page)
     assert start, f"no element {element_id}"
-    tag, depth = start.group(1), 0
-    for found in re.finditer(rf"<(/?){tag}\b[^>]*>", page[start.start():]):
+    return closed_at(page, start.start())
+
+
+def closed_at(page, start):
+    """The element that opens at start, up to its own closing tag."""
+    tag, depth = re.match(r"<(\w+)", page[start:]).group(1), 0
+    for found in re.finditer(rf"<(/?){tag}\b[^>]*>", page[start:]):
         depth += -1 if found.group(1) else 1
         if depth == 0:
-            return page[start.start():start.start() + found.end()]
-    raise AssertionError(f"{element_id} is not closed")
+            return page[start:start + found.end()]
+    raise AssertionError(f"{page[start:start + 60]} is not closed")
 
 
 def an_investigation_is_chosen_by_the_marker_only(base):
     repo, _ = investigation_branch(base)
     _, markup = generate(repo, base)
-    assert "Investigation page for" in text(markup) and 'id="sum-question"' in markup, "AC1: the marker gave no investigation page"
+    assert "Investigation page for" in text(markup) and 'id="question"' in markup, "AC1: the marker gave no investigation page"
     assert footer_value(markup, "Changed files").startswith("2"), "AC1: the footer doesn't count the diff's files"
     write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Mode: investigation", "MODE:  Investigation \t"))
     _, markup = generate(repo, base)
@@ -2377,13 +2436,13 @@ def the_investigation_page_shows_each_section(base):
     _, markup = generate(repo, base)
     assert "Why do checkout totals drift by a cent?" in summary_row(markup, "question")
     answer = summary_row(markup, "answer")
-    assert "Rounding runs twice" in answer and "medium confidence" in answer and "Confidence:" not in answer, answer
+    assert "Rounding runs twice" in answer and "Medium confidence" in answer and "Confidence:" not in answer, answer
     decisions = listed(markup, "decisions")
     assert len(decisions) == 2, decisions
     assert "Round at the total or per line." in decisions[0] and "Unblocks: the fix in the cart." in decisions[0], decisions
     assert "Keep the old receipts" in decisions[1] and "Unblocks: not recorded" in decisions[1], decisions
     assert listed(markup, "blockers") == [], listed(markup, "blockers")
-    assert "2 decisions · 0 blockers" in text(re.search(r'<p class="strip">.*?</p>', markup, re.S).group(0))
+    assert [chip[1:3] for chip in chips_in(element(markup, "answer"))] == [("d1", "Your call"), ("d2", "Your call")], "AC2: a decision has no chip"
     hypotheses = section(markup, 1)
     assert "H1. Rounding runs twice" in text(element(hypotheses, "hyp-1")) and "The cart rounds in two places." in text(element(hypotheses, "hyp-1"))
     assert "two round() calls" in text(element(hypotheses, "hyp-1-for"))
@@ -2409,7 +2468,7 @@ def the_investigation_page_shows_each_section(base):
     assert footer_value(markup, "Working tree") == "dirty", footer_value(markup, "Working tree")
     write(repo, "decision-notes", INVESTIGATION_NOTES.split("## What you must decide")[0] + "## What you must decide\n- None\n")
     _, markup = generate(repo, base)
-    assert listed(markup, "decisions") == [] and "0 decisions" in text(markup), "AC2: an item None asks a decision"
+    assert listed(markup, "decisions") == [] and "No decisions needed." in text(page_part(markup, "decide")), "AC2: an item None asks a decision"
 
 
 def missing_investigation_sections_are_blockers(base):
@@ -2419,7 +2478,8 @@ def missing_investigation_sections_are_blockers(base):
     for name in ("The question", "The answer", "What you must decide"):
         assert sum(name in item for item in blockers) == 1, (name, blockers)
     assert len(blockers) == 3, f"AC2: an empty part became a blocker: {blockers}"
-    assert "none recorded" in text(section(markup, 2)) and "none recorded" in text(element(markup, "hyp-1-for"))
+    assert [chip[2] for chip in chips_in(element(markup, "answer"))] == ["Blocks"] * 3, "a missing part isn't named in the answer's box"
+    assert 'id="options"' not in markup and "none recorded" in text(element(markup, "hyp-1-for")), "an empty Options shows a placeholder"
     for line, word in (("", "missing"), ("Confidence: certain", "unknown")):
         write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", line))
         _, markup = generate(repo, base)
@@ -2429,7 +2489,7 @@ def missing_investigation_sections_are_blockers(base):
     _, markup = generate(repo, base)
     answer = summary_row(markup, "answer")
     assert listed(markup, "blockers") == [], f"AC2: a reason after the level made it unknown: {listed(markup, 'blockers')}"
-    assert "medium confidence" in answer and "the refund path wasn" in answer and "Confidence:" not in answer, answer
+    assert "Medium confidence" in answer and "the refund path wasn" in answer and "Confidence:" not in answer, answer
 
 
 def blocks_that_need_a_change_do_not_apply(base):
@@ -2442,10 +2502,10 @@ def blocks_that_need_a_change_do_not_apply(base):
         _, markup = generate(repo, base, {"error": True})
         assert not os.path.exists(calls), f"AC3: gh was called: {open(calls).read()}"
         page = text(markup)
-        line = summary_row(markup, "gates")
+        line = text(element(footer(markup), "not-applying"))
         for block in ("PR", "CI", "verify", "review stamp", "validate stamp", "checks guide", "ship steps"):
             assert block in line, (block, line)
-        assert page.count("does not apply") == 1 and "does not apply" in line, line
+        assert page.count("do not apply") == 1 and "do not apply" in line, line
         for word in ("no PR yet", "missing", "unavailable", "phase off"):
             assert word not in page, (off, word)
         assert all(f'id="check-F{n}"' in section(markup, 4) for n in range(1, 7)), f"AC3: {off} hid a finding"
@@ -2461,8 +2521,8 @@ def findings_are_not_failures(base):
                       (FINDINGS_ROWS.replace("| Supports |", "| **Supports** |"), range(1, 7))):
         repo, _ = investigation_branch(base, rows=rows)
         _, markup = generate(repo, base)
-        words = {n: re.search(r'<span class="st [^"]*">([^<]+)</span>', check_block(markup, f"F{n}")).group(1) for n in ids}
-        expected = {1: "Supports", 2: "Refutes", 3: "Inconclusive", 4: "NOT RUN", 5: "not as expected", 6: "as expected"}
+        words = {n: finding_word(markup, f"F{n}") for n in ids}
+        expected = {1: "Supports", 2: "Refutes", 3: "Inconclusive", 4: "Not run", 5: "not as expected", 6: "as expected"}
         assert words == {n: expected[n] for n in ids}, words
         for n in ids:
             block = check_block(markup, f"F{n}")
@@ -2477,6 +2537,122 @@ def findings_are_not_failures(base):
         "AC4: the gates' parser reads findings words"
     guide = "### M1. Look\n- **Where:** you\n\n## Results\n\n| Step | Result | Evidence |\n|---|---|---|\n| M1 | Supports | seen |\n"
     assert review_stamp.guide_steps(guide)["M1"]["result"] is None, "AC4: the checks guide reads a findings word"
+
+
+def finding_field(page, check_id, name):
+    """One field of a finding's block, as text."""
+    found = re.search(rf"<dt>{name}</dt><dd>(.*?)</dd>(?=<dt>|</dl>)", check_block(page, check_id), re.S)
+    assert found, f"no {name} in {check_id}"
+    return text(found.group(1))
+
+
+def the_investigation_page_uses_the_change_pages_stylesheet(base):
+    repo, _ = investigation_branch(base)
+    _, markup = generate(repo, base)
+    style = re.search(r"<style>(.*?)</style>", markup, re.S).group(1)
+    for needle in ("--bg:#FCFCFC", "@media (prefers-color-scheme:dark)", ".verdict-box", ".lc.p"):
+        assert needle in style, f"AC1: the page lacks the change page's {needle}"
+    for needle in ("--surface:#161917", "--human:#FF9B73"):
+        assert needle not in style, f"AC1: the page still carries the old stylesheet's {needle}"
+    with open(os.path.join(KIT, "bin", "decision-report")) as fh:
+        source = fh.read()
+    assert "\nSTYLE = " not in source and "\ndef document(" not in source, "AC1: the old STYLE or document() is left"
+
+
+def the_first_screen_answers_the_question(base):
+    repo, _ = investigation_branch(base)
+    _, markup = generate(repo, base)
+    hero = summary(markup)
+    assert text(element(hero, "question")) == "Why do checkout totals drift by a cent?", text(element(hero, "question"))
+    box = element(hero, "answer")
+    assert 'class="verdict-box' in box and "Rounding runs twice" in text(box), "AC2: the answer isn't in the box"
+    assert re.search(r'<span class="lc n"><b>Medium confidence</b>', box), "AC2: the confidence isn't a chip in words"
+    tally = text(re.search(r'<p class="tally">(.*?)</p>', hero, re.S).group(1))
+    assert tally == ("6 findings in the validation report: 1 supports, 1 refutes, 1 inconclusive, 1 not run, "
+                     "1 as expected, 1 not as expected."), tally
+    assert '<div class="bar" aria-hidden="true">' in hero, "AC2: no findings bar"
+    assert 'class="rail"' not in markup, "AC2: a ship rail is drawn"
+    assert hero.index('id="question"') < hero.index('id="answer"') < hero.index('class="tally"'), "AC2: the first screen's order"
+    for line, said in (("Confidence: high", ("High confidence", "")), ("Confidence: low, one trace only", ("Low confidence", "one trace only"))):
+        write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", line))
+        _, markup = generate(repo, base)
+        chip_text = re.search(r'<span class="lc n"><b>(.*?)</b>(.*?)</span>', element(markup, "answer"), re.S)
+        assert chip_text and (text(chip_text.group(1)), text(chip_text.group(2))) == said, (line, chip_text and chip_text.group(0))
+    write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "Confidence: certain"))
+    _, markup = generate(repo, base)
+    chips = chips_in(element(markup, "answer"))
+    assert chips[0][1:3] == ("answer", "Blocks") and "Confidence" in chips[0][3] and "unknown" in chips[0][3], chips
+
+    repo, evidence = investigation_branch(in_dir(base, "long"), notes=VERBOSE_NOTES, rows=VERBOSE_ROWS)
+    put(os.path.join(evidence, "before.png"), PNG)
+    put(os.path.join(evidence, "after.png"), PNG)
+    _, markup = generate(repo, base)
+    lead = text(element(markup, "question"))
+    assert lead.startswith("Why do checkout totals drift") and "payment gateway" not in lead, f"AC2: the lead isn't the first paragraph: {lead}"
+    assert "payment gateway" in text(element(markup, "question-more")) and "data:image/png" in element(markup, "question-more"), \
+        "AC2: the rest of the question and its image don't fold below"
+    box = element(markup, "answer")
+    assert "Rounding runs twice" in text(box) and "payment gateway" not in text(box) and "data:image" not in box, \
+        "AC2: the answer's box holds more than its first paragraph"
+    more = element(markup, "answer-more")
+    assert "payment gateway" in text(more) and "data:image/png" in more and "missing-trace.txt" in text(more), \
+        "AC2: the rest of the answer and its evidence don't fold below"
+    chips = chips_in(box)
+    assert [chip[2] for chip in chips] == ["Blocks"] * 2 + ["Your call"] * 4 + ["4 more"], [chip[2] for chip in chips]
+    assert chips[-1][1] == "decide", chips[-1]
+    tally = text(re.search(r'<p class="tally">(.*?)</p>', markup, re.S).group(1))
+    assert tally.startswith("14 findings in the validation report: 1 supports, 1 refutes, 1 inconclusive, 1 not run, 9 as expected"), tally
+
+
+def the_body_draws_cards_and_chips(base):
+    rows = FINDINGS_ROWS + "| F7 | AC9 | a criterion the spec lacks | totals match | Supports | seen |\n"
+    repo, _ = investigation_branch(base, rows=rows)
+    _, markup = generate(repo, base)
+    first = element(markup, "hyp-1")
+    assert '<div class="ps">' in first and 'class="box for"' in first and 'class="box against"' in first, "AC3: For and Against aren't side by side"
+    assert '<div class="box">' in section(markup, 2) and "Round per line" in text(section(markup, 2)), "AC3: the options aren't in a card"
+    assert chips_in(element(markup, "not-run")) == [("s", "check-F4", "Not run", "the refund path", "F4")], chips_in(element(markup, "not-run"))
+    found = element(markup, "finding-map")
+    by_row = {text(label): [chip[4] for chip in chips_in(row)] for label, row in map_rows(found)}
+    assert by_row == {"The cause is named.": ["F1", "F2", "F5", "F6"], "The refund is checked.": ["F3", "F4"], "criterion 9": ["F7"]}, by_row
+    chips = {chip[4]: chip for chip in chips_in(found)}
+    assert chips["F1"] == ("a", "check-F1", "Supports", "two round calls in the trace", "F1"), chips["F1"]
+    assert chips["F2"][:3] == ("r", "check-F2", "Refutes") and chips["F3"][2] == "Inconclusive" and chips["F4"][2] == "Not run", chips
+    assert chips["F5"][2] == "not as expected" and chips["F6"][2] == "as expected", chips
+    assert not any(chip[0] in ("p", "f") for chip in chips.values()), "AC3: a finding chip reads as passed or failed"
+    assert finding_field(markup, "F1", "Criterion") == "The cause is named." and finding_field(markup, "F7", "Criterion") == "criterion 9"
+    assert all("AC" not in finding_field(markup, f"F{n}", "Criterion") for n in range(1, 8)), "AC3: a criterion is named by its bare id"
+    for name, said in (("Expected", "one call"), ("Observed", "trace"), ("Source", "validation-shop-feature~cart.md:")):
+        assert said in finding_field(markup, "F1", name), (name, finding_field(markup, "F1", name))
+    decisions = re.findall(r'<article class="decision"><h3 id="d(\d+)">', markup)
+    assert decisions == ["1", "2"], "AC3: a decision isn't a card"
+
+
+def removed_blocks_are_gone_and_absences_stay(base):
+    rows = FINDINGS_ROWS + "| F7 | AC1 | an empty row |  | Supports |  |\n"
+    repo, _ = investigation_branch(base, rows=rows)
+    _, markup = generate(repo, base)
+    for needle in ('class="strip"', 'class="toc"', 'class="num"', 'id="summary"', 'class="sum"', 'class="sec"><summary'):
+        assert needle not in markup, f"AC4: {needle} is still drawn"
+    assert "Gates" not in text(markup), "AC4: the Gates row is still drawn"
+    assert finding_field(markup, "F7", "Expected") == "not recorded" and finding_field(markup, "F7", "Observed") == "not recorded", \
+        "AC4: an Expected or Observed not recorded isn't said"
+    notes = (INVESTIGATION_NOTES.split("## Options")[0].replace("The cart rounds in two places.\n", "")
+             + "## Not checked\n\n## What you must decide\n- None\n")
+    repo, _ = investigation_branch(in_dir(base, "bare"), notes=notes, rows=FINDINGS_ROWS.replace("NOT RUN", "Supports"))
+    _, markup = generate(repo, base)
+    for anchor in ('id="options"', 'id="not-checked"', 'id="not-checked-notes"'):
+        assert anchor not in markup, f"AC4: an empty optional part shows: {anchor}"
+    assert re.search(r'<article class="box hyp" id="hyp-1"><h3>[^<]*</h3><div class="ps">', markup), "AC4: an empty description shows a placeholder"
+    assert "none recorded" in text(element(markup, "hyp-1-against")), "AC4: an empty side isn't none recorded"
+
+    repo, evidence = investigation_branch(in_dir(base, "long"), notes=VERBOSE_NOTES, rows=VERBOSE_ROWS)
+    _, markup = generate(repo, base)
+    first = element(markup, "hyp-1")
+    folded = first.index('<details class="more"')
+    assert "The cart rounds in two places." in text(first[:folded]) and "payment gateway" not in text(first[:folded]), \
+        "AC4: a description past its first paragraph isn't folded"
+    assert enclosing_folds(markup, 'id="hyp-1-for"') == [], "AC4: For and Against folded with the description"
 
 
 def one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation(base):
@@ -2581,7 +2757,7 @@ def a_marker_on_an_empty_diff_gives_the_investigation_page(base):
     assert "Investigation page for" in text(markup), "AC1: an empty diff with the marker isn't an investigation"
     assert "<dt>Changed files</dt>" not in footer(markup), "AC1: the footer counts files on a branch without a diff"
     assert "Mode: investigation" not in text(summary(markup)), "the investigation page suggests its own mode"
-    words = [re.search(r'<span class="st [^"]*">([^<]+)</span>', check_block(markup, f"F{n}")).group(1) for n in (1, 2, 3)]
+    words = [finding_word(markup, f"F{n}") for n in (1, 2, 3)]
     assert words == ["Supports", "Refutes", "Inconclusive"], f"AC4: a findings-only table: {words}"
 
 
@@ -2645,7 +2821,7 @@ def the_answer_needs_more_than_its_confidence(base):
     assert len(blockers) == 1 and "The answer" in blockers[0] and "only its" in blockers[0], blockers
     write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "**Confidence:** **high**."))
     _, markup = generate(repo, base)
-    assert listed(markup, "blockers") == [] and "high confidence" in summary_row(markup, "answer"), listed(markup, "blockers")
+    assert listed(markup, "blockers") == [] and "High confidence" in summary_row(markup, "answer"), listed(markup, "blockers")
     write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", "Confidence: high. One trace only"))
     _, markup = generate(repo, base)
     answer = summary_row(markup, "answer")
@@ -5083,7 +5259,8 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      signals_read_only_the_last_2_mb, an_investigation_is_chosen_by_the_marker_only,
                      an_empty_diff_only_suggests_the_mode, the_investigation_page_shows_each_section,
                      missing_investigation_sections_are_blockers, blocks_that_need_a_change_do_not_apply,
-                     findings_are_not_failures, one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation, the_notes_embed_their_evidence, brief_counts_findings,
+                     findings_are_not_failures, the_investigation_page_uses_the_change_pages_stylesheet, the_first_screen_answers_the_question,
+                     the_body_draws_cards_and_chips, removed_blocks_are_gone_and_absences_stay, one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation, the_notes_embed_their_evidence, brief_counts_findings,
                      the_skills_describe_the_investigation_notes, a_marker_on_an_empty_diff_gives_the_investigation_page,
                      the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert, hypotheses_keep_their_lists_and_subheadings,
                      the_notes_embed_each_file_under_its_first_part, the_answer_needs_more_than_its_confidence,
