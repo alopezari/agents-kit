@@ -211,6 +211,8 @@ def skills():
 def tools():
     rows = []
     for name in sorted(os.listdir(os.path.join(KIT, "bin"))):
+        if not os.path.isfile(os.path.join(KIT, "bin", name)):
+            continue
         head = header_comment(f"bin/{name}")
         usage = [l.strip() for l in head.splitlines() if l.strip().startswith(name + " ") or l.strip() == name]
         summary = first_paragraph("\n".join(l for l in head.splitlines() if l.strip() not in usage))
@@ -335,7 +337,9 @@ def render():
         w(f"- {reason}")
     w("- Touching `~/.agents/approvals`, written out or relative to the working directory or a `cd` in the command: "
       "approvals for shared-system writes must come from the user. Naming it in a message, an echo or a search is text.")
-    w("- Recursive deletes outside the working directory or temp dirs, or of unresolved (`$VAR`, wildcard) paths.")
+    w("- Recursive deletes of the working directory or a folder holding it, and outside the working directory, temp dirs, "
+      "linked git worktrees and regenerable caches (`__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`), or of "
+      "unresolved (`$VAR`, wildcard) paths other than a quoted `\"$VAR/__pycache__\"`.")
     w("- `gh pr create` until the review (and, for behavior changes, validate) stamp matches the change, and "
       "while the PR's target isn't the base the stamps measured against (`review_stamp.py base`).")
     w("- The last one lifts for a phase the user switched off with a `phase off <phase>` line or `/flow off <phase>` (review, "

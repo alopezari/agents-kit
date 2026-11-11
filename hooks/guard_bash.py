@@ -264,7 +264,7 @@ SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 
 
 def dangerous_rm(command, cwd, run_by=None):
-    """Recursive deletes outside the working directory or temp dirs, each judged from where the `cd`s before it
+    """Recursive deletes outside the working directory, temp dirs, linked worktrees and regenerable caches, each judged from where the `cd`s before it
     leave the shell (a subshell's cd ends with it), with the variables segments_with_values() knows substituted.
     After a cd the guard can't resolve, a relative target is unresolved too. A quoted string the command runs as a
     command (bash -c, eval, trap) is judged the same way, run_by giving the directory and variables of its segment."""
@@ -314,7 +314,8 @@ def dangerous_rm(command, cwd, run_by=None):
                 if run_by:
                     # Run as text, the caller's arguments are what it passes in (find -exec sh -c '… "$1"').
                     targets = [t for t in targets if not re.search(r"\$\{?[\d@*#]", t) and (runs_in is not None or os.path.isabs(t))]
-                denied = dangerous_rm_targets(targets, runs_in, cwd)
+                # An unquoted $VAR splits on spaces, so the path before a cache name may be several targets.
+                denied = dangerous_rm_targets(targets, runs_in, cwd, "$" in shell_code(stripped))
                 if denied:
                     return denied
         runs_strings = None
@@ -402,23 +403,70 @@ def run_words(tokens):
     return [], chdir
 
 
-def dangerous_rm_targets(targets, here, cwd):
+def dangerous_rm_targets(targets, here, cwd, unquoted_variable=False):
     """Each target judged from the tracked directory and from cwd as well: a cd the tracking gets wrong (in a
-    pipeline, after `false &&`, undone by popd) can then only deny more than judging from cwd alone did."""
+    pipeline, after `false &&`, undone by popd) can then only deny more than judging from cwd alone did. A linked
+    worktree and a regenerable cache may go from anywhere, but never the folder the shell is in or one holding it."""
     home = os.path.realpath(os.path.expanduser("~"))
+    shell_dirs = {d for d in (cwd, here and os.path.realpath(here)) if d}
     for target in targets:
-        target = os.path.expanduser(target)
-        if "$" in target or "`" in target or "*" == target.strip("/") or (here is None and not os.path.isabs(target)):
+        # $PWD as ., not as here: judged from cwd too, a cd tracked wrong can't make it look safer.
+        target = os.path.expanduser(re.sub(r"^\$(?:\{PWD\}|PWD)(?=/|$)", ".", target))
+        # A cache folder that holds the shell's folder could be the one a variable or wildcard names.
+        cache = regenerable_cache(target) and not any(set(d.split(os.sep)) & CACHE_FOLDERS for d in shell_dirs)
+        unresolved = "$" in target or "`" in target or (here is None and not os.path.isabs(target))
+        if unresolved and cache and not unquoted_variable:
+            continue
+        if unresolved or "*" == target.strip("/"):
             return f"Recursive delete of an unresolved or wildcard path: {target}"
         for place in {here or cwd, cwd}:
             path = os.path.realpath(os.path.join(place, target))
             if path in ("/", home) or cwd.startswith(path + os.sep) or path == cwd:
                 return f"Recursive delete of {path}, which contains the working directory or home."
-            inside_cwd = path.startswith(cwd + os.sep)
-            inside_tmp = any(path == r or path.startswith(r + os.sep) for r in SAFE_RM_ROOTS)
-            if not (inside_cwd or inside_tmp):
+            if path.startswith(cwd + os.sep) or any(path == r or path.startswith(r + os.sep) for r in SAFE_RM_ROOTS):
+                continue
+            # A symlink named __pycache__ resolves to what it points at, which is what rm -rf path/ deletes.
+            resolved_cache = cache and os.path.basename(path) in CACHE_FOLDERS
+            if not (resolved_cache or in_linked_worktree(path)):
                 return f"Recursive delete outside the working directory: {path}"
+            # Only these allowances trust the tracked folder: a popd it misses then denies, as before, no more.
+            if any(d == path or d.startswith(path + os.sep) for d in shell_dirs):
+                return f"Recursive delete of {path}, which contains the folder the shell is in."
     return None
+
+
+CACHE_FOLDERS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+
+
+def regenerable_cache(target):
+    """Whether the target is a cache folder its tool rebuilds. A $(…) or backtick before it runs a command, and a ..
+    climbs out of it."""
+    return (os.path.basename(os.path.normpath(target)) in CACHE_FOLDERS and ".." not in target.split("/")
+            and "$(" not in target and "`" not in target)
+
+
+def in_linked_worktree(path):
+    """Whether path is a linked git worktree or inside one: the nearest .git above it is a file pointing into a
+    repository's worktrees/<name>, which git gives a commondir file (a submodule's points into modules/). An
+    unreadable one counts as not."""
+    folder = path
+    while True:
+        dotgit = os.path.join(folder, ".git")
+        if os.path.isfile(dotgit):
+            try:
+                with open(dotgit, errors="replace") as fh:
+                    first = fh.readline(4096)
+            except OSError:
+                return False
+            gitdir = os.path.join(folder, first[len("gitdir:"):].strip()) if first.startswith("gitdir:") else ""
+            return (os.path.basename(os.path.dirname(os.path.normpath(gitdir))) == "worktrees"
+                    and os.path.isfile(os.path.join(gitdir, "commondir")))
+        if os.path.exists(dotgit):
+            return False
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            return False
+        folder = parent
 
 
 RUNS_QUOTED_TEXT = re.compile(r"\beval\b|\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\b")
@@ -737,7 +785,7 @@ def targets_kit(repo, host, cwd):
 
 
 COPY_COMMANDS = {"cp", "mv", "install", "ln"}
-# Agents look for PRODUCT.md and DESIGN.md often; these only read what they name, unless the output is redirected.
+# Agents look for PRODUCT.md and DESIGN.md often; these only read what they name, unless the output is redirected to a file.
 READERS = {"cat", "head", "tail", "less", "grep", "rg", "ls", "stat", "test", "[", "wc", "file", "diff"}
 READ_ONLY_IMPECCABLE = {"context", "detect", "doctor", "help", "version", "live-status"}
 IMPECCABLE_FLAGS_ONLY = {"--help", "-h", "--schema", "--version"}
@@ -1562,9 +1610,9 @@ def impeccable_files(command, cwd, session):
     where none exists yet, adds them to a .gitignore, or runs Impeccable's `live`, `hooks on`/`reset` or another
     command that would create `.impeccable/`. None otherwise.
 
-    Coarse on purpose: a name in the command counts as a write, and every folder it cd's into counts as where it
-    runs. Shell is too varied to tell writes from mentions, and a wrong guess costs a question, not a file in someone
-    else's repository."""
+    Coarse on purpose: a name in the command counts as a write, unless its segment only reads (only_reads()), and
+    every folder it cd's into counts as where it runs. A variable assigned a design name counts wherever a segment
+    that doesn't only read uses it. A wrong guess costs a question, not a file in someone else's repository."""
     if not re.search(r"product\.md|design\.md|impeccable", command, re.I):
         return None  # most commands: no git call
     text = without_prose(command)
@@ -1572,7 +1620,7 @@ def impeccable_files(command, cwd, session):
     # A newline inside quotes is part of an argument (sed's a\ text), not the end of a command.
     joined = re.sub(r"'[x\n]*'|\"[x\n]*\"", lambda m: m.group().replace("\n", "x"), code)
     cuts = [(0, 0)] + [m.span() for m in re.finditer(r"&&|\|\||(?<![<>&])&(?![>&])|(?<!>)\||[;\n()]", joined)]
-    folders, gitignores, targets, runs = [cwd], [], [], []
+    folders, gitignores, targets, runs, design_vars = [cwd], [], [], [], {}
     # A patch run through the shell (Codex's apply_patch) names its files in a heredoc body.
     for path in re.findall(r"^\*\*\* (?:Add File|Update File|Move to): (.+)$", command, re.M):
         (gitignores if os.path.basename(path).lower() == ".gitignore" else targets).append(path)
@@ -1585,8 +1633,12 @@ def impeccable_files(command, cwd, session):
             folders.append(cd_into(folders[-1], cd.group(1)))
         words = WORD.findall(segment)
         words = words[next((i for i, w in enumerate(words) if not LEADING.fullmatch(w)), len(words)):]
-        if not words or (words[0] in READERS and ">" not in code[start:boundary]):
+        if not words or only_reads(segment, words, code[start:boundary]):
+            if ASSIGNMENTS_BEFORE_NOTHING.fullmatch(code[start:boundary]):
+                design_vars.update((name, value.strip("'\"")) for name, value in ONE_ASSIGNMENT.findall(segment)
+                                   if design_files.DESIGN_NAME.search(value))
             continue
+        targets += [design_vars[a or b] for a, _, b in VARIABLE.findall(segment) if (a or b) in design_vars]
         if any(os.path.basename(w).lower() == ".gitignore" for w in words):
             gitignores += [w for w in words if os.path.basename(w).lower() == ".gitignore"]
             continue  # the names in it are ignore rules, judged below
@@ -1606,6 +1658,67 @@ def impeccable_files(command, cwd, session):
         if why:
             return why
     return None
+
+
+def only_reads(segment, words, code):
+    """Whether a segment (its words from the program on, and its code with quotes blanked) only reads what it names:
+    nothing but assignments, or a reader whose redirects go to a descriptor or /dev/null."""
+    if ASSIGNMENTS_BEFORE_NOTHING.fullmatch(code):
+        return True
+    if ">" in HARMLESS_REDIRECT.sub("", code):
+        return False
+    program, args = words[0], words[1:]
+    if program == "sed":
+        return sed_only_prints(segment)
+    if program == "find":
+        return not any(re.fullmatch(r"-(?:delete|exec|execdir|ok|okdir|fls|fprint\w*)", w) for w in args)
+    if program == "git":
+        while args and args[0].startswith("-"):  # global options: -C <path> and -c <name=value> take a word
+            args = args[2:] if args[0] in ("-C", "-c") else args[1:]
+        return bool(args) and args[0] in READ_ONLY_GIT and not any(w.startswith("--output") for w in args)
+    return program in READERS
+
+
+# Plain assignments and nothing else: no redirect, $(…), backtick or pipe in a value. Each ends at whitespace, or
+# a=b=c would split many ways.
+ASSIGNMENTS_BEFORE_NOTHING = re.compile(r"\s*(?:\w+=[^\s`<>|&;()]*(?:\s+|\Z))+")
+# 2>&1, >&2, >/dev/null, &>/dev/null: no file written. `>&name` is a file, so the descriptor is digits only.
+HARMLESS_REDIRECT = re.compile(r"(?:(?<!\d)\d+|&)?>>?\s*(?:&\d+-?|&-|/dev/null)(?![^\s;&|)])")
+READ_ONLY_GIT = {"log", "show", "diff", "status", "ls-files", "blame", "grep", "rev-parse", "cat-file"}
+# One sed command that only prints lines: 15,30p, /re/p, $p. Others write files too (w, s///w) or need a closer look.
+SED_ADDRESS = r"(?:\d+|\$|/[^/\n]*/)"
+SED_PRINT = re.compile(rf"\s*(?:{SED_ADDRESS}(?:,{SED_ADDRESS})?)?p\s*")
+
+
+def sed_only_prints(segment):
+    """Whether a sed segment runs with -n and only print scripts, so it writes nothing. GNU sed reads an option after
+    a file as an option and BSD sed as a file, so any option there counts as a write."""
+    try:
+        tokens = shlex.split(HARMLESS_REDIRECT.sub(" ", segment))
+    except ValueError:
+        return False
+    args = iter(tokens[tokens.index("sed") + 1:] if "sed" in tokens else [])
+    quiet, scripts, operands, options_end = False, [], [], False
+    for word in args:
+        option = re.fullmatch(r"-([nEr]*)(e?)", word)
+        if options_end or not word.startswith("-") or word == "-":
+            operands.append(word)
+        elif operands:
+            return False
+        elif word == "--":
+            options_end = True
+        elif option and (option.group(1) or option.group(2)):
+            quiet = quiet or "n" in option.group(1)
+            if option.group(2):
+                scripts.append(next(args, "w"))  # -e with nothing after it: not a print
+        elif word in ("--quiet", "--silent", "--regexp-extended"):
+            quiet = quiet or word != "--regexp-extended"
+        else:
+            return False
+    if not scripts and operands:
+        scripts.append(operands[0])
+    parts = [part for s in scripts for part in s.split(";") if part.strip()]
+    return quiet and bool(parts) and all(SED_PRINT.fullmatch(part) for part in parts)
 
 
 def impeccable_run(rest, folder, session):

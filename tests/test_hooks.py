@@ -346,6 +346,77 @@ def guard_resolves_rm_variables(base):
         "a=b=b=… must split one way, or the guard runs out of time and lets the command through"
 
 
+def guard_allows_worktree_and_cache_deletes(base):
+    # Without the temp roots the guard allows anyway, so an allow here comes from the worktree or cache rule.
+    code = (f"import sys; sys.path.insert(0, {H!r}); import guard_bash; guard_bash.SAFE_RM_ROOTS = (); "
+            "sys.exit(guard_bash.main())")
+
+    def guard_here(command, cwd):
+        out = subprocess.run(["python3", "-B", "-c", code], capture_output=True, text=True,
+                             input=json.dumps({"tool_input": {"command": command}, "cwd": cwd, "session_id": "t"}),
+                             env={**os.environ, "AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE})
+        assert out.returncode == 0 and "guard failed" not in out.stdout, out.stdout + out.stderr
+        return "deny" if out.stdout.strip() else "allow"
+
+    main = new_repo(base, "main")
+    linked = os.path.join(base, "linked")
+    assert git(main, "worktree", "add", "-q", "-b", "side", linked).returncode == 0
+    os.makedirs(os.path.join(linked, "bin", "__pycache__"))
+    bare, bare_linked = os.path.join(base, "bare.git"), os.path.join(base, "bare-linked")
+    assert git(base, "clone", "-q", "--bare", main, bare).returncode == 0
+    assert git(bare, "worktree", "add", "-q", "-b", "bare-side", bare_linked).returncode == 0
+    assert "/bare.git/worktrees/" in open(os.path.join(bare_linked, ".git")).read()
+    submodule = os.path.join(base, "submodule")
+    os.makedirs(os.path.join(main, ".git", "modules", "submodule"))
+    os.makedirs(submodule)
+    open(os.path.join(submodule, ".git"), "w").write(f"gitdir: {main}/.git/modules/submodule\n")
+    elsewhere = os.path.join(base, "elsewhere")
+    os.makedirs(os.path.join(elsewhere, "sub"))
+    os.makedirs(os.path.join(main, "bin", "__pycache__"))
+    os.symlink(os.path.join(main, "bin"), os.path.join(base, "__pycache__"))
+    # A checkout whose git dir sits in a folder named worktrees without being one: git gives a worktree a commondir.
+    os.makedirs(os.path.join(base, "store", "worktrees", "lookalike"))
+    lookalike = os.path.join(base, "lookalike")
+    os.makedirs(lookalike)
+    open(os.path.join(lookalike, ".git"), "w").write(f"gitdir: {base}/store/worktrees/lookalike\n")
+    in_cache = os.path.join(base, "tool", ".pytest_cache", "v")
+    os.makedirs(in_cache)
+    for cmd in [f"rm -rf {linked}", f"rm -r {linked}/bin/__pycache__", f"rm -rf {linked}/bin", f"rm -rf {bare_linked}",
+                f"rm -r {bare_linked}/app.py", f'rm -rf "$EV/checks/__pycache__"', 'rm -rf "$PWD/.cachetest"',
+                "rm -rf ${PWD}/sub", 'rm -rf "$X/.pytest_cache" "$Y/.mypy_cache/" "$Z/.ruff_cache"',
+                f"rm -rf {main}/bin/__pycache__"]:
+        assert guard_here(cmd, elsewhere) == "allow", f"a worktree or a cache: {cmd}"
+    for cmd in ['rm -rf "$EV/checks/__pycache__"', 'rm -rf "$PWD/.cachetest"', "rm -rf bin/__pycache__",
+                "pushd bin && make && popd && rm -rf bin", "cd bin && make || rm -rf bin"]:
+        assert guard_here(cmd, linked) == "allow", f"from inside the worktree: {cmd}"
+    for cmd in [f"rm -rf {main}/bin", f"rm -rf {main}", "rm -rf ~", "rm -rf /", "rm -rf .", f"rm -rf {elsewhere}",
+                f"rm -rf {bare}", f"rm -rf {linked} /usr/lib", f"rm -rf {linked} && git push --force origin side",
+                'rm -rf "$PWD"', f"rm -rf {submodule}", f"rm -rf {submodule}/x", f"rm -rf {linked}/..",
+                'rm -rf "$EV/checks"', 'rm -rf "$X/__pycache__/../.."', 'rm -rf "$X/*"', 'rm -rf "$X/__pycache__"*',
+                'rm -rf "$(git rev-parse --show-toplevel)/__pycache__"', 'rm -rf "`pwd`/__pycache__"',
+                'cd "$X" && rm -rf "$PWD/sub"', "rm -rf $PWD/../x", 'cd /usr && rm -rf "$PWD/x"',
+                "bash -c 'cd /usr && rm -rf \"$PWD/x\"'", 'rm -rf "$X/__pycache__/sub/.."', "rm -rf $Y/.mypy_cache/",
+                'rm -rf "$PWD-old"', 'rm -rf "${PWD}x"', "rm -rf $PWD.bak", f"cd {linked} && rm -rf {linked}",
+                f"cd {linked}/bin && rm -rf {linked}", f"pushd {linked} && rm -rf ../linked",
+                f"rm -rf {base}/__pycache__/", f"rm -rf {lookalike}"]:
+        assert guard_here(cmd, elsewhere) == "deny", f"could lose work: {cmd}"
+    for cwd, root in ((linked, linked), (bare_linked, bare_linked), (os.path.join(linked, "bin"), linked)):
+        for cmd in [f"rm -rf {cwd}", f"rm -rf {root}", "rm -rf .", f"rm -rf {main}/app.py"]:
+            assert guard_here(cmd, cwd) == "deny", f"the cwd or the main checkout from inside a worktree: {cmd} in {cwd}"
+    for cmd in ['rm -rf "$X/.pytest_cache"', f"rm -rf {base}/tool/.pytest_cache", "rm -rf ../../*/.pytest_cache"]:
+        assert guard_here(cmd, in_cache) == "deny", f"a cache folder holding the cwd: {cmd}"
+    if os.geteuid() == 0:
+        return  # root reads a file whatever its mode
+    unreadable = os.path.join(base, "unreadable")
+    os.makedirs(unreadable)
+    open(os.path.join(unreadable, ".git"), "w").write(f"gitdir: {main}/.git/worktrees/linked\n")
+    os.chmod(os.path.join(unreadable, ".git"), 0)
+    try:
+        assert guard_here(f"rm -rf {unreadable}", elsewhere) == "deny", "an unreadable .git file isn't a worktree"
+    finally:
+        os.chmod(os.path.join(unreadable, ".git"), 0o644)
+
+
 def guard_reads_code_not_text(base):
     for cmd in ["cat > /tmp/spec.md <<'EOF'\nrun git push --force origin x\nEOF",
                 "cat > \"$(echo /tmp/spec.md)\" <<'EOF'\nthen git branch -D old\nEOF",
@@ -4072,7 +4143,18 @@ def impeccable_files_in_a_shared_repo_need_the_user_first(base):
                     "~/.agents/skills/impeccable/scripts/impeccable serve-question --start --payload p.json",
                     "npx impeccable live", "impeccable hooks on", "mv /tmp/x PRODUCT.md", "install -m 644 /tmp/x DESIGN.md",
                     "ln -s /tmp/x PRODUCT.md", "echo DESIGN.md | tee -a .gitignore", "cat >> .gitignore <<'EOF'\nDESIGN.md\nEOF",
-                    "npx -y impeccable@latest live", "FOO=1 impeccable hooks reset", "echo x >| DESIGN.md"]:
+                    "npx -y impeccable@latest live", "FOO=1 impeccable hooks reset", "echo x >| DESIGN.md",
+                    "sed -i s/a/b/ PRODUCT.md", "sed -i'' s/a/b/ PRODUCT.md", "sed -ni s/a/b/ PRODUCT.md",
+                    "sed --in-place=.bak s/a/b/ DESIGN.md", "sed -I '' s/a/b/ DESIGN.md", "find .impeccable -delete",
+                    "find . -name PRODUCT.md -exec rm {} +", "find .impeccable -fprint out", "cat x > DESIGN.md",
+                    "git add PRODUCT.md", "echo x 2>&1 > DESIGN.md", "cat x 2>/dev/null > DESIGN.md",
+                    "cat x >&DESIGN.md", "git diff --output DESIGN.md", "d=x touch .impeccable",
+                    "git -C . checkout PRODUCT.md", "sed -n 'w DESIGN.md' x", "sed -n '1p;w DESIGN.md' x",
+                    "sed -n s/a/b/w DESIGN.md x", "sed -n -f script PRODUCT.md", "sed -e s/a/b/ PRODUCT.md",
+                    "find .impeccable -fprint0 x", "sed -n -e 1p x -e 'w DESIGN.md'", "sed -n 1p -i PRODUCT.md",
+                    "sed -n -i 1p PRODUCT.md", "sed -n 1p PRODUCT.md -i", "d=.impeccable>PRODUCT.md", "X=a>DESIGN.md",
+                    'D=".impeccable"; mkdir -p "$D"', 'OUT=DESIGN.md; cat t > "$OUT"', "D=.impeccable; touch ${D}/x",
+                    "sed -n 'w DESIGN.md' /dev/null -e 1p", "sed -n 's/a/b/w DESIGN.md' -e 1p /dev/null"]:
         assert shell(command) == "deny", command
     for name, inp in [("Edit", {"file_path": os.path.join(shared, ".gitignore"), "old_string": "", "new_string": "PRODUCT.md"}),
                       ("apply_patch", {"input": "*** Begin Patch\n*** Update File: notes.md\n*** Move to: PRODUCT.md\n*** End Patch"})]:
@@ -4081,8 +4163,21 @@ def impeccable_files_in_a_shared_repo_need_the_user_first(base):
     assert shell("cat > README.md <<'EOF'\nimpeccable live\nEOF") == "allow", "nor is a heredoc body"
     assert shell("impeccable help") == "allow"
     for command in ["impeccable context", "impeccable detect --json index.html", "impeccable doctor", "cat PRODUCT.md",
-                    "grep DESIGN.md README.md", "echo hi > notes.txt"]:
+                    "grep DESIGN.md README.md", "echo hi > notes.txt", "cat PRODUCT.md 2>&1", "ls .impeccable >/dev/null",
+                    "head DESIGN.md 2>/dev/null", "cat PRODUCT.md >&2", "ls .impeccable &>/dev/null",
+                    "test -f PRODUCT.md 2>/dev/null && cat PRODUCT.md", "sed -n 1,20p DESIGN.md",
+                    "sed -n '15,30p' PRODUCT.md", "sed -n '/^## /p' DESIGN.md", "sed -nE -e '1p;$p' PRODUCT.md",
+                    "find .impeccable -name '*.json'", "find . -name DESIGN.md -print",
+                    "git log -- PRODUCT.md", "git -C . show HEAD:DESIGN.md", "git --no-pager diff DESIGN.md",
+                    "git status .impeccable", "git ls-files PRODUCT.md", "git blame DESIGN.md", "git grep x -- PRODUCT.md",
+                    "git rev-parse --show-toplevel:PRODUCT.md", "git cat-file -p HEAD:PRODUCT.md",
+                    'd=".impeccable"', "d=.impeccable; ls \"$d\"", "P=PRODUCT.md D='DESIGN.md'",
+                    "sed -ne 15,30p PRODUCT.md", "sed -n -e '15,30p;' PRODUCT.md", "sed -n 2>/dev/null 1p PRODUCT.md"]:
         assert shell(command) == "allow", f"read-only or unrelated: {command}"
+    started = child_cpu()
+    for command in ["a=" + "b=" * 40 + " cat PRODUCT.md", "cat PRODUCT.md <<<" + "1" * 70000]:
+        shell(command)
+    assert child_cpu() - started < 3, "the read-only checks must stay linear, or the guard runs out of time"
     reason = run_hook("guard_files.py", {"tool_name": "Write", "tool_input": {"file_path": product, "content": "x"},
                                         "cwd": shared, "session_id": "d1"}, env=env)["hookSpecificOutput"]["permissionDecisionReason"]
     assert "`PRODUCT.md`" in reason and "carry on without it" in reason, reason
@@ -5618,7 +5713,7 @@ def the_real_ps_listing_parses(base):
 TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, the_old_self_review_name_still_switches_the_review, switches_follow_a_branch_rename, a_rename_is_followed_in_the_checkout_read, same_named_repos_keep_their_own_switches, a_review_rounds_line_says_what_an_unreadable_file_means, coming_back_after_hours_asks_for_the_status_first, a_review_rounds_line_sets_the_re_checks_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
-         guard_allows_routine, guard_resolves_rm_variables, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
+         guard_allows_routine, guard_resolves_rm_variables, guard_allows_worktree_and_cache_deletes, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_needs_a_video_per_check, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,

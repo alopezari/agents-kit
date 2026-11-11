@@ -8,6 +8,7 @@
 #                                                 test_triage, the .sh tests...) run whole
 # Sections run concurrently, after the doctor on its own; each prints as one block, in this order, once it and every section above it have finished.
 cd "$(dirname "$0")" || exit 2
+export PYTHONDONTWRITEBYTECODE=1  # the tests import hooks and tools: no __pycache__ left in the checkout
 unset AGENTS_SUITE_ONLY  # the tests --only names (kit_home.selected); a run without --only runs every test
 # The tests reach the kit through ~/.agents. Run from another checkout, re-run under a HOME holding only .agents,
 # linked to it, as the verify overlay does. Its tests see no install outside .agents, so the doctor is skipped.
