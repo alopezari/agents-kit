@@ -211,6 +211,8 @@ def skills():
 def tools():
     rows = []
     for name in sorted(os.listdir(os.path.join(KIT, "bin"))):
+        if not os.path.isfile(os.path.join(KIT, "bin", name)):
+            continue
         head = header_comment(f"bin/{name}")
         usage = [l.strip() for l in head.splitlines() if l.strip().startswith(name + " ") or l.strip() == name]
         summary = first_paragraph("\n".join(l for l in head.splitlines() if l.strip() not in usage))
