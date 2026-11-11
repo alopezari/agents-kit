@@ -1,24 +1,24 @@
 <svg class="only-wide" viewBox="0 0 1216 400" role="img" aria-label="The flow: spec, build, review, validate, ship, which opens the pull request and waits for its CI, follow-pr only when you ask, merge by you after any optional checks (the flow ends here), then the deploy, which ship runs only when you ask. Guards run on every command, checks at every turn, and stamps gate the pull request.">
-<g font-family="JetBrains Mono, monospace" font-size="13" fill="#E8E6DF">
-<line x1="40" y1="90" x2="993" y2="90" stroke="#C6EC5A" stroke-width="2"></line>
-<line x1="1005" y1="90" x2="1136" y2="90" stroke="#8A8F88" stroke-width="2" stroke-dasharray="3 4"></line>
-<g><rect x="50" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="60" y="50" text-anchor="middle" font-weight="700">spec</text><text x="60" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">acceptance</text><text x="60" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">criteria</text></g>
-<g><rect x="205" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="215" y="50" text-anchor="middle" font-weight="700">build</text><text x="215" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">agent edits</text></g>
-<g><rect x="361" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="371" y="50" text-anchor="middle" font-weight="700">review</text><text x="371" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">lenses +</text><text x="371" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">second model</text></g>
-<g><rect x="516" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="526" y="50" text-anchor="middle" font-weight="700">validate</text><text x="526" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">suite + local</text><text x="526" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">checks</text></g>
-<g><rect x="672" y="80" width="20" height="20" fill="#0E100F" stroke="#C6EC5A" stroke-width="2"></rect><text x="682" y="50" text-anchor="middle" font-weight="700">ship</text><text x="682" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">opens the PR,</text><text x="682" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">waits for CI</text></g>
-<g><rect x="827" y="80" width="20" height="20" fill="#0E100F" stroke="#8A8F88" stroke-width="2" stroke-dasharray="3 3"></rect><text x="837" y="50" text-anchor="middle" font-weight="700">follow-pr</text><text x="837" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">when you ask:</text><text x="837" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">CI + comments</text></g>
-<g><rect x="983" y="80" width="20" height="20" fill="#FF9B73" stroke="#FF9B73" stroke-width="2"></rect><text x="993" y="50" text-anchor="middle" font-weight="700" fill="#FF9B73">merge</text><text x="993" y="134" text-anchor="middle" font-size="11" fill="#FF9B73">yours, after any</text><text x="993" y="149" text-anchor="middle" font-size="11" fill="#FF9B73">optional checks</text></g>
-<g><rect x="1138" y="80" width="20" height="20" fill="#0E100F" stroke="#8A8F88" stroke-width="2" stroke-dasharray="3 3"></rect><text x="1148" y="50" text-anchor="middle" font-weight="700">deploy</text><text x="1148" y="134" text-anchor="middle" font-size="11" fill="#8A8F88">ship, if asked:</text><text x="1148" y="149" text-anchor="middle" font-size="11" fill="#8A8F88">deploy, install</text></g>
-<path d="M215 72 C 215 20, 371 20, 371 72" stroke="#8A8F88" fill="none" stroke-dasharray="3 4"></path>
-<text x="293" y="16" text-anchor="middle" font-size="11" fill="#8A8F88">finding confirmed → fix</text>
-<line x1="40" y1="200" x2="1176" y2="200" stroke="#2A2E2B" stroke-dasharray="6 6"></line>
-<text x="40" y="190" font-size="11" fill="#8A8F88">AUTOMATIC</text>
-<rect x="40" y="226" width="1136" height="40" fill="#0E100F" stroke="#2A2E2B"></rect>
-<text x="56" y="251" fill="#C6EC5A">guard_bash · guard_mcp</text><text x="1160" y="251" text-anchor="end" fill="#8A8F88">every command · shared-system writes need your approval</text>
-<rect x="215" y="282" width="961" height="40" fill="#0E100F" stroke="#2A2E2B"></rect>
-<text x="231" y="307" fill="#C6EC5A">stop checks + verify</text><text x="1160" y="307" text-anchor="end" fill="#8A8F88">every turn that edited files · changed lines only · evidence saved</text>
-<rect x="371" y="338" width="311" height="40" fill="#0E100F" stroke="#FF9B73"></rect>
-<text x="387" y="363" fill="#FF9B73">stamps gate gh pr create</text>
+<g class="fill-text" font-family="JetBrains Mono, monospace" font-size="13">
+<line class="stroke-accent" x1="40" y1="90" x2="993" y2="90" stroke-width="2"></line>
+<line class="stroke-dim" x1="1005" y1="90" x2="1136" y2="90" stroke-width="2" stroke-dasharray="3 4"></line>
+<g><rect class="fill-bg stroke-accent" x="50" y="80" width="20" height="20" stroke-width="2"></rect><text x="60" y="50" text-anchor="middle" font-weight="700">spec</text><text class="fill-dim" x="60" y="134" text-anchor="middle" font-size="11">acceptance</text><text class="fill-dim" x="60" y="149" text-anchor="middle" font-size="11">criteria</text></g>
+<g><rect class="fill-bg stroke-accent" x="205" y="80" width="20" height="20" stroke-width="2"></rect><text x="215" y="50" text-anchor="middle" font-weight="700">build</text><text class="fill-dim" x="215" y="134" text-anchor="middle" font-size="11">agent edits</text></g>
+<g><rect class="fill-bg stroke-accent" x="361" y="80" width="20" height="20" stroke-width="2"></rect><text x="371" y="50" text-anchor="middle" font-weight="700">review</text><text class="fill-dim" x="371" y="134" text-anchor="middle" font-size="11">lenses +</text><text class="fill-dim" x="371" y="149" text-anchor="middle" font-size="11">second model</text></g>
+<g><rect class="fill-bg stroke-accent" x="516" y="80" width="20" height="20" stroke-width="2"></rect><text x="526" y="50" text-anchor="middle" font-weight="700">validate</text><text class="fill-dim" x="526" y="134" text-anchor="middle" font-size="11">suite + local</text><text class="fill-dim" x="526" y="149" text-anchor="middle" font-size="11">checks</text></g>
+<g><rect class="fill-bg stroke-accent" x="672" y="80" width="20" height="20" stroke-width="2"></rect><text x="682" y="50" text-anchor="middle" font-weight="700">ship</text><text class="fill-dim" x="682" y="134" text-anchor="middle" font-size="11">opens the PR,</text><text class="fill-dim" x="682" y="149" text-anchor="middle" font-size="11">waits for CI</text></g>
+<g><rect class="fill-bg stroke-dim" x="827" y="80" width="20" height="20" stroke-width="2" stroke-dasharray="3 3"></rect><text x="837" y="50" text-anchor="middle" font-weight="700">follow-pr</text><text class="fill-dim" x="837" y="134" text-anchor="middle" font-size="11">when you ask:</text><text class="fill-dim" x="837" y="149" text-anchor="middle" font-size="11">CI + comments</text></g>
+<g><rect class="fill-human stroke-human" x="983" y="80" width="20" height="20" stroke-width="2"></rect><text class="fill-human" x="993" y="50" text-anchor="middle" font-weight="700">merge</text><text class="fill-human" x="993" y="134" text-anchor="middle" font-size="11">yours, after any</text><text class="fill-human" x="993" y="149" text-anchor="middle" font-size="11">optional checks</text></g>
+<g><rect class="fill-bg stroke-dim" x="1138" y="80" width="20" height="20" stroke-width="2" stroke-dasharray="3 3"></rect><text x="1148" y="50" text-anchor="middle" font-weight="700">deploy</text><text class="fill-dim" x="1148" y="134" text-anchor="middle" font-size="11">ship, if asked:</text><text class="fill-dim" x="1148" y="149" text-anchor="middle" font-size="11">deploy, install</text></g>
+<path class="stroke-dim" d="M215 72 C 215 20, 371 20, 371 72" fill="none" stroke-dasharray="3 4"></path>
+<text class="fill-dim" x="293" y="16" text-anchor="middle" font-size="11">finding confirmed → fix</text>
+<line class="stroke-line" x1="40" y1="200" x2="1176" y2="200" stroke-dasharray="6 6"></line>
+<text class="fill-dim" x="40" y="190" font-size="11">AUTOMATIC</text>
+<rect class="fill-bg stroke-line" x="40" y="226" width="1136" height="40"></rect>
+<text class="fill-accent" x="56" y="251">guard_bash · guard_mcp</text><text class="fill-dim" x="1160" y="251" text-anchor="end">every command · shared-system writes need your approval</text>
+<rect class="fill-bg stroke-line" x="215" y="282" width="961" height="40"></rect>
+<text class="fill-accent" x="231" y="307">stop checks + verify</text><text class="fill-dim" x="1160" y="307" text-anchor="end">every turn that edited files · changed lines only · evidence saved</text>
+<rect class="fill-bg stroke-human" x="371" y="338" width="311" height="40"></rect>
+<text class="fill-human" x="387" y="363">stamps gate gh pr create</text>
 </g>
 </svg>

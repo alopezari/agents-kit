@@ -1,18 +1,18 @@
 <svg viewBox="0 0 560 420" role="img" aria-label="One kit feeds Claude Code and Codex; profiles layer in on top">
-<g font-family="JetBrains Mono, monospace" font-size="13" fill="#E8E6DF">
-<rect x="160" y="140" width="210" height="140" fill="#0E100F" stroke="#C6EC5A" stroke-width="1.5"></rect>
-<text x="178" y="168" fill="#C6EC5A" font-weight="700">~/.agents</text>
-<line x1="160" y1="182" x2="370" y2="182" stroke="#2A2E2B"></line>
+<g class="fill-text" font-family="JetBrains Mono, monospace" font-size="13">
+<rect class="fill-bg stroke-accent" x="160" y="140" width="210" height="140" stroke-width="1.5"></rect>
+<text class="fill-accent" x="178" y="168" font-weight="700">~/.agents</text>
+<line class="stroke-line" x1="160" y1="182" x2="370" y2="182"></line>
 <text x="178" y="208">AGENTS.md</text><text x="178" y="232">skills/</text><text x="178" y="256">hooks/  repos/</text>
-<rect x="424" y="110" width="120" height="44" fill="#0E100F" stroke="#2A2E2B"></rect><text x="438" y="137">Claude Code</text>
-<rect x="424" y="266" width="120" height="44" fill="#0E100F" stroke="#2A2E2B"></rect><text x="462" y="293">Codex</text>
-<path d="M370 184 C 400 184, 396 132, 424 132" stroke="#C6EC5A" fill="none" stroke-width="1.5"></path>
-<path d="M370 236 C 400 236, 396 288, 424 288" stroke="#C6EC5A" fill="none" stroke-width="1.5"></path>
-<rect x="16" y="40" width="112" height="36" fill="none" stroke="#8A8F88" stroke-dasharray="4 4"></rect><text x="30" y="63" fill="#B5B3AB">work</text>
-<rect x="16" y="86" width="112" height="36" fill="none" stroke="#8A8F88" stroke-dasharray="4 4"></rect><text x="30" y="109" fill="#B5B3AB">client</text>
-<rect x="16" y="132" width="112" height="36" fill="none" stroke="#8A8F88" stroke-dasharray="4 4"></rect><text x="30" y="155" fill="#B5B3AB">side project</text>
-<text x="16" y="28" font-size="11" fill="#8A8F88">profiles</text>
-<path d="M128 104 C 150 104, 150 190, 160 200" stroke="#8A8F88" fill="none" stroke-dasharray="4 4"></path>
-<text x="16" y="200" font-size="11" fill="#8A8F88">--profile</text>
+<rect class="fill-bg stroke-line" x="424" y="110" width="120" height="44"></rect><text x="438" y="137">Claude Code</text>
+<rect class="fill-bg stroke-line" x="424" y="266" width="120" height="44"></rect><text x="462" y="293">Codex</text>
+<path class="stroke-accent" d="M370 184 C 400 184, 396 132, 424 132" fill="none" stroke-width="1.5"></path>
+<path class="stroke-accent" d="M370 236 C 400 236, 396 288, 424 288" fill="none" stroke-width="1.5"></path>
+<rect class="stroke-dim" x="16" y="40" width="112" height="36" fill="none" stroke-dasharray="4 4"></rect><text class="fill-muted" x="30" y="63">work</text>
+<rect class="stroke-dim" x="16" y="86" width="112" height="36" fill="none" stroke-dasharray="4 4"></rect><text class="fill-muted" x="30" y="109">client</text>
+<rect class="stroke-dim" x="16" y="132" width="112" height="36" fill="none" stroke-dasharray="4 4"></rect><text class="fill-muted" x="30" y="155">side project</text>
+<text class="fill-dim" x="16" y="28" font-size="11">profiles</text>
+<path class="stroke-dim" d="M128 104 C 150 104, 150 190, 160 200" fill="none" stroke-dasharray="4 4"></path>
+<text class="fill-dim" x="16" y="200" font-size="11">--profile</text>
 </g>
 </svg>
