@@ -181,7 +181,9 @@ def the_agent_stays_out_of_the_approvals(base):
                      ("node --eval \"require('fs').writeFileSync('/Users/me/.agents/approvals/x', '')\"", "/tmp"),
                      ("dd if=/dev/null of=\"~/.agents/approvals/my file\"", "/tmp"),
                      ("touch \"$PWD/.agents/approvals/a b\"", "/tmp"),
-                     ("python3 - <<'EOF'\ntest = '/Users/me/.agents/approvals/linear'\nopen(test, 'w')\nEOF", "/tmp")]:
+                     ("python3 - <<'EOF'\ntest = '/Users/me/.agents/approvals/linear'\nopen(test, 'w')\nEOF", "/tmp"),
+                     ("D=$HOME; cat > f <<'EOF'\nD=/tmp\nEOF\ntouch $D/.agents/approvals/linear", "/tmp"),
+                     (f"cd {base} && D=$HOME; touch $D/.agents/approvals/linear", "/tmp")]:
         assert guard(cmd, cwd) == "deny", f"should deny from {cwd}: {cmd}"
     try:
         for cmd, cwd in [(c, kit) for c in [
@@ -415,6 +417,94 @@ def guard_allows_worktree_and_cache_deletes(base):
         assert guard_here(f"rm -rf {unreadable}", elsewhere) == "deny", "an unreadable .git file isn't a worktree"
     finally:
         os.chmod(os.path.join(unreadable, ".git"), 0o644)
+
+
+def guard_reason(command, cwd="/usr/lib"):
+    """The guard's deny reason, "" when it allows. From /usr/lib no temp path is inside the working directory, and
+    TMPDIR is fixed: an allow comes from a variable the guard resolved, not from where the command runs."""
+    env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
+    env.update({"AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, "TMPDIR": "/private/var/folders/ab/T/"})
+    out = subprocess.run(["python3", H + "guard_bash.py"], capture_output=True, text=True, env=env,
+                         input=json.dumps({"tool_input": {"command": command}, "cwd": cwd, "session_id": "t"}))
+    assert out.returncode == 0 and "guard failed" not in out.stdout, out.stdout + out.stderr
+    return json.loads(out.stdout)["hookSpecificOutput"]["permissionDecisionReason"] if out.stdout.strip() else ""
+
+
+def guard_keeps_variables_through_heredocs_and_quoted_text(base):
+    scratch = "S=/tmp/x; rm -rf $S; mkdir -p $S\n"
+    for cmd in [scratch + "cat > $S/m.py <<'EOF'\nimport subprocess, sys\nS=sys.argv[1]\nsubprocess.run([\"ls\", S])\nEOF\n"
+                "python3 $S/m.py $S",
+                scratch + "cat > $S/d.js <<JS\nconst S=process.argv[2];\nJS",
+                "python3 - <<'PY'\ns = '''it's'''\nPY\nSP=/tmp/x; rm -rf $SP/out; tool eval \"1+1\"",
+                "S=/tmp/x; sed -i 's/a:unset}/b/' $S/f; rm -rf $S/m"]:
+        assert guard_reason(cmd) == "", f"the outer shell never runs that text: {cmd!r}"
+    for cmd in ["S=/tmp/x\nbash <<'EOF'\nS=$HOME\nrm -rf $S/y\nEOF", "cat > f <<'EOF'\nT=/tmp/x\nEOF\nrm -rf $T/y",
+                "S=/tmp/x; read S; rm -rf $S", "S=/tmp/x; eval 'unset S'; rm -rf $S/y",
+                "S=/tmp/x; trap 'unset S' DEBUG; rm -rf $S/y"]:
+        assert guard_reason(cmd) != "", f"a body's own delete, or a variable the shell changes: {cmd!r}"
+    for middle in [". /dev/stdin <<'EOF'\nS=/usr\nEOF", "eval \"$(cat <<'EOF'\nS=/usr\nEOF\n)\"",
+                   "cat > f <<EOF\necho $((S=1))\nEOF", "cat > f <<EOF\n${S:=/usr}\nEOF",
+                   "echo hi # see <<EOF\nS=/usr\nEOF", "x=$((1<<2))\nS=/usr\n2))",
+                   "echo \"\ncat > f <<JS\n\"; S=/usr; echo \"\nJS\n\""]:
+        cmd = f"S=/tmp/x\n{middle}\nrm -rf $S/lib"
+        assert guard_reason(cmd) != "", f"text the outer shell may run: {cmd!r}"
+
+
+def guard_keeps_chain_assignments_after_sure_steps(base):
+    sub = os.path.join(base, "sub")
+    os.makedirs(sub)
+    for cmd in [f"cd {base} && SP=/tmp/x; rm -rf $SP/ev", f"cd {base} && H=$(mktemp -d) && ln -s /x $H/l && true | tail; rm -rf $H",
+                "A=/tmp/a && B=/tmp/b; rm -rf $B", f"bash -c 'cd {base} && SP=/tmp/x; rm -rf $SP/ev'"]:
+        assert guard_reason(cmd) == "", f"every step before the assignment succeeds: {cmd!r}"
+    for cmd in ["cd /no/such/dir && SP=/tmp/x; rm -rf $SP/ev", "true && SP=/tmp/x; rm -rf $SP",
+                "make x && SP=/tmp/x; rm -rf $SP", f"false || cd {base} && SP=/tmp/x; rm -rf $SP",
+                f"cd {base} && SP=/usr; rm -rf $SP/lib", f"if true; then cd {base} && SP=/tmp/x; rm -rf $SP/ev; fi",
+                f"if false; then cd {base} && SP=/tmp/x; fi; rm -rf $SP/ev", f"(cd {base} && SP=/tmp/x); rm -rf $SP/ev",
+                f"( cd {base} && SP=/tmp/x; rm -rf $SP/ev )", f"true | cd {base} && SP=/tmp/x; rm -rf $SP/ev",
+                f"cd {base} | cat && SP=/tmp/x; rm -rf $SP/ev"]:
+        assert guard_reason(cmd) != "", f"a step that may fail, or a chain the shell may skip: {cmd!r}"
+    assert guard_reason("cd sub && SP=/tmp/x; rm -rf $SP/ev", cwd=base) != "", "a relative cd isn't trusted"
+    if os.geteuid() == 0:
+        return  # root enters a folder whatever its mode
+    os.chmod(sub, 0)
+    try:
+        assert guard_reason(f"cd {sub} && SP=/tmp/x; rm -rf $SP/ev") != "", "a folder the user can't enter"
+    finally:
+        os.chmod(sub, 0o755)
+
+
+def guard_judges_loop_words_one_by_one(base):
+    eight = " ".join("12345678")
+    for cmd in ["S=/tmp/x; for m in m1 m2; do rm -rf $S/$m; mkdir -p $S/$m; done",
+                "for p in a b; do rm -rf \"/tmp/x/plugins/$p\"; done", "for m in a b; do rm -rf build/$m; done",
+                "bash -c 'for p in a b; do rm -rf /tmp/x/$p; done'",
+                f"for a in {eight}; do for b in {eight}; do rm -rf /tmp/x/$a/$b; done; done"]:
+        assert guard_reason(cmd) == "", f"every word stays in a temp dir or the working directory: {cmd!r}"
+    for cmd in ["for d in /tmp/a /usr; do rm -rf \"$d\"; done", "for m in a ../../usr; do rm -rf /tmp/x/$m; done",
+                "for m in a ../..; do rm -rf build/$m; done", "rm -rf \"$p\"; for p in /tmp/a /tmp/b; do :; done",
+                "for p in /tmp/a /tmp/b; do :; done; rm -rf \"$p\"", "for p in '/tmp/a /usr'; do rm -rf $p; done",
+                "for p in; do rm -rf /tmp/x/$p; done", "for p; do rm -rf /tmp/x/$p; done",
+                "for p in $(ls); do rm -rf /tmp/x/$p; done", "for p in *; do rm -rf /tmp/x/$p; done",
+                "for p in {a,../../usr}; do rm -rf /tmp/x/$p; done", "for p in a $X; do rm -rf /tmp/x/$p; done",
+                "for m in a; do m=/usr; rm -rf $m; done", "for m in a; do read m; rm -rf /tmp/x/$m; done",
+                "for m in a; do rm -rf /tmp/x/$m; done; for m in ../../usr; do :; done",
+                "for m in a/b; do rm -rf /tmp/x/${m%/*}; done", "select m in a b; do rm -rf /tmp/x/$m; done",
+                f"for a in {eight} 9; do for b in {eight}; do rm -rf /tmp/x/$a/$b; done; done"]:
+        assert guard_reason(cmd) != "", f"a word that may leave the allowed places, or one not judged: {cmd!r}"
+
+
+def guard_denials_name_the_rewrite(base):
+    def closing(reason):
+        return re.split(r"(?<=[.!?])\s+", reason.strip())[-1]
+    unresolved, branch = guard_reason("rm -rf $UNSET/x"), guard_reason("git branch -D x")
+    assert "write the path out" in unresolved and "statement of its own" in unresolved, unresolved
+    assert "`git branch -d`" in branch and "`git worktree add --detach`" in branch, branch
+    plain = guard_reason("rm -rf /usr/lib/x", cwd=base)
+    assert plain and "write the path out" not in plain and "statement of its own" not in plain, plain
+    for reason in [unresolved, branch, plain, guard_reason("git push --force origin x"), guard_reason("sudo ls")]:
+        assert "Nothing in this command ran" in reason, reason
+        last = closing(reason)
+        assert "the user" in last and "the agent that started you" in last, last
 
 
 def guard_reads_code_not_text(base):
@@ -4154,7 +4244,8 @@ def impeccable_files_in_a_shared_repo_need_the_user_first(base):
                     "find .impeccable -fprint0 x", "sed -n -e 1p x -e 'w DESIGN.md'", "sed -n 1p -i PRODUCT.md",
                     "sed -n -i 1p PRODUCT.md", "sed -n 1p PRODUCT.md -i", "d=.impeccable>PRODUCT.md", "X=a>DESIGN.md",
                     'D=".impeccable"; mkdir -p "$D"', 'OUT=DESIGN.md; cat t > "$OUT"', "D=.impeccable; touch ${D}/x",
-                    "sed -n 'w DESIGN.md' /dev/null -e 1p", "sed -n 's/a/b/w DESIGN.md' -e 1p /dev/null"]:
+                    "sed -n 'w DESIGN.md' /dev/null -e 1p", "sed -n 's/a/b/w DESIGN.md' -e 1p /dev/null",
+                    "find . \\( -name PRODUCT.md \\) -delete", "(touch PRODUCT.md)"]:
         assert shell(command) == "deny", command
     for name, inp in [("Edit", {"file_path": os.path.join(shared, ".gitignore"), "old_string": "", "new_string": "PRODUCT.md"}),
                       ("apply_patch", {"input": "*** Begin Patch\n*** Update File: notes.md\n*** Move to: PRODUCT.md\n*** End Patch"})]:
@@ -4172,7 +4263,8 @@ def impeccable_files_in_a_shared_repo_need_the_user_first(base):
                     "git status .impeccable", "git ls-files PRODUCT.md", "git blame DESIGN.md", "git grep x -- PRODUCT.md",
                     "git rev-parse --show-toplevel:PRODUCT.md", "git cat-file -p HEAD:PRODUCT.md",
                     'd=".impeccable"', "d=.impeccable; ls \"$d\"", "P=PRODUCT.md D='DESIGN.md'",
-                    "sed -ne 15,30p PRODUCT.md", "sed -n -e '15,30p;' PRODUCT.md", "sed -n 2>/dev/null 1p PRODUCT.md"]:
+                    "sed -ne 15,30p PRODUCT.md", "sed -n -e '15,30p;' PRODUCT.md", "sed -n 2>/dev/null 1p PRODUCT.md",
+                    "find . -maxdepth 2 \\( -iname 'product.md' -o -name '.impeccable' \\) -not -path './node_modules/*'; cat x.php"]:
         assert shell(command) == "allow", f"read-only or unrelated: {command}"
     started = child_cpu()
     for command in ["a=" + "b=" * 40 + " cat PRODUCT.md", "cat PRODUCT.md <<<" + "1" * 70000]:
@@ -5713,7 +5805,9 @@ def the_real_ps_listing_parses(base):
 TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_phases_by_scope, the_old_self_review_name_still_switches_the_review, switches_follow_a_branch_rename, a_rename_is_followed_in_the_checkout_read, same_named_repos_keep_their_own_switches, a_review_rounds_line_says_what_an_unreadable_file_means, coming_back_after_hours_asks_for_the_status_first, a_review_rounds_line_sets_the_re_checks_by_scope, only_the_user_runs_the_switch_cli, pr_gate_skips_the_phases_switched_off, stop_skips_the_phases_switched_off,
          guard_blocks_irreversible, only_the_user_grants_an_approval_in_a_dialog,
          the_agent_stays_out_of_the_approvals,
-         guard_allows_routine, guard_resolves_rm_variables, guard_allows_worktree_and_cache_deletes, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
+         guard_allows_routine, guard_resolves_rm_variables, guard_allows_worktree_and_cache_deletes,
+         guard_keeps_variables_through_heredocs_and_quoted_text, guard_keeps_chain_assignments_after_sure_steps,
+         guard_judges_loop_words_one_by_one, guard_denials_name_the_rewrite, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_needs_a_video_per_check, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,

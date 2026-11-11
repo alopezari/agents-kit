@@ -14,6 +14,7 @@ import functools
 import io
 import itertools
 import json
+import math
 import os
 import re
 import shlex
@@ -69,7 +70,8 @@ RULES = [
      r"|(?![^;&|\n]*\s(--staged|-[a-zA-Z]*S[a-zA-Z]*)(\s|$)))"
      r"(\s+(-s|--source)\s+[^\s;&|]+|\s+-[\w=~^./@{}-]+)*\s+(--\s+)?\./?(\s|$)",
      "`git restore .`: discards all uncommitted changes."),
-    (GIT + r"branch\s+-D\b", "`git branch -D`: force-deletes a branch."),
+    (GIT + r"branch\s+-D\b", "`git branch -D`: force-deletes a branch. `git branch -d` deletes a merged one; for a "
+                             "throwaway checkout, `git worktree add --detach` leaves no branch to delete."),
     (GIT + r"stash\s+(drop|clear)\b", "`git stash drop|clear`: deletes stashed work."),
     (MERGE, "`gh pr merge`: merging is the user's decision. Instead of running it themselves, the user can allow it "
             "until their next message, by asking for it in plain words (`merge it`, `mergéalo`) or by starting their "
@@ -266,6 +268,7 @@ SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 def dangerous_rm(command, cwd, run_by=None):
     """Recursive deletes outside the working directory, temp dirs, linked worktrees and regenerable caches, each judged from where the `cd`s before it
     leave the shell (a subshell's cd ends with it), with the variables segments_with_values() knows substituted.
+    Inside a loop over literal words (loop_words()), a target using its variable is judged once per word.
     After a cd the guard can't resolve, a relative target is unresolved too. A quoted string the command runs as a
     command (bash -c, eval, trap) is judged the same way, run_by giving the directory and variables of its segment."""
     here, known = run_by or (cwd, None)  # here is None after an unresolvable cd
@@ -285,6 +288,7 @@ def dangerous_rm(command, cwd, run_by=None):
                     for i in range(first, end)}
     # Code an interpreter runs (python3 -c '… os.system("rm …")') runs its strings wherever they stand in it.
     code_spawns = run_by is not None and bool(SPAWNS.search(text))
+    loops = loop_words(text)
     outer, at, line, next_run = [], 0, 0, 0
     for segment, values in segments_with_values(text, known):
         start = text.find(segment, at)
@@ -314,6 +318,7 @@ def dangerous_rm(command, cwd, run_by=None):
                 if run_by:
                     # Run as text, the caller's arguments are what it passes in (find -exec sh -c '… "$1"').
                     targets = [t for t in targets if not re.search(r"\$\{?[\d@*#]", t) and (runs_in is not None or os.path.isabs(t))]
+                targets = [word for t in targets for word in with_loop_words(t, start, loops)]
                 # An unquoted $VAR splits on spaces, so the path before a cache name may be several targets.
                 denied = dangerous_rm_targets(targets, runs_in, cwd, "$" in shell_code(stripped))
                 if denied:
@@ -418,7 +423,10 @@ def dangerous_rm_targets(targets, here, cwd, unquoted_variable=False):
         if unresolved and cache and not unquoted_variable:
             continue
         if unresolved or "*" == target.strip("/"):
-            return f"Recursive delete of an unresolved or wildcard path: {target}"
+            hint = ("" if not re.search(r"\$\{?[A-Za-z_]", target) or re.search(r"\$\(|`", target) else
+                    " To pass, write the path out, or assign the variable in a statement of its own before the delete "
+                    "(on its own line or after `;`, not after `&&` behind a step that may fail).")
+            return f"Recursive delete of an unresolved or wildcard path: {target}.{hint}"
         for place in {here or cwd, cwd}:
             path = os.path.realpath(os.path.join(place, target))
             if path in ("/", home) or cwd.startswith(path + os.sep) or path == cwd:
@@ -433,6 +441,87 @@ def dangerous_rm_targets(targets, here, cwd, unquoted_variable=False):
             if any(d == path or d.startswith(path + os.sep) for d in shell_dirs):
                 return f"Recursive delete of {path}, which contains the folder the shell is in."
     return None
+
+
+
+# The word combinations one delete is judged with at most: the hook must answer before the harness's timeout, which
+# lets the command through.
+LOOP_COMBINATIONS = 64
+LOOP_WORD = re.compile(r"[\w./@%+:][\w./@%+:-]*")
+SHELL_TOKEN = re.compile(r"[;&|()\n]|[^\s;&|()]+")
+
+
+@functools.lru_cache(maxsize=8)
+def loop_words(text):
+    """(position of `do`, position of `done`, name, words) of each `for NAME in words` loop over literal words whose
+    variable nothing else sets: the only loop over it, never assigned, read, unset or given a ${NAME:=…}. None at all
+    when the loops can't be read for sure: a heredoc body the shell may run, IFS set, a declare or a case anywhere, a
+    header it can't parse, or a do and done that don't pair."""
+    body = opaque_heredoc_lines(text)
+    if body is None or re.search(r"\bIFS\b|\b(?:declare|typeset|local|readonly|case)\b", text):
+        return ()
+    shell = list(blank_lines(text, body))
+    for a, b in quoted_spans("".join(shell)):
+        shell[a:b] = "\0" * (b - a)
+    shell = re.sub(r"(?:^|(?<=[\s;&|()]))#[^\n]*", lambda m: " " * len(m.group()), "".join(shell).replace(CONTINUATION, "  "))
+    looped = {}
+    for name in re.findall(r"\b(?:for|select)\s+(\w+)", text):
+        looped[name] = looped.get(name, 0) + 1
+    set_otherwise = set(ASSIGNED_NAME.findall(text)) | set(re.findall(r"\$\{(\w+):?=", text)) | \
+        {w for m in READ_LIKE.finditer(text) for w in re.findall(r"\w+", m.group(1))}
+    tokens = [(m.start(), m.group()) for m in SHELL_TOKEN.finditer(shell)]
+    loops, open_loops, command, i = [], [], True, 0  # open_loops: (do, name, words), None before a while's do
+    while i < len(tokens):
+        at, word = tokens[i]
+        i += 1
+        if word in ";&|()\n":
+            command = True
+        elif not command:
+            continue
+        elif word in ("for", "select"):
+            if i >= len(tokens) or not re.fullmatch(r"[A-Za-z_]\w*", tokens[i][1]):
+                return ()
+            name, words, i = tokens[i][1], [], i + 1
+            if i < len(tokens) and tokens[i][1] == "in":
+                i += 1
+                while i < len(tokens) and tokens[i][1] not in ";&|()\n":
+                    words.append(tokens[i][1])
+                    i += 1
+            while i < len(tokens) and tokens[i][1] in (";", "\n"):
+                i += 1
+            if i >= len(tokens) or tokens[i][1] != "do":
+                return ()
+            literal = word == "for" and words and all(LOOP_WORD.fullmatch(w) for w in words)
+            only_set_by_its_loop = looped.get(name) == 1 and name not in set_otherwise
+            open_loops.append((tokens[i][0], name if literal and only_set_by_its_loop else None, words))
+            i += 1
+        elif word in ("while", "until"):
+            open_loops.append(None)
+        elif word == "do":
+            if not open_loops or open_loops[-1] is not None:
+                return ()
+            open_loops[-1] = (at, None, [])
+        elif word == "done":
+            if not open_loops or open_loops[-1] is None:
+                return ()
+            do, name, words = open_loops.pop()
+            if name:
+                loops.append((do, at, name, tuple(words)))
+            command = False
+        elif word not in ("if", "then", "else", "elif", "fi", "!", "time", "{", "}"):
+            command = False
+    return () if open_loops else tuple(loops)
+
+
+def with_loop_words(target, at, loops):
+    """The target once per combination of the words of the loops around position at whose variable it uses; as
+    written when it uses none, or past LOOP_COMBINATIONS, where it stays unresolved."""
+    around = [(name, words) for do, done, name, words in loops
+              if do <= at < done and re.search(rf"\$(?:{name}(?!\w)|\{{{name}\}})", target)]
+    if not around or math.prod(len(words) for _, words in around) > LOOP_COMBINATIONS:
+        return [target]
+    names = [name for name, _ in around]
+    return [expand(target, dict(zip(names, combination))) for combination in itertools.product(*(w for _, w in around))]
 
 
 CACHE_FOLDERS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
@@ -999,12 +1088,11 @@ def starts_process(code, interpreter):
     return bool(spawns.search(code) or (SHELL_BACKTICKS.match(interpreter) and "`" in code))
 
 
-def read_heredocs(lines):
-    """(first body line, end, kind, interpreter) of each heredoc in the lines; kind is "script" for a quoted body only
-    an interpreter reads, fed to it or written to a file the lines give it, that starts no process, "spawns" when it
-    starts one, else "other". A heredoc that never
-    ends runs to the last line. None when a header goes on past its line, which this doesn't read."""
-    found, queue = [], []  # queue: [delimiter, header line, match, first body line] of each heredoc still open
+def heredoc_spans(lines):
+    """(header line number, header match, first body line, end) of each heredoc in the lines, its delimiter line at
+    end. A heredoc that never ends runs to the last line. None when a header goes on past its line, which this
+    doesn't read."""
+    found, queue = [], []  # queue: [delimiter, header line number, match, first body line] of each heredoc still open
     for i, line in enumerate(lines):
         if queue:
             if line.lstrip("\t") == queue[0][0]:
@@ -1014,15 +1102,26 @@ def read_heredocs(lines):
             continue
         comment = re.search(r"(?:^|\s)#", line)
         quoted = quoted_spans(line)
-        queue = [[m.group(2) or m.group(3) or m.group(4), line, m, i + 1] for m in HEREDOC.finditer(line)
+        queue = [[m.group(2) or m.group(3) or m.group(4), i, m, i + 1] for m in HEREDOC.finditer(line)
                  if (not comment or m.start() < comment.start()) and not any(a < m.start() < b for a, b in quoted)]
         if queue and line.endswith("\\"):
             return None
-    found += [q[1:] + [len(lines)] for q in queue]
+    return found + [q[1:] + [len(lines)] for q in queue]
+
+
+def read_heredocs(lines):
+    """(first body line, end, kind, interpreter) of each heredoc in the lines; kind is "script" for a quoted body only
+    an interpreter reads, fed to it or written to a file the lines give it, that starts no process, "spawns" when it
+    starts one, else "other". A heredoc that never
+    ends runs to the last line. None when a header goes on past its line, which this doesn't read."""
+    found = heredoc_spans(lines)
+    if found is None:
+        return None
     in_body = {i for _, _, start, end in found for i in range(start, end)}
     interpreted = files_interpreted("\n".join("" if i in in_body else line for i, line in enumerate(lines)))
     bodies = []
-    for header, m, start, end in found:
+    for header_line, m, start, end in found:
+        header = lines[header_line]
         program = heredoc_feeds(header, m, INTERPRETER_RECEIVER)
         program = program.group(1) if program else next(
             (interpreted[f] for f in written_files(header) if f in interpreted and not m.group(4)), "")
@@ -1254,18 +1353,121 @@ def segments_with_values(text, inherited=None):
     """Each segment the text splits into at ; & | and new lines, with the variables known to hold a value when it
     runs, then ("", the values known at the end). A variable is known after an assignment that surely ran: a
     segment of only assignments, outside a subshell, $(…), compound command, pipeline or background job, at the start,
-    after ; or a new line, or earlier in the same && chain. One set some other way too (twice, by read or a loop, ${X:=…}) stays unknown. $HOME and
-    $TMPDIR come from the hook's environment unless the command sets them, or all from inherited: the values known
-    where the text runs as a command (eval)."""
+    after ; or a new line, or later in an && chain whose earlier steps surely succeed (a cd into a directory that
+    exists and can be entered, an assignment it resolves); else only in the rest of that chain. One set some other
+    way too (twice, by read or a loop, ${X:=…}) stays unknown. $HOME and $TMPDIR come from the hook's environment
+    unless the command sets them, or all from inherited: the values known where the text runs as a command (eval).
+    A heredoc body the shell itself never runs (opaque_heredoc_lines()) neither sets nor unsets the variables of the
+    rest, and a read or unset inside a quoted string, not at its start, names none; the body's own segments get the
+    values as if it ran. When that can't be told for sure, every line counts as the shell's, as before."""
+    body = opaque_heredoc_lines(text)
+    if not body:
+        flow = variable_flow(text, inherited, body is not None)
+    else:
+        lines = text.split("\n")
+        line_starts = list(itertools.accumulate((len(line) + 1 for line in lines[:-1]), initial=0))
+        on_body = lambda start: bisect.bisect_right(line_starts, start) - 1 in body  # noqa: E731
+        inside = [s for s in variable_flow(text, inherited, False) if s[0] is not None and on_body(s[0])]
+        outside = [s for s in variable_flow(blank_lines(text, body), inherited, True) if s[0] is None or not on_body(s[0])]
+        flow = sorted(inside + outside[:-1], key=lambda s: s[0]) + outside[-1:]
+    for start, end, values in flow:
+        yield ("", values) if start is None else (text[start:end], values)
+
+
+def blank_lines(text, numbers):
+    """The text with the lines of these numbers blanked to spaces, every position kept."""
+    return "\n".join(" " * len(line) if i in numbers else line for i, line in enumerate(text.split("\n")))
+
+
+# A command the current shell runs as its own code, at a command's start: a heredoc body it reads, or any text, may
+# then set its variables. A command name the shell only knows when it runs ($cmd) may be one.
+CURRENT_SHELL_RUNNER = re.compile(r"(?:^|[;&|(){}`\n])[ \t]*(?:(?:if|then|else|elif|do|while|until|time|!|command|builtin|"
+                                  r"exec|nohup|\w+=[^\s;&|()]*)[ \t]+(?:-[^\s;&|()]*[ \t]+)*)*([^\s;&|()<>]+)")
+CURRENT_SHELL_RUNNERS = {"source", ".", "eval", "trap", "alias"}
+# In an unquoted heredoc body, what the shell expands may assign: $((S=1)), $[S=1], ${S:=x}, ${a[i=1]}.
+BODY_ASSIGNS = re.compile(r"\$\(\(|\$\[|\$\{[^}]*[=\[]")
+DELIMITER_END = re.compile(r"[\s;&|<>()]|$")
+
+
+@functools.lru_cache(maxsize=8)
+def opaque_heredoc_lines(text):
+    """The numbers of the heredoc body lines in the text, which the shell feeds to a program and never runs itself;
+    None when that can't be told for sure: a heredoc read_heredocs() can't read or that no delimiter line closes, a
+    delimiter it may read another way, a header in a comment, a string, a $(…) or backticks or on a line with ((, $[
+    or exec, a `<<` it doesn't take for a header, a body line ending in a backslash before the delimiter, an unquoted
+    body that may assign, or a source, ., eval, trap, alias or $cmd at a command's start anywhere in the text."""
+    lines = text.split("\n")
+    spans = heredoc_spans(lines)
+    if spans is None:
+        return None
+    body, headers = set(), {}
+    for header, m, first, end in spans:
+        line, delimiter = lines[header], m.group(2) or m.group(3) or m.group(4)
+        if end >= len(lines) or not re.fullmatch(r"[\w.-]+", delimiter) or not DELIMITER_END.match(line, m.end()) \
+                or (not m.group(0).startswith("<<-") and lines[end] != delimiter) \
+                or (end > first and lines[end - 1].endswith("\\")) \
+                or (m.group(4) and BODY_ASSIGNS.search("\n".join(lines[first:end]))):
+            return None
+        body.update(range(first, end))
+        headers.setdefault(header, []).append(m.start())
+    for i, line in enumerate(lines):
+        if i not in body and [m.start() for m in HEREDOC.finditer(line)] != headers.get(i, []):
+            return None  # a << it doesn't read as a header, in a comment or a string, may still be one
+    if any(header_enclosed(lines[i], starts) for i, starts in headers.items()):
+        return None
+    blanked = blank_lines(text, body)
+    offsets = list(itertools.accumulate((len(line) + 1 for line in lines[:-1]), initial=0))
+    strings = quoted_spans(blanked)
+    string_starts = [a for a, _ in strings]
+    for i, starts in headers.items():
+        for at in starts:
+            k = bisect.bisect_left(string_starts, offsets[i] + at) - 1
+            if k >= 0 and offsets[i] + at < strings[k][1]:
+                return None  # a header in a string that spans lines
+    for m in CURRENT_SHELL_RUNNER.finditer(blanked):
+        word = re.sub(r"['\"\\]", "", m.group(1))
+        if word in CURRENT_SHELL_RUNNERS or ("$" in word or "`" in word) and not re.match(r"\w+\+?=", word):
+            return None
+    return frozenset(body)
+
+
+def header_enclosed(line, starts):
+    """Whether a heredoc header at one of these positions of the line sits after a comment's start, or inside a [,
+    a ( or backticks the line opens before it, or the line holds ((, $[ or exec: there the shell may read its body
+    as code."""
+    layout = line_layout(line)[0]
+    comment = re.search(r"(?:^|[\s;&|()<>`])#", layout)
+    if (comment and comment.start() < max(starts)) or re.search(r"\(\(|\$\[|\bexec\b", line):
+        return True
+    starts, brackets, parens, ticks = set(starts), 0, 0, 0
+    for i, (c, masked) in enumerate(zip(line, layout)):
+        if i in starts and (brackets > 0 or parens > 0 or ticks % 2):
+            return True
+        brackets += (c == "[") - (c == "]")
+        parens += (masked == "(") - (masked == ")")
+        ticks += c == "`"
+    return False
+
+READ_LIKE = re.compile(r"\b(?:read|mapfile|readarray|getopts|printf\s+-v|unset)\b([^;&|\n]*)")
+
+
+def variable_flow(text, inherited, outer_only):
+    """segments_with_values() of the text as (start, end, values), then (None, None, the values at the end). With
+    outer_only, the text's heredoc bodies are blanked, so its every line is the shell's: a read or unset inside a
+    quoted string, not at its start, names no variable, and an && chain's sure steps keep its assignments."""
     names = ASSIGNED_NAME.findall(text)
     unsure = {name for name in names if names.count(name) > 1} if len(names) < 200 else set(names)
     unsure |= {n for pair in re.findall(r"\b(?:for|select)\s+(\w+)|\$\{(\w+):?=", text) for n in pair if n}
-    for words in re.findall(r"\b(?:read|mapfile|readarray|getopts|printf\s+-v|unset)\b([^;&|\n]*)", text):
-        unsure |= set(re.findall(r"\w+", words))
+    in_text = in_string_after_its_start(text) if outer_only else lambda at: False
+    for m in READ_LIKE.finditer(text):
+        if not in_text(m.start()):
+            unsure |= set(re.findall(r"\w+", m.group(1)))
     base = dict(inherited) if inherited is not None else {"HOME": os.path.expanduser("~"), "TMPDIR": os.environ.get("TMPDIR")}
     for name in set(names) | unsure:
         base.pop(name, None)
-    known, chain, parens, compound = {}, {}, 0, 0
+    # A readonly name makes its assignment fail, so no assignment is a sure step where one may be declared.
+    assignment_steps = outer_only and not re.search(r"\b(?:readonly|declare|typeset)\b", text)
+    known, chain, parens, compound, chain_sure = {}, {}, 0, 0, True
     by_line = "\n".join(line_layout(line)[0] for line in text.split("\n")).replace(CONTINUATION, "  ")
     whole = list(text.replace(CONTINUATION, "  "))
     for start, end in quoted_spans(text):
@@ -1281,9 +1483,8 @@ def segments_with_values(text, inherited=None):
         before = chained_by(parts[k - 1]) if k else ";"
         after = chained_by(parts[k + 1]) if k + 1 < len(parts) else ";"
         if before != "&&":
-            chain = {}
-        values = {**base, **known, **chain}
-        yield parts[k], values
+            chain, chain_sure = {}, outer_only and before == ";"
+        yield breaks[k], breaks[k + 1], {**base, **known, **chain}
         stripped, code = parts[k].strip(), masked[breaks[k]:breaks[k + 1]].strip()
         first = (code.split() or [""])[0]
         leading = len(code) - len(code.lstrip("("))
@@ -1291,14 +1492,54 @@ def segments_with_values(text, inherited=None):
         compound += first in COMPOUND_OPENS or code.endswith("{")
         assignments = ASSIGNMENTS_ONLY.fullmatch(stripped)
         framed = (k == 0 or sure[k - 1]) and (k + 1 >= len(parts) or sure[k + 1])
-        if assignments and framed and parens == compound == 0 and before in (";", "&&") and after not in ("|", "&"):
+        top_level = framed and parens == compound == 0
+        step_sure = top_level and after == "&&" and sure_cd(stripped)
+        if assignments and top_level and before in (";", "&&") and after not in ("|", "&"):
+            resolved = True
             for m in ONE_ASSIGNMENT.finditer(assignments.group(1)):
                 value = None if m.group(1) in unsure else assigned_value(m.group(2), {**base, **known, **chain})
+                resolved &= value is not None
                 if value is not None:
-                    (known if before == ";" else chain)[m.group(1)] = value
+                    (known if before == ";" or chain_sure else chain)[m.group(1)] = value
+            step_sure = after == "&&" and resolved and assignment_steps and \
+                re.match(r"(?:export\s+)?\w+=", stripped) is not None
+        chain_sure = chain_sure and step_sure
         parens = max(0, parens + code.count("(") - code.count(")") - leading)  # a case pattern's ) opened nothing
         compound = max(0, compound - (first in COMPOUND_CLOSES or first.startswith("}")))
-    yield "", {**base, **known}
+    yield None, None, {**base, **known}
+
+
+def in_string_after_its_start(text):
+    """Whether a position lies inside a closed quoted string, read over the whole text and line by line alike, past
+    the string's first word: `sed 's/a:unset}/b/'` reads no variable, `trap 'unset S' DEBUG` may."""
+    def inside(spans, source, at):
+        k = bisect.bisect_left(spans, (at,)) - 1  # the last string starting before the position
+        if k < 0:
+            return False
+        a, b = spans[k]
+        return at < b and b - a > 1 and source[b - 1] == source[a] and re.compile(r"\S").search(source, a + 1, at) is not None
+    whole, lines = quoted_spans(text), text.split("\n")
+    offsets = list(itertools.accumulate((len(line) + 1 for line in lines[:-1]), initial=0))
+    by_line = {}
+
+    def check(at):
+        i = bisect.bisect_right(offsets, at) - 1
+        if i not in by_line:
+            by_line[i] = quoted_spans(lines[i])
+        return inside(whole, text, at) and inside(by_line[i], lines[i], at - offsets[i])
+    return check
+
+
+def sure_cd(segment):
+    """Whether the segment is a cd that surely succeeds: into one absolute directory, written out, that exists and
+    the guard's own user can enter."""
+    try:
+        words = shlex.split(segment)
+    except ValueError:
+        return False
+    if len(words) != 2 or words[0] != "cd" or not os.path.isabs(words[1]) or re.search(r"[$`*?\[\]{}~\\]", segment):
+        return False
+    return os.path.isdir(words[1]) and os.access(words[1], os.X_OK)
 
 
 def database_grant(statement):
@@ -1619,7 +1860,7 @@ def impeccable_files(command, cwd, session):
     code = shell_code(text)
     # A newline inside quotes is part of an argument (sed's a\ text), not the end of a command.
     joined = re.sub(r"'[x\n]*'|\"[x\n]*\"", lambda m: m.group().replace("\n", "x"), code)
-    cuts = [(0, 0)] + [m.span() for m in re.finditer(r"&&|\|\||(?<![<>&])&(?![>&])|(?<!>)\||[;\n()]", joined)]
+    cuts = [(0, 0)] + [m.span() for m in re.finditer(r"&&|\|\||(?<![<>&])&(?![>&])|(?<!>)\||[;\n]|(?<!\\)[()]", joined)]
     folders, gitignores, targets, runs, design_vars = [cwd], [], [], [], {}
     # A patch run through the shell (Codex's apply_patch) names its files in a heredoc body.
     for path in re.findall(r"^\*\*\* (?:Add File|Update File|Move to): (.+)$", command, re.M):
@@ -1934,7 +2175,8 @@ def main():
             "permissionDecisionReason": (
                 f"Blocked by ~/.agents/hooks/guard_bash.py: {reason} "
                 "Nothing in this command ran, including any steps chained before or after the blocked one. "
-                "If this is really needed, stop and ask the user to run it themselves."
+                "If it is really needed, stop: in the main session, ask the user to run it themselves; as a subagent, "
+                "which can't reach the user, report the blocked command to the agent that started you."
             ),
         }
     }))

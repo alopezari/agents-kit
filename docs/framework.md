@@ -119,7 +119,7 @@ Every block, every approved or browser MCP call and every shell command a user's
 - `git clean -f`: deletes untracked files.
 - `git checkout .`: discards all uncommitted changes.
 - `git restore .`: discards all uncommitted changes.
-- `git branch -D`: force-deletes a branch.
+- `git branch -D`: force-deletes a branch. `git branch -d` deletes a merged one; for a throwaway checkout, `git worktree add --detach` leaves no branch to delete.
 - `git stash drop|clear`: deletes stashed work.
 - `gh pr merge`: merging is the user's decision. Instead of running it themselves, the user can allow it until their next message, by asking for it in plain words (`merge it`, `mergéalo`) or by starting their message with the line `allow gh pr merge`. `--admin` stays theirs.
 - `gh repo delete|archive`: deletes or archives a repository.
