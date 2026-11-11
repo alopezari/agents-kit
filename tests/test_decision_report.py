@@ -5217,7 +5217,7 @@ def prose_stops_at_a_reading_width(base):
     caps = {}
     for selectors, width in re.findall(r"([^{}@]+)\{[^{}]*?max-width:([^;}]+)", stylesheet(markup)):
         caps.update({selector.strip(): width for selector in re.split(r",(?![^()]*\))", selectors)})  # not the commas inside :is()
-    for prose in ("p", ":is(main,footer) :is(ul,ol):not([class])>li", ".reasons>li", ".kf dd", ".fresh li", ".stepl li", ".crit>li", ".owned>li", ".check dd", ".opts li"):
+    for prose in ("p", ":is(main,footer) :is(ul,ol):not([class])>li", ".reasons>li", ".kf dd", ".fresh li", ".stepl li", ".crit>li", ".owned>li", ".check dd:not(:has(table,.file))", ".opts li"):
         assert re.fullmatch(r"(\d+)ch", caps.get(prose, "")) and int(caps[prose][:-2]) <= 72, f"{prose} has no reading width: {caps.get(prose)}"
     for prose in (".lead", ".verdict", ".tally"):  # each a <p>: a rule of its own may only narrow the cap
         assert prose not in caps or (caps[prose].endswith("ch") and int(caps[prose][:-2]) <= 72), f"{prose} lifts the reading width: {caps[prose]}"
