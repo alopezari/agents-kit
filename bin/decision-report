@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Write the branch's decision page: one local HTML page, built from the spec, the agent's decision notes, the reports,
 the evidence and the pull request's CI, for one question: is this PR safe to merge, or is something missing that could
-compromise system stability or the user's experience? It opens as a control panel: a verdict that comes only from
-recorded values (Not ready, Your call or Ready), then one sentence each on the problem, stability, the user's experience,
-testing, code review, what isn't proven, undo and your decisions. Six sections follow in order (the problem, the solution,
-testing, code review, not proven, your decisions), each a native disclosure, open, with long lists folded behind their
-count; then a footer with merge and ship, the reports as annexes, the pull request's quality signals from quality.jsonl
-and its identifiers. Tests are grouped by layer, and those the agent ran for real show their evidence inline even when
-the page showed it earlier. Figures the notes name are embedded in place, and an SVG is only ever an image. An animated
-figure is a scene file: its allowlisted shapes, text and timing are validated and compiled here into inline SVG and CSS,
+compromise system stability or the user's experience? Its first screen holds the claim, a verdict that comes only from
+recorded values (Not ready, Your call or Ready) with a chip for each reason, a rail of spec, review, validate and CI
+ending on your call, and short stability, experience and undo cards. Sections follow in order (the problem and the
+solution as cards with a headline and key facts and the agent's prose folded, testing, code review, not proven, your decisions), each open,
+with long lists folded behind their count; then a footer with merge and ship, the reports as annexes, the pull request's
+quality signals from quality.jsonl and its identifiers. Testing is drawn as a test map of named checks per layer, review
+as a lens matrix and regressions as a matrix; a fact the notes leave out is left off unless the field is required. It
+follows the system's light or dark theme. A check that failed or did not run shows its outcome open and its
+log, video and script folded below it. Figures the notes name are embedded in place, and an SVG is only ever an image. An animated figure is a scene file: its allowlisted shapes, text and timing are validated and compiled here into inline SVG and CSS,
 with no-script controls, and a refused one costs only that figure. References
 link: the PR, its commits and file:line to GitHub, https URLs, and local reports and evidence by file://. A branch that
 answers a question instead of shipping a change gets the investigation page, below.
@@ -68,6 +69,10 @@ ci_wait.GH_TIMEOUT = GH_TIMEOUT = 20
 
 CSP = "default-src 'none'; img-src file: data:; media-src file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
 TEXT_LIMIT = 200 * 1024
+CRITERION_WORDS = 12
+LABEL_CHARS = 120  # a chip's name or a criterion's label, repeated wherever a matrix names it: its full text is in its own block
+NAMED_CHECKS = 2
+NAMED_CRITERIA = 2
 IMAGE_LIMIT = 2 * 1024 * 1024
 TOTAL_LIMIT = 20 * 1024 * 1024
 REPORT_LIMIT = review_stamp.REPORT_LIMIT
@@ -131,6 +136,7 @@ PROBLEM_FACTS = ("Headline", "Background", "Who it hits", "What they see", "How 
 SOLUTION_FACTS = ("Headline", "For you", "Time added", "Connects to", "If it fails", "To undo", "Rejected")
 ARCHITECTURE_MAP = "Architecture map"
 REGRESSIONS = "Where a regression could show up"
+BEFORE_AFTER = "Before and after"
 DECISION_FIELDS = ("Options", "Cost", "Recommendation", "Accepts", "Blocking")
 OPEN_IMPACT = ("If it goes wrong", "Worst case", "Can wait because")  # all required: any left out is an impact not recorded
 GAP_IMPACT = ("If it goes wrong", "Worst case", "Checked by")
@@ -156,6 +162,7 @@ RECONSTRUCTED = re.compile(r"\breconstructed\b", re.I)
 SETUP_STEPS = ("M0", "S0", "P0")  # a guide's setup: access and exports, not a test
 LONG_LIST = 5  # a passing list longer than this starts collapsed
 VERDICT_REASONS = 3  # how many reasons the verdict's sentence names before "and N more"
+VERDICT_CHIPS = 8  # how many reasons the verdict shows as chips; past it, the last chip counts the rest
 MAX_DOTS = 200
 VERDICT_RULE = ("Not ready: CI failed, running, missing or unread; the local HEAD differs from the PR's; the PR is merged or closed; a check or verify failed; "
                 "a missing or stale review or validation; or an item marked as blocking. "
@@ -173,19 +180,6 @@ ALWAYS_LAYERS = ("unit", "integration", "e2e", "mutation", "manual")
 LAYER_NAMES = {"unit": "Unit", "integration": "Integration", "e2e": "End to end", "mutation": "Mutation", "manual": "By hand",
                "property": "Property-based", "regex": "Regex timing", "design": "Design", "a11y": "Accessibility",
                "query budget": "Query budget", "migration": "Migration", OTHER_LEVEL: "Other", NO_LEVEL: "Layer not recorded"}
-LAYER_MEANS = {"unit": "One piece of code at a time, usually with fake inputs. Fast, and blind to how the pieces work together.",
-               "integration": "Several real pieces working together, without the whole program around them.",
-               "e2e": "The real program from start to finish, on a real machine, the way it actually runs.",
-               "mutation": "Plants bugs on purpose, to find out whether the other tests would notice.",
-               "manual": "A person follows the steps in the real product and looks at the result.",
-               "property": "Throws many generated inputs at a rule that must always hold.",
-               "regex": "Times a pattern against its worst-case input so it can't hang.",
-               "design": "Looks at the rendered page against the design.",
-               "a11y": "Checks the page works with a keyboard and a screen reader.",
-               "query budget": "Counts the database queries a path makes against a limit.",
-               "migration": "Runs the data or schema change on a copy and checks the result.",
-               OTHER_LEVEL: "The report names a level this page doesn't know.",
-               NO_LEVEL: "The report gives this check no level."}
 LENS_COLUMNS = ("Lens", "What it checks", "Model", "Findings", "Confirmed", "Outcomes")
 SHIP_SECTIONS = (("deploy", "Deploy"), ("smoke", "Smoke checks"), ("rollback", "Rollback"), ("installed", "Installed on this machine"))
 ANNEXES = (("spec", "Spec"), ("decision-notes", "Decision notes"), ("pr-body", "PR body"), ("verify", "Verify report"),
@@ -1608,7 +1602,7 @@ def evidence_freshness(page, row, merged_tree, scripts):
 
 
 def unread_results(lines):
-    """(first cell, result) of each row whose result reads like a failure or a skip in words the stamp and the page don't count: left out, it would read as nothing wrong."""
+    """(first cell, check name, result) of each row whose result reads like a failure or a skip in words the stamp and the page don't count: left out, it would read as nothing wrong."""
     names = None
     for line in lines:
         cells = review_stamp.table_cells(line)
@@ -1619,7 +1613,8 @@ def unread_results(lines):
         elif names and len(cells) > names.index("Result"):
             result = cells[names.index("Result")]
             if FAILURE_LIKE_RESULT.match(result) and not ANY_RESULT.match(result):
-                yield cells[0], result
+                check = cells[names.index("Check")] if "Check" in names and len(cells) > names.index("Check") else ""
+                yield cells[0], plain(check), result
 
 
 def verdict_of_change(stops, calls):
@@ -1658,36 +1653,36 @@ def sentence_list(parts):
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
+def checks_named(names):
+    """Up to NAMED_CHECKS checks by name in a verdict reason; more by their count, named in the reason's detail."""
+    return sentence_list(names) if len(names) <= NAMED_CHECKS else counted(len(names), "check")
+
+
 def counted(n, word):
     return f"{n} {word}{'s' * (n != 1)}"
+
+
+def shortened(text):
+    """Plain text cut to LABEL_CHARS at a word, for a label a matrix repeats."""
+    if len(text) <= LABEL_CHARS:
+        return text
+    cut = text[:LABEL_CHARS].rsplit(" ", 1)[0] or text[:LABEL_CHARS]
+    return cut.rstrip(" ,;:.") + "…"
 
 
 def not_recorded_word():
     return state("Not recorded", "dim")
 
 
-def section(sid, eyebrow, title, body):
-    """A section of the page. The id sits inside the disclosure: a link opens a closed <details> only through what it holds."""
-    return (f'<details class="sec" open><summary><hgroup><p class="eyebrow">{esc(eyebrow)}</p><h2>{title}</h2></hgroup></summary>'
-            f'<div class="body" id="{sid}">{body}</div></details>')
+def section(sid, title, body):
+    """A section of the page under its heading, always open: a fold inside it holds what is long."""
+    return f'<section class="sec"><h2>{title}</h2><div class="body" id="{sid}">{body}</div></section>'
 
 
 def fold(title, count, inner, opened=False, inner_id=None):
     """A long list behind its count."""
     anchor = f' id="{inner_id}"' if inner_id else ""
-    return (f'<details class="more"{" open" if opened else ""}><summary><b>{esc(title)}</b> <span class="n">{count}</span> '
-            f'<span class="hint"></span></summary><div class="inner"{anchor}>{inner}</div></details>')
-
-
-def fact_list(page, facts, labels, judged=(), absent="Not recorded"):
-    """A fact sheet: each label with what the notes say, or what's missing named. `judged` labels are the agent's judgment."""
-    def label(name):
-        return f'{esc(name)}<span class="judg">Agent&#x27;s judgment</span>' if name in judged else esc(name)
-
-    def value(name):
-        said = facts.get(name)
-        return page.inline(said) if said else esc(absent(name) if callable(absent) else absent)
-    return '<dl class="facts">' + "".join(f"<dt>{label(name)}</dt><dd>{value(name)}</dd>" for name in labels) + "</dl>"
+    return (f'<details class="more"{" open" if opened else ""}><summary><b>{esc(title)}</b> <span class="n">{count}</span></summary><div class="inner"{anchor}>{inner}</div></details>')
 
 
 def impact_cell(label, value):
@@ -1771,6 +1766,8 @@ def read_change(page, page_path, evidence, off, phases_error, paths, texts, whys
     for row in c.rows:
         row["anchor"] = page.new_id(f"check-{row['id']}")
         row["level"] = test_level(row["level"] or "")
+        row["words"] = plain(row["check"]) or row["id"]  # the check's name for a sentence and a chip; its id is the agent's own label
+        row["name"] = page.inline(row["check"], links=False) if row["check"].strip() else esc(row["id"])
         if row["level"] == NO_LEVEL:
             row["level"] = type_of.get(row["id"], NO_LEVEL)
         c.rows_at.setdefault(row["level"], []).append(row)
@@ -1791,6 +1788,8 @@ def read_change(page, page_path, evidence, off, phases_error, paths, texts, whys
             c.named_in.setdefault(name.strip(), []).append(int(number.group(1)))
     c.ac_known = c.validation_ok and any(row["ac_column"] for row in c.rows)
     c.criteria_numbers = [(int(found.group(1)), found.group(2)) for found in (re.match(r"(\d{1,6})\.\s*(.*)", item) for item in c.criteria or []) if found]
+    c.criteria_said = dict(c.criteria_numbers)
+    c.rows_by_id = {row["id"]: row for row in c.rows}
     c.uncovered = [n for n, _ in c.criteria_numbers if c.ac_known and not any(n in row["acs"] for row in c.rows)]
     c.not_proven = not_proven_items(texts["validation"]) if c.validation_ok else []
     c.open_items = [(n, *labelled_parts(entry, OPEN_FIELDS), entry) for n, (_, _, entry) in
@@ -1804,7 +1803,7 @@ def read_change(page, page_path, evidence, off, phases_error, paths, texts, whys
     notes = c.notes or {}
     c.problem_facts, c.problem_text = split_facts(notes.get("problem") or "", PROBLEM_FACTS)
     c.solution_facts, solution_text = split_facts(notes.get("solution") or "", SOLUTION_FACTS)
-    c.placed, c.solution_text = pull_subsections(solution_text, (ARCHITECTURE_MAP, REGRESSIONS))
+    c.placed, c.solution_text = pull_subsections(solution_text, (ARCHITECTURE_MAP, REGRESSIONS, BEFORE_AFTER))
     legacy = note_items(notes.get("decide") or "")  # only here is a "Merge…" item the recommendation: under Decisions it is a decision
     c.merge_note = next((item for item in legacy if re.match(MERGE_NOTE, item, re.I)), None)
     c.decisions = [parse_decision(item) for item in note_items(notes.get("decisions") or "") + legacy
@@ -1834,29 +1833,57 @@ def agent_prose(page, text, prefix):
     return f'<p class="by">Written by the agent</p>{page.markdown(text, prefix, top=4, figures=True)}' if text else ""
 
 
+def lead_sentence(paragraph):
+    """A card's headline when the notes give none: the paragraph's first sentence, the whole paragraph staying in the fold."""
+    return first_sentence(" ".join(paragraph.split()))[0] if paragraph else paragraph
+
+
+def key_facts(page, facts, labels, judged=()):
+    """The facts worth reading before the fold, only those recorded: an empty optional field draws nothing."""
+    said = [(name, facts[name]) for name in labels if facts.get(name)]
+    return ('<dl class="kf">' + "".join(f'<dt>{esc(name)}' + ('<span class="judg">Agent&#x27;s judgment</span>' if name in judged else "")
+                                        + f"</dt><dd>{page.inline(value)}</dd>" for name, value in said) + "</dl>") if said else ""
+
+
 def problem_section(c):
     page, notes = c.page, c.notes or {}
     prose = "\n\n".join(part for part in (c.problem_text, notes.get("task")) if part)
-    if prose:
-        story = agent_prose(page, prose, "problem")
-    elif c.goal:
-        story = f'<p>{page.inline(c.goal.group(1))}</p><p class="by">The spec&#x27;s goal</p>'
-    else:
-        story = f"<p>{not_recorded_word()}</p>"
-    background = page.inline(c.problem_facts["Background"]) if c.problem_facts.get("Background") else not_recorded_word()
-    body = (f'<h3>Some background first</h3><p>{background}</p><h3>What went wrong</h3>{story}'
-            + fact_list(page, c.problem_facts, ("Who it hits", "What they see", "How bad", "How often", "If we wait"), ("How bad", "How often"),
-                        lambda name: "No deadline recorded" if name == "If we wait" else "Not recorded"))
-    title = page.inline(c.problem_facts["Headline"], links=False) if c.problem_facts.get("Headline") else "The problem"
-    return section("problem", "The problem", title, body)
+    story = agent_prose(page, prose, "problem")
+    headline = (c.problem_facts.get("Headline") or lead_sentence(first_paragraph(c.problem_text) or first_paragraph(notes.get("task") or ""))
+                or (c.goal.group(1) if c.goal else ""))
+    unwritten = (f'<p class="by">{"The spec&#x27;s goal. " if c.goal and not c.problem_facts.get("Headline") else ""}'
+                 f"What went wrong, in the agent&#x27;s words: {not_recorded_word()}</p>") if headline and not prose else ""
+    background = f'<h4>Some background first</h4><p>{page.inline(c.problem_facts["Background"])}</p>' if c.problem_facts.get("Background") else ""
+    rest = key_facts(page, c.problem_facts, ("What they see", "How often", "If we wait"), ("How often",))
+    inner = background + (f"<h4>What went wrong</h4>{story}" if story else "") + rest
+    return (f'<div class="box prob"><div class="body" id="problem"><h3>The problem</h3>'
+            + (f'<p class="hl">{page.inline(headline, links=False)}</p>' if headline else f"<p>{not_recorded_word()}</p>") + unwritten
+            + key_facts(page, c.problem_facts, ("Who it hits", "How bad"), ("How bad",))
+            + (f'<details class="more"><summary><b>What went wrong, in the agent&#x27;s words</b></summary><div class="inner">{inner}</div></details>' if inner else "")
+            + "</div></div>")
 
 
-def regression_table(page, text):
-    """The notes' table of where a regression could show up, each row the agent's judgment."""
+def chip_for_check(c, said):
+    """A regression's check as a chip when it names a check, or a guide step past setup with a recorded result, else None."""
+    token = said.strip("*_` .")
+    row = c.rows_by_id.get(token)
+    if row and row["result"] in ("PASS", "FAIL", "NOT RUN"):
+        return row_chip(row)
+    if token in c.guide and token not in SETUP_STEPS and c.guide[token]["result"]:
+        return step_chip(token, c.guide[token])
+    return None
+
+
+def regression_matrix(c, text):
+    """The notes' table of where a regression could show up: each system with its reason, and what checked it as a chip or as the notes' words."""
+    page = c.page
+    heading = "<h3>Where a regression could show up</h3>"
+    if not text:
+        return ""
     table = [cells for cells in (review_stamp.table_cells(line) for line in text.split("\n")) if cells]
     rules = [line for line in text.split("\n") if TABLE_RULE.match(line)]
     if len(table) < 2 or not rules:
-        return f"<p>{not_recorded_word()}</p>" if not text else page.markdown(text, "regressions", top=4)
+        return heading + page.markdown(text, "regressions", top=4)
     names = [cell.strip("*_ ").lower() for cell in table[0]]
     rows = [cells for cells in table[1:] if not TABLE_RULE.match("|".join(cells)) and not all(TABLE_RULE.match(cell) for cell in cells)]
 
@@ -1866,15 +1893,63 @@ def regression_table(page, text):
 
     def checked(cells):
         said = cell(cells, "what checked it").strip()
-        return page.inline(said) if said else '<span class="need">Not checked</span>'
-    body = "".join("<tr>" + impact_cell("What could break", page.inline(cell(cells, "system")))
-                   + impact_cell("Why it could", page.inline(cell(cells, "why it could regress")))
-                   + impact_cell("What checked it", checked(cells)) + "</tr>" for cells in rows)
-    return ('<p class="src">Agent&#x27;s judgment, from the spec&#x27;s change map and a search of the code.</p>'
-            + stack_table(("What could break", "Why it could", "What checked it"), [body], "regressions"))
+        if not said or said.strip("*_ .").lower() == "not checked":
+            return '<td class="e">Not checked</td>'
+        parts = [part.strip() for part in re.split(r"[,;]| and ", said) if part.strip()]
+        chips = [chip_for_check(c, part) for part in parts]
+        if not any(chips):
+            return f"<td>{page.inline(said)}</td>"
+        words = [page.inline(part) for part, found in zip(parts, chips) if not found]
+        return (f'<td class="h"><div class="chips">{"".join(found for found in chips if found)}</div>'
+                + (f'<p class="m">{"; ".join(words)}</p>' if words else "") + "</td>")
+    body = "".join(f'<tr><th scope="row">{page.inline(cell(cells, "system"))}</th><td class="m">{page.inline(cell(cells, "why it could regress"))}</td>'
+                   f"{checked(cells)}</tr>" for cells in rows)
+    drawn = ('<div class="scroll" tabindex="0" role="region" aria-label="Table: where a regression could show up"><table class="mx" id="regressions"><thead><tr>'
+            '<th scope="col">What could break</th><th scope="col">Why it could</th><th scope="col">What checked it</th></tr></thead>'
+            f"<tbody>{body}</tbody></table></div>")
+    if not page.charge(drawn):  # each chip repeats a check's name: past the total, the notes' own table stands in
+        drawn = page.markdown(text, "regressions", top=4)
+    return heading + '<p class="src">Agent&#x27;s judgment, from the spec&#x27;s change map and a search of the code.</p>' + drawn
+
+
+def before_after(page, text):
+    """The notes' before and after as they wrote it, its first table with Before and After columns drawn as paired cells."""
+    if not text:
+        return ""
+    lines = [(line, fenced) for line, fenced in review_stamp.outside_fences(text)]
+    first = last = None
+    for n, (line, fenced) in enumerate(lines):
+        cells = None if fenced else review_stamp.table_cells(line)
+        names = [cell.strip("*_ ").lower() for cell in cells or []]
+        if "before" in names and "after" in names and n + 1 < len(lines) and TABLE_RULE.match(lines[n + 1][0]):
+            first = last = n
+            while last + 1 < len(lines) and not lines[last + 1][1] and review_stamp.table_cells(lines[last + 1][0]):
+                last += 1
+            break
+    if first is None:
+        return f'<h3>Before and after</h3>{page.markdown(text, "before-after", top=4, figures=True)}'
+    table = [review_stamp.table_cells(line) for line, _ in lines[first:last + 1]]
+    names = [cell.strip("*_ ").lower() for cell in table[0]]
+    before, after = names.index("before"), names.index("after")
+    others = [at for at in range(len(names)) if at not in (before, after)]
+    label, extra = (others[0], others[1:]) if others else (None, [])
+    rows = [cells for cells in table[2:] if not all(TABLE_RULE.match(cell) for cell in cells if cell.strip())]
+    get = lambda cells, at: page.inline(cells[at]) if at < len(cells) else ""  # noqa: E731
+    drawn = ('<div class="scroll" tabindex="0" role="region" aria-label="Table: before and after"><table class="ba"><thead><tr>'
+             + (f'<th scope="col">{page.inline(table[0][label])}</th>' if label is not None else "")
+             + '<th scope="col">Before</th><th scope="col">After</th>' + "".join(f'<th scope="col">{page.inline(table[0][at])}</th>' for at in extra)
+             + "</tr></thead><tbody>"
+             + "".join("<tr>" + (f'<th scope="row">{get(cells, label)}</th>' if label is not None else "")
+                       + f'<td class="b">{get(cells, before)}</td><td class="a">{get(cells, after)}</td>'
+                       + "".join(f'<td class="m">{get(cells, at)}</td>' for at in extra) + "</tr>" for cells in rows)
+             + "</tbody></table></div>")
+    around = ["\n".join(line for line, _ in part) for part in (lines[:first], lines[last + 1:])]
+    return ("<h3>Before and after</h3>" + (page.markdown(around[0], "before-after", top=4, figures=True) if around[0].strip() else "")
+            + drawn + (page.markdown(around[1], "before-after", top=4, figures=True) if around[1].strip() else ""))
 
 
 def solution_section(c):
+    """The solution's card beside the problem's, then what the notes drew: before and after, the architecture map, the regressions."""
     page, notes = c.page, c.notes or {}
     prose = "\n\n".join(part for part in (c.solution_text, notes.get("change")) if part)
     para = first_paragraph(c.texts["pr-body"]) if c.texts["pr-body"] else None
@@ -1883,27 +1958,28 @@ def solution_section(c):
     elif para:
         story = f'<p>{page.inline(para)}</p><p class="by">The PR description&#x27;s first paragraph</p>'
     else:
-        story = f"<p>{not_recorded_word()}</p>"
-    example = "" if re.search(r"^#+\s*worked example\s*$", prose, re.I | re.M) else f"<h3>Worked example</h3><p>{not_recorded_word()}</p>"
-    experience = (f'<h3>Your experience</h3>{page.markdown(notes["users"], "users", top=4)}' if notes.get("users") else "")
+        story = ""
+    experience = (f'<h4>Your experience</h4>{page.markdown(notes["users"], "users", top=4)}' if notes.get("users") else "")
+    rest = key_facts(page, c.solution_facts, ("For you", "Connects to", "To undo", "Rejected"))
+    inner = story + experience + rest
+    headline = c.solution_facts.get("Headline") or lead_sentence(first_paragraph(prose) if prose else para)
+    box = (f'<div class="box sol"><div class="body" id="fix"><h3>The solution</h3>'
+           + (f'<p class="hl">{page.inline(headline, links=False)}</p>' if headline else f"<p>{not_recorded_word()}</p>")
+           + key_facts(page, c.solution_facts, ("Time added", "If it fails"))
+           + (f'<details class="more"><summary><b>How it works, in the agent&#x27;s words</b></summary><div class="inner">{inner}</div></details>' if inner else "")
+           + "</div></div>")
     drawn = c.placed.get(ARCHITECTURE_MAP)
+    arch = ""
     if drawn:
         lines = drawn.split("\n")
         images = [(n, found) for n, found in ((n, FIGURE_LINE.fullmatch(line.strip())) for n, line in enumerate(lines)) if found]
         taken = {at for at, _ in images}
         rest = "\n".join(line for n, line in enumerate(lines) if n not in taken)
         figure = "".join(page.figure(found.group(1), found.group(2), "fig mapfig") for _, found in images)
-        arch = (page.markdown(rest, "map", top=4) + figure
-                + '<ul class="legend"><li><i class="c"></i>Changed</li><li><i class="a"></i>Could be affected</li><li><i></i>Not touched</li></ul>')
-    else:
-        arch = f"<p>{not_recorded_word()}</p>"
-    regressions = c.placed.get(REGRESSIONS) or ""
-    body = (f"<h3>How it works</h3>{story}{example}{experience}"
-            f'<h3>Architecture map</h3>{arch}<h3>Where a regression could show up</h3>{regression_table(page, regressions)}'
-            + fact_list(page, c.solution_facts, ("For you", "Time added", "Connects to", "If it fails", "To undo", "Rejected")).replace(
-                '<dl class="facts">', '<dl class="facts" id="undo">', 1))
-    title = page.inline(c.solution_facts["Headline"], links=False) if c.solution_facts.get("Headline") else "The solution"
-    return section("fix", "The solution", title, body)
+        arch = (f"<h3>Architecture map</h3>{page.markdown(rest, 'map', top=4)}{figure}"
+                '<ul class="legend"><li><i class="c"></i>Changed</li><li><i class="a"></i>Could be affected</li><li><i></i>Not touched</li></ul>')
+    below = before_after(page, c.placed.get(BEFORE_AFTER)) + arch + regression_matrix(c, c.placed.get(REGRESSIONS) or "")
+    return box, below
 
 
 # Testing
@@ -1922,7 +1998,7 @@ def check_blocks(c):
 
     def test_rows(at):
         return "".join(f'<tr><td><code>{esc(name)}</code></td><td>{state(result, "need" if result == "FAIL" else "ok")}</td>'
-                       f'<td>{", ".join(f"AC{n}" for n in c.named_in.get(name, []))}</td></tr>' for name, result in at)
+                       f'<td>{"; ".join(esc(criterion_words(c, n)) for n in c.named_in.get(name, []))}</td></tr>' for name, result in at)
 
     def test_table(label, at):
         return (f'<div class="table" tabindex="0" role="region" aria-label="Table: {esc(label)}">'
@@ -1931,13 +2007,17 @@ def check_blocks(c):
 
     outputs = {}  # realpath of a text output: its (steps, result lines, runner tests), and the row that lists its tests
     for row in c.rows:
-        blocks, steps, said, tests, partial, listed_in, unread = [], [], [], [], False, [], False
+        blocks, notices, steps, said, tests, partial, listed_in, unread = [], [], [], [], [], False, [], False
         row["fresh"] = evidence_freshness(page, row, c.merged_tree, scripts)
-        for named, real in named_files(page, row):
+        files = named_files(page, row)
+        row["method"] = method_of(row, files)
+        for named, real in files:
             why_unread = ("is outside the evidence directory" if real is None else "is missing" if not os.path.exists(real)
                           else "is not a file" if not os.path.isfile(real) else "can't be read" if not os.access(real, os.R_OK) else None)
             if why_unread:
                 c.missing_files.setdefault(row["anchor"], []).append((os.path.basename(named), why_unread))
+                notices.append(page.file_block(named, real, again=True))  # shown above the fold: a file that isn't there is no evidence to fold
+                continue
             blocks.append((real, page.file_block(named, real, again=True)))
             unread = unread or real in page.past
             if real in page.lines and os.path.dirname(real) != scripts:
@@ -1949,6 +2029,7 @@ def check_blocks(c):
                     tests, partial = tests + found_tests, partial or real in page.cut
                 elif found_tests and owner is not row:
                     listed_in.append(owner)  # a suite output several checks cite counts its tests once, at its first
+        shown = len(blocks)
         blocks = log_and_video_tabs(page, row, blocks, scripts)
         row["tests"] = (len(tests), sum(result == "FAIL" for _, _, result in tests), partial)
         fits = page.charge(*steps, *said, *(section + name for section, name, _ in tests))
@@ -1966,8 +2047,8 @@ def check_blocks(c):
             # shown again above the full list: the failed and named tests, and each section's name twice more
             if not page.charge(*(name for name, _ in failed + named), *(2 * name_section for name_section in by_section)):
                 failed, named = [], []
-            runner += (f'<details class="runner"><summary>{len(tests)} tests from the runner · {row["tests"][1]} FAIL · criteria '
-                       f'{esc(row["ac"]) or "none"}' + (" · partial: the log's middle was cut" if partial else "") + "</summary>"
+            runner += (f'<details class="runner"><summary>{len(tests)} tests from the runner · {row["tests"][1]} FAIL'
+                       + (" · partial: the log's middle was cut" if partial else "") + "</summary>"
                        '<div class="table" tabindex="0" role="region" aria-label="Table: tests by section"><table><thead><tr>'
                        '<th scope="col">Section</th><th scope="col">Tests</th><th scope="col">FAIL</th></tr></thead><tbody>'
                        + "".join(f'<tr><td><code>{esc(name_section)}</code></td><td>{len(at)}</td><td>'
@@ -1979,7 +2060,11 @@ def check_blocks(c):
                        + "".join(f'<p class="runner-h">{esc(name_section)}</p>{test_table(f"tests in {name_section}", at)}'
                                  for name_section, at in by_section.items())
                        + "</details></details>")
-        acs = " ".join(f'<a class="ac" href="#ac-{n}">AC{n}</a>' for n in row["acs"]) or (esc(row["ac"]) or state("no AC", "dim"))
+        acs = "; ".join(f'<a class="ac" href="#ac-{n}">{esc(criterion_words(c, n))}</a>' for n in row["acs"]) or (esc(row["ac"]) or state("no criterion", "dim"))
+        which = ""
+        if len(row["acs"]) > NAMED_CRITERIA:
+            which = f'<details class="crit"><summary>which criteria</summary><p>{acs}</p></details>'
+            acs = f'{len(row["acs"])} criteria'
         kind = CASE_WORDS.get(row["case"].strip("*_ "), row["case"])
         meta = " · ".join(part for part in (esc(kind), f"proves {acs}", f"evidence {row['fresh']}",
                                             state("no video", "need") if row["anchor"] in unfilmed else "") if part)
@@ -1992,15 +2077,26 @@ def check_blocks(c):
                       if over else not_recorded_word())
         row["block"] = (
             f'<details class="check"{"" if row["result"] == "PASS" else " open"}><summary>'
-            f'<span class="cid">{esc(row["id"])}</span><h4>{page.inline(row["check"], links=False) or esc(row["id"])}</h4>'
-            f'<span class="chip">{esc(LAYER_NAMES[row["level"]])}</span>'
-            f'<span class="res {result_tone(row["result"]) if row["result"] != "PASS" else "ok"}">{esc(outcome)}</span></summary>'
-            f'<div class="inner" id="{row["anchor"]}"><p class="meta">{meta}</p><dl>'
+            f'<span class="res {"fail" if row["result"] == "FAIL" else result_tone(row["result"])}">{esc(outcome)}</span>'
+            f'<h4>{row["name"]}</h4><span class="cid">{esc(row["id"])}</span><span class="chip">{esc(LAYER_NAMES[row["level"]])}</span></summary>'
+            f'<div class="inner" id="{row["anchor"]}"><p class="meta">{meta}</p>{which}<dl>'
             f'<dt>Steps</dt><dd>{steps_html}</dd><dt>Expected</dt><dd>{expected}</dd>'
             f'<dt>Actual</dt><dd>{actual}' + (f" {observed}" if observed else "")
             + "".join(f'<span class="said">{esc(line)}</span>' for line in said) + runner
             + f'</dd><dt>Source</dt><dd>{page.path(c.paths["validation"], c.paths["validation"] + ":" + str(row["line"]))}</dd></dl>'
-            f'{"".join(blocks) or state("no evidence named", "dim")}</div></details>')
+            + "".join(notices)
+            + (f'<details class="raw"><summary>Evidence: {counted(shown, "file")}</summary>{"".join(blocks)}</details>'
+               if blocks else "" if row["anchor"] in c.missing_files else state("no evidence named", "dim")) + '</div></details>')
+
+
+def method_of(row, files):
+    """How a check was recorded: by hand, a replay of its log (bin/evidence-video --replay leaves <stem>.replay), or a live video."""
+    if row["level"] == "manual":
+        return "by hand"
+    videos = [real for _, real in files if real and os.path.splitext(real)[1].lower() in PLAYABLE and os.path.isfile(real) and os.path.getsize(real)]
+    if any(os.path.isfile(os.path.splitext(video)[0] + ".replay") for video in videos):
+        return "replay"
+    return "live" if videos else ""
 
 
 def log_and_video_tabs(page, row, blocks, scripts):
@@ -2058,32 +2154,58 @@ def freshness_sentence(c):
             + (f" {media} {'has' if words.count(NO_OUTPUT) == 1 else 'have'} only a screenshot or video, which can&#x27;t name a commit." if NO_OUTPUT in words else "") + f" {tally}</p>")
 
 
-def layers_table(c):
-    def chips(level):
+def check_tags(row, unfilmed):
+    """A check's labels beside its name: how it was recorded, then whether its evidence covers this commit and has its video."""
+    return tuple(tag for tag in (row.get("method"), "stale" if row["fresh"] == "stale" else "",
+                                 "commit unknown" if row["fresh"] == "unknown" and row["result"] in ("PASS", "FAIL") else "",
+                                 "no video" if row["anchor"] in unfilmed else "") if tag)
+
+
+def tally(c):
+    """What the bar counts, in words: the validation report's checks, then the checks guide's steps."""
+    steps = [info["result"] for step, info in c.guide.items() if step not in SETUP_STEPS]
+    said, parts = [], []
+    if c.validation_ok:
+        passed, fails, not_run = c.counts["PASS"], c.counts["FAIL"], c.counts["NOT RUN"]
+        said.append(f'{counted(len(c.rows), "check")} in the validation report: {passed} passed, {fails} failed, {not_run} did not run.')
+        parts += [("p", passed), ("f", fails), ("s", not_run)]
+    if steps:
+        done, failed = steps.count("PASS"), steps.count("FAIL")
+        todo = len(steps) - done - failed
+        if todo == len(steps):
+            said.append(f'{counted(len(steps), "step")} in the checks guide, to do by hand.')
+        else:
+            said.append(f'{counted(len(steps), "step")} in the checks guide: {done} passed, {failed} failed, {todo} to do by hand.')
+        parts += [("p", done), ("f", failed), ("t", todo)]
+    if not said:
+        return ""
+    return (f'<p class="tally">{" ".join(said)}</p><div class="bar" aria-hidden="true">'
+            + "".join(f'<i class="{kind}" style="flex-grow:{n}"></i>' for kind, n in parts if n) + "</div>")
+
+
+def test_map(c):
+    """One row per layer the change has, each check a chip led by its result and its name, then the always-kept layers it has none of."""
+    steps = {step: info for step, info in c.guide.items() if step not in SETUP_STEPS}
+    known = list(ALWAYS_LAYERS) + [level for level in LEVELS + (OTHER_LEVEL, NO_LEVEL) if level not in ALWAYS_LAYERS]
+    rows, drawn = [], set()
+    unfilmed = {row["anchor"] for row in c.without_video}
+    for level in known:
         at = c.rows_at.get(level, [])
-        steps = {step: info for step, info in c.guide.items() if step not in SETUP_STEPS} if level == "manual" else {}
-        todo = [step for step, info in steps.items() if info["result"] != "PASS"]
-        passed = [step for step in steps if step not in todo]
-        shown = "".join(f'<a class="chip" href="#{row["anchor"]}">{esc(row["id"])}</a> ' for row in at)
-        shown += "".join(f'<a class="chip" href="#todo-{esc(step)}">{esc(step)}</a> ' for step in passed)
-        shown += "".join(f'<a class="chip todo" href="#todo-{esc(step)}">{esc(step)}</a> ' for step in todo)
-        ran, ran_failed = sum(row["tests"][0] for row in at), sum(row["tests"][1] for row in at)
-        runner = (f' <span class="meta">({counted(ran, "test")} in the runner output' + (f", {ran_failed} FAIL" if ran_failed else "") + ")</span>") if ran else ""
+        guided = list(steps.items()) if level == "manual" else []
         skipped = c.not_run_types.get(level)
-        all_skipped = skipped and at and all(row["result"] == "NOT RUN" for row in at)
-        said = ""
+        if not at and not guided and not skipped:
+            continue
+        chips = [row_chip(row, check_tags(row, unfilmed)) for row in at] + [step_chip(step, info) for step, info in guided]
         if skipped:
-            reason = c.page.inline(skipped["evidence"]) or state("no reason recorded", "need")
-            said = f'<p>{esc(skipped["type"])} not run' + (f" ({counted(len(at), 'check')})" if all_skipped else "") + f": {reason}</p>"
-        if not at and not steps:
-            return said or '<span class="none">None in this change</span>'
-        return said + f'<span class="count">{len(at) + len(passed)}</span> {shown}' + ('<span class="meta">to do</span>' if todo else "") + runner
-    known = list(ALWAYS_LAYERS) + [level for level in LEVELS + (OTHER_LEVEL, NO_LEVEL)
-                                   if (level in c.rows_at or level in c.not_run_types) and level not in ALWAYS_LAYERS]
-    return ('<h3>Which layer each test belongs to</h3><table class="layers"><thead><tr><th scope="col">Layer</th><th scope="col">What it proves</th>'
-            '<th scope="col">Tests</th></tr></thead><tbody>'
-            + "".join(f'<tr><th scope="row"><span class="layername">{esc(LAYER_NAMES[level])}</span></th><td>{esc(LAYER_MEANS[level])}</td><td>{chips(level)}</td></tr>'
-                      for level in known) + "</tbody></table>")
+            reason = c.page.inline(skipped["evidence"], links=False) or "no reason recorded"
+            chips.append(f'<span class="lc s"><b>Not run</b>{esc(skipped["type"])} tests: {reason}</span>')
+        ran, ran_failed = sum(row["tests"][0] for row in at), sum(row["tests"][1] for row in at)
+        runner = (f'<span class="ran">{counted(ran, "test")} in the runner output' + (f", {ran_failed} failed" if ran_failed else "") + "</span>") if ran else ""
+        rows.append(f'<div class="row"><span class="lay">{esc(LAYER_NAMES[level])}</span><div class="chips">{"".join(chips)}{runner}</div></div>')
+        drawn.add(level)
+    empty = [LAYER_NAMES[level] for level in ALWAYS_LAYERS if level not in drawn]
+    none = f'<p class="none">None in this change: {esc(", ".join(empty))}.</p>' if empty else ""
+    return f'<div class="map" id="test-map">{"".join(rows)}{none}</div>'
 
 
 def automated_part(c):
@@ -2104,16 +2226,14 @@ def automated_part(c):
     if planted:
         killed, total = planted
         shown = min(total, MAX_DOTS)
-        dots = (f'<ul class="dots" role="img" aria-label="{killed} of {total} planted bugs caught">'
-                + "".join(f'<li{"" if n < killed else " class=miss"}></li>' for n in range(shown)) + "</ul>")
+        dots = (f'<span class="dots" role="img" aria-label="{killed} of {total} planted bugs caught">'
+                + "".join(f'<i{"" if n < killed else " class=miss"}></i>' for n in range(shown)) + "</span>")
         bugs = f"{killed} of {total} caught.{dots}"
-    else:
-        bugs = "Not measured"
     measured = coverage_words(quality_record(c.pr)[0]) if c.pr else None
     has_problem = any(row["result"] != "PASS" for row in automated)
     return ('<div id="automated"><h3>Automated tests</h3><dl class="facts">'
-            f"<dt>On this machine</dt><dd>{here}</dd><dt>In CI</dt><dd>{ci}</dd><dt>Planted bugs</dt><dd>{bugs}</dd>"
-            f'<dt>Coverage</dt><dd>{esc(measured) if measured else "Not measured"}</dd></dl>'
+            f"<dt>On this machine</dt><dd>{here}</dd><dt>In CI</dt><dd>{ci}</dd>" + (f"<dt>Planted bugs</dt><dd>{bugs}</dd>" if planted else "")
+            + (f"<dt>Coverage</dt><dd>{esc(measured)}</dd>" if measured else "") + "</dl>"
             + (fold("Evidence of the automated tests", len(automated), "".join(row["block"] for row in automated),
                     opened=has_problem) if automated else "") + "</div>")
 
@@ -2168,13 +2288,12 @@ def coverage_matrix(c):
         return f"<p>{state('not recorded', 'dim')} no numbered acceptance criteria</p>"
 
     def chips(rows):
-        return " ".join(f'<a class="chip" href="#{row["anchor"]}">{esc(row["id"])} {state(row["result"], result_tone(row["result"]))}</a>'
-                        for row in rows) or '<span class="none">None</span>'
+        return f'<div class="chips">{"".join(row_chip(row) for row in rows)}</div>' if rows else '<span class="none">None</span>'
     rows_html = []
     for n, words in c.criteria_numbers:
         first, rest = first_sentence(words)
         how = "how it&#x27;s checked" if rest.startswith("— verify:") else "the rest"
-        promise = page.inline(first) + (f'<details class="crit"><summary>{how}</summary><p>{page.inline(rest)}</p></details>' if rest else "")
+        promise = f'<details class="crit"><summary>{how}</summary><p>{page.inline(rest)}</p></details>' if rest else ""
         covering = [row for row in c.rows if n in row["acs"]]
         if not c.validation_ok:
             why = (source_state(c, "validation", "validate") or "not recorded").split(":")[0]
@@ -2187,9 +2306,13 @@ def coverage_matrix(c):
             proof = (impact_cell("Run for real", chips([row for row in covering if row["level"] not in AUTOMATED_LEVELS]))
                      + impact_cell("Test suite", chips([row for row in covering if row["level"] in AUTOMATED_LEVELS and row["level"] != "mutation"]))
                      + impact_cell("Bugs planted", chips([row for row in covering if row["level"] == "mutation"])))
-        rows_html.append(f'<tr id="ac-{n}"><th scope="row">AC{n}</th>{impact_cell("Promise", promise)}{proof}</tr>')
-    table = ('<table class="grid-impact stack matrix"><thead><tr><th scope="col">Criterion</th><th scope="col">Promise</th><th scope="col">Run for real</th>'
+        rows_html.append(f'<tr id="ac-{n}"><th scope="row">{page.inline(first)}</th>{impact_cell("How it is checked", promise)}{proof}</tr>')
+    table = ('<table class="grid-impact stack matrix"><thead><tr><th scope="col">Criterion</th><th scope="col">How it is checked</th><th scope="col">Run for real</th>'
              f'<th scope="col">Test suite</th><th scope="col">Bugs planted</th></tr></thead><tbody>{"".join(rows_html)}</tbody></table>')
+    if not page.charge(table):  # rows × criteria chips: past the total, the validation report in the annex stands in
+        targets = "".join(f'<li id="ac-{n}">{esc(criterion_words(c, n))}</li>' for n, _ in c.criteria_numbers)  # check and verdict links land here
+        return (f'<p>{state("too large", "need")} the table of what proves each criterion doesn&#x27;t fit the page; '
+                f'<a href="#annex-validation">the validation report</a> has it</p><ol class="crit">{targets}</ol>')
     return fold("What had to be true, and what proves it", len(rows_html), table, opened=bool(c.uncovered) or not c.ac_known)
 
 
@@ -2210,42 +2333,77 @@ def testing_section(c):
                        f'{state("not recorded", "dim") if c.pre_pr_a else state("missing", "need")} <code>{esc(c.environment)}</code></p>')
     else:
         environment = ""
-    return section("testing", "Testing", "What was tested, and what wasn&#x27;t",
-                   freshness + fresh_list + layers_table(c) + automated_part(c) + manual_part(c) + todo_part(c) + coverage_matrix(c) + environment)
+    return section("testing", "Testing", freshness + fresh_list + tally(c) + test_map(c) + automated_part(c) + manual_part(c) + todo_part(c)
+                   + c.coverage + environment)
 
 
 # Review
 
-def bar(width, *parts):
-    return f'<div class="fbar" style="--w:{width:.1f}%">' + "".join(f'<span class="{kind}" style="width:{share:.1f}%"></span>' for kind, share in parts) + "</div>"
+LENS_OUTCOME_COLUMNS = {"fixed": "Fixed", "wrong": "Rejected", "intentional": "Rejected", "rejected": "Rejected", "open": "Open", "uncertain": "Open",
+                        "pre-existing": "Pre-existing", "minor": "Minor"}
 
 
-def review_funnel(c):
+def lens_outcomes(cell, findings):
+    """{column: count} from a Lenses row's Outcomes cell, or None when the cell is blank or can't be read: then no count is known.
+    When the outcomes add up to fewer than the row's findings, a column the cell leaves out is None: the rest went somewhere unknown."""
+    pairs = [part.strip() for part in cell.split(",") if part.strip()]
+    found = [re.fullmatch(r"([a-z-]+)\s*=\s*(\d{1,9})", pair.lower()) for pair in pairs]
+    if not pairs or not all(found) or any(one.group(1) not in LENS_OUTCOME_COLUMNS for one in found):
+        return None
+    counts = {}
+    for one in found:
+        column = LENS_OUTCOME_COLUMNS[one.group(1)]
+        counts[column] = counts.get(column, 0) + int(one.group(2))
+    if sum(counts.values()) < int(findings):
+        counts = {column: counts.get(column) for column in set(LENS_OUTCOME_COLUMNS.values())}
+    return counts
+
+
+def review_matrix(c):
+    """Each lens, its models' findings added up, against what became of them; a count the report doesn't attribute reads unknown, never 0."""
+    if not c.lenses:
+        return ""
+    by_lens = {}
+    for lens in c.lenses:
+        by_lens.setdefault(lens["lens"], []).append(lens)
+    read = {name: [lens_outcomes(lens["outcomes"], lens["findings"]) for lens in models if lens not in c.failed_lenses] for name, models in by_lens.items()}
+    columns = ["Fixed", "Rejected", "Open", "Pre-existing"] + (["Minor"] if any(counts and counts.get("Minor") for ran in read.values() for counts in ran) else [])
+
+    def cells(models, ran):
+        failed = [lens for lens in models if lens in c.failed_lenses]
+        why = "; ".join(f'{esc(lens["model"])}: ' + c.page.inline(re.sub(r"^\s*not run:\s*", "", lens["findings"], flags=re.I)) for lens in failed)
+        if not ran:
+            return "".join('<td class="e">—</td>' for _ in columns) + f'<td class="w">{why}</td>'
+        out = ""
+        for column in columns:
+            n = None if any(counts is None or counts.get(column, 0) is None for counts in ran) else sum(counts.get(column, 0) for counts in ran)
+            tone = "u" if n is None else "e" if n == 0 else "h" if column == "Fixed" else "w" if column == "Open" else ""
+            attribute = f' class="{tone}"' if tone else ""
+            out += f'<td{attribute}>{"unknown" if n is None else n}</td>'
+        return out + (f'<td class="w">{why}</td>' if failed else '<td class="e">Ran</td>')
+    body = "".join(f'<tr><th scope="row">{esc(name)}</th>{cells(models, read[name])}</tr>' for name, models in by_lens.items())
+    return ('<div class="scroll" tabindex="0" role="region" aria-label="Table: what each lens found"><table class="mx num" id="review-matrix"><thead><tr>'
+            '<th scope="col"><span class="vh">Lens</span></th>' + "".join(f'<th scope="col">{column}</th>' for column in columns)
+            + f'<th scope="col">Not run</th></tr></thead><tbody>{body}</tbody></table></div>')
+
+
+def review_tally(c):
+    """The report's own count of its findings, and what the per-lens numbers leave out."""
     numbers = [lens for lens in c.lenses or [] if lens not in c.failed_lenses]
     raised = sum(int(lens["findings"]) for lens in numbers) if numbers else None
     confirmed = sum(int(lens["confirmed"]) for lens in numbers) if numbers and all(LENS_COUNT.fullmatch(lens["confirmed"].strip()) for lens in numbers) else None
     tally = {outcome: sum(e[0] == outcome for e in c.entries) for outcome in REVIEW_OUTCOMES}
-    lines = sum(tally[outcome] for outcome in REVIEW_OUTCOMES if outcome != "Not run")
-    scale = max(raised or 0, confirmed or 0, lines, 1)
-    width = lambda n: n * 100 / scale  # noqa: E731
-    fixed, others = tally["Fixed"], tally["Rejected"] + tally["Pre-existing"]
-    rows = [(raised, "findings raised", bar(width(raised or 0), ("c-raised", 100))),
-            (confirmed, "held up when checked against the code", bar(width(confirmed or 0), ("c-raised", 100))),
-            (lines, "lines in the report, which groups related findings and small ones",
-             bar(width(lines), *((kind, n * 100 / lines) for kind, n in (("c-ok", fixed), ("c-dim", others), ("c-need", tally["Open"])) if lines and n)))]
-    funnel = '<div class="funnel">' + "".join(
-        f'<div class="frow"><p><strong>{n if n is not None else "Not recorded"}</strong> {words}</p>{drawn}</div>' for n, words, drawn in rows) + "</div>"
     explained = []
-    if raised is not None and confirmed is not None and raised != confirmed:
-        explained.append(f"{raised - confirmed} of the findings raised were not confirmed when checked.")
-    if confirmed is not None and confirmed != lines:
+    if raised is not None:
+        explained.append(f"The lenses raised {raised}" + (f", and {confirmed} held up when checked against the code." if confirmed is not None else "."))
+    if confirmed is not None and confirmed != sum(tally[outcome] for outcome in REVIEW_OUTCOMES if outcome != "Not run"):
         explained.append("The report&#x27;s lines differ from the confirmed count because it groups related findings and small ones.")
     if c.lenses is None:
         explained.append("The report has no Lenses table, so per-lens counts not recorded.")
     src = (f'<p class="src">{tally["Fixed"]} fixed, {tally["Rejected"]} rejected, {tally["Open"]} open, {tally["Pre-existing"]} already there before this change. '
-           f'All bars share one scale. {" ".join(explained)}</p>')
+           f'{" ".join(explained)}</p>')
     reconstructed = "".join(f'<p class="src need">{esc(line.strip())}</p>' for line in c.texts["review"].split("\n") if RECONSTRUCTED.search(line))
-    return funnel + src + reconstructed
+    return src + reconstructed
 
 
 def finding_item(page, anchor, entry):
@@ -2264,7 +2422,7 @@ def review_section(c):
     head = (f'<p>{state("This review is stale", "need")} its stamp doesn&#x27;t cover this commit, so what follows may be out of date.</p>'
             if word == "stale" else "")
     if not c.review:
-        return section("review", "Code review", "What the review found", f'{head}<p>{source_html(c, "review", "review")}</p>')
+        return section("review", "Code review", f'{head}<p>{source_html(c, "review", "review")}</p>')
     fields = c.review[1]
     model = fields.get("cross-model") or fields.get("cross-model reading")
     families = list(dict.fromkeys(lens["model"].strip() for lens in c.lenses or [] if lens["model"].strip() not in ("", "—", "-")))
@@ -2325,24 +2483,30 @@ def review_section(c):
         entries = [(label, entry) for kind, label, entry in c.entries if kind == outcome]
         listed = "".join(finding_item(page, f"{anchor}-{n}", entry) for n, (_, entry) in enumerate(entries, 1))
         return fold(title, len(entries), f'<ul class="find">{listed}</ul>' if entries else "<p>None.</p>", inner_id=anchor)
-    return section("review", "Code review", "What the review found",
-                   head + review_funnel(c) + facts + still_open
+    return section("review", "Code review",
+                   head + review_matrix(c) + review_tally(c) + facts + still_open
                    + outcome_fold("Fixed", "Fixed before you saw it") + outcome_fold("Rejected", "Rejected, with the reason")
                    + outcome_fold("Pre-existing", "Already there before this change") + lens_fold)
 
 
 # Not proven, and decisions
 
+def short_then_rest(page, words):
+    """Prose by its first sentence, the rest folded behind one line."""
+    first, rest = first_sentence(" ".join(words.split()))
+    return page.inline(first) + (f'<details class="crit"><summary>the rest</summary><p>{page.inline(rest)}</p></details>' if rest else "")
+
+
 def limit_rows(c):
     """Each gap: (gap html, fields). Named gaps, then checks that didn't run and criteria without a check, none of them with an invented impact."""
     page = c.page
     named = c.not_proven
-    rows = [(page.inline(gap), fields) for gap, fields, _ in named]
+    rows = [(short_then_rest(page, gap), fields) for gap, fields, _ in named]
     said = {word.strip(".-") for gap, *_ in named for word in re.findall(r"[\w.-]+", gap)}
     for row in c.rows:
         if row["result"] == "NOT RUN" and row["id"] not in said:
             rows.append((f'<code>{esc(row["id"])}</code> did not run: {page.inline(row["check"], links=False)}', {}))
-    rows += [(f"AC{n} has no check", {}) for n in c.uncovered]
+    rows += [(f"No check proves “{esc(criterion_words(c, n).rstrip('.'))}”", {}) for n in c.uncovered]
     return rows
 
 
@@ -2363,7 +2527,7 @@ def limits_section(c):
     guide = ""
     if c.guide and c.texts["checks-guide"] is not None:
         guide = f'<details class="more"><summary><b>The steps to check this yourself</b></summary><div class="inner">{c.page.markdown(c.texts["checks-guide"], "guide")}</div></details>'
-    return section("limits", "Not proven", "What the tests can&#x27;t promise", intro + table + guide)
+    return section("limits", "Not proven", intro + table + guide)
 
 
 def options_list(page, options):
@@ -2377,7 +2541,7 @@ def options_list(page, options):
 def decide_section(c):
     page = c.page
     if not c.decisions:
-        return section("decide", "Your decisions", "What only you can decide", "<p>No decisions needed.</p>")
+        return section("decide", "Your decisions", "<p>No decisions needed.</p>")
     articles = []
     for n, decision in enumerate(c.decisions, 1):
         def said(name):
@@ -2387,10 +2551,10 @@ def decide_section(c):
         extra = "".join(f"<p>{page.inline(line)}</p>" for line in decision["extra"])
         articles.append(f'<article class="decision"><h3 id="d{n}">{n}. {page.inline(decision["title"])}</h3>{extra}{options}'
                         f"<p><strong>Cost:</strong> {said('Cost')}</p><p><strong>Recommendation:</strong> {said('Recommendation')}</p>{accepts}</article>")
-    return section("decide", "Your decisions", "What only you can decide", "".join(articles))
+    return section("decide", "Your decisions", "".join(articles))
 
 
-# The verdict and the control panel
+# The verdict, the rail and the cards
 
 def verdict_reasons(c):
     """(stops, calls, notes), each [(link, phrase for the sentence, what to read)]. VERDICT_RULE is the rule this applies."""
@@ -2405,10 +2569,10 @@ def verdict_reasons(c):
         stops.append(("#footer", "the local HEAD differs from the PR head", f"local <code>{esc(c.head)}</code>, PR {page.commit(c.pr['headRefOid'])}"))
     for row in c.rows:
         if row["result"] == "FAIL":
-            stops.append((f"#{row['anchor']}", f"{row['id']} failed", page.inline(row["check"])))
+            stops.append((f"#{row['anchor']}", f"{row['words']} failed", f"{esc(row['id'])}: {page.inline(row['check'])}", ("Failed", row["name"], row["id"])))
     for step, info in c.guide.items():
         if info["result"] == "FAIL":
-            stops.append((f"#guide-{step}", f"checks guide step {step} failed", esc(info["name"])))
+            stops.append((f"#guide-{step}", f"checks guide step {step} failed", esc(info["name"]), ("Failed", esc(info["name"]), step)))
     if c.verify_word and c.verify_word not in ("PASS", "phase off", "checked nothing"):
         stops.append(("#footer", "verify failed", esc(c.verify_line or c.verify_word)))
     for phase, kind, name in (("review", "review", "review"), ("validate", "validation", "validation")):
@@ -2432,23 +2596,29 @@ def verdict_reasons(c):
 
     for row in c.rows:
         if row["result"] == "NOT RUN":
-            calls.append((f"#{row['anchor']}", f"{row['id']} did not run", page.inline(row["check"])))
-        for name, why_unread in c.missing_files.get(row["anchor"], []):
-            calls.append((f"#{row['anchor']}", f"{row['id']} names {name}, which {why_unread}", esc(name)))
-    on_another = [row["id"] for row in c.rows if row["fresh"] == "stale"]
+            calls.append((f"#{row['anchor']}", f"{row['words']} did not run", f"{esc(row['id'])}: {page.inline(row['check'])}", ("Not run", row["name"], row["id"])))
+    unreadable = [(row, name, why_unread) for row in c.rows for name, why_unread in c.missing_files.get(row["anchor"], [])]
+    if len(unreadable) > NAMED_CHECKS:  # one reason for them all, each named in its detail
+        calls.append((f"#{unreadable[0][0]['anchor']}", f"{counted(len(unreadable), 'file')} the checks name can't be read",
+                      "; ".join(f"“{esc(row['words'])}” names {esc(name)}, which {why_unread}" for row, name, why_unread in unreadable) + "."))
+    else:
+        calls += [(f"#{row['anchor']}", f"“{row['words']}” names {name}, which {why_unread}", esc(name)) for row, name, why_unread in unreadable]
+    on_another = [f'“{row["words"]}”' for row in c.rows if row["fresh"] == "stale"]
     if on_another and not c.stale_problems:  # a stale_problem already stops the merge
-        calls.append(("#freshness", f"{sentence_list(on_another)} ran on another commit", "Their evidence doesn't cover what you would merge."))
-    unknown = [row["id"] for row in c.rows if row["fresh"] == "unknown" and row["result"] in ("PASS", "FAIL")]
+        calls.append(("#freshness", f"{checks_named(on_another)} ran on another commit",
+                      "Their evidence doesn't cover what you would merge." + (f" {esc(sentence_list(on_another))}." if len(on_another) > NAMED_CHECKS else "")))
+    unknown = [f'“{row["words"]}”' for row in c.rows if row["fresh"] == "unknown" and row["result"] in ("PASS", "FAIL")]
     if unknown:
-        calls.append(("#freshness", f"{sentence_list(unknown)} {'do' if len(unknown) != 1 else 'does'} not say which commit {'they' if len(unknown) != 1 else 'it'} ran on",
-                      "An output with no commit can't show it covers what you would merge."))
+        calls.append(("#freshness", f"{checks_named(unknown)} {'do' if len(unknown) != 1 else 'does'} not say which commit {'they' if len(unknown) != 1 else 'it'} ran on",
+                      "An output with no commit can't show it covers what you would merge." + (f" {esc(sentence_list(unknown))}." if len(unknown) > NAMED_CHECKS else "")))
     for lens in c.failed_lenses:
         if not SWITCHED_OFF.search(lens["findings"]):
             calls.append(("#review-lenses", f'the {lens["model"]} {lens["lens"]} lens did not run', page.inline(lens["findings"])))
     for entry in c.failed_reviewers:
         calls.append(("#review-not-run", "a reviewer did not run", page.inline(entry)))
-    for check, result in c.unread_results:
-        calls.append(("#testing", f"{check} has a result the page can't count: {result}", "Read it as not passed until the report says PASS, FAIL or NOT RUN."))
+    for check, name, result in c.unread_results:
+        named = f"“{name}”" if name else check
+        calls.append(("#testing", f"{named} has a result the page can't count: {result}", "Read it as not passed until the report says PASS, FAIL or NOT RUN."))
     for skipped in c.not_run_types.values():
         calls.append(("#testing", f'{skipped["type"]} tests did not run', page.inline(skipped["evidence"]) or "No reason recorded."))
     if c.criteria_numbers and c.validation_ok and not c.ac_known:
@@ -2456,15 +2626,16 @@ def verdict_reasons(c):
     if c.freshness_unread:
         calls.append(("#freshness", "an output can't be read, so the evidence's freshness is unknown", esc(c.freshness_unread)))
     for n in c.uncovered:
-        calls.append((f"#ac-{n}", f"AC{n} has no check", f"AC{n} has no check."))
+        calls.append((f"#ac-{n}", f"no check proves “{criterion_words(c, n).rstrip('.')}”", f"Criterion {n} has no check."))
     # A row whose missing file is its video already has a reason above.
     unfilmed = [row for row in c.without_video
                 if not any(name.lower().endswith(review_stamp.VIDEO_EXTENSIONS) for name, _ in c.missing_files.get(row["anchor"], []))]
     if unfilmed:
-        ids = [row["id"] for row in unfilmed]
-        calls.append((f"#{unfilmed[0]['anchor']}", f"video evidence is missing for {sentence_list(ids)}",
+        names = [f'“{row["words"]}”' for row in unfilmed]
+        calls.append((f"#{unfilmed[0]['anchor']}", f"video evidence is missing for {checks_named(names)}",
                       "Each Evidence cell names no usable video (a non-empty .webm or .mp4 in the evidence directory), so a validate "
-                      "stamp taken now refuses it. Record each with bin/evidence-video."))
+                      "stamp taken now refuses it. Record each with bin/evidence-video."
+                      + (f" {esc(sentence_list(names))}." if len(names) > NAMED_CHECKS else "")))
     without_impact = [finding for _, finding, impact, _, _ in c.open_items if impact_missing(impact, OPEN_IMPACT)]
     gaps = [gap for gap, fields, _ in c.not_proven if impact_missing(fields, GAP_IMPACT)]
     if without_impact or gaps:
@@ -2522,65 +2693,176 @@ def ready_sentence(c):
     return sentence_list(parts)
 
 
+def plain(markdown_text):
+    """A report's short text as words for a sentence: its emphasis and code marks dropped, a snake_case name's underscores kept."""
+    return re.sub(r"[`*]+|(?<!\w)_+|_+(?!\w)", "", " ".join((markdown_text or "").split()))
+
+
+def criterion_words(c, n):
+    """A criterion by its first sentence, never by its number, cut to CRITERION_WORDS words: the coverage table holds it whole."""
+    said = c.criteria_said.get(n)
+    if not said:
+        return f"criterion {n}"
+    words = first_sentence(" ".join(said.split()))[0].split()
+    return shortened(" ".join(words[:CRITERION_WORDS]) + ("…" if len(words) > CRITERION_WORDS else ""))
+
+
+def chip(href, tone, word, name, cid="", tags=()):
+    """A check or a reason as a chip: its result first, its name in words, its id only as a small label at the end."""
+    return (f'<a class="lc {tone}" href="#{esc(href)}"><b>{esc(word)}</b>{name}' + "".join(f'<span class="tag">{esc(tag)}</span>' for tag in tags)
+            + (f'<span class="id">{esc(cid)}</span>' if cid else "") + "</a>")
+
+
+def row_chip(row, tags=()):
+    tone, word = {"PASS": ("p", "Passed"), "FAIL": ("f", "Failed"), "NOT RUN": ("s", "Not run")}.get(row["result"], ("s", "Not counted"))
+    return chip(row["anchor"], tone, word, esc(shortened(row["words"])), row["id"], tags)
+
+
+def step_chip(step, info, tags=()):
+    tone, word = {"PASS": ("p", "Passed"), "FAIL": ("f", "Failed")}.get(info["result"], ("s", "To do"))
+    return chip(f"todo-{step}", tone, word, esc(shortened(info["name"])), step, tags)
+
+
+RAIL_SOURCES = {  # the links of the verdict's reasons each rail step answers for
+    "spec": ("#annex-spec",),
+    "review": ("#review", "#annex-review"),
+    "validate": ("#testing", "#freshness", "#limits", "#ac-", "#check-", "#guide-", "#todo", "#annex-validation", "#annex-checks-guide"),
+    "ci": ("#footer",),
+}
+
+
+def rail_steps(c, stops, calls):
+    """(name, link, word, detail, tone) for spec, review, validate and CI, each from its own source, then the owner's call.
+    A step never reads passed while the verdict holds a reason from its sources, and one the verdict's stops come from is red."""
+    def criteria():
+        n = len(c.criteria_numbers)
+        return f'{n} criteri{"on" if n == 1 else "a"}' if n else "no numbered criteria"
+
+    def held(phase):
+        for reasons, word, tone in ((stops, "blocks", "fail"), (calls, "your call", "wait")):
+            for href, phrase, *_ in reasons:
+                if href.startswith(RAIL_SOURCES[phase]):
+                    return word, esc(phrase), tone
+        return None
+
+    def toned(phase, step):
+        word, detail, tone = step
+        stopped = tone not in ("off", "pass") and any(href.startswith(RAIL_SOURCES[phase]) for href, *_ in stops)
+        return word, detail, "fail" if stopped else tone
+
+    if "spec" in c.off:
+        spec = ("switched off", "", "off")
+    elif c.spec_text is not None:
+        spec = (held("spec") or ("written", criteria(), "pass")) if c.criteria_numbers else ("written", criteria(), "wait")
+    elif c.spec_read_why and not c.spec_read_why.startswith("no report"):
+        spec = ("unavailable", "can&#x27;t be read", "wait")
+    else:
+        spec = ("missing", "no spec", "wait")
+
+    def unread(kind, phase, label):
+        why = source_state(c, kind, phase)
+        if why in QUIET:
+            return ("switched off", "", "off") if why == "phase off" else ("not needed", "nothing it would check changed", "off")
+        if why:
+            why = why[len("unavailable: "):]
+            return ("missing", f"no {label} report", "wait") if why.startswith("no report") else ("unavailable", "can&#x27;t be read", "wait")
+        word = c.stamps[phase]
+        if word == "stale":
+            return "stale", "the stamp doesn&#x27;t cover this commit", "wait"
+        if word == "missing":
+            return "missing", "no stamp for this commit", "wait"
+        return None
+
+    lens_down = [lens for lens in c.failed_lenses if not SWITCHED_OFF.search(lens["findings"])]
+    fixed = sum(entry[0] == "Fixed" for entry in c.entries) if c.review else 0
+    review = (unread("review", "review", "review")
+              or (("not run", esc(f'the {lens_down[0]["model"]} {lens_down[0]["lens"]} lens did not run'), "wait") if lens_down else None)
+              or (("not run", "a reviewer did not run", "wait") if c.failed_reviewers else None)
+              or (("open", f'{counted(len(c.open_items), "finding")} left open', "wait") if c.open_items else None)
+              or held("review")
+              or ("passed", f"{fixed} fixed" if fixed else "", "pass"))
+
+    total, fails, not_run = len(c.rows), c.counts["FAIL"], c.counts["NOT RUN"]
+    words = [row.get("fresh") for row in c.rows]
+    unfilmed = c.without_video
+    validate = (unread("validation", "validate", "validation")
+                or (("failed", f'{fails} of {counted(total, "check")} failed', "fail") if fails else None)
+                or (("stale", "evidence from another commit", "wait") if c.stale_problems or "stale" in words else None)
+                or (("not run", f'{not_run} of {counted(total, "check")} did not run', "wait") if not_run else None)
+                or (("not run", esc(f'{next(iter(c.not_run_types.values()))["type"]} tests did not run'), "wait") if c.not_run_types else None)
+                or (("missing", f'no video for “{unfilmed[0]["name"]}”' if len(unfilmed) == 1 else f"no video for {counted(len(unfilmed), 'check')}", "wait")
+                    if unfilmed else None)
+                or (("missing", "a file a check names", "wait") if c.missing_files else None)
+                or (("missing", "a criterion has no check", "wait") if c.uncovered else None)
+                or (("unavailable", "a result the page can&#x27;t count", "wait") if c.unread_results else None)
+                or (("unavailable", "which commit the evidence ran on is unknown", "wait")
+                    if c.freshness_unread or any(row["fresh"] == "unknown" and row["result"] in ("PASS", "FAIL") for row in c.rows) else None)
+                or held("validate")
+                or ("passed", f'{total - not_run - fails} of {counted(total, "check")} passed', "pass"))
+
+    ci = {"PASS": ("passed", "", "pass"), "FAIL": ("failed", "", "fail"), "pending": ("pending", "", "wait"), "missing": ("missing", "no checks yet", "wait"),
+          "no CI": ("not needed", "this repository runs no CI", "off"), "CI phase off": ("switched off", "", "off"),
+          "no PR yet": ("missing", "no PR yet", "wait")}.get(c.ci_word, ("unavailable", "can&#x27;t be read", "wait"))
+    if ci[2] == "pass":
+        ci = held("ci") or ci
+
+    if c.decisions:
+        yours = counted(len(c.decisions), "decision")
+    elif stops or calls:
+        yours = f'{counted(len(stops) + len(calls), "reason")} to read'
+    else:
+        yours = "nothing to decide"
+    return (("Spec", "annex-spec", *toned("spec", spec)), ("Review", "review", *toned("review", review)),
+            ("Validate", "testing", *toned("validate", validate)), ("CI", "footer", *toned("ci", ci)),
+            ("Your call", "decide", yours, "", "you"))
+
+
+def rail(c, stops, calls):
+    return ('<ol class="rail" aria-label="Where this change stands">' + "".join(
+        f'<li class="{tone}"><a href="#{href}"><span class="dot" aria-hidden="true">{n}</span><span class="nm">{name}</span>'
+        f'<span class="say"><b>{word}</b>' + (f'<span class="d">{detail}</span>' if detail else "") + "</span></a></li>"
+        for n, (name, href, word, detail, tone) in enumerate(rail_steps(c, stops, calls), 1)) + "</ol>")
+
+
+def reason_chip(href, phrase, is_stop, named=None):
+    if named:
+        word, name, cid = named
+        return chip(href.lstrip("#"), "f" if is_stop else "w", word, name, cid)
+    return chip(href.lstrip("#"), "f" if is_stop else "w", "Blocks" if is_stop else "Your call", esc(phrase))
+
+
 def hero(c, title, stops, calls, notes):
     page = c.page
     word = verdict_of_change(stops, calls)
     reasons = stops or calls
-    tone = "ok" if not reasons else "need"
     if reasons:
-        phrases = [esc(phrase) for _, phrase, _ in reasons[:VERDICT_REASONS]]
+        phrases = [esc(phrase) for _, phrase, *_ in reasons[:VERDICT_REASONS]]
         if len(reasons) > VERDICT_REASONS:
             phrases.append(f"{len(reasons) - VERDICT_REASONS} more")
         said = sentence_list(phrases)
     else:
         said = esc(ready_sentence(c))
     choices = (f' <a href="#decide">{counted(len(c.decisions), "choice")} {"are" if len(c.decisions) != 1 else "is"} yours.</a>' if c.decisions else "")
-    verdict = f'<p class="verdict"><strong class="{tone}">{esc(word)}:</strong> {said}.{choices}</p>'
+    chips = [reason_chip(href, phrase, True, *named) for href, phrase, _, *named in stops] + \
+            [reason_chip(href, phrase, False, *named) for href, phrase, _, *named in calls]
+    if len(chips) > VERDICT_CHIPS:
+        hidden_from = "stops" if len(stops) >= VERDICT_CHIPS else "calls"  # the list holding the first chip left out
+        chips = chips[:VERDICT_CHIPS - 1] + [chip(hidden_from, "s", f"{len(chips) - VERDICT_CHIPS + 1} more", "in Why this verdict")]
+    verdict = (f'<div class="verdict-box {"fail" if stops else "wait" if calls else "pass"}"><p class="verdict"><strong>{esc(word)}:</strong> {said}.{choices}</p>'
+               + (f'<ul class="chips" aria-label="What decides it">{"".join(f"<li>{one}</li>" for one in chips)}</ul>' if chips else "") + "</div>")
     listed = "".join(
-        f'<p class="why-h">{heading}</p><ul id="{list_id}">' + "".join(f'<li><a href="{esc(href)}">{esc(phrase)}</a>: {detail}</li>' for href, phrase, detail in items) + "</ul>"
+        f'<p class="why-h">{heading}</p><ul id="{list_id}">' + "".join(f'<li><a href="{esc(href)}">{esc(phrase)}</a>: {detail}</li>' for href, phrase, detail, *_ in items) + "</ul>"
         for list_id, heading, items in (("stops", "What stops the merge", stops), ("calls", "What needs your call", calls), ("notes", "Also worth a look", notes)) if items)
     why = (f'<details class="why" id="verdict-why"><summary>Why this verdict</summary><p class="src">{esc(VERDICT_RULE)}</p>'
            + (listed or "<p>Nothing stops the merge and nothing needs your call.</p>") + "</details>")
-    facts = {**c.problem_facts, **c.solution_facts}
     notes_read = c.notes or {}
-
-    def sentence(text):
-        return page.inline(first_sentence(" ".join(text.split()))[0], links=False) if text and text.strip() else "Not recorded."
-    problem = c.problem_facts.get("What they see") or first_paragraph(c.problem_text) or first_paragraph(notes_read.get("task") or "") or (c.goal.group(1) if c.goal else "")
-    fails, not_run = c.counts["FAIL"], c.counts["NOT RUN"]
-    manual = sum(row["level"] not in AUTOMATED_LEVELS and row["result"] != "NOT RUN" for row in c.rows)
-    if c.validation_ok:
-        tested = f'{sum(row["result"] == "PASS" for row in c.rows)} of {counted(len(c.rows), "check")} passed, {manual} run for real; {fails} failed and {not_run} did not run.'
-    else:
-        tested = "Not recorded."
-    fresh_words = [row.get("fresh") for row in c.rows]
-    validation_state = source_state(c, "validation", "validate")
-    test_word = ("Clear" if c.validation_ok and validation_state is None and c.stamps["validate"] == "current" and not fails and not not_run and "stale" not in fresh_words and "unknown" not in fresh_words
-                 and not c.not_run_types and not c.uncovered and not c.missing_files and not c.without_video and not c.unread_results else "Read this")
-    if c.review:
-        kinds = {outcome: sum(e[0] == outcome for e in c.entries) for outcome in REVIEW_OUTCOMES}
-        reviewed = f'{kinds["Fixed"]} fixed, {kinds["Rejected"]} rejected, {kinds["Open"]} left open.'
-    else:
-        reviewed = "Not recorded."
-    lens_down = any(not SWITCHED_OFF.search(lens["findings"]) for lens in c.failed_lenses)
-    review_word = "Clear" if c.review and not c.open_items and c.stamps["review"] == "current" and not lens_down and not c.failed_reviewers else "Read this"
-    limits = limit_rows(c)
-    gaps = len(limits)
-    all_named = not any(impact_missing(fields, GAP_IMPACT) for _, fields in limits)
-    proven = (f'{counted(gaps, "gap")} recorded' + (", each named with what it would mean for you." if all_named else ".")) if gaps else "No gap recorded."
-    unread = validation_state is not None and validation_state not in QUIET
-    if validation_state:
-        proven = "Not recorded." if unread else f"Validation {validation_state}."
-    decided = (f'You have {counted(len(c.decisions), "decision")} before the merge.' if c.decisions else "No decisions needed.")
-    rows = (("problem", "The problem", sentence(problem), None), ("fix", "Stability", sentence(notes_read.get("stability")), None),
-            ("fix", "Your experience", sentence(notes_read.get("users")), None), ("testing", "Testing", tested, test_word),
-            ("review", "Code review", reviewed, review_word), ("limits", "Not proven", proven, "Read this" if gaps or unread else None if validation_state else "Clear"),
-            ("undo", "Undo", sentence(facts.get("To undo")), None), ("decide", "Your decisions", decided, "Yours" if c.decisions else None))
-    panel = '<div class="panel">' + "".join(
-        f'<a href="#{href}"><b>{label}</b><span>{body}</span><i class="{"ok" if word_of == "Clear" else "need" if word_of else ""}">{word_of or ""}</i></a>'
-        for href, label, body, word_of in rows) + "</div>"
+    said_of = (("Stability", "stab", notes_read.get("stability")), ("Your experience", "exp", notes_read.get("users")),
+               ("Undo", "undo", c.solution_facts.get("To undo")))
+    cards = "".join(f'<div class="box {kind}"><h2>{label}</h2><p>{page.inline(first_sentence(" ".join(said.split()))[0], links=False)}</p></div>'
+                    for label, kind, said in said_of if said and said.strip())
     lead = c.lead or (c.goal.group(1) if c.goal else "") or (first_paragraph(c.texts["pr-body"]) if c.texts["pr-body"] else "") or first_paragraph(c.problem_text)
-    return (f'<header class="hero"><h1>{esc(title)}</h1><p class="lead">{page.inline(lead) if lead else "Not recorded."}</p>{verdict}{why}{panel}</header>')
+    return (f'<header class="hero"><h1>{esc(title)}</h1><p class="lead">{page.inline(lead) if lead else "Not recorded."}</p>{verdict}{why}'
+            f'{rail(c, stops, calls)}' + (f'<div class="three">{cards}</div>' if cards else "") + "</header>")
 
 
 # The footer: what's left after the merge, the reports, the ids
@@ -2700,8 +2982,8 @@ def change_footer(c):
 
 def build(page_path, evidence):
     page = Page(evidence)
-    page.ids.update(("main", "footer", "environment", "problem", "fix", "undo", "testing", "review", "limits", "decide", "freshness", "automated",
-                     "manual", "todo", "regressions", "review-open", "review-not-run", "review-lenses", "verdict-why", "merge-note", "ship-steps"))
+    page.ids.update(("main", "footer", "environment", "problem", "fix", "testing", "review", "limits", "decide", "freshness", "automated",
+                     "manual", "todo", "regressions", "test-map", "review-matrix", "review-open", "review-not-run", "review-lenses", "verdict-why", "merge-note", "ship-steps"))
     off, phases_error = phase_switches.phases_off_or_error(os.getcwd())
     kinds = ("decision-notes", "pr-body", "verify", "review", "validation", "checks-guide", "follow-pr")
     paths = dict(zip(kinds, review_stamp.report_paths(*kinds)))
@@ -2713,7 +2995,7 @@ def build(page_path, evidence):
     c = read_change(page, page_path, evidence, off, phases_error, paths, texts, whys)
     c.changed = changed_files(c.base)
 
-    # The copies of report text shown outside the annexes: the notes' panel sentences and facts, the review's findings,
+    # The copies of report text shown outside the annexes: the notes' hero sentences and facts, the review's findings,
     # the checks, the ship steps, the guide's steps. Each source is under REPORT_LIMIT, so they fit in the total before
     # any evidence, and the evidence and annexes after them fall back to links. When they don't (long non-ASCII reports),
     # nothing is left for evidence or annexes.
@@ -2723,7 +3005,8 @@ def build(page_path, evidence):
 
     # Built in the order that spends the embed budget: the notes' figures, then the evidence, then the annexes
     problem = problem_section(c)
-    fix = solution_section(c)
+    fix, drawn = solution_section(c)
+    c.coverage = coverage_matrix(c)
     check_blocks(c)
     testing = testing_section(c)
     review = review_section(c)
@@ -2731,7 +3014,8 @@ def build(page_path, evidence):
     decide = decide_section(c)
     stops, calls, notes = verdict_reasons(c)
     title = c.notes_title or (c.pr["title"] if c.pr else None) or (c.spec_title.group(1) if c.spec_title else c.branch)
-    main = hero(c, title, stops, calls, notes) + problem + fix + testing + review + limits + decide
+    change = f'<section class="sec"><h2>The change</h2><div class="ps">{problem}{fix}</div>{drawn}</section>'
+    main = hero(c, title, stops, calls, notes) + change + testing + review + limits + decide
     return change_document(title, main, change_footer(c), c.page.scene_style())
 
 
@@ -3153,174 +3437,222 @@ PLAYER_STYLE = """
 
 
 CHANGE_STYLE = """
-:root{color-scheme:dark;--bg:#0E100F;--panel:#161917;--rule:#2A2E2B;--fg:#ECE9E1;--muted:#A9ADA6;--ok:#C6EC5A;--need:#FF9B73;--dim:#8E928B;
---sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
-*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:1.5rem}
-body{margin:0;background:var(--bg);color:var(--fg);font:400 1.0625rem/1.65 var(--sans);padding:3.5rem 16px 6rem;overflow-wrap:break-word;-webkit-font-smoothing:antialiased}
-::selection{background:var(--ok);color:#10140a}
-main{max-width:50rem;margin-inline:auto;display:grid;gap:5.5rem;min-width:0}
-main>*{min-width:0}
-main,footer,section,.hero,.more>.inner,.file,.strip,.frame,.todo-step,.decision,.owned,.funnel{grid-template-columns:minmax(0,1fr)}
-section,.hero{display:grid;gap:1.15rem;min-width:0}
-h1,h2,h3,h4{margin:0;text-wrap:balance;letter-spacing:-.02em}
-h1{font-size:clamp(2.2rem,5.4vw,3.3rem);line-height:1.02;font-weight:800;letter-spacing:-.035em}
-h2{font-size:clamp(1.75rem,4.4vw,2.6rem);line-height:1.1;font-weight:750}
-h3{font-size:1.25rem;line-height:1.3;font-weight:700;margin-top:1.4rem;letter-spacing:-.01em}
-h4{font-size:1.0625rem;line-height:1.4;font-weight:650;letter-spacing:0}
-.inner h4,.annex-body h4{margin-top:1.75rem}.inner h3+h4,.annex-body h3+h4{margin-top:.5rem}
-p{margin:0;max-width:68ch}
-a{color:inherit;text-decoration:underline;text-decoration-color:#6c706a;text-underline-offset:.2em}
-a:hover{text-decoration-color:var(--ok)}
-a:focus-visible,summary:focus-visible{outline:2px solid var(--ok);outline-offset:3px}
-code{font:400 .88em var(--mono);background:#1f2320;padding:.08em .32em;overflow-wrap:anywhere}
-.lead{font-size:clamp(1.2rem,2.3vw,1.42rem);line-height:1.48;max-width:40em}
-.verdict{border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);padding:.95rem 0;max-width:none;font-size:1.0625rem}
-.ok{color:var(--ok)}.need{color:var(--need)}.dim{color:var(--dim)}
-nav{display:flex;flex-wrap:wrap;gap:.35rem 1.25rem;font-size:.95rem;color:var(--muted)}
-.by{color:var(--dim);font-size:.85rem;margin-bottom:-.6rem}
-.fig{display:block;width:100%;height:auto;margin-block:.5rem}
-.src{color:var(--muted);font-size:.9rem}
+:root{color-scheme:light dark;
+--bg:#FCFCFC;--card:#FFFFFF;--sunk:#F4F4F5;--line:#E4E4E7;--text:#27272A;--soft:#52525B;--faint:#6B6B75;
+--blue:#1B4ED8;--teal:#0F766E;--amber:#B45309;--violet:#9333EA;--rose:#D21B43;--lime:#4D7C0F;
+--pass:#047857;--fail:#C42029;--wait:#B45309;--you:#1B4ED8;
+--fg:var(--text);--muted:var(--soft);--dim:var(--faint);--rule:var(--line);--panel:var(--sunk);--ok:var(--blue);--need:var(--amber);
+--sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--r:10px}
+@media (prefers-color-scheme:dark){:root{
+--bg:#0A0A0A;--card:#111111;--sunk:#161616;--line:#232323;--text:#F5F5F5;--soft:#B4B4B4;--faint:#8A8A8A;
+--blue:#4F7FF5;--teal:#2DD4BF;--amber:#FBBF24;--violet:#C084FC;--rose:#FB7185;--lime:#A3E635;
+--pass:#34D399;--fail:#FB414A;--wait:#FBBF24;--you:#4F7FF5}}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:1.5rem;background:var(--bg)}
+body{margin:0;background:var(--bg);color:var(--text);font:400 15px/1.55 var(--sans);padding:40px 16px 64px;overflow-wrap:break-word;-webkit-font-smoothing:antialiased}
+main,footer{max-width:1040px;margin-inline:auto;min-width:0}
+main{display:grid;gap:48px;grid-template-columns:minmax(0,1fr)}
+main>*,section,.hero,.body,.inner{min-width:0}
+h1,h2,h3,h4{margin:0;text-wrap:balance;letter-spacing:-.01em}
+h1{font-size:clamp(26px,3.6vw,34px);line-height:1.15;letter-spacing:-.02em;max-width:30ch}
+h2{font-size:20px;line-height:1.25}
+h3{font-size:15px;line-height:1.35;margin-top:1.1rem}
+h4{font-size:14.5px;line-height:1.4;margin-top:.9rem}
+h5{font-size:13.5px;line-height:1.4;margin:.8rem 0 .3rem}
+p,main ul:not([class])>li{margin:0;max-width:65ch}
+a{color:inherit;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:.2em}
+a:hover{text-decoration-color:currentColor}
+:focus-visible{outline:2px solid var(--you);outline-offset:2px;border-radius:4px}
+code{font:400 max(.86em,12.5px) var(--mono);background:var(--sunk);padding:.06em .3em;border-radius:4px;overflow-wrap:anywhere}
+.skip{position:absolute;inset-inline-start:-999px;top:0;background:var(--you);color:var(--bg);padding:.4rem .8rem;font-weight:650}.skip:focus{inset-inline-start:16px;top:8px}
 .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
-.lenses{border-collapse:collapse;width:100%;font-size:.95rem;margin-top:.4rem}
-.lenses th,.lenses td{padding:.5rem .6rem .5rem 0;border-bottom:1px solid var(--rule);text-align:left;font-weight:400}
-.lenses thead th{color:var(--muted);font-size:.85rem}
-.lenses tbody th{font-weight:600}
-.lenses .num{text-align:right;font:400 .92rem var(--mono);font-variant-numeric:tabular-nums;width:5.2rem;padding-right:0}
-.g{display:flex;gap:.55rem;align-items:baseline}
-.g .n{font:400 .95rem var(--mono);color:var(--muted)}
-.g.need{color:var(--need)}.g.ok{color:var(--ok)}.g.dim{color:var(--muted)}
-.find{list-style:none;margin:0;padding:0;display:grid}
-.find li{padding:.7rem 0;border-top:1px solid var(--rule)}
-.fh{font-weight:400}.g.need + .find .fh{font-weight:600}
-.fr{color:var(--muted);font-size:.95rem;margin-top:.2rem}
-.crit{list-style:none;margin:0;padding:0}
-.crit li{display:grid;grid-template-columns:1.6rem minmax(0,1fr) auto;gap:.1rem .6rem;padding:.6rem 0;border-top:1px solid var(--rule);scroll-margin-top:1.5rem}
-.crit li:target,.check:target{outline:1px solid var(--ok);outline-offset:.5rem}
-.ac{font:400 .8rem/1.5 var(--mono);padding:0 .35rem;border:1px solid #454a45;text-decoration:none;white-space:nowrap}
-.ac:hover{border-color:var(--ok);color:var(--ok)}
-.check{display:grid;gap:.6rem;padding-top:1.5rem;border-top:1px solid var(--rule);margin-top:.4rem;scroll-margin-top:1.5rem;min-width:0}
-.check header{display:flex;justify-content:space-between;gap:1rem;align-items:baseline}
-.cid{font:400 .92rem var(--mono);color:var(--muted);margin-right:.35rem}
-.res{font:600 .9rem var(--mono);white-space:nowrap}
-.meta{color:var(--muted);font-size:.9rem}
-.check dl{display:grid;grid-template-columns:5.2rem minmax(0,1fr);gap:.2rem .6rem;margin:0;font-size:.98rem}
-.check dt{color:var(--muted)}.check dd{margin:0}
-details .src{margin-top:.5rem}
-.ids{color:var(--muted);font-size:.9rem;border-top:1px solid var(--rule);padding-top:1rem}
-footer{display:grid}
-@media (max-width:560px){.crit li{grid-template-columns:1.6rem minmax(0,1fr)}.check header{flex-wrap:wrap}.check dl{grid-template-columns:minmax(0,1fr)}.check dt{margin-top:.3rem}.lenses td:nth-child(2){font-size:.85rem}}
-.eyebrow{font-size:1rem;font-weight:600;color:var(--ok);margin-bottom:-.75rem}
-.panel{margin:0;border-top:1px solid var(--rule)}
-.panel>a{display:grid;grid-template-columns:9.5rem minmax(0,1fr) 5.5rem;gap:.15rem 1rem;padding:.8rem 0;border-bottom:1px solid var(--rule);text-decoration:none}
-.panel>a:hover{background:var(--panel)}
-.panel b{font-weight:650}.panel span{color:var(--fg);line-height:1.45}
-.panel i{font:600 .85rem/1.7 var(--mono);text-align:right;color:var(--muted)}.panel i.ok{color:var(--ok)}.panel i.need{color:var(--need)}
-.facts{display:grid;grid-template-columns:9.5rem minmax(0,1fr);gap:0 1rem;margin:0;border-top:1px solid var(--rule)}
-.facts dt,.facts dd{padding:.65rem 0;border-bottom:1px solid var(--rule);margin:0;line-height:1.5}
-.facts dt{color:var(--muted);font-size:.95rem}
-.judg{display:block;color:var(--dim);font-size:.82rem}
-.funnel{display:grid;gap:.5rem;margin:.3rem 0}
-.frow{display:grid;grid-template-columns:minmax(0,1fr);gap:.15rem}
-.frow p{font-size:.95rem;max-width:none}.frow strong{font:600 1rem var(--mono);margin-right:.35rem}
-.fbar{height:1rem;width:var(--w);display:flex}
-.fbar>span{display:block;height:100%}
-.c-raised{background:#6d726c}.c-ok{background:var(--ok)}.c-need{background:var(--need)}.c-dim{background:#3a403b}
-.grid-impact{width:100%;border-collapse:collapse;font-size:.95rem;margin-top:.3rem}
-.grid-impact th,.grid-impact td{text-align:left;vertical-align:top;padding:.65rem .8rem .65rem 0;border-bottom:1px solid var(--rule);font-weight:400;line-height:1.45}
-.grid-impact thead th{color:var(--muted);font-size:.85rem}
-.grid-impact tbody th{font-weight:600}
-.matrix .none{color:var(--need)}
-.dots{display:flex;flex-wrap:wrap;gap:.35rem;margin:.2rem 0 .4rem;list-style:none;padding:0}
-.dots li{width:.95rem;height:.95rem;border-radius:50%;background:var(--ok)}.dots .miss{background:transparent;box-shadow:inset 0 0 0 2px var(--muted)}
-.decision{border-top:1px solid var(--rule);padding-top:1rem;display:grid;gap:.5rem}
-.opts{margin:0;padding:0;list-style:none;display:grid;gap:.35rem}
-.opts b{font:600 .95rem var(--mono);margin-right:.4rem}
-.default{color:var(--muted);font-size:.95rem}
-@media (max-width:640px){.panel>a{grid-template-columns:minmax(0,1fr) auto}.panel span{grid-column:1/-1;grid-row:2}.panel i{grid-row:1;grid-column:2}.facts{grid-template-columns:minmax(0,1fr)}.facts dt{border-bottom:0;padding-bottom:0}.facts dd{padding-top:.1rem}.grid-impact.stack thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.grid-impact.stack tr{display:block;border-bottom:1px solid var(--rule);padding:.6rem 0}.grid-impact.stack th,.grid-impact.stack td{display:block;border:0;padding:.1rem 0}.grid-impact.stack td[data-l]::before{content:attr(data-l) ": ";color:var(--muted)}}
-summary{cursor:pointer}.sec>summary,.more>summary,.check>summary{list-style:none}.sec>summary::-webkit-details-marker,.more>summary::-webkit-details-marker,.check>summary::-webkit-details-marker{display:none}
-.sec>summary::after,.more>summary::after,.check>summary::after{content:"";flex:none;width:.6rem;height:.6rem;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);margin:.35rem .3rem 0 auto}
-.sec[open]>summary::after,.more[open]>summary::after,.check[open]>summary::after{transform:rotate(225deg);margin-top:.65rem}
-summary:hover::after{border-color:var(--ok)}
-.sec>summary{display:flex;gap:1rem;align-items:flex-start}.sec>summary>hgroup{display:grid;gap:.5rem}.sec>summary::after{width:.85rem;height:.85rem;margin-top:1.6rem}
-.sec[open]>summary::after{margin-top:2rem}
-.sec>.body{display:grid;grid-template-columns:minmax(0,1fr);gap:1.15rem;margin-top:1.15rem;min-width:0}
-.eyebrow{margin-bottom:0}
-.more{border-top:1px solid var(--rule)}.more>summary{display:flex;gap:.6rem;align-items:baseline;padding:.8rem 0;font-weight:650}
-.more>summary .n{font:400 .95rem var(--mono);color:var(--muted)}.more>summary .hint{color:var(--muted);font-weight:400;font-size:.92rem}.more>summary .hint::before{content:"expand"}.more[open]>summary .hint::before{content:"collapse"}
-.more.ok>summary b{color:var(--ok);font-weight:650}.more>summary b{font-weight:650}
-.more>.inner{padding-bottom:.8rem;display:grid;gap:.6rem}
-.check{border-top:1px solid var(--rule);display:block;padding:0;margin:0}
-.check>summary{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;gap:.2rem .7rem;align-items:baseline;padding:.75rem 0}
-.check>summary::after{margin-top:0}.check>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;padding-bottom:1.1rem}
-.chip{display:inline-block;font:600 .74rem/1.55 var(--mono);padding:0 .4rem;border:1px solid #5a5f5a;white-space:nowrap;text-transform:uppercase;letter-spacing:.03em}
-.chip.todo{border-style:dashed;color:var(--need);border-color:var(--need)}
-.layers{width:100%;border-collapse:collapse;font-size:.95rem}
-.layers th,.layers td{text-align:left;vertical-align:top;padding:.65rem .8rem .65rem 0;border-bottom:1px solid var(--rule);font-weight:400;line-height:1.45}
-.layers thead th{color:var(--muted);font-size:.85rem}.layers tbody th{white-space:nowrap}
-.layers .none{color:var(--muted)}
-.layername{font-weight:650}
-.todo-step{border-top:1px solid var(--rule);padding:.8rem 0;display:grid;gap:.35rem}
-.todo-step h4{display:flex;flex-wrap:wrap;gap:.5rem;align-items:baseline}
+.ok{color:var(--pass)}.need{color:var(--wait)}.fail{color:var(--fail)}.dim{color:var(--faint)}
+.st{font:600 12px/1.5 var(--mono);padding:0 .35rem;border:1px solid currentColor;border-radius:4px;white-space:nowrap}
+.st.ok{color:var(--pass)}.st.need{color:var(--wait)}.st.dim{color:var(--faint);border-style:dashed}.st.neutral{color:var(--soft)}
+.src,.by,.meta{color:var(--soft);font-size:13px}.by{color:var(--faint)}
+.hero{display:grid;gap:16px}
+.lead{font-size:16px;color:var(--soft);max-width:64ch}
+.verdict-box{--k:var(--pass);background:var(--k);color:var(--bg);border-radius:var(--r);padding:14px 16px;display:grid;gap:10px}
+.verdict-box.fail{--k:var(--fail)}.verdict-box.wait{--k:var(--wait)}
+.verdict{font-size:15px;max-width:none}.verdict strong{font-size:18px;letter-spacing:-.01em;margin-inline-end:4px}
+.verdict a{color:inherit;text-decoration-color:currentColor}
+.verdict-box .chips{list-style:none;margin:0;padding:0}
+.verdict-box .lc{background:var(--bg);border-color:var(--bg)}
+.verdict-box :focus-visible{outline-color:var(--bg)}
+.why{font-size:14px;color:var(--soft)}.why>summary{cursor:pointer;font-weight:600;color:var(--text)}
+.why-h{font-weight:600;margin:.6rem 0 0;color:var(--text)}.why ul{margin:.4rem 0 0;padding-inline-start:1.1rem;display:grid;gap:.3rem}
+.lc{--k:var(--faint);display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:0 6px;font-size:13px;line-height:1.45;padding:3px 8px;border-radius:6px;border:1px solid var(--k);background:var(--card);color:var(--text);text-decoration:none;max-width:100%}
+a.lc:hover{box-shadow:inset 0 0 0 1px var(--k)}
+.lc b{color:var(--k);font-weight:700}
+.lc .id,.lc .tag{font:400 12px/1.6 var(--mono);color:var(--faint)}
+.lc .tag{border:1px solid var(--line);border-radius:4px;padding:0 4px;color:var(--soft)}
+.lc.p{--k:var(--pass)}.lc.f{--k:var(--fail)}.lc.w{--k:var(--wait)}
+.lc.s{border-style:dashed;color:var(--soft)}
+.chips{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.chips li{display:contents}
+.rail{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin:6px 0 0;padding:0;list-style:none}
+.rail li{--c:var(--faint);position:relative;padding-inline-end:10px;min-width:0}
+.rail li.pass{--c:var(--pass)}.rail li.fail{--c:var(--fail)}.rail li.wait{--c:var(--wait)}.rail li.you{--c:var(--you)}
+.rail li::after{content:"";position:absolute;top:15px;inset-inline:38px 0;height:2px;background:var(--line)}
+.rail li:last-child::after{display:none}
+.rail a{display:block;text-decoration:none}
+.rail a:hover .nm{text-decoration:underline}
+.dot{width:32px;height:32px;border-radius:50%;background:var(--c);color:var(--bg);display:grid;place-items:center;font-weight:750;font-size:14px;margin-bottom:7px;position:relative;z-index:1}
+.rail .off .dot{background:var(--bg);color:var(--c);border:2px dotted var(--c)}
+.rail .wait .dot{background:var(--bg);color:var(--c);border:2px solid var(--c)}
+.rail .you .dot{background:var(--bg);color:var(--c);border:2px dashed var(--c)}
+.rail .nm{font-weight:650;display:block}
+.rail .say{font-size:13px;color:var(--soft);display:block}
+.rail .say b{color:var(--c);display:block}
+.rail .say .d{display:block}
+.three,.ps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.ps{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+.box{--c:var(--line);background:var(--card);border:1px solid var(--line);border-top:3px solid var(--c);border-radius:var(--r);padding:11px 13px;min-width:0}
+.box h2,.box h3{font-size:13px;color:var(--c);margin:0 0 3px}
+.box p{font-size:14px}
+.box.stab{--c:var(--teal)}.box.exp{--c:var(--violet)}.box.undo{--c:var(--blue)}.box.prob{--c:var(--rose)}.box.sol{--c:var(--pass)}
+.box .hl{font-size:16px;font-weight:650;line-height:1.35;margin-bottom:4px;color:var(--text)}
+.kf{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:3px 12px;margin:8px 0 0;font-size:13.5px}
+.kf dt{color:var(--faint)}.kf dd{margin:0}
+.judg{display:block;color:var(--faint);font-size:12px}
+.sec{display:grid;gap:12px}
+.sec>.body,.sec .body{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;scroll-margin-top:2rem}
+details.more{border-top:1px solid var(--line);font-size:14px}
+details.more>summary{cursor:pointer;padding:.55rem 0;color:var(--blue);font-weight:600}
+details.more>summary b{font-weight:600}details.more>summary .n{font:400 12px var(--mono);color:var(--faint);margin-inline-start:4px}
+details.more>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;padding-bottom:.8rem}
+.box details.more{margin-top:10px}
+.scroll,.table{overflow-x:auto;max-width:100%}
+.ba,.mx{width:100%;border-collapse:separate;border-spacing:4px;font-size:14px}
+.ba th,.mx th{font-size:12px;font-weight:650;padding:4px 6px;text-align:start;color:var(--soft)}
+.ba thead th,.mx thead th{border-bottom:3px solid var(--line)}
+.ba thead th:first-child,.mx thead th:first-child{border:0}
+.ba tbody th,.mx tbody th{font-size:14px;color:var(--text);vertical-align:middle}
+.ba td,.mx td{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:7px 9px;vertical-align:middle}
+.ba td.b{background:transparent;border-style:dashed;color:var(--soft)}
+.ba td.a{border-color:var(--pass);box-shadow:inset 0 0 0 1px var(--pass)}
+.ba td.m,.mx td.m,.mx td p.m{color:var(--soft)}.mx td p.m{font-size:13px;margin-top:4px}
+.mx td.e{background:transparent;border-style:dashed;color:var(--faint)}
+.mx td.u{background:transparent;border-style:dotted;color:var(--wait);font-style:italic}
+.mx td.w{border-color:var(--wait);color:var(--wait)}
+.mx td.h{border-color:var(--blue);box-shadow:inset 0 0 0 1px var(--blue)}
+.mx.num td,.mx.num thead th:not(:first-child){text-align:center;font-variant-numeric:tabular-nums}
+.mx.num td.h{font-weight:700;color:var(--blue)}
 .mapfig{max-width:34rem;margin-inline:auto;width:100%}
-.legend{display:flex;flex-wrap:wrap;gap:.3rem 1.2rem;font-size:.9rem;color:var(--muted);margin:0;padding:0;list-style:none;justify-content:center}
-.legend i{display:inline-block;width:1.3rem;height:.8rem;margin-right:.4rem;vertical-align:-.05rem;border:1.5px solid #3a403b}
-.legend .c{border:1.5px solid var(--ok);background:#1f2612}.legend .a{border:1.5px dashed var(--need)}
-@media (max-width:560px){.check>summary{grid-template-columns:auto auto minmax(0,1fr) auto}.check>summary h4{grid-column:1/-1;grid-row:2}.layers tbody th{white-space:normal}}
-.sec>.body,.check>.inner{scroll-margin-top:9rem}
-.check>.inner:target{outline:1px solid var(--ok);outline-offset:.5rem}
-@media (max-width:560px){.more>summary .hint{display:none}}
-.skip{position:absolute;left:-999px;top:0;background:var(--ok);color:#10140a;padding:.4rem .8rem;font-weight:650}.skip:focus{left:16px;top:8px}
-:focus-visible{outline:2px solid var(--ok);outline-offset:2px}
-.verdict .ok{color:var(--ok)}.verdict .need{color:var(--need)}
-.why-h{font-weight:600;margin:.6rem 0 0}.why{font-size:.95rem;color:var(--muted)}.why>summary{cursor:pointer;font-weight:600}.why ul{margin:.5rem 0 0;padding-left:1.1rem;display:grid;gap:.35rem}
-.fig img{max-width:100%;height:auto;display:block;margin-inline:auto}
-.strip{display:grid;gap:1.5rem;margin:.3rem 0;background:var(--panel);border:1px solid var(--rule);padding:1rem}
+.legend{display:flex;flex-wrap:wrap;gap:.3rem 1.2rem;font-size:13px;color:var(--soft);margin:0;padding:0;list-style:none;justify-content:center}
+.legend i{display:inline-block;width:1.3rem;height:.8rem;margin-inline-end:.4rem;vertical-align:-.05rem;border:1.5px solid var(--faint);border-radius:3px}
+.legend .c{border:1.5px solid var(--blue);background:var(--blue)}.legend .a{border:1.5px dashed var(--amber)}
+#freshness.stale{border:1px solid var(--wait);box-shadow:inset 0 0 0 1px var(--wait);border-radius:var(--r);padding:10px 13px;max-width:none}
+#freshness.stale strong{color:var(--wait)}
+.fresh{margin:0;padding-inline-start:1.1rem;font-size:14px;display:grid;gap:.3rem}
+.tally{font-size:14px;color:var(--soft);max-width:none}
+.bar{display:flex;gap:3px;max-width:520px}
+.bar i{height:12px;border-radius:999px;background:var(--faint);min-width:6px}
+.bar i.p{background:var(--pass)}.bar i.f{background:var(--fail)}
+.bar i.s,.bar i.t{background:repeating-linear-gradient(90deg,var(--faint) 0 8px,transparent 8px 13px)}
+.map{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:6px 12px}
+.map .row{display:grid;grid-template-columns:170px minmax(0,1fr);gap:10px;align-items:center;padding:8px 0;border-top:1px dashed var(--line)}
+.map .row:first-child{border-top:0}
+.map .lay{font-weight:650;font-size:14px}
+.map .ran{font-size:12.5px;color:var(--faint)}
+.map .none{font-size:13px;color:var(--soft);padding:8px 0;border-top:1px dashed var(--line);max-width:none}
+.check{border-top:1px solid var(--line)}
+.check>summary{display:flex;flex-wrap:wrap;gap:.2rem .6rem;align-items:baseline;padding:.65rem 0;cursor:pointer;list-style:none}
+.check>summary::-webkit-details-marker{display:none}
+.check>summary::after{content:"";order:-1;width:7px;height:7px;border:solid var(--faint);border-width:0 2px 2px 0;transform:rotate(-45deg);align-self:center;flex:none}
+.check>summary:dir(rtl)::after{transform:rotate(135deg)}.check[open]>summary::after{transform:rotate(45deg)}
+.check>summary h4{margin:0;font-size:14.5px}
+.check>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;padding-bottom:1rem;scroll-margin-top:2rem}
+.check>.inner:target{outline:1px solid var(--you);outline-offset:.4rem;border-radius:4px}
+.cid{font:400 12px var(--mono);color:var(--faint)}
+.res{font:700 13px var(--mono);white-space:nowrap;color:var(--pass)}.res.fail{color:var(--fail)}.res.dim{color:var(--faint)}
+.chip{display:inline-block;font:600 12px/1.6 var(--mono);padding:0 .4rem;border:1px solid var(--line);border-radius:4px;white-space:nowrap;color:var(--soft)}
+.chip.todo{border-style:dashed;color:var(--wait);border-color:var(--wait)}
+.check dl{display:grid;grid-template-columns:5.2rem minmax(0,1fr);gap:.2rem .6rem;margin:0;font-size:14px}
+.check dt{color:var(--faint)}.check dd{margin:0;min-width:0}
+.ac{text-decoration:underline;text-decoration-style:dotted}
+.facts{display:grid;grid-template-columns:10rem minmax(0,1fr);gap:0 1rem;margin:0;border-top:1px solid var(--line);font-size:14px}
+.facts dt,.facts dd{padding:.5rem 0;border-bottom:1px solid var(--line);margin:0}
+.facts dt{color:var(--soft)}
+.dots{display:flex;flex-wrap:wrap;gap:.3rem;margin:.2rem 0 .3rem;list-style:none;padding:0}
+.dots i{width:.85rem;height:.85rem;border-radius:50%;background:var(--pass)}.dots .miss{background:transparent;box-shadow:inset 0 0 0 2px var(--faint)}
+.g{display:flex;gap:.55rem;align-items:baseline}.g .n{font:400 13px var(--mono);color:var(--faint)}
+.g.need{color:var(--wait)}.g.ok{color:var(--pass)}
+.find{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:minmax(0,1fr)}.find li{padding:.6rem 0;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.fr{color:var(--soft);font-size:14px;margin-top:.15rem}
+.lenses,.grid-impact{width:100%;border-collapse:collapse;font-size:14px}
+.lenses th,.lenses td,.grid-impact th,.grid-impact td{text-align:start;vertical-align:top;padding:.5rem .7rem .5rem 0;border-bottom:1px solid var(--line);font-weight:400}
+.lenses thead th,.grid-impact thead th{color:var(--soft);font-size:12px;font-weight:650}
+.lenses tbody th,.grid-impact tbody th{font-weight:600}
+.matrix .none{color:var(--wait)}
+.crit{font-size:13px;color:var(--soft)}.crit>summary{cursor:pointer}
+.todo-step{border-top:1px solid var(--line);padding:.7rem 0;display:grid;grid-template-columns:minmax(0,1fr);gap:.3rem}
+.todo-step h4{display:flex;flex-wrap:wrap;gap:.5rem;align-items:baseline;margin:0}
+.owner{font:600 12px var(--mono);color:var(--soft)}.owned{display:grid;grid-template-columns:minmax(0,1fr);gap:.3rem;padding-inline-start:1.3rem}
+.decision{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--you);border-radius:var(--r);padding:12px 14px;display:grid;grid-template-columns:minmax(0,1fr);gap:.45rem}
+.decision h3{margin:0}
+.opts{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:8px}
+.opts li{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px}
+.opts b{font:700 13px var(--mono);color:var(--you);margin-inline-end:.4rem}
+.default{color:var(--soft);font-size:14px}
+.fig{display:block;width:100%;height:auto;margin-block:.4rem}.fig img{max-width:100%;height:auto;display:block;margin-inline:auto}
+.strip{display:grid;grid-template-columns:minmax(0,1fr);gap:1.2rem;margin:.3rem 0;background:var(--sunk);border:1px solid var(--line);border-radius:var(--r);padding:1rem}
 .strip-title{font-weight:650}
-.frame{margin:0;display:grid;gap:.7rem}
+.frame{margin:0;display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem}
 .frame img{display:block;width:100%;max-width:34rem;height:auto;margin-inline:auto}
-.frame figcaption{font-size:1rem;line-height:1.5}
-.frame .stepno{display:block;font:600 .8rem var(--mono);color:var(--muted);margin-bottom:.1rem}
-.stepl{list-style:none;margin:0;padding:0;display:grid;gap:.45rem}
-.stepl li{padding-left:.75rem;border-left:3px solid transparent;font-size:.98rem;line-height:1.45;color:var(--fg)}
-.st{font:600 .78rem/1.5 var(--mono);padding:0 .35rem;border:1px solid currentColor;white-space:nowrap}
-.st.ok{color:var(--ok)}.st.need{color:var(--need)}.st.dim{color:var(--dim)}
-.need{color:var(--need)}.dim{color:var(--dim)}
-.file{margin:.7rem 0 0;display:grid;gap:.4rem;min-width:0}
-.file img{max-width:100%;height:auto;display:block}
-.file video{max-width:100%;display:block}
-.file .name{font-size:.9rem;margin:0}.file .size{color:var(--dim);font-size:.82rem}
-.file figcaption{font-size:.85rem;color:var(--muted)}
-.tabs{position:relative;margin:.7rem 0 0;padding:0;border:0;min-width:0;display:flex;flex-wrap:wrap;gap:0 .5rem}
+.frame figcaption{font-size:14.5px}
+.frame .stepno{display:block;font:600 12px var(--mono);color:var(--soft)}
+.stepl{list-style:none;margin:0;padding:0;display:grid;gap:.4rem}
+.stepl li{padding-inline-start:.75rem;border-inline-start:3px solid transparent;font-size:14px}
+.file{margin:.6rem 0 0;display:grid;grid-template-columns:minmax(0,1fr);gap:.35rem;min-width:0}
+.file img,.file video{max-width:100%;height:auto;display:block}
+.file .name{font-size:13px;margin:0}.file .size{color:var(--faint);font-size:12px}
+.file figcaption{font-size:13px;color:var(--soft)}
+.tabs{position:relative;margin:.6rem 0 0;padding:0;border:0;min-width:0;display:flex;flex-wrap:wrap;gap:0 .5rem}
 .tabs>input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
-.tabs>label{display:inline-flex;align-items:center;min-height:2.5rem;padding:0 .9rem;border:1px solid var(--rule);color:var(--muted);cursor:pointer;font-size:.92rem;font-weight:600;user-select:none}
-.tabs>label:hover{border-color:var(--dim);color:var(--fg)}
-.tabs>input:checked+label{border-color:var(--fg);color:var(--fg);font-weight:700;text-decoration:underline;text-underline-offset:4px}
-.tabs>input:focus-visible+label{outline:2px solid var(--ok);outline-offset:2px}
+.tabs>label{display:inline-flex;align-items:center;min-height:2.5rem;padding:0 .9rem;border:1px solid var(--line);border-radius:6px 6px 0 0;color:var(--soft);cursor:pointer;font-size:13.5px;font-weight:600;user-select:none}
+.tabs>label:hover{color:var(--text)}
+.tabs>input:checked+label{border-color:var(--text);color:var(--text);font-weight:700;text-decoration:underline;text-underline-offset:4px}
+.tabs>input:focus-visible+label{outline:2px solid var(--you);outline-offset:2px}
 .tabs>.pane{display:none;flex-basis:100%;min-width:0}.tabs>.pane>.file{margin-top:0}
 .t-video:checked~.p-video,.t-log:checked~.p-log{display:block}
-.fields{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.1rem .8rem;font-size:.82rem;color:var(--muted);margin:0}
+.fields{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.1rem .8rem;font-size:12.5px;color:var(--soft);margin:0}
 .fields dd{margin:0;overflow-wrap:anywhere}
-.out,pre.cmd{margin:0;background:var(--panel);border:1px solid var(--rule);padding:.6rem .75rem;font:400 .8rem/1.5 var(--mono);overflow-x:auto;max-width:100%}
-@media (max-width:640px){pre.cmd{white-space:pre-wrap;overflow-wrap:anywhere}}
-.earlier{font-size:.9rem;color:var(--muted)}.earlier>summary{cursor:pointer}
-.cut{color:var(--need);font-size:.85rem}
-.said{display:block;font:400 .85rem/1.5 var(--mono);color:var(--muted);overflow-wrap:anywhere}
-.runner{font-size:.9rem;margin-top:.4rem}.runner>summary{cursor:pointer}.runner-h{font-weight:600;margin:.5rem 0 .2rem}
-.table{overflow-x:auto;max-width:100%}.table table{border-collapse:collapse;width:100%;font-size:.9rem}
-.table th,.table td{text-align:left;vertical-align:top;padding:.4rem .7rem .4rem 0;border-bottom:1px solid var(--rule)}
-.absent{color:var(--muted)}.absent .k{font-weight:600}
-.fresh{margin:0;padding-left:1.1rem;font-size:.92rem;display:grid;gap:.3rem}
-.owner{font:600 .78rem var(--mono);color:var(--muted)}.owned{display:grid;gap:.3rem;padding-left:1.3rem}
+.out,pre.cmd{margin:0;background:var(--sunk);border:1px solid var(--line);border-radius:6px;padding:.6rem .75rem;font:400 12.5px/1.5 var(--mono);overflow-x:auto;max-width:100%}
+.earlier{font-size:13.5px;color:var(--soft)}.earlier>summary{cursor:pointer}
+.cut{color:var(--wait);font-size:13px}
+.said{display:block;font:400 12.5px/1.5 var(--mono);color:var(--soft);overflow-wrap:anywhere}
+.runner{font-size:13.5px;margin-top:.4rem}.runner>summary{cursor:pointer}
+.raw{margin-top:.6rem}.raw>summary{cursor:pointer;font-size:13.5px;font-weight:600;color:var(--soft);padding:.4rem 0}.runner-h{font-weight:600;margin:.5rem 0 .2rem}
+.table table{border-collapse:collapse;width:100%;font-size:13.5px}
+.table th,.table td{text-align:start;vertical-align:top;padding:.35rem .7rem .35rem 0;border-bottom:1px solid var(--line)}
+.absent{color:var(--soft)}.absent .k{font-weight:600}
 .ship{margin-top:.6rem}.ship h4{margin:0 0 .25rem}
-.crit{font-size:.88rem;color:var(--muted);margin-top:.25rem}.crit>summary{cursor:pointer}
-footer{max-width:50rem;margin:5.5rem auto 0;display:grid;gap:.9rem;color:var(--muted);font-size:.95rem;min-width:0}
-footer>details>summary{cursor:pointer;font-weight:600;color:var(--fg)}
-.annex{margin-top:.5rem}.annex>summary{cursor:pointer}.annex summary code{overflow-wrap:anywhere}.annex-body{padding:.5rem 0;min-width:0;overflow-wrap:anywhere}
-.sum,.ids{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.2rem .9rem;margin:0;font-size:.85rem}
-.sum .row{display:contents}.sum dd,.ids dd{margin:0;overflow-wrap:anywhere}.ids dt,.sum dt{color:var(--dim)}
+footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr);gap:.8rem;color:var(--soft);font-size:14px}
+footer>details>summary{cursor:pointer;font-weight:600;color:var(--text)}
+.annex{margin-top:.4rem}.annex>summary{cursor:pointer}.annex summary code{overflow-wrap:anywhere}.annex-body{padding:.5rem 0;min-width:0;overflow-wrap:anywhere}
+.sum,.ids{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.2rem .9rem;margin:0;font-size:13px}
+.sum .row{display:contents}.sum dd,.ids dd{margin:0;overflow-wrap:anywhere}.ids dt,.sum dt{color:var(--faint)}
 .ids code,.src code{overflow-wrap:anywhere}
+@media (max-width:640px){
+body{padding:24px 16px 48px}
+.rail{grid-template-columns:minmax(0,1fr)}
+.rail li{padding-bottom:12px}
+.rail li::after{top:36px;bottom:0;inset-inline:15px auto;width:2px;height:auto}
+.rail a{display:grid;grid-template-columns:32px minmax(0,1fr);gap:0 12px}
+.rail .dot{grid-row:span 2;margin:0}
+.three,.ps{grid-template-columns:minmax(0,1fr)}
+.map .row{grid-template-columns:minmax(0,1fr);gap:4px}
+.facts,.check dl{grid-template-columns:minmax(0,1fr)}.facts dt{border-bottom:0;padding-bottom:0}.facts dd{padding-top:.1rem}
+.grid-impact.stack thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.grid-impact.stack tr{display:block;border-bottom:1px solid var(--line);padding:.5rem 0}
+.grid-impact.stack th,.grid-impact.stack td{display:block;border:0;padding:.1rem 0}
+.grid-impact.stack td[data-l]::before{content:attr(data-l) ": ";color:var(--soft)}
+pre.cmd{white-space:pre-wrap;overflow-wrap:anywhere}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-@media print{details::details-content{content-visibility:visible;display:block}details:not([open])>*:not(summary){display:block}summary::after{display:none}.tabs>label{display:none}.tabs>.pane{display:block}}
+@media print{:root{--bg:#FFFFFF;--card:#FFFFFF;--sunk:#F4F4F5;--line:#D4D4D8;--text:#000000;--soft:#3F3F46;--faint:#52525B;
+--blue:#1B4ED8;--teal:#0F766E;--amber:#B45309;--violet:#9333EA;--rose:#D21B43;--lime:#4D7C0F;--pass:#047857;--fail:#C42029;--wait:#B45309;--you:#1B4ED8}
+.verdict-box,.dot,.bar i,.dots i{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+body{background:#fff;color:#000}details::details-content{content-visibility:visible;display:block}details:not([open])>*:not(summary){display:block}.tabs>label{display:none}.tabs>.pane{display:block}}
 """
 
 

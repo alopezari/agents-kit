@@ -94,9 +94,9 @@ On a failure, don't fix it here: report it, and offer the `kit-follow-pr` skill,
 
 When the wait ends, whatever its exit, write the decision page again, before step 6 frees the branch: the page shows CI for the PR's head as it stands.
 
-**The decision page.** One local HTML page for one question: is this PR safe to merge, or is something missing that could compromise system stability or the user's experience? It opens as a control panel: a verdict that comes only from recorded values (Not ready, Your call or Ready; the rule is on the page), then one sentence each on the problem, stability, the user's experience, testing, code review, what isn't proven, undo and your decisions. The sections follow, each open and collapsible: problem, solution, testing, code review, not covered, decisions, with long lists collapsed behind their count; merge, ship, rollback and the full reports sit in the footer. Write it after opening the PR or updating an open one, and again when the CI wait ends; never publish it (evidence can hold sensitive data).
+**The decision page.** One local HTML page for one question: is this PR safe to merge, or is something missing that could compromise system stability or the user's experience? It opens on the verdict, which comes only from recorded values (Not ready, Your call or Ready; the rule is on the page), with each reason as a chip that links to its evidence, then a rail of spec, review, validate and CI ending on your call, and one line each on stability, the user's experience and undo. The sections follow: the change (the problem and solution cards, with the agent's longer account folded behind each, before and after, the map and where a regression could show up), testing (a map of the checks by layer), code review (a matrix of each lens's findings), not proven and your decisions, with long lists collapsed behind their count; merge, ship, rollback and the full reports sit in the footer. Write it after opening the PR or updating an open one, and again when the CI wait ends; never publish it (evidence can hold sensitive data).
 
-First write the decision notes, at the path `~/.agents/bin/reports path decision-notes` prints, and refresh them whenever the change or its reports changed since they were written. They are Markdown, in short plain sentences, for an owner who may never have seen this project. Write them from the spec, the diff (`git diff <base>`) and the reports; each claim about the code names its `file:line`. The page labels them as the agent's and adds no prose of its own, so what you leave out reads "Not recorded". The shape:
+First write the decision notes, at the path `~/.agents/bin/reports path decision-notes` prints, and refresh them whenever the change or its reports changed since they were written. They are Markdown, in short plain sentences, for an owner who may never have seen this project. Write them from the spec, the diff (`git diff <base>`) and the reports; each claim about the code names its `file:line`. The page labels them as the agent's and adds no prose of its own: a section you leave out reads "Not recorded", and a fact line you leave out is left off the page. The shape:
 
 ````markdown
 # The claim this change makes true, as the page's title
@@ -110,18 +110,18 @@ One sentence: what this change could do to the running system.
 One sentence: what the user sees differently.
 
 ## The problem
-Headline: the problem, as the section's title
+Headline: the problem in one sentence, the card's lead
 Background: what this project is, what the affected part does and the situation that led to the problem, in plain words
 Who it hits: who, and how many if a source says
 What they see: what happens to them, as they would describe it
 How bad: words about the user's experience, with the reason; never a SEV grade
 How often: words, with the reason
-If we wait: only what a source names; left out, the page says "No deadline recorded"
+If we wait: only what a source names; left out, the page leaves it off
 
 What went wrong, in prose, with its figures in place.
 
 ## The solution
-Headline: the solution, as the section's title
+Headline: the solution in one sentence, the card's lead
 For you: what changes for the owner
 Time added: to the path this runs on
 Connects to: what it reads, calls or writes
@@ -159,7 +159,7 @@ Where it applies: the steps as a figure series or a list.
 
 `How bad`, `How often` and the regression table are your judgment, and the page labels them so. Build the map and the regression table from the spec's Change map and a code search, not from memory; a blank `What checked it` reads "Not checked". Under `## Decisions` list only what the owner must decide before the merge, never the merge itself, whose verdict is the page's. Add `Blocking: yes` to a decision only when the merge must wait for it: that makes the verdict Not ready, and so does the same field on an Open finding or a not-proven gap.
 
-A figure is a line holding only `![what it shows](file)`, for an image or SVG in the evidence directory, and it's embedded where the line stands. Its alt text says everything the figure shows. An `.svg` is only ever an image, so its scripts can't run: never inline, never a link to its original. Write `Figure: title` on the line above several images in a row to draw them as one series, in order, each caption carrying what that step shows. Draw each SVG with a `viewBox` about 480 wide and text of at least 16 units, so it stays legible on a phone. The map follows the page's legend: solid lime for changed, dashed coral for could be affected, grey for untouched. A moving GIF or WebP can't be held still: write a scene instead.
+A figure is a line holding only `![what it shows](file)`, for an image or SVG in the evidence directory, and it's embedded where the line stands. Its alt text says everything the figure shows. An `.svg` is only ever an image, so its scripts can't run: never inline, never a link to its original. Write `Figure: title` on the line above several images in a row to draw them as one series, in order, each caption carrying what that step shows. Draw each SVG with a `viewBox` about 480 wide and text of at least 16 units, so it stays legible on a phone. The map follows the page's legend: solid blue for changed, dashed amber for could be affected, grey for untouched. A moving GIF or WebP can't be held still: write a scene instead.
 
 An animated figure is a scene file, `<name>.scene.json` in the evidence directory, on a line of its own: `![what it shows](<name>.scene.json)`. The page compiles it into inline SVG and CSS on one continuous timeline, with all its captions visible and the current one lit, a progress bar, play, pause and restart with no script, and the whole picture still under reduced motion and in print. A scene plays on its own, so one inside a `Figure:` series ends the series there. For example:
 
