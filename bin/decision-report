@@ -2226,8 +2226,8 @@ def automated_part(c):
     if planted:
         killed, total = planted
         shown = min(total, MAX_DOTS)
-        dots = (f'<ul class="dots" role="img" aria-label="{killed} of {total} planted bugs caught">'
-                + "".join(f'<li{"" if n < killed else " class=miss"}></li>' for n in range(shown)) + "</ul>")
+        dots = (f'<span class="dots" role="img" aria-label="{killed} of {total} planted bugs caught">'
+                + "".join(f'<i{"" if n < killed else " class=miss"}></i>' for n in range(shown)) + "</span>")
         bugs = f"{killed} of {total} caught.{dots}"
     measured = coverage_words(quality_record(c.pr)[0]) if c.pr else None
     has_problem = any(row["result"] != "PASS" for row in automated)
@@ -3573,7 +3573,7 @@ details.more>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;p
 .facts dt,.facts dd{padding:.5rem 0;border-bottom:1px solid var(--line);margin:0}
 .facts dt{color:var(--soft)}
 .dots{display:flex;flex-wrap:wrap;gap:.3rem;margin:.2rem 0 .3rem;list-style:none;padding:0}
-.dots li{width:.85rem;height:.85rem;border-radius:50%;background:var(--pass)}.dots .miss{background:transparent;box-shadow:inset 0 0 0 2px var(--faint)}
+.dots i{width:.85rem;height:.85rem;border-radius:50%;background:var(--pass)}.dots .miss{background:transparent;box-shadow:inset 0 0 0 2px var(--faint)}
 .g{display:flex;gap:.55rem;align-items:baseline}.g .n{font:400 13px var(--mono);color:var(--faint)}
 .g.need{color:var(--wait)}.g.ok{color:var(--pass)}
 .find{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:minmax(0,1fr)}.find li{padding:.6rem 0;border-top:1px solid var(--line);overflow-wrap:anywhere}
@@ -3650,7 +3650,7 @@ pre.cmd{white-space:pre-wrap;overflow-wrap:anywhere}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 @media print{:root{--bg:#FFFFFF;--card:#FFFFFF;--sunk:#F4F4F5;--line:#D4D4D8;--text:#000000;--soft:#3F3F46;--faint:#52525B;
 --blue:#1B4ED8;--teal:#0F766E;--amber:#B45309;--violet:#9333EA;--rose:#D21B43;--lime:#4D7C0F;--pass:#047857;--fail:#C42029;--wait:#B45309;--you:#1B4ED8}
-.verdict-box,.dot,.bar i,.dots li{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+.verdict-box,.dot,.bar i,.dots i{print-color-adjust:exact;-webkit-print-color-adjust:exact}
 body{background:#fff;color:#000}details::details-content{content-visibility:visible;display:block}details:not([open])>*:not(summary){display:block}.tabs>label{display:none}.tabs>.pane{display:block}}
 """
 

@@ -4372,7 +4372,8 @@ def a_funnel_with_no_counts_shows_no_zeros(base):
 def a_caught_planted_bug_and_a_survivor_look_different(base):
     repo, _, gh = ready_with_rows(base, lambda ev: ready_rows(ev).replace("21/21 killed", "20/21 killed"))
     markup = generate(repo, base, gh)[1]
-    assert "<li class=miss>" in markup
+    assert "<i class=miss>" in markup
+    assert not re.search(r'<(ul|ol)[^>]*role="img"', markup), "a list given role=img leaves its items outside any list"
     assert re.search(r"\.dots \.miss\{[^}]*\}", markup), "a survivor is drawn like a caught bug"
 
 
