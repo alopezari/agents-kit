@@ -5,6 +5,8 @@ import base64
 import concurrent.futures
 import datetime
 import html
+import importlib.machinery
+import importlib.util
 import html.parser
 import json
 import multiprocessing
@@ -2478,7 +2480,9 @@ def missing_investigation_sections_are_blockers(base):
     for name in ("The question", "The answer", "What you must decide"):
         assert sum(name in item for item in blockers) == 1, (name, blockers)
     assert len(blockers) == 3, f"AC2: an empty part became a blocker: {blockers}"
-    assert [chip[2] for chip in chips_in(element(markup, "answer"))] == ["Blocks"] * 3, "a missing part isn't named in the answer's box"
+    assert [chip[2:4] for chip in chips_in(element(markup, "answer"))] == [
+        ("Blocks", "“The question” is missing"), ("Blocks", "“The answer” is missing"), ("Blocks", "“What you must decide” is missing")], \
+        "a missing part isn't named in the answer's box"
     assert 'id="options"' not in markup and "none recorded" in text(element(markup, "hyp-1-for")), "an empty Options shows a placeholder"
     for line, word in (("", "missing"), ("Confidence: certain", "unknown")):
         write(repo, "decision-notes", INVESTIGATION_NOTES.replace("Confidence: medium", line))
@@ -2600,6 +2604,8 @@ def the_first_screen_answers_the_question(base):
     chips = chips_in(box)
     assert [chip[2] for chip in chips] == ["Blocks"] * 2 + ["Your call"] * 4 + ["4 more"], [chip[2] for chip in chips]
     assert chips[-1][1] == "decide", chips[-1]
+    assert not any("open" in enclosing_folds(markup, f'id="{rest}"')[-1] for rest in ("question-more", "answer-more")), \
+        "AC2: the rest of the question or answer starts open"
     tally = text(re.search(r'<p class="tally">(.*?)</p>', markup, re.S).group(1))
     assert tally.startswith("14 findings in the validation report: 1 supports, 1 refutes, 1 inconclusive, 1 not run, 9 as expected"), tally
 
@@ -2632,7 +2638,7 @@ def removed_blocks_are_gone_and_absences_stay(base):
     rows = FINDINGS_ROWS + "| F7 | AC1 | an empty row |  | Supports |  |\n"
     repo, _ = investigation_branch(base, rows=rows)
     _, markup = generate(repo, base)
-    for needle in ('class="strip"', 'class="toc"', 'class="num"', 'id="summary"', 'class="sum"', 'class="sec"><summary'):
+    for needle in ('class="strip"', 'class="toc"', 'class="num"', 'id="summary"', 'class="sum"', '<details class="sec"'):
         assert needle not in markup, f"AC4: {needle} is still drawn"
     assert "Gates" not in text(markup), "AC4: the Gates row is still drawn"
     assert finding_field(markup, "F7", "Expected") == "not recorded" and finding_field(markup, "F7", "Observed") == "not recorded", \
@@ -2653,6 +2659,57 @@ def removed_blocks_are_gone_and_absences_stay(base):
     assert "The cart rounds in two places." in text(first[:folded]) and "payment gateway" not in text(first[:folded]), \
         "AC4: a description past its first paragraph isn't folded"
     assert enclosing_folds(markup, 'id="hyp-1-for"') == [], "AC4: For and Against folded with the description"
+
+
+def the_answers_chips_past_six_say_where_the_rest_are(base):
+    missing = "".join(f" [m{n}](m{n}.txt)" for n in range(1, 8))
+    notes = INVESTIGATION_NOTES.replace("by a cent?", "by a cent?" + missing)
+    repo, _ = investigation_branch(base, notes=notes, rows=FINDINGS_ROWS + "| F7 | AC1 | a second trace | one call | Supports | seen |\n")
+    _, markup = generate(repo, base)
+    chips = chips_in(element(markup, "answer"))
+    assert [chip[1:3] for chip in chips[6:]] == [("blockers", "1 more"), ("decide", "2 more")], \
+        f"AC2: seven blockers and two decisions don't say where the hidden three are: {[chip[1:4] for chip in chips]}"
+    assert len(listed(markup, "blockers")) == 7, listed(markup, "blockers")
+    tally = text(re.search(r'<p class="tally">(.*?)</p>', markup, re.S).group(1))
+    assert tally.startswith("7 findings in the validation report: 2 supports, 1 refutes,"), tally
+
+    notes = INVESTIGATION_NOTES.replace("by a cent?", "by a cent?" + "".join(f" [m{n}](m{n}.txt)" for n in range(1, 5)))
+    repo, _ = investigation_branch(in_dir(base, "six"), notes=notes)
+    _, markup = generate(repo, base)
+    assert [chip[2] for chip in chips_in(element(markup, "answer"))] == ["Blocks"] * 4 + ["Your call"] * 2, "AC2: six chips grew a more chip"
+
+
+def a_lead_that_is_not_prose_keeps_its_blocks(base):
+    notes = (INVESTIGATION_NOTES.replace("Why do checkout totals drift by a cent?", "- Why do totals drift?\n- And why only in EUR?")
+             .replace("Rounding runs twice: once per line and once on the total.", "The `round_total()` call runs twice."))
+    repo, _ = investigation_branch(base, notes=notes)
+    _, markup = generate(repo, base)
+    question = element(markup, "question")
+    assert question.count("<li>") == 2 and "- Why" not in text(question), f"AC2: a question written as a list lost its items: {question}"
+    assert "<code>round_total()</code>" in element(markup, "answer") and ".verdict-box code{background:var(--bg);color:var(--fg)}" in markup, \
+        "AC1: code in the answer's box takes the box's colour on its own background"
+    assert "Skip to the answer" in markup and "Skip to the verdict" not in markup, "the skip link names a verdict the page doesn't have"
+
+
+def each_results_word_and_tone_stays_as_it_was(base):
+    loader = importlib.machinery.SourceFileLoader("decision_report_looks", os.path.join(KIT, "bin", "decision-report"))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    looks = {context: [module.result_look(context, result) for result in ("PASS", "FAIL", "NOT RUN", "Supports", "BLOCKED")]
+             for context in module.RESULT_LOOKS}
+    assert looks == {
+        "check chip": [("p", "Passed"), ("f", "Failed"), ("s", "Not run"), ("s", "Not counted"), ("s", "Not counted")],
+        "step chip": [("p", "Passed"), ("f", "Failed"), ("s", "To do"), ("s", "To do"), ("s", "To do")],
+        "check block": [("ok", "Passed"), ("fail", "FAIL"), ("dim", "NOT RUN"), ("dim", "Supports"), ("dim", "BLOCKED")],
+        "check actual": [(None, "As expected."), (None, ""), (None, "Did not run."), (None, ""), (None, "")],
+        "state": [("ok", "PASS"), ("need", "FAIL"), ("dim", "NOT RUN"), ("dim", "Supports"), ("dim", "BLOCKED")],
+        "finding": [("neutral", "as expected"), ("neutral", "not as expected"), ("dim", "Not run"), ("neutral", "Supports"), ("neutral", "BLOCKED")],
+        "finding chip": [("n", "as expected"), ("n", "not as expected"), ("s", "Not run"), ("a", "Supports"), ("n", "BLOCKED")],
+    }, looks
+    assert {word: module.LENS_OUTCOME_COLUMNS[word] for word in module.quality_log_cli.OUTCOMES} == {
+        "fixed": "Fixed", "wrong": "Rejected", "intentional": "Rejected", "minor": "Minor", "pre-existing": "Pre-existing",
+        "open": "Open", "uncertain": "Open"}, module.LENS_OUTCOME_COLUMNS
+    assert module.plain("a" + "_" * 40000 + "b [the trace](trace.txt) `x` **y**") == "a" + "_" * 40000 + "b the trace x y"
 
 
 def one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation(base):
@@ -5260,7 +5317,8 @@ TESTS = kit_home.selected((writes_the_page_with_its_csp_and_prints_its_path, bou
                      an_empty_diff_only_suggests_the_mode, the_investigation_page_shows_each_section,
                      missing_investigation_sections_are_blockers, blocks_that_need_a_change_do_not_apply,
                      findings_are_not_failures, the_investigation_page_uses_the_change_pages_stylesheet, the_first_screen_answers_the_question,
-                     the_body_draws_cards_and_chips, removed_blocks_are_gone_and_absences_stay, one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation, the_notes_embed_their_evidence, brief_counts_findings,
+                     the_body_draws_cards_and_chips, removed_blocks_are_gone_and_absences_stay, the_answers_chips_past_six_say_where_the_rest_are, a_lead_that_is_not_prose_keeps_its_blocks,
+                     each_results_word_and_tone_stays_as_it_was, one_pass_row_reads_passed_on_a_change_and_as_expected_on_an_investigation, the_notes_embed_their_evidence, brief_counts_findings,
                      the_skills_describe_the_investigation_notes, a_marker_on_an_empty_diff_gives_the_investigation_page,
                      the_investigation_page_keeps_its_csp_and_renders_hostile_text_inert, hypotheses_keep_their_lists_and_subheadings,
                      the_notes_embed_each_file_under_its_first_part, the_answer_needs_more_than_its_confidence,

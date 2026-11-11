@@ -165,6 +165,7 @@ SETUP_STEPS = ("M0", "S0", "P0")  # a guide's setup: access and exports, not a t
 LONG_LIST = 5  # a passing list longer than this starts collapsed
 VERDICT_REASONS = 3  # how many reasons the verdict's sentence names before "and N more"
 VERDICT_CHIPS = 8  # how many reasons the verdict shows as chips; past it, the last chip counts the rest
+BLOCK_START = re.compile(r"\s*(?:[-*+]\s|\d{1,9}[.)]\s|#{1,6}\s|>|\||```|~~~)")
 ANSWER_CHIPS = 6  # how many blockers and decisions the investigation's answer shows as chips; past it, one more chip counts the rest
 MAX_DOTS = 200
 VERDICT_RULE = ("Not ready: CI failed, running, missing or unread; the local HEAD differs from the PR's; the PR is merged or closed; a check or verify failed; "
@@ -493,7 +494,7 @@ def state(word, tone):
 
 
 # How a result reads where it shows, as (tone, word): None stands for any other result, a None word for the result's own.
-# A check chip and a step chip use the chip tones, the rest the state tones; a finding is never passed or failed.
+# A chip context uses the chip tones, a check block the .res tones, the others the state tones; a finding is never passed or failed.
 RESULT_LOOKS = {
     "check chip": {"PASS": ("p", "Passed"), "FAIL": ("f", "Failed"), "NOT RUN": ("s", "Not run"), None: ("s", "Not counted")},
     "step chip": {"PASS": ("p", "Passed"), "FAIL": ("f", "Failed"), None: ("s", "To do")},
@@ -1125,7 +1126,7 @@ def check_rows(text, results=review_stamp.RESULTS):
         said = RESULT_DETAIL.match(cell("Result") or "")
         rows.append({"id": cells[0].strip("*_ "), "result": result, "detail": said.group(1).strip() if said else "",
                      "check": cell("Check") or "", "ac": ac or "",
-                     "acs": [int(n) for n in re.findall(r"\bAC(\d{1,6})\b", ac or "")], "ac_column": ac is not None, "case": cell("Case", True) or "",
+                     "acs": list(dict.fromkeys(int(n) for n in re.findall(r"\bAC(\d{1,6})\b", ac or ""))), "ac_column": ac is not None, "case": cell("Case", True) or "",
                      "expected": cell("Expected", True), "observed": cell("Evidence") or "", "line": index + 1,
                      "group": group, "level": (cell("Level") or "").strip("*_` ").lower() or None})
     return rows
@@ -1804,7 +1805,7 @@ def read_change(page, page_path, evidence, off, phases_error, paths, texts, whys
         for name in re.findall(r"`([^`\n]+)`", verify) if number else ():
             c.named_in.setdefault(name.strip(), []).append(int(number.group(1)))
     c.ac_known = c.validation_ok and any(row["ac_column"] for row in c.rows)
-    c.criteria_numbers = [(int(found.group(1)), found.group(2)) for found in (re.match(r"(\d{1,6})\.\s*(.*)", item) for item in c.criteria or []) if found]
+    c.criteria_numbers = criteria_by_number(c.criteria)
     c.criteria_said = dict(c.criteria_numbers)
     c.rows_by_id = {row["id"]: row for row in c.rows}
     c.uncovered = [n for n, _ in c.criteria_numbers if c.ac_known and not any(n in row["acs"] for row in c.rows)]
@@ -2360,6 +2361,9 @@ LENS_OUTCOME_COLUMNS = {**{word: {"wrong": "Rejected", "intentional": "Rejected"
                            for word in quality_log_cli.OUTCOMES}, "rejected": "Rejected"}  # the column's own word, read as it always was
 
 
+MATRIX_COLUMNS = ("Fixed", "Rejected", "Open", "Pre-existing")  # always drawn; another outcome's column only when a lens counts one
+
+
 def lens_outcomes(cell, findings):
     """{column: count} from a Lenses row's Outcomes cell, or None when the cell is blank or can't be read: then no count is known.
     When the outcomes add up to fewer than the row's findings, a column the cell leaves out is None: the rest went somewhere unknown."""
@@ -2384,7 +2388,8 @@ def review_matrix(c):
     for lens in c.lenses:
         by_lens.setdefault(lens["lens"], []).append(lens)
     read = {name: [lens_outcomes(lens["outcomes"], lens["findings"]) for lens in models if lens not in c.failed_lenses] for name, models in by_lens.items()}
-    columns = ["Fixed", "Rejected", "Open", "Pre-existing"] + (["Minor"] if any(counts and counts.get("Minor") for ran in read.values() for counts in ran) else [])
+    columns = list(MATRIX_COLUMNS) + [column for column in dict.fromkeys(LENS_OUTCOME_COLUMNS.values()) if column not in MATRIX_COLUMNS
+                                      and any(counts and counts.get(column) for ran in read.values() for counts in ran)]
 
     def cells(models, ran):
         failed = [lens for lens in models if lens in c.failed_lenses]
@@ -2711,8 +2716,15 @@ def ready_sentence(c):
 
 
 def plain(markdown_text):
-    """A report's short text as words for a sentence: its emphasis and code marks dropped, a snake_case name's underscores kept."""
-    return re.sub(r"[`*]+|(?<!\w)_+|_+(?!\w)", "", " ".join((markdown_text or "").split()))
+    """A report's short text as words for a sentence: a link by its label, its emphasis and code marks dropped, a snake_case
+    name's underscores kept. A run of underscores is matched from its first, or a long one is retried from each."""
+    words = re.sub(r"!?\[([^\]\n]*)\]\([^)\n]*\)", r"\1", " ".join((markdown_text or "").split()))
+    return re.sub(r"[`*]+|(?<!\w)_+|(?<!_)_+(?!\w)", "", words)
+
+
+def criteria_by_number(criteria):
+    """[(number, text)] for the spec's numbered criteria."""
+    return [(int(found.group(1)), found.group(2)) for found in (re.match(r"(\d{1,6})\.\s*(.*)", item) for item in criteria or []) if found]
 
 
 def criterion_words(criteria_said, n):
@@ -3043,8 +3055,8 @@ def page_head(title, style):
             f"<title>{esc(title)}</title><style>{style}</style></head><body>")
 
 
-def change_document(title, main, footer, scene_style):
-    return page_head(title, CHANGE_STYLE + scene_style) + f'<a class="skip" href="#main">Skip to the verdict</a><main id="main">{main}</main>{footer}</body></html>\n'
+def change_document(title, main, footer, scene_style, skip_to="the verdict"):
+    return page_head(title, CHANGE_STYLE + scene_style) + f'<a class="skip" href="#main">Skip to {skip_to}</a><main id="main">{main}</main>{footer}</body></html>\n'
 
 
 def split_hypotheses(text):
@@ -3076,21 +3088,29 @@ def lead_and_rest(text):
     return "\n".join(lines).strip(), ""
 
 
-def rest_fold(title, page, rest, anchor, files, inner_id=None):
+def lead_html(page, text, anchor, tag, attrs, before=""):
+    """The first paragraph in <tag attrs>: inline when it is prose; as its blocks, in a div, when it opens a list, a heading, a quote,
+    a table or a fenced block."""
+    if BLOCK_START.match(text):
+        return f"<div {attrs}>{before}{page.markdown(text, anchor, top=4)}</div>"
+    return f"<{tag} {attrs}>{before}{page.inline(text) if text else 'Not recorded.'}</{tag}>"
+
+
+def rest_fold(title, page, rest, anchor, files, inner_id=None, top=4):
     """The rest of a part past its first paragraph, and the files it names, behind its size; nothing when both are empty."""
     if not rest and not files:
         return ""
     size = ", ".join(said for said in (counted(len(plain(rest).split()), "word") if rest else "",
                                        counted(len(files), "file") if files else "") if said)
-    return fold(title, size, (page.markdown(rest, anchor, top=4) if rest else "") + "".join(files), inner_id=inner_id)
+    return fold(title, size, (page.markdown(rest, anchor, top=top) if rest else "") + "".join(files), inner_id=inner_id)
 
 
-def finding_map(rows, criteria_said):
+def finding_map(rows, labels):
     """One row per criterion the findings answer, by its words, each finding a chip; a finding naming several shows in each."""
     groups = {}
     for row in rows:
-        keys = [(0, n, criterion_words(criteria_said, n)) for n in row["acs"]] or \
-               [(1, 0, plain(row["ac"])) if row["ac"].strip() else (2, 0, "No criterion named")]
+        keys = [(0, n, labels[n]) for n in row["acs"]] or \
+               [(1, 0, shortened(plain(row["ac"]))) if row["ac"].strip() else (2, 0, "No criterion named")]
         for key in keys:
             groups.setdefault(key, []).append(row)
     lines = []
@@ -3121,7 +3141,7 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
     spec_text, spec_read_why = read_report(spec_path) if spec_path else (None, spec_why)
     spec_path = spec_path or "the spec"
     spec_title = re.search(r"^# (.+)$", spec_text or "", re.M)
-    criteria_said = {int(found.group(1)): found.group(2) for found in (re.match(r"(\d{1,6})\.\s*(.*)", item) for item in criteria or []) if found}
+    criteria_said = dict(criteria_by_number(criteria))
     notes = level_two_sections(texts["decision-notes"])
     branch = review_stamp.git("branch", "--show-current")
     head = review_stamp.git("rev-parse", "--verify", "--quiet", "HEAD") or "no commit yet"
@@ -3153,20 +3173,20 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
                        if block.startswith('<div class="file text"') else block)
         return out
 
-    def part(text, anchor):
-        return ((page.markdown(text, anchor, top=4) if text.strip() else f'<p>{state("none recorded", "dim")}</p>')
+    def part(text, anchor, top=4):
+        return ((page.markdown(text, anchor, top=top) if text.strip() else f'<p>{state("none recorded", "dim")}</p>')
                 + "".join(evidence_of(text, anchor)))
 
     def required(heading_text, key):
         body = (notes.get(key) or "").strip()
         if not body:
-            blockers.append(("#annex-decision-notes", f"## {heading_text} is missing", "write it in the decision notes"))
+            blockers.append(("#annex-decision-notes", f"“{heading_text}” is missing", f"write <code>## {esc(heading_text)}</code> in the decision notes"))
         return body
 
     # The question and the answer: the first paragraph of each on the first screen, the rest and their files folded below
     question = required("The question", "the question")
     question_lead, question_rest = lead_and_rest(question)
-    question_more = rest_fold("The rest of the question", page, question_rest, "question-more", evidence_of(question, "question"), "question-more")
+    question_more = rest_fold("The rest of the question", page, question_rest, "question-more", evidence_of(question, "question"), "question-more", top=2)
     answer = required("The answer", "the answer")
     confidence, confidence_reason, kept = None, "", []
     for line, fenced in outside_fences(answer):
@@ -3183,7 +3203,7 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
     if answer and not "\n".join(kept).strip():
         blockers.append(("#answer", "The answer holds only its Confidence line", "write the answer above it"))
     answer_lead, answer_rest = lead_and_rest("\n".join(kept))
-    answer_more = rest_fold("The rest of the answer", page, answer_rest, "answer-more", evidence_of(answer, "answer"), "answer-more")
+    answer_more = rest_fold("The rest of the answer", page, answer_rest, "answer-more", evidence_of(answer, "answer"), "answer-more", top=2)
 
     # Hypotheses, each a card: its first paragraph, the rest folded, For and Against side by side
     intro, hypotheses = split_hypotheses(notes.get("hypotheses") or "")
@@ -3198,7 +3218,7 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
                                                  for key, label in (("for", "For"), ("against", "Against"))) + "</div></article>")
     hypotheses_html = section("hypotheses", "Hypotheses", cards or f'<p>{state("none recorded", "dim")}</p>')
     options = (notes.get("options") or "").strip()
-    options_html = section("options", "Options", f'<div class="box">{part(options, "options")}</div>') if options else ""
+    options_html = section("options", "Options", f'<div class="box">{part(options, "options", top=3)}</div>') if options else ""
 
     # Not checked: its notes, and each finding NOT RUN with its reason
     rows = check_rows(texts["validation"], RESULTS + review_stamp.FINDINGS) if texts["validation"] is not None else []
@@ -3210,25 +3230,31 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
         page.embedded = TOTAL_LIMIT
     unchecked = (notes.get("not checked") or "").strip()
     reasons = ('<ul class="reasons" id="not-run">' + "".join(
-        f'<li>{chip(row["anchor"], "s", "Not run", esc(shortened(row["words"])), row["id"])} '
+        f'<li>{chip(row["anchor"], *result_look("finding chip", row["result"]), esc(shortened(row["words"])), row["id"])} '
         f'{page.inline(row["observed"]) or state("no reason recorded", "dim")}</li>' for row in not_run) + "</ul>") if not_run else ""
-    unchecked_html = (section("not-checked", "Not checked", (f'<div id="not-checked-notes">{part(unchecked, "not-checked-notes")}</div>' if unchecked else "")
+    unchecked_html = (section("not-checked", "Not checked", (f'<div id="not-checked-notes">{part(unchecked, "not-checked-notes", top=3)}</div>' if unchecked else "")
                               + reasons) if unchecked or not_run else "")
 
     # Findings: a result is what was found, not a gate, so no row reads as passed or failed
+    labels = {n: criterion_words(criteria_said, n) for row in rows for n in row["acs"]}
+    crits = ["; ".join(esc(labels[n]) for n in row["acs"]) or esc(shortened(plain(row["ac"]))) for row in rows]
+    map_html = finding_map(rows, labels)
+    if not page.charge(map_html, *crits):  # one finding can name criteria by the thousand: the report holds them all
+        map_html = f'<p>{state("linked", "dim")} the criteria the findings answer are past the 20 MB embedded in total: see the validation report</p>'
+        crits = [esc(shortened(plain(row["ac"]))) for row in rows]
     blocks = []
-    for row in rows:
+    for row, crit in zip(rows, crits):
         files = "".join(page.file_block(named, real) for named, real in named_files(page, row))
-        crit = "; ".join(esc(criterion_words(criteria_said, n)) for n in row["acs"]) or esc(plain(row["ac"])) or state("none named", "dim")
+        crit = crit or state("none named", "dim")
         expected = page.inline(row["expected"]) if row["expected"] and row["expected"].strip() else state("not recorded", "dim")
         blocks.append(
-            f'<details class="check"><summary>{result_state("finding", row["result"])}<h4>{page.inline(row["check"], links=False) or esc(row["id"])}</h4>'
+            f'<details class="check"><summary>{result_state("finding", row["result"])}<h3>{page.inline(row["check"], links=False) or esc(row["id"])}</h3>'
             f'<span class="cid">{esc(row["id"])}</span></summary><div class="inner" id="{row["anchor"]}"><dl>'
             f'<dt>Criterion</dt><dd>{crit}</dd><dt>Expected</dt><dd>{expected}</dd>'
             f'<dt>Observed</dt><dd>{page.inline(row["observed"]) or state("not recorded", "dim")}</dd>'
             f'<dt>Evidence</dt><dd>{files or state("no evidence named", "dim")}</dd>'
             f'<dt>Source</dt><dd>{page.path(paths["validation"], paths["validation"] + ":" + str(row["line"]))}</dd></dl></div></details>')
-    findings_html = section("findings", "Findings", finding_map(rows, criteria_said) + fold("Each finding in full", len(rows), "".join(blocks))
+    findings_html = section("findings", "Findings", map_html + fold("Each finding in full", len(rows), "".join(blocks))
                             if rows else f'<p class="absent">{state("not recorded", "dim")} no findings table in <code>{esc(paths["validation"])}</code></p>')
 
     # Your decisions, each a card with what it unblocks; an item `None` says there is nothing to decide
@@ -3251,24 +3277,26 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
                           f'<p class="absent">{state("missing", "need")} <code>## What you must decide</code> in the decision notes</p>')
 
     # The first screen: the title, the question, the answer with its confidence, what blocks and what is yours, the findings bar
-    reasons_chips = [reason_chip(link, phrase, True) for link, phrase, _ in blockers] + \
+    reasons_chips = [reason_chip(link, shortened(phrase), True) for link, phrase, _ in blockers] + \
                     [chip(f"d{n}", "w", "Your call", esc(shortened(first_sentence(plain(first))[0]))) for n, first in enumerate(decisions, 1)]
     if len(reasons_chips) > ANSWER_CHIPS:
-        hidden = len(reasons_chips) - ANSWER_CHIPS
-        to, where = ("blockers", "in What the agent must fix") if len(blockers) > ANSWER_CHIPS else ("decide", "in Your decisions")
-        reasons_chips = reasons_chips[:ANSWER_CHIPS] + [chip(to, "s", f"{hidden} more", where)]
+        hidden_blockers = max(len(blockers) - ANSWER_CHIPS, 0)
+        hidden = ((hidden_blockers, "blockers", "in What the agent must fix"),
+                  (len(reasons_chips) - ANSWER_CHIPS - hidden_blockers, "decide", "in Your decisions"))
+        reasons_chips = reasons_chips[:ANSWER_CHIPS] + [chip(to, "s", f"{n} more", where) for n, to, where in hidden if n]
     confidence_chip = (f'<span class="lc n"><b>{confidence.capitalize()} confidence</b>{page.inline(confidence_reason)}</span>'
                        if confidence in ("high", "medium", "low") else "")
     chips_html = "".join(f"<li>{one}</li>" for one in ([confidence_chip] if confidence_chip else []) + reasons_chips)
-    box = (f'<div class="verdict-box {"fail" if blockers else "ans"}" id="answer"><p class="verdict"><strong>Answer:</strong> '
-           f'{page.inline(answer_lead) if answer_lead else "Not recorded."}</p>'
+    box = (f'<div class="verdict-box {"fail" if blockers else "ans"}" id="answer">'
+           + lead_html(page, answer_lead, "answer-lead", "p", 'class="verdict"', "<strong>Answer:</strong> ")
            + (f'<ul class="chips" aria-label="Its confidence, what blocks it and what is yours">{chips_html}</ul>' if chips_html else "") + "</div>")
     why = ('<details class="why"><summary>What the agent must fix</summary><ul id="blockers">'
            + "".join(f'<li><a href="{esc(link)}">{esc(phrase)}</a>: {detail}</li>' for link, phrase, detail in blockers) + "</ul></details>") if blockers else ""
-    tally_html = findings_tally(rows) if rows else '<p class="tally">No findings recorded in the validation report.</p>'
+    tally_html = (findings_tally(rows) if rows else '<p class="tally">No findings recorded in the validation report.</p>' if texts["validation"] is not None
+                  else '<p class="tally">No validation report to count findings from.</p>')
     title = spec_title.group(1) if spec_title else branch
-    hero_html = (f'<header class="hero"><h1>{esc(title)}</h1><p class="lead" id="question">{page.inline(question_lead) if question_lead else "Not recorded."}</p>'
-                 f"{question_more}{box}{answer_more}{why}{tally_html}</header>")
+    question_html = lead_html(page, question_lead, "question-lead", "p", 'class="lead" id="question"')
+    hero_html = f'<header class="hero"><h1>{esc(title)}</h1>{question_html}{question_more}{box}{answer_more}{why}{tally_html}</header>'
 
     # The footer: what doesn't apply, the reports, the ids
     annexes = {"spec": (spec_path, spec_text, spec_read_why), "decision-notes": (paths["decision-notes"], texts["decision-notes"], None),
@@ -3303,9 +3331,11 @@ def build_investigation(page_path, page, off, phases_error, paths, texts, whys):
               f'<dt>Page</dt><dd>local file, not published · <a href="{esc(file_href(page_path))}"><code>{esc(page_path)}</code></a></dd>'
               f'</dl><p class="src">Investigation page for <code>{esc(branch)}</code>, from its notes, findings and evidence.</p></footer>')
     main = hero_html + hypotheses_html + options_html + unchecked_html + findings_html + decide_html
-    return change_document(title, main, footer, page.scene_style())
+    return change_document(title, main, footer, page.scene_style(), "the answer")
 
 
+# Only a page with a scene carries this. A scene's keyframes come through --k because an inline `animation` shorthand would beat the pause rule,
+# and `*` doesn't match a pseudo-element, so every rule that stops the motion names the bar's too.
 PLAYER_STYLE = """
 .player{position:relative;display:grid;grid-template-columns:minmax(0,1fr);gap:.7rem}
 .copy{display:grid;grid-template-columns:minmax(0,1fr);gap:.8rem;min-width:0}.copy-b{display:none}
@@ -3376,7 +3406,7 @@ code{font:400 max(.86em,12.5px) var(--mono);background:var(--sunk);padding:.06em
 .verdict{font-size:15px;max-width:none}.verdict strong{font-size:18px;letter-spacing:-.01em;margin-inline-end:4px}
 .verdict a{color:inherit;text-decoration-color:currentColor}
 .verdict-box .chips{list-style:none;margin:0;padding:0}
-.verdict-box .lc{background:var(--bg);border-color:var(--bg)}
+.verdict-box .lc{background:var(--bg);border-color:var(--bg)}.verdict-box code{background:var(--bg);color:var(--fg)}
 .verdict-box :focus-visible{outline-color:var(--bg)}
 .why{font-size:14px;color:var(--soft)}.why>summary{cursor:pointer;font-weight:600;color:var(--text)}
 .why-h{font-weight:600;margin:.6rem 0 0;color:var(--text)}.why ul{margin:.4rem 0 0;padding-inline-start:1.1rem;display:grid;gap:.3rem}
@@ -3466,7 +3496,7 @@ details.more>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;p
 .check>summary::-webkit-details-marker{display:none}
 .check>summary::after{content:"";order:-1;width:7px;height:7px;border:solid var(--faint);border-width:0 2px 2px 0;transform:rotate(-45deg);align-self:center;flex:none}
 .check>summary:dir(rtl)::after{transform:rotate(135deg)}.check[open]>summary::after{transform:rotate(45deg)}
-.check>summary h4{margin:0;font-size:14.5px}
+.check>summary :is(h3,h4){margin:0;font-size:14.5px}
 .check>.inner{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem;padding-bottom:1rem;scroll-margin-top:2rem}
 .check>.inner:target{outline:1px solid var(--you);outline-offset:.4rem;border-radius:4px}
 .cid{font:400 12px var(--mono);color:var(--faint)}
