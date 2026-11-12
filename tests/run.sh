@@ -52,7 +52,7 @@ sections=("hooks|hooks" "generic-verify|generic verify" "gh-wrapper|gh proxy wra
   "pr-comments|pull request comments not handled yet" "free-branch|free a branch from its worktree" "prune-merged|remove merged worktrees and branches"
   "pr-validation|pull request validation section" "decision-report|decision page" "evidence-video|CLI check videos" "approve|approvals from a dialog" "spec|spec lint and second reading" "build-ab|build-model A/B"
   "verify-changed|verify on changed lines" "structure-facts|structure facts for review" "deps|dependencies" "outcomes|outcomes and escapes" "review-eval|review evals"
-  "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "mods|Claude Code mod"
+  "sessions|sessions and phases" "triage|triage" "ci-wait|CI wait" "health|weekly health report" "mods|Claude Code mod"
   "docs|framework reference" "site|site build" "version|version" "install|install on a new machine"
   "doctor|install doctor" "kit-home|every test refuses another checkout" "run-sh|tests/run.sh --only")
 names=("${sections[@]%%|*}")
@@ -95,6 +95,7 @@ section_triage() {
   return $f
 }
 section_ci_wait() { python3 test_ci_wait.py; }
+section_health() { python3 test_health.py; }
 section_mods() {
   local f=0 kit=~/.agents
   command -v claude >/dev/null || { echo "FAIL claude is not installed: the mod can't be validated or tested"; return 1; }
@@ -235,10 +236,15 @@ done
 fail=0
 for n in "${!picked[@]}"; do
   i=${picked[$n]}
-  if [ -n "${alone[$n]:-}" ]; then [ "${alone[$n]}" = 0 ] || fail=1; else wait "${pids[$n]}" || fail=1; fi
+  if [ -n "${alone[$n]:-}" ]; then status=${alone[$n]}; else wait "${pids[$n]}"; status=$?; fi
   unset "pids[$n]"  # reaped: an interrupt must not signal a pid the system may have reused
+  [ "$status" = 0 ] || fail=1
   printf '\n== %s\n' "${sections[$i]#*|}"
   cat "$out/$i"
+  if [ "$status" != 0 ] && ! grep -q '^FAIL ' "$out/$i"; then
+    [ -z "$(tail -c1 "$out/$i")" ] || echo  # the section stopped mid-line, and a FAIL counts only at a line's start
+    echo "FAIL ${names[$i]} exited $status without naming a failing test"
+  fi
 done
 
 if [ -n "$only" ]; then
