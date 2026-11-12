@@ -20,6 +20,7 @@
   review_stamp.py base [--matches <branch>]        # (both options also take --name=value) the ref the change is measured against (see branch_base), or
                                                    # exit 1, saying why, when a PR targeting <branch> (empty: the
                                                    # default branch) would show a different change
+  review_stamp.py gate <checks> [<target>...]      # guard_bash.py's PR gate, answered in one process (see gate())
 
 A stamp covers every file that differs from the merge-base with the branch's base (the default branch, or the
 parent of a stacked branch: branch_base), except the changelog, so committing stamped changes keeps it valid
@@ -32,6 +33,7 @@ import contextlib
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import re
@@ -68,8 +70,34 @@ class GitTimeout(RuntimeError):
     pass
 
 
+_remembered = None  # what this process has asked while gate() answers; None outside it, so importers see no cache
+
+
+def remember(key, compute):
+    """compute()'s value, computed once per key while gate() answers, and every time outside it."""
+    if _remembered is None:
+        return compute()
+    if key not in _remembered:
+        _remembered[key] = compute()
+    return _remembered[key]
+
+
+def forget():
+    """Drop what gate() remembers: for code that changed what git or the fingerprint read, as a move of files does."""
+    if _remembered is not None:
+        _remembered.clear()
+
+
 def run_git(args, cwd=None, env=None, text=True):
-    """git's completed process; raises RuntimeError naming the command when it runs past GIT_TIMEOUT."""
+    """git's completed process; raises RuntimeError naming the command when it runs past GIT_TIMEOUT. While gate()
+    answers, a call with no environment of its own runs once: it must only read, and what changes its answer calls
+    forget()."""
+    if env is None and _remembered is not None:
+        return remember(("git", tuple(args), cwd, os.getcwd(), text), lambda: launch_git(args, cwd, None, text))
+    return launch_git(args, cwd, env, text)
+
+
+def launch_git(args, cwd, env, text):
     try:
         return subprocess.run(["git", *args], capture_output=True, text=text, cwd=cwd, env=env, timeout=GIT_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -256,7 +284,7 @@ def working_tree():
 def fingerprint_for(kind):
     # Verify reruns the tests on the code as it is, the default branch's changes included; review and validation
     # judged the branch's own change, which a merge of the default branch doesn't alter.
-    return fingerprint() if kind in VERIFY_KINDS else change_fingerprint()
+    return fingerprint() if kind in VERIFY_KINDS else remember("change_fingerprint", change_fingerprint)
 
 
 # Files skills/kit-spec/path.sh and bin/reports name <kind>-<repo>-<branch key>.md, next to the spec.
@@ -302,6 +330,7 @@ def follow_branch_renames():
             if os.path.exists(src) and not os.path.exists(dst) and not (old in dashed and branch_exists(old)):
                 try:
                     os.rename(src, dst)
+                    forget()
                     moved = True
                     if dst.endswith(".md"):  # reports link their evidence by its directory's name
                         relink_evidence(dst, f"evidence-{repo}-{old}", f"evidence-{repo}-{new}")
@@ -368,6 +397,7 @@ def move_out_of_tmpdir(common, repo, key):
             try:
                 os.makedirs(shared, exist_ok=True)
                 shutil.move(src, dst)
+                forget()
                 print(f"moved {name} out of $TMPDIR", file=sys.stderr)
             except OSError as error:
                 print(f"could not move {src} to {dst}: {error}", file=sys.stderr)
@@ -966,8 +996,58 @@ def option(args, name):
     return None
 
 
+def enter_repository():
+    """Move to the work tree's top; False outside a git repository."""
+    git_dir = run_git(["rev-parse", "--absolute-git-dir"], env={**os.environ, "LC_ALL": "C"})  # the check reads English
+    if git_dir.returncode != 0:
+        if "not a git repository" in git_dir.stderr:
+            return False
+        raise RuntimeError(f"git rev-parse failed: {' '.join(git_dir.stderr.split())}")
+    os.chdir(git("rev-parse", "--show-toplevel"))
+    return True
+
+
+def gate(args):
+    """The PR gate's steps, as guard_bash.py takes them, in one process that asks git each question once: every
+    target's `base --matches` up to the first that fails, then `check --kind review` when review is on, then, when
+    validate is on and nothing failed, `needs-validate` and the validate check it asks for. Prints one JSON line,
+    {"steps": [[args, exit, stdout, stderr], ...]}."""
+    checks = args[0].split(",") if args else []
+    if not checks or not set(checks) <= {"review", "validate"}:
+        print("usage: review_stamp.py gate review|validate|review,validate [<target>...]", file=sys.stderr)
+        return 2
+    steps = []
+
+    def step(*command):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = run_command(list(command))
+            except RuntimeError as error:
+                print(f"review_stamp: {error}", file=sys.stderr)
+                code = 2
+        steps.append([list(command), code, out.getvalue(), err.getvalue()])
+        return code
+
+    global _remembered
+    _remembered = {}
+    try:
+        if all(step("base", "--matches", target) == 0 for target in args[1:]):
+            if "review" not in checks or step("check", "--kind", "review") == 0:
+                if "validate" in checks and step("needs-validate") == 0:
+                    step("check", "--kind", "validate")
+    finally:
+        _remembered = None
+    print(json.dumps({"steps": steps}))
+    return 0
+
+
 def main():
     args = sys.argv[1:]
+    return gate(args[1:]) if args[:1] == ["gate"] else run_command(args)
+
+
+def run_command(args):
     kind = option(args, "--kind")
     if kind == "":
         print(f"--kind needs a value: one of {', '.join(STAMP_KINDS)}.", file=sys.stderr)
@@ -983,12 +1063,8 @@ def main():
         print("A verify stamp comes only from running verify: run `python3 ~/.agents/hooks/stop_checks.py verify`, "
               "which stamps the change when it passes.", file=sys.stderr)
         return 2
-    git_dir = run_git(["rev-parse", "--absolute-git-dir"], env={**os.environ, "LC_ALL": "C"})  # the check reads English
-    if git_dir.returncode != 0:
-        if "not a git repository" in git_dir.stderr:
-            return 0
-        raise RuntimeError(f"git rev-parse failed: {' '.join(git_dir.stderr.split())}")
-    os.chdir(git("rev-parse", "--show-toplevel"))
+    if not remember("repository", enter_repository):
+        return 0
     if command == "branch-key":
         print(branch_key(git("branch", "--show-current")))
         return 0

@@ -1285,12 +1285,14 @@ def a_plain_request_approves_a_database_statement_for_that_turn(base):
                          ("Drop the test databases, and empty the old test tables!", {"DROP DATABASE", "TRUNCATE TABLE"}),
                          ("allow DROP SCHEMA\nwipe all the test tables", {"DROP SCHEMA", "DROP TABLE"})]:
         prompt(text)
-        assert allowed() == grants, f"{text!r} approves {sorted(grants)}, got {sorted(allowed())}"
+        got = allowed()
+        assert got == grants, f"{text!r} approves {sorted(grants)}, got {sorted(got)}"
     for text in ["can you drop the test databases?", "Don't drop the database",
                  "Borra las bases de prueba.\n\nY luego revisa el CI"]:
         prompt("allow DROP DATABASE\nallow DROP TABLE\nallow DROP SCHEMA\nallow TRUNCATE TABLE")
         prompt(text)
-        assert not allowed(), f"grants nothing and revokes the last ones: {text!r}, got {sorted(allowed())}"
+        got = allowed()
+        assert not got, f"grants nothing and revokes the last ones: {text!r}, got {sorted(got)}"
 
     # Only an imperative request opening the message grants: a verb or object word anywhere else is a question, a
     # refusal, a report, a paste, or a word for something else.
@@ -2841,6 +2843,322 @@ def guard_fails_closed(base):
     slow = reason("gh pr create --head feat/x --fill", repo, env={"PATH": fake + ":" + os.environ["PATH"]})
     assert "TimeoutExpired" in (slow or "") and time.time() - started < 10, (slow, time.time() - started)
     assert reason("ls", gone) is None, "a command no check needs git for still runs"
+
+
+def gate_probe(base):
+    """A `git` that logs each call to $GATE_GIT_LOG, fails the $GATE_GIT_FAIL command and runs the real one, and a
+    sitecustomize that logs each Python start to $GATE_PYTHON_LOG, sleeps $GATE_GIT_DELAY before each git it launches
+    and breaks the stamp process as $GATE_STAMP_FAULT names ("answer" prints $GATE_STAMP_ANSWER in its place)."""
+    probe = os.path.join(base, "gate-probe")
+    os.makedirs(probe)
+    with open(os.path.join(probe, "git"), "w") as fh:
+        fh.write('#!/bin/sh\nprintf "%s\\n" "$*" >> "$GATE_GIT_LOG"\n'
+                 'if [ -n "$GATE_GIT_FAIL" ] && [ "$1" = "$GATE_GIT_FAIL" ]; then echo "fatal: broken on purpose" >&2; exit 128; fi\n'
+                 f'exec {shutil.which("git")} "$@"\n')
+    os.chmod(os.path.join(probe, "git"), 0o755)
+    with open(os.path.join(probe, "sitecustomize.py"), "w") as fh:
+        fh.write("""import atexit, io, os, signal, subprocess, sys, time
+if os.environ.get("GATE_PYTHON_LOG"):
+    with open(os.environ["GATE_PYTHON_LOG"], "a") as log:
+        log.write(sys.argv[0] + "\\n")
+if os.environ.get("GATE_GIT_DELAY"):
+    launch = subprocess.Popen.__init__
+    def launch_slow_git(self, args, *more, **options):
+        if not isinstance(args, (str, bytes)) and os.path.basename(args[0]) == "git":
+            time.sleep(float(os.environ["GATE_GIT_DELAY"]))
+        launch(self, args, *more, **options)
+    subprocess.Popen.__init__ = launch_slow_git
+fault = os.environ.get("GATE_STAMP_FAULT") if sys.argv[0].endswith("review_stamp.py") else None
+if fault == "hang":
+    time.sleep(60)
+elif fault == "exit":
+    os._exit(3)
+elif fault == "signal":
+    os.kill(os.getpid(), signal.SIGKILL)
+elif fault == "nothing":
+    os._exit(0)
+elif fault == "answer":
+    print(os.environ["GATE_STAMP_ANSWER"], flush=True)
+    os._exit(0)
+elif fault == "cut":
+    held = sys.stdout = io.StringIO()
+    atexit.register(lambda: (sys.__stdout__.write(held.getvalue()[:len(held.getvalue()) // 2]), sys.__stdout__.flush()))
+""")
+    return probe
+
+
+def gate_answer(command, repo, probe, **env):
+    """The gate's deny reason ("" when it allows) and the seconds it took, with the probe in front of the hook."""
+    started = time.time()
+    said = run_hook("guard_bash.py", {"tool_input": {"command": command}, "cwd": repo, "session_id": "test"},
+                    env={"PATH": probe + ":" + os.environ["PATH"], "PYTHONPATH": probe, "GATE_GIT_LOG": os.devnull, **env})
+    return (said["hookSpecificOutput"]["permissionDecisionReason"] if said else ""), time.time() - started
+
+
+def commit_file(repo, path):
+    open(os.path.join(repo, path), "w").write("c = 1\n")
+    git(repo, "add", path)
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", path)
+
+
+def stamped_change(repo, branch=None):
+    """A change, on a new branch when one is named, with a tracked edit and one untracked file, reviewed and validated."""
+    if branch:
+        git(repo, "switch", "-q", "-c", branch)
+    open(os.path.join(repo, "app.py"), "a").write("y = 2\n")
+    open(os.path.join(repo, "new.py"), "w").write("n = 1\n")
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0, kind
+
+
+def stamp_file(repo, name):
+    common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    found = [os.path.join(d, name) for d, _, files in os.walk(os.path.join(common, "agents", "stamps")) if name in files]
+    assert len(found) == 1, found
+    return found[0]
+
+
+def gate_shapes(base):
+    """(shape, repository, command, the command with a wrong target) for each repository the gate's process ceiling
+    holds in, both stamps valid."""
+    local = new_repo(base, "gate-local")
+    stamped_change(local, "feature")
+    source = new_repo(base, "gate-source")
+    clone = os.path.join(base, "gate-clone")
+    git(base, "clone", "-q", source, clone)
+    git(clone, "config", "branch.feature.agentsBase", "trunk")
+    stamped_change(clone, "feature")
+    stacked = new_repo(base, "gate-stacked")
+    remote = os.path.join(base, "gate-stacked.git")
+    git(base, "init", "-q", "--bare", remote)
+    git(stacked, "remote", "add", "origin", remote)
+    git(stacked, "push", "-q", "origin", "trunk")
+    git(stacked, "remote", "set-head", "origin", "trunk")
+    git(stacked, "switch", "-q", "-c", "parent")
+    commit_file(stacked, "parent.py")
+    git(stacked, "push", "-q", "origin", "parent")
+    git(stacked, "switch", "-q", "-c", "child")
+    commit_file(stacked, "child.py")  # a pushed branch at HEAD is not taken as the parent
+    stamped_change(stacked)
+    create = "gh pr create --base {} --title t --body b"
+    return [("local", local, create.format("trunk"), create.format("nope")),
+            ("clone", clone, create.format("trunk"), create.format("nope")),
+            ("stacked", stacked, create.format("parent"), create.format("nope")),
+            ("two creates", clone, "gh pr create --base trunk --title a; gh pr create -B origin/trunk --title b",
+             "gh pr create --base trunk --title a; gh pr create -B nope --title b")]
+
+
+def the_pr_gate_launches_few_processes(base):
+    probe = gate_probe(base)
+    over = []
+    for shape, repo, command, _ in gate_shapes(base):
+        gits, pythons = os.path.join(base, f"{shape}-git.log"), os.path.join(base, f"{shape}-python.log")
+        said, took = gate_answer(command, repo, probe, GATE_GIT_LOG=gits, GATE_PYTHON_LOG=pythons)
+        with open(gits) as fh:
+            git_calls = len(fh.readlines())
+        with open(pythons) as fh:
+            python_starts = len([line for line in fh if not line.strip().endswith("guard_bash.py")])
+        print(f"gate in the {shape} shape: {python_starts} Python, {git_calls} git, {took:.2f}s")
+        assert said == "", f"{shape}: both stamps are valid: {said}"
+        if python_starts != 1 or not 0 < git_calls <= 30:
+            over.append(f"{shape}: {python_starts} Python and {git_calls} git processes")
+    assert not over, over
+
+
+def the_pr_gate_answers_with_slow_git(base):
+    probe = gate_probe(base)
+    expected = {"allowed": "", "wrong target": "This PR targets `nope`",
+                "no validation": "has no validation recorded", "no review": "No review recorded"}
+    # The delay is slept inside the hook's processes, without the probe's `git` on PATH: a process more per git call
+    # is the load the gate has to survive, and this test would time out under it as the gate once did.
+    slow = {"GATE_GIT_DELAY": "0.1", "PATH": os.environ["PATH"]}
+    for shape, repo, command, wrong in gate_shapes(base):
+        answers = {"allowed": gate_answer(command, repo, probe, **slow),
+                   "wrong target": gate_answer(wrong, repo, probe, **slow)}
+        for case, name in (("no validation", "validate.stamp"), ("no review", "self-review.stamp")):
+            path = stamp_file(repo, name)
+            with open(path) as fh:
+                kept = fh.read()
+            os.remove(path)
+            answers[case] = gate_answer(command, repo, probe, **slow)
+            with open(path, "w") as fh:
+                fh.write(kept)
+        for case, (said, took) in answers.items():
+            print(f"gate in the {shape} shape, {case}, git 0.1 s slower: {took:.2f}s")
+            assert "The guard failed" not in said, f"{shape}, {case}: {said}"
+            assert case != "allowed" or took > 1, f"{shape}: ten git calls weren't delayed, so git wasn't slow ({took:.2f}s)"
+            assert (said == "") if case == "allowed" else (expected[case] in said), f"{shape}, {case}: {said}"
+
+
+def the_pr_gate_reads_renamed_and_legacy_stamps(base):
+    repo = new_repo(base)
+    stamped_change(repo, "old")
+    git(repo, "branch", "-m", "old", "new")
+    command = "gh pr create --base trunk --title t --body b"
+    assert guard(command, repo) == "allow", "stamps kept under the branch's earlier name still open the gate"
+    git_dir = git(repo, "rev-parse", "--absolute-git-dir").stdout.strip()
+    for name in ("self-review.stamp", "validate.stamp"):
+        os.rename(stamp_file(repo, name), os.path.join(git_dir, name))
+    assert guard(command, repo) == "allow", "stamps in the legacy location still open the gate"
+    os.remove(os.path.join(git_dir, "validate.stamp"))
+    said = gate_answer(command, repo, gate_probe(base))[0]
+    assert "has no validation recorded" in said, f"the legacy validation stamp was the one that counted: {said!r}"
+
+
+def stamp_fault_denial(base, fault, **env):
+    """The gate's answer when the stamp process fails as `fault` says, on a change it would otherwise allow."""
+    probe = gate_probe(base)
+    repo = new_repo(base)
+    stamped_change(repo, "feature")
+    command = "gh pr create --base trunk --title t --body b"
+    assert gate_answer(command, repo, probe)[0] == "", "without the fault the gate allows"
+    said, took = gate_answer(command, repo, probe, GATE_STAMP_FAULT=fault, **env)
+    assert said and took < 10, f"{fault} {env}: denies within the budget ({took:.1f}s): {said!r}"
+    assert "review_stamp.py" in said and "recorded" not in said, f"{fault} {env}: names the stamp check, not a missing stamp: {said}"
+    return said
+
+
+def a_stamp_check_past_the_budget_denies(base):
+    said = stamp_fault_denial(base, "hang")
+    assert "TimeoutExpired" in said, said
+
+
+def a_stamp_check_exiting_above_one_denies(base):
+    said = stamp_fault_denial(base, "exit")
+    assert "exit 3" in said, said
+
+
+def a_stamp_check_killed_by_a_signal_denies(base):
+    said = stamp_fault_denial(base, "signal")
+    assert "SIGKILL" in said, said
+
+
+def a_stamp_check_printing_nothing_denies(base):
+    said = stamp_fault_denial(base, "nothing")
+    assert "printed nothing" in said, said
+
+
+def a_stamp_check_answer_cut_short_denies(base):
+    said = stamp_fault_denial(base, "cut")
+    assert "cut short" in said, said
+
+
+def a_stamp_check_answer_the_guard_does_not_expect_denies(base):
+    target, review, needs, validate = (["base", "--matches", "trunk"], ["check", "--kind", "review"], ["needs-validate"],
+                                       ["check", "--kind", "validate"])
+    passed = [[step, 0, "", ""] for step in (target, review, needs, validate)]
+    answers = {"another shape": {"allowed": True},
+               "no steps": {"steps": []},
+               "no review step": {"steps": passed[:1]},
+               "no needs-validate step": {"steps": passed[:2]},
+               "no validate step": {"steps": passed[:3]},
+               "a step killed by a signal": {"steps": passed[:2] + [[needs, -9, "", ""]]},
+               "an exit code no step has": {"steps": passed[:3] + [[validate, 3, "", ""]]},
+               "an exit code as text": {"steps": [[target, "0", "", ""]] + passed[1:]},
+               "a step with no output": {"steps": [[target, 0]] + passed[1:]}}
+    for at, (case, answer) in enumerate(answers.items()):
+        os.makedirs(os.path.join(base, str(at)))
+        said = stamp_fault_denial(os.path.join(base, str(at)), "answer", GATE_STAMP_ANSWER=json.dumps(answer))
+        assert "doesn't expect" in said, f"{case}: {said}"
+
+
+def a_stamp_step_that_could_not_tell_denies(base):
+    # Inside the stamp process, after the target matched: the step's own error is what the refusal carries.
+    said = stamp_fault_denial(base, "", GATE_GIT_FAIL="diff")
+    assert "`review_stamp.py check --kind review` failed: review_stamp: git diff failed: fatal: broken on purpose" in said, said
+
+
+def a_target_check_that_could_not_tell_denies(base):
+    # Read by itself: the guard doesn't count on the stamp process stopping at the target it couldn't check.
+    steps = [[["base", "--matches", "trunk"], 2, "", ""], [["check", "--kind", "review"], 0, "", ""], [["needs-validate"], 1, "", ""]]
+    said = stamp_fault_denial(base, "answer", GATE_STAMP_ANSWER=json.dumps({"steps": steps}))
+    assert "review_stamp.py base failed (exit 2)" in said, said
+
+
+def stamped_with_its_spec_in_the_checkout(base, branch):
+    """(repository, its specs directory, the shared agents directory, the repository's name in file names) of a change
+    reviewed and validated with its spec in a $TMPDIR inside the checkout, where moving the spec changes the change."""
+    repo = new_repo(base)
+    specs = os.path.join(repo, "tmp", "agents-specs")
+    os.makedirs(specs)
+    common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    name = common.split("/")[-2]
+    stamped_change(repo, branch)
+    open(os.path.join(specs, f"spec-{name}-{branch}.md"), "w").write("# spec\n")
+    for kind in ("review", "validate"):
+        assert write_stamp(repo, kind).returncode == 0, kind
+    return repo, specs, os.path.join(common, "agents"), name
+
+
+def gate_with_tmpdir_in_the_checkout(base, repo):
+    return gate_answer("gh pr create --base trunk --title t --body b", repo, gate_probe(base), TMPDIR=os.path.join(repo, "tmp"))[0]
+
+
+def the_pr_gate_measures_the_change_again_after_moving_its_files(base):
+    repo, specs, shared, name = stamped_with_its_spec_in_the_checkout(base, "old")
+    git(repo, "branch", "-m", "old", "new")
+    said = gate_with_tmpdir_in_the_checkout(base, repo)
+    assert os.path.exists(os.path.join(shared, f"spec-{name}-new.md")) and not os.listdir(specs), "the gate moved the spec out of the checkout"
+    assert "has no validation recorded" in said, f"the validation is checked against the change as it is now: {said!r}"
+
+
+def the_pr_gate_measures_the_change_again_after_a_rename_alone(base):
+    repo, specs, shared, name = stamped_with_its_spec_in_the_checkout(base, "old")
+    git(repo, "branch", "-m", "old", "new")
+    open(os.path.join(shared, f"spec-{name}-new.md"), "w").write("# another spec\n")  # its place is taken, so no move follows
+    said = gate_with_tmpdir_in_the_checkout(base, repo)
+    assert os.listdir(specs) == [f"spec-{name}-new.md"], "the gate renamed the spec and left it in the checkout"
+    assert "has no validation recorded" in said, f"the validation is checked against the change as it is now: {said!r}"
+
+
+def the_pr_gate_measures_the_change_again_after_a_move_alone(base):
+    repo, specs, shared, name = stamped_with_its_spec_in_the_checkout(base, "feature")
+    git_dir = git(repo, "rev-parse", "--absolute-git-dir").stdout.strip()
+    for stamp in ("self-review.stamp", "validate.stamp"):  # a branch never renamed: only one with no stamps directory looks for files to move
+        os.rename(stamp_file(repo, stamp), os.path.join(git_dir, stamp))
+    os.rmdir(os.path.join(shared, "stamps", "feature"))
+    said = gate_with_tmpdir_in_the_checkout(base, repo)
+    assert os.path.exists(os.path.join(shared, f"spec-{name}-feature.md")) and not os.listdir(specs), "the gate moved the spec out of the checkout"
+    assert "has no validation recorded" in said, f"the validation is checked against the change as it is now: {said!r}"
+
+
+def what_the_gate_remembers_tells_writes_and_directories_apart(base):
+    repo = new_repo(base)
+    os.makedirs(os.path.join(repo, "sub"))
+    code = (f"import os, sys; sys.path.insert(0, {H!r}); import review_stamp as r\n"
+            "r._remembered = {}\n"
+            "tree = r.working_tree()\n"
+            "open('new.py', 'w').write('n = 1\\n')\n"
+            "assert r.working_tree() != tree, 'a git call that stages into its own index runs every time'\n"
+            "top = r.git('rev-parse', '--show-prefix')\n"
+            "os.chdir('sub')\n"
+            "assert (top, r.git('rev-parse', '--show-prefix')) == ('', 'sub/'), 'asked from another directory, it is another question'\n"
+            f"assert r.git('rev-parse', '--show-prefix', cwd={repo!r}) == '', 'and so is one asked about another directory'\n"
+            "assert r._remembered, 'the reads were remembered'\n")
+    done = subprocess.run(["python3", "-c", code], cwd=repo, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+
+
+def importers_of_the_stamp_tool_see_no_memo(base):
+    repo = new_repo(base)
+    stamped_change(repo, "feature")
+    code = (f"import contextlib, io, sys; sys.path.insert(0, {H!r}); import review_stamp as r\n"
+            "def gate(checks):\n"
+            "    with contextlib.redirect_stdout(io.StringIO()) as out:\n"
+            "        try:\n"
+            "            r.gate([checks, 'trunk'])\n"
+            "        except ZeroDivisionError:\n"
+            "            pass\n"
+            "    return out.getvalue()\n"
+            "before = gate('review,validate'), r.fingerprint_for('review')\n"
+            "open('app.py', 'a').write('z = 3\\n')\n"
+            "assert r._remembered is None and r.fingerprint_for('review') != before[1], 'a read after the gate is a new one'\n"
+            "assert gate('review,validate') != before[0], 'and so is a second gate in the same process'\n"
+            "r.run_command = lambda args: 1 / 0\n"
+            "gate('review')\n"
+            "assert r._remembered is None, 'a step that raises leaves no memo behind'\n")
+    done = subprocess.run(["python3", "-c", code], cwd=repo, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
 
 
 def pr_gate_follows_worktrees(base):
@@ -4755,7 +5073,8 @@ def the_old_self_review_name_still_switches_the_review(base):
         with open(store, "w") as fh:
             json.dump({"self-review": "off"}, fh)  # switched off before the phase was renamed
         assert phases_off(a) == {"review": "global"}, f"a stored self-review counts as review: {phases_off(a)}"
-        assert "validation" in pr_gate(), f"a stored self-review: off lifts the review gate: {pr_gate()}"
+        said = pr_gate()
+        assert "validation" in said, f"a stored self-review: off lifts the review gate: {said}"
         phase_line("phase on review", a)
         assert phases_off(a) == {}, "a branch's on under the new name overrides a global off under the old one"
         os.remove(switch_file(a, "feature"))
@@ -5888,7 +6207,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_needs_a_video_per_check, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
          validate_stamp_refuses_a_suite_run_that_doesnt_count, validate_stamp_suite_overlay_edge_cases,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, evidence_env_keeps_its_bounds, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, report_paths_asks_one_reports_process_for_all_kinds, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, evidence_env_keeps_its_bounds, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, the_pr_gate_launches_few_processes, the_pr_gate_answers_with_slow_git, the_pr_gate_reads_renamed_and_legacy_stamps, a_stamp_check_past_the_budget_denies, a_stamp_check_exiting_above_one_denies, a_stamp_check_killed_by_a_signal_denies, a_stamp_check_printing_nothing_denies, a_stamp_check_answer_cut_short_denies, a_stamp_check_answer_the_guard_does_not_expect_denies, a_stamp_step_that_could_not_tell_denies, a_target_check_that_could_not_tell_denies, the_pr_gate_measures_the_change_again_after_moving_its_files, the_pr_gate_measures_the_change_again_after_a_rename_alone, the_pr_gate_measures_the_change_again_after_a_move_alone, what_the_gate_remembers_tells_writes_and_directories_apart, importers_of_the_stamp_tool_see_no_memo, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, report_paths_asks_one_reports_process_for_all_kinds, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once, the_stop_message_forbids_working_around_a_check_and_names_no_heading,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
