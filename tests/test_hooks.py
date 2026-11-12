@@ -183,7 +183,9 @@ def the_agent_stays_out_of_the_approvals(base):
                      ("touch \"$PWD/.agents/approvals/a b\"", "/tmp"),
                      ("python3 - <<'EOF'\ntest = '/Users/me/.agents/approvals/linear'\nopen(test, 'w')\nEOF", "/tmp"),
                      ("D=$HOME; cat > f <<'EOF'\nD=/tmp\nEOF\ntouch $D/.agents/approvals/linear", "/tmp"),
-                     (f"cd {base} && D=$HOME; touch $D/.agents/approvals/linear", "/tmp")]:
+                     (f"cd {base} && D=$HOME; touch $D/.agents/approvals/linear", "/tmp"),
+                     ("D=/tmp; while read l; do export \"$l\"; done <<'EOF'\nD=$HOME\nEOF\ntouch $D/.agents/approvals/linear",
+                      "/tmp")]:
         assert guard(cmd, cwd) == "deny", f"should deny from {cwd}: {cmd}"
     try:
         for cmd, cwd in [(c, kit) for c in [
@@ -419,14 +421,15 @@ def guard_allows_worktree_and_cache_deletes(base):
         os.chmod(os.path.join(unreadable, ".git"), 0o644)
 
 
-def guard_reason(command, cwd="/usr/lib"):
+def guard_reason(command, cwd="/usr/lib", crash=False):
     """The guard's deny reason, "" when it allows. From /usr/lib no temp path is inside the working directory, and
-    TMPDIR is fixed: an allow comes from a variable the guard resolved, not from where the command runs."""
+    TMPDIR is fixed: an allow comes from a variable the guard resolved, not from where the command runs. A guard
+    that fails is a failed test, unless the crash is what the test asks for."""
     env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
     env.update({"AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, "TMPDIR": "/private/var/folders/ab/T/"})
     out = subprocess.run(["python3", H + "guard_bash.py"], capture_output=True, text=True, env=env,
                          input=json.dumps({"tool_input": {"command": command}, "cwd": cwd, "session_id": "t"}))
-    assert out.returncode == 0 and "guard failed" not in out.stdout, out.stdout + out.stderr
+    assert out.returncode == 0 and crash == ("guard failed" in out.stdout), out.stdout + out.stderr
     return json.loads(out.stdout)["hookSpecificOutput"]["permissionDecisionReason"] if out.stdout.strip() else ""
 
 
@@ -441,15 +444,24 @@ def guard_keeps_variables_through_heredocs_and_quoted_text(base):
         assert guard_reason(cmd) == "", f"the outer shell never runs that text: {cmd!r}"
     for cmd in ["S=/tmp/x\nbash <<'EOF'\nS=$HOME\nrm -rf $S/y\nEOF", "cat > f <<'EOF'\nT=/tmp/x\nEOF\nrm -rf $T/y",
                 "S=/tmp/x; read S; rm -rf $S", "S=/tmp/x; eval 'unset S'; rm -rf $S/y",
-                "S=/tmp/x; trap 'unset S' DEBUG; rm -rf $S/y"]:
+                "S=/tmp/x; trap 'unset S' DEBUG; rm -rf $S/y", "S=/tmp/x; eval 'true; unset S'; rm -rf $S/y",
+                "S=/tmp/x; 'unset' S; rm -rf $S/y", "S=/tmp/x\n2>/dev/null eval 'echo hi; unset S'\nrm -rf $S/y"]:
         assert guard_reason(cmd) != "", f"a body's own delete, or a variable the shell changes: {cmd!r}"
     for middle in [". /dev/stdin <<'EOF'\nS=/usr\nEOF", "eval \"$(cat <<'EOF'\nS=/usr\nEOF\n)\"",
+                   "source /dev/stdin <<'EOF'\nS=/usr\nEOF", "<<'EOF' . /dev/stdin\nS=/usr\nEOF",
                    "$c /dev/stdin <<'EOF'\nS=/usr\nEOF", "`echo source` /dev/stdin <<'EOF'\nS=/usr\nEOF",
+                   "while read -r line; do export \"$line\"; done <<'EOF'\nS=/usr\nEOF",
+                   "while IFS='=' read -r k v; do printf -v \"$k\" '%s' \"$v\"; done <<'EOF'\nS=/usr\nEOF",
+                   "while read -r pair; do declare \"$pair\"; done <<'EOF'\nS=/usr\nEOF",
+                   "f() { while read l; do export \"$l\"; done; }\nf <<'EOF'\nS=/usr\nEOF",
                    "cat > f <<EOF\necho $((S=1))\nEOF", "cat > f <<EOF\n${S:=/usr}\nEOF",
                    "echo hi # see <<EOF\nS=/usr\nEOF", "x=$((1<<2))\nS=/usr\n2))",
                    "echo \"\ncat > f <<JS\n\"; S=/usr; echo \"\nJS\n\""]:
         cmd = f"S=/tmp/x\n{middle}\nrm -rf $S/lib"
         assert guard_reason(cmd) != "", f"text the outer shell may run: {cmd!r}"
+    for cmd in ["$a" * 40 + "/x!", "cat <<EOF\n" + "${" * 35000 + "\nEOF"]:
+        started = child_cpu()
+        assert guard_reason(cmd) == "" and child_cpu() - started < 3, f"the heredoc reading must not stall: {cmd[:20]!r}"
 
 
 def guard_keeps_chain_assignments_after_sure_steps(base):
@@ -458,14 +470,35 @@ def guard_keeps_chain_assignments_after_sure_steps(base):
     for cmd in [f"cd {base} && SP=/tmp/x; rm -rf $SP/ev", f"cd {base} && H=$(mktemp -d) && ln -s /x $H/l && true | tail; rm -rf $H",
                 "A=/tmp/a && B=/tmp/b; rm -rf $B", f"bash -c 'cd {base} && SP=/tmp/x; rm -rf $SP/ev'"]:
         assert guard_reason(cmd) == "", f"every step before the assignment succeeds: {cmd!r}"
+    for cmd in ["SP=/tmp/x && make 2>&1; rm -rf $SP/ev", "SP=/tmp/x && make &>/dev/null || true; rm -rf $SP/ev",
+                f"# tidy up\ncd {base} && H=$(mktemp -d) && make > $H/log 2>&1\nrm -rf $H"]:
+        assert guard_reason(cmd) == "", f"a redirection's & ends no list, and a comment runs nothing: {cmd!r}"
+    for cmd in [f"mkdir -p /tmp/x; cd {base} && SP=/tmp/x; rm -rf $SP/ev",
+                f"mkdir -p {base}/n && cat > {base}/n/f <<'EOF'\n$(rmdir x)\nEOF\ncd {base} && H=$(mktemp -d) && "
+                "make 2>&1 | tail -20; rm -rf $H"]:
+        assert guard_reason(cmd) == "", f"nothing before the cd can remove its folder: {cmd!r}"
+    for cmd in [f"cat f | xargs rmdir; cd {sub} && SP=/tmp/x; rm -rf $SP/ev",
+                f"echo $(rmdir {sub}); cd {sub} && SP=/tmp/x; rm -rf $SP/ev",
+                f"cat <<EOF\n$(rmdir {sub})\nEOF\ncd {sub} && SP=/tmp/x; rm -rf $SP/ev",
+                f"mkdir -p /tmp/x && rm -rf {sub}; cd {sub} && SP=/tmp/x; rm -rf $SP/ev"]:
+        assert guard_reason(cmd) != "", f"a command before the cd may have removed its folder: {cmd!r}"
     for cmd in ["cd /no/such/dir && SP=/tmp/x; rm -rf $SP/ev", "true && SP=/tmp/x; rm -rf $SP",
                 "make x && SP=/tmp/x; rm -rf $SP", f"false || cd {base} && SP=/tmp/x; rm -rf $SP",
+                "A=$(make x) && SP=/tmp/x; rm -rf $SP/ev", "cd /bin/ls && SP=/tmp/x; rm -rf $SP/ev",
+                f"cd {base} extra && SP=/tmp/x; rm -rf $SP/ev",
                 f"cd {base} && SP=/usr; rm -rf $SP/lib", f"if true; then cd {base} && SP=/tmp/x; rm -rf $SP/ev; fi",
                 f"if false; then cd {base} && SP=/tmp/x; fi; rm -rf $SP/ev", f"(cd {base} && SP=/tmp/x); rm -rf $SP/ev",
                 f"( cd {base} && SP=/tmp/x; rm -rf $SP/ev )", f"true | cd {base} && SP=/tmp/x; rm -rf $SP/ev",
                 f"cd {base} | cat && SP=/tmp/x; rm -rf $SP/ev"]:
         assert guard_reason(cmd) != "", f"a step that may fail, or a chain the shell may skip: {cmd!r}"
-    assert guard_reason("cd sub && SP=/tmp/x; rm -rf $SP/ev", cwd=base) != "", "a relative cd isn't trusted"
+    for cmd in [f"cd {base} && HOME=/tmp/x && true & rm -rf \"$HOME/Documents\"", "SP=/tmp/x && true & rm -rf $SP/ev",
+                f"readonly HOME\ncd {base} && export HOME=/tmp/x\nrm -rf \"$HOME/Documents\"",
+                f"cd {base} && local SP=/tmp/x; rm -rf $SP/ev", f"declare -r A; A=/tmp/a && SP=/tmp/x; rm -rf $SP/ev",
+                f"cd {base} && SP=/tmp/x>/no/such/dir/out; rm -rf \"$SP/ev\"", "SP=/tmp/x>/no/such/dir/out; rm -rf \"$SP/ev\"",
+                f"IFS=:\ncd {base} && SP=\"/tmp/x:$HOME/Documents\"\nrm -rf $SP",
+                f"rmdir {sub}\ncd {sub} && SP=/tmp/x\nrm -rf $SP/ev"]:
+        assert guard_reason(cmd) != "", f"an assignment that may not happen, or not in this shell: {cmd!r}"
+    assert guard_reason("cd .. && SP=/tmp/x; rm -rf $SP/ev", cwd=sub) != "", "a relative cd isn't trusted"
     if os.geteuid() == 0:
         return  # root enters a folder whatever its mode
     os.chmod(sub, 0)
@@ -480,7 +513,10 @@ def guard_judges_loop_words_one_by_one(base):
     for cmd in ["S=/tmp/x; for m in m1 m2; do rm -rf $S/$m; mkdir -p $S/$m; done",
                 "for p in a b; do rm -rf \"/tmp/x/plugins/$p\"; done", "for m in a b; do rm -rf build/$m; done",
                 "bash -c 'for p in a b; do rm -rf /tmp/x/$p; done'",
-                f"for a in {eight}; do for b in {eight}; do rm -rf /tmp/x/$a/$b; done; done"]:
+                "for f in a b; do rm -f \"/tmp/x/${f}.log\"; rm -rf \"/tmp/x/${f}\"; git commit -m x; done; cd /",
+                f"for a in {eight}; do for b in {eight}; do rm -rf /tmp/x/$a/$b; done; done",
+                "S=/tmp/x; for m in a b; do rm -rf $S/$m; mkdir -p $S/$m; (cd $S/$m && git init -q .); done",
+                "for m in a b; do (cd / && ls); x=$(cd / && pwd); rm -rf build/$m; done"]:
         assert guard_reason(cmd) == "", f"every word stays in a temp dir or the working directory: {cmd!r}"
     for cmd in ["for d in /tmp/a /usr; do rm -rf \"$d\"; done", "for m in a ../../usr; do rm -rf /tmp/x/$m; done",
                 "for m in a ../..; do rm -rf build/$m; done", "rm -rf \"$p\"; for p in /tmp/a /tmp/b; do :; done",
@@ -491,8 +527,20 @@ def guard_judges_loop_words_one_by_one(base):
                 "for m in a; do m=/usr; rm -rf $m; done", "for m in a; do read m; rm -rf /tmp/x/$m; done",
                 "for m in a; do rm -rf /tmp/x/$m; done; for m in ../../usr; do :; done",
                 "for m in a/b; do rm -rf /tmp/x/${m%/*}; done", "select m in a b; do rm -rf /tmp/x/$m; done",
-                f"for a in {eight} 9; do for b in {eight}; do rm -rf /tmp/x/$a/$b; done; done"]:
+                "for m in a b; do m[0]=/usr; rm -rf $m; done", "for m in a b; do ((m++)); rm -rf /tmp/x/$m; done",
+                "IFS=.; for m in a./usr; do rm -rf /tmp/x/$m; done",
+                f"for a in {eight} 9; do for b in {eight}; do rm -rf /tmp/x/$a/$b; done; done",
+                f"for a in {eight}; do for b in {eight}; do rm -rf /tmp/x/$a/$b /tmp/x/$b/$a; done; done"]:
         assert guard_reason(cmd) != "", f"a word that may leave the allowed places, or one not judged: {cmd!r}"
+    # Each word is judged from where the guard tracks the shell, and only by the shell that runs the loop.
+    for cmd in ["for m in a b; do rm -rf ./$m; cd /; done", "for m in a b; do cd .. && rm -rf $m; done",
+                "f() { cd /; }; for m in a b; do rm -rf ./$m; f; done", "for m in a b; do (cd /; rm -rf ./$m); done",
+                "for m in a b; do rm -rf ./$m; (cd /); cd ..; done", "(for m in a b; do rm -rf ./$m; cd /; done)",
+                "for m in a b; do (cd /usr && rm -rf $m); done", "for m in a b; do x=$(cd /usr; (ls); rm -rf $m); done",
+                "for m in a b; do (true; (cd /usr; ls; (rm -rf $m))); done",
+                "for m in a b; do\nbash <<'EOF'\nrm -rf \"$PWD/$m\"\nEOF\ndone",
+                "for m in a; do cat > s.sh <<'EOF'\nrm -rf ./$m/lib\nEOF\nbash s.sh; done"]:
+        assert guard_reason(cmd) != "", f"a loop that moves the shell, or whose delete another shell runs: {cmd!r}"
 
 
 def guard_denials_name_the_rewrite(base):
@@ -503,7 +551,11 @@ def guard_denials_name_the_rewrite(base):
     assert "`git branch -d`" in branch and "`git worktree add --detach`" in branch, branch
     plain = guard_reason("rm -rf /usr/lib/x", cwd=base)
     assert plain and "write the path out" not in plain and "statement of its own" not in plain, plain
-    for reason in [unresolved, branch, plain, guard_reason("git push --force origin x"), guard_reason("sudo ls")]:
+    for computed in [guard_reason("rm -rf \"$(cat f)/x\""), guard_reason("rm -rf /tmp/x/${S%/*}")]:
+        assert "write the path out" in computed and "statement of its own" not in computed, computed
+    gone = guard_reason("gh pr create --fill", cwd=os.path.join(base, "gone"), crash=True)
+    assert "The guard failed" in gone and "Tell the user" not in gone, gone
+    for reason in [unresolved, branch, plain, gone, guard_reason("git push --force origin x"), guard_reason("sudo ls")]:
         assert "Nothing in this command ran" in reason, reason
         last = closing(reason)
         assert "ask the user" in last and "the agent that started you" in last, last
