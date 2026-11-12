@@ -271,8 +271,11 @@ def dangerous_rm(command, cwd, run_by=None):
     Inside a loop over literal words (loop_words()), a target using its variable is judged once per word, while that
     adds at most LOOP_COMBINATIONS targets to one delete.
     After a cd the guard can't resolve, a relative target is unresolved too. A quoted string the command runs as a
-    command (bash -c, eval, trap) is judged the same way, run_by giving the directory and variables of its segment."""
-    here, known = run_by or (cwd, None)  # here is None after an unresolvable cd
+    command (bash -c, eval, trap) is judged the same way, run_by giving the directory and variables of its segment,
+    whether it runs before anything else could have removed a directory, and whether its shell reads it as written
+    (segments_with_values()): in a double-quoted one the calling shell expands each $NAME first, so no loop's words
+    stand for it there."""
+    here, known, runs_first, as_written = run_by or (cwd, None, True, True)  # here is None after an unresolvable cd
     # An unquoted heredoc writes \$T as $T: T=\$(mktemp -d) there makes a temp dir. Elsewhere a target with $ is
     # unresolved anyway.
     command = command.replace("\\$", "$")
@@ -289,9 +292,9 @@ def dangerous_rm(command, cwd, run_by=None):
                     for i in range(first, end)}
     # Code an interpreter runs (python3 -c '… os.system("rm …")') runs its strings wherever they stand in it.
     code_spawns = run_by is not None and bool(SPAWNS.search(text))
-    loops = loop_words(text)
+    loops = loop_words(text) if as_written else ()
     outer, at, line, next_run = [], 0, 0, 0
-    for segment, values in segments_with_values(text, known):
+    for segment, values in segments_with_values(text, known, runs_first, as_written):
         start = text.find(segment, at)
         line += text.count("\n", at, start)
         at = start + len(segment)
@@ -340,7 +343,10 @@ def dangerous_rm(command, cwd, run_by=None):
             if runs_strings:
                 script = PROCESS_QUOTE.sub(lambda m: "\n" + "".join(g or "" for g in m.group(1, 2, 3, 5, 6)) + "\n",
                                            text[a + 1:b - 1].replace("\\n", "\n"))
-                denied = dangerous_rm(script, cwd, (runs_in, values))
+                # A trap's string or one written to a file runs later, and one after another command runs after it.
+                first = runs_first and words[:1] not in ([], ["trap"]) and not written_files(segment) and all(
+                    not before.strip() or before.lstrip().startswith("#") for before in text[:start].split("\n"))
+                denied = dangerous_rm(script, cwd, (runs_in, values, first, as_written and text[a] == "'"))
                 if denied:
                     return denied
         for _ in range(len(stripped) - len(stripped.rstrip(")"))):
@@ -464,7 +470,8 @@ SHELL_TOKEN = re.compile(r"[;&|()\n]|[^\s;&|()]+")
 def loop_words(text):
     """(start, end, name, words) of each stretch of a `for NAME in words` loop over literal words where the guard
     can judge every turn, the whole body from `do` to `done` as a rule: nothing else sets the variable (outside
-    heredoc bodies its name stands only in its `for` and as $NAME or ${NAME}), and the loop holds no heredoc body,
+    heredoc bodies its name stands only in its `for` and as $NAME or ${NAME}, not onto a read's or printf's option
+    either), and the loop holds no heredoc body,
     which another shell may run, and no cd, pushd or popd, which would move the next turn. One in a subshell the
     body opens moves that subshell only, and cuts out the stretch from it to the subshell's end. None at all when
     the loops can't be read for sure: no sure reading of the heredocs (opaque_heredoc_lines()), a case or a function
@@ -483,9 +490,11 @@ def loop_words(text):
     line_starts = line_offsets(text.split("\n"))
     body_starts = sorted(line_starts[i] for i in body)
 
+    attached = {name for m in READ_LIKE.finditer(own) for name in ATTACHED_NAME.findall(m.group(1))}
+
     def set_only_by_its_loop(name):
         elsewhere = re.sub(rf"\$(?:{name}(?!\w)|\{{{name}\}})", " ", own)
-        return len(re.findall(rf"(?<![\w./-]){name}(?![\w./-])", elsewhere)) == 1
+        return name not in attached and len(re.findall(rf"(?<![\w./-]){name}(?![\w./-])", elsewhere)) == 1
 
     # open_loops: (do, name, words, the parentheses open at its do), None before a while's do.
     # moved: (the parentheses open, position) of each cd, innermost last; unjudged: from such a cd to its subshell's end.
@@ -1300,7 +1309,7 @@ def string_literals(code, interpreter):
 # A variable assignment's value, each piece matched one way only: plain characters, $ not opening $(, a $(…) without
 # nested parentheses, a double- or single-quoted string. Assignments end at whitespace, or a=b=c would split many ways.
 ASSIGNED_VALUE = r"""(?:[^\s"'$`()]|\$(?!\()|\$\([^()]*\)|"[^"]*"|'[^']*')*"""
-ASSIGNMENTS_ONLY = re.compile(r"(?:(?:export|local|readonly|declare)\s+)?((?:\w+=" + ASSIGNED_VALUE + r"(?:\s+|$))+)")
+ASSIGNMENTS_ONLY = re.compile(r"(?:(?:export|local|readonly|declare)\s+)?((?:[A-Za-z_]\w*=" + ASSIGNED_VALUE + r"(?:\s+|$))+)")
 ONE_ASSIGNMENT = re.compile(r"(\w+)=(" + ASSIGNED_VALUE + r")")
 ASSIGNED_NAME = re.compile(r"(?<![\w$.:/-])(\w+)\+?=")
 VARIABLE = re.compile(r"\$\{(\w+)(:?-[^}]*)?\}|\$(\w+)")
@@ -1381,27 +1390,31 @@ def chained_by(separator):
     return "&" if separator.strip() == "&" else ";"
 
 
-def segments_with_values(text, inherited=None):
+def segments_with_values(text, inherited=None, runs_first=True, as_written=True):
     """Each segment the text splits into at ; & | and new lines, with the variables known to hold a value when it
     runs, then ("", the values known at the end). A variable is known after an assignment that surely ran: a
     segment of only assignments, outside a subshell, $(…), compound command, pipeline or background job, at the start,
     after ; or a new line, or later in an && chain whose earlier steps surely succeed (a cd into a directory that
-    exists and can be entered, while nothing that ran could have removed it; an assignment it resolves); else only
-    in the rest of that chain. It stays known after its list unless the list runs in the background. One set some
+    exists and can be entered, while nothing that ran could have removed it, so none when the text runs after other
+    commands, runs_first off; an assignment it resolves); else only in the rest of that chain. It stays known after
+    its list unless the list runs in the background. One set some
     other way too (twice, by read or a loop, ${X:=…}) stays unknown. $HOME and $TMPDIR come from the hook's
     environment unless the command sets them, or all from inherited: the values known where the text runs as a
     command (eval).
     A heredoc body the shell itself never runs (opaque_heredoc_lines()) neither sets nor unsets the variables of the
     rest, and a read or unset inside a quoted string, not at its start, names none; the body's own segments get the
-    values as if it ran. When that can't be told for sure, every line counts as the shell's, as before."""
-    body = opaque_heredoc_lines(text)
+    values as if it ran. When that can't be told for sure, or the text isn't what its shell reads (as_written off:
+    the calling shell expands a double-quoted string first), every line counts as the shell's, as before, and no
+    chain step is sure."""
+    body = opaque_heredoc_lines(text) if as_written else None
     if not body:
-        flow = variable_flow(text, inherited, body is not None)
+        flow = variable_flow(text, inherited, body is not None, runs_first)
     else:
         line_starts = line_offsets(text.split("\n"))
         on_body = lambda start: bisect.bisect_right(line_starts, start) - 1 in body  # noqa: E731
         inside = [s for s in variable_flow(text, inherited, False) if s[0] is not None and on_body(s[0])]
-        outside = [s for s in variable_flow(blank_lines(text, body), inherited, True) if s[0] is None or not on_body(s[0])]
+        outside = [s for s in variable_flow(blank_lines(text, body), inherited, True, runs_first)
+                   if s[0] is None or not on_body(s[0])]
         flow = sorted(inside + outside[:-1], key=lambda s: s[0]) + outside[-1:]
     for start, end, values in flow:
         yield ("", values) if start is None else (text[start:end], values)
@@ -1421,10 +1434,11 @@ def line_offsets(lines):
 # body it reads, or any text, may then set its variables. A command name the shell only knows when it runs ($cmd)
 # may be one, unless it is written as a path ("$S/tool"): a name with a slash is a program's, never a builtin's.
 # That trusts the variable to hold one word: a value written with spaces to become `source file` isn't a mistake.
-# Each $ is matched one way only, or a long run of them takes the hook past its timeout.
+# Each $, and the spaces after a redirection, match one way only, or a long run of them takes the hook past its
+# timeout.
 PROGRAM_PATH = re.compile(r"(?=[^/]*/)(?:\$\{\w+\}|\$(?=\w)|[\w.@%+:,~/-])+")
 CURRENT_SHELL_RUNNER = re.compile(r"(?:^|[;&|(){}`\n])[ \t]*(?:(?:if|then|else|elif|do|while|until|time|!|command|builtin|"
-                                  r"exec|nohup|\w+=[^\s;&|()]*|\d*[<>]+[&-]?[ \t]*[^\s;&|()<>]*)[ \t]+"
+                                  r"exec|nohup|\w+=[^\s;&|()]*|\d*[<>]+[&-]?(?:[ \t]*[^\s;&|()<>]+)?)[ \t]+"
                                   r"(?:-[^\s;&|()]*[ \t]+)*)*([^\s;&|()<>]+)")
 CURRENT_SHELL_RUNNERS = {"source", ".", "eval", "trap", "alias"}
 # What sets a variable, or how it is set and split, in a way variable_flow() doesn't follow: a readonly name makes
@@ -1521,14 +1535,16 @@ def header_enclosed(line, starts):
     return False
 
 
-READ_LIKE = re.compile(r"\b(?:read|mapfile|readarray|getopts|printf\s+-v|unset)\b([^;&|\n]*)")
+READ_LIKE = re.compile(r"\b(?:(?:read|mapfile|readarray|getopts|unset)\b|printf\s+-v)([^;&|\n]*)")
+# In a READ_LIKE command's words, the name written onto its option: printf -vNAME, read -raNAME.
+ATTACHED_NAME = re.compile(r"(?:^|(?<!\S)-\w*?[aA])(\w+)")
 # Commands that remove no directory, whatever their arguments, while nothing in them runs another: a $(…), a <(…),
 # backticks, or the body of a heredoc with an unquoted delimiter.
 REMOVES_NOTHING = {"mkdir", "cat", "echo", "printf", "touch", "ls", "true", ":"}
 RUNS_ANOTHER_COMMAND = re.compile(r"[(`]|<<-?[ \t]*[\w.-]")
 
 
-def variable_flow(text, inherited, shell_code_only):
+def variable_flow(text, inherited, shell_code_only, runs_first=True):
     """segments_with_values() of the text as (start, end, values), then (None, None, the values at the end). With
     shell_code_only, the text's heredoc bodies are blanked and nothing in it sets a variable some way this doesn't
     follow (opaque_heredoc_lines()), so its every line is the shell's: a read or unset inside a quoted string, not
@@ -1539,7 +1555,7 @@ def variable_flow(text, inherited, shell_code_only):
     in_text = in_string_after_its_start(text) if shell_code_only else lambda at: False
     for m in READ_LIKE.finditer(text):
         if not in_text(m.start()):
-            unsure |= set(re.findall(r"\w+", m.group(1)))
+            unsure |= set(re.findall(r"\w+", m.group(1)) + ATTACHED_NAME.findall(m.group(1)))
     base = dict(inherited) if inherited is not None else {"HOME": os.path.expanduser("~"), "TMPDIR": os.environ.get("TMPDIR")}
     for name in set(names) | unsure:
         base.pop(name, None)
@@ -1547,7 +1563,7 @@ def variable_flow(text, inherited, shell_code_only):
     known, pending, chain, parens, compound, chain_sure = {}, {}, {}, 0, 0, True
     # A cd is sure only while nothing ran that could have removed its directory since the guard looked: comments,
     # assignments, sure cds and REMOVES_NOTHING commands.
-    untouched = shell_code_only
+    untouched = shell_code_only and runs_first
     by_line = "\n".join(line_layout(line)[0] for line in text.split("\n")).replace(CONTINUATION, "  ")
     whole = list(text.replace(CONTINUATION, "  "))
     for start, end in quoted_spans(text):
@@ -1603,27 +1619,32 @@ def variable_flow(text, inherited, shell_code_only):
 def in_string_after_its_start(text):
     """Whether a position lies inside a closed quoted string, read over the whole text and line by line alike, past
     the string's first word: `sed 's/a:unset}/b/'` reads no variable, `trap 'unset S' DEBUG` may."""
-    def inside(spans, source, at):
+    def inside(spans, source, at, first_words):
         k = bisect.bisect_left(spans, (at,)) - 1  # the last string starting before the position
         if k < 0:
             return False
         a, b = spans[k]
-        return at < b and b - a > 1 and source[b - 1] == source[a] and re.compile(r"\S").search(source, a + 1, at) is not None
+        if a not in first_words:  # found once per string: a long one may hold thousands of positions to check
+            word = re.compile(r"\S").search(source, a + 1, b)
+            first_words[a] = word.start() if word else b
+        return at < b and b - a > 1 and source[b - 1] == source[a] and first_words[a] < at
     whole, lines = quoted_spans(text), text.split("\n")
     offsets = line_offsets(lines)
-    by_line = {}
+    by_line, whole_words = {}, {}
 
     def check(at):
         i = bisect.bisect_right(offsets, at) - 1
         if i not in by_line:
-            by_line[i] = quoted_spans(lines[i])
-        return inside(whole, text, at) and inside(by_line[i], lines[i], at - offsets[i])
+            by_line[i] = (quoted_spans(lines[i]), {})
+        return inside(whole, text, at, whole_words) and inside(by_line[i][0], lines[i], at - offsets[i], by_line[i][1])
     return check
 
 
 def sure_cd(segment):
     """Whether the segment is a cd that surely succeeds: into one absolute directory, written out, that exists and
     the guard's own user can enter."""
+    if not segment.startswith("cd"):  # told before the split, which is slow on a segment holding a long string
+        return False
     try:
         words = shlex.split(segment)
     except ValueError:

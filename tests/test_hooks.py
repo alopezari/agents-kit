@@ -459,7 +459,8 @@ def guard_keeps_variables_through_heredocs_and_quoted_text(base):
                    "echo \"\ncat > f <<JS\n\"; S=/usr; echo \"\nJS\n\""]:
         cmd = f"S=/tmp/x\n{middle}\nrm -rf $S/lib"
         assert guard_reason(cmd) != "", f"text the outer shell may run: {cmd!r}"
-    for cmd in ["$a" * 40 + "/x!", "cat <<EOF\n" + "${" * 35000 + "\nEOF"]:
+    for cmd in ["$a" * 40 + "/x!", "cat <<EOF\n" + "${" * 35000 + "\nEOF", "x;" + ">  " * 26,
+                "bash -c \"" + " " * 30000 + "x " + "IFS " * 30000 + "\"; rm -rf /tmp/x/y"]:
         started = child_cpu()
         assert guard_reason(cmd) == "" and child_cpu() - started < 3, f"the heredoc reading must not stall: {cmd[:20]!r}"
 
@@ -480,7 +481,11 @@ def guard_keeps_chain_assignments_after_sure_steps(base):
     for cmd in [f"cat f | xargs rmdir; cd {sub} && SP=/tmp/x; rm -rf $SP/ev",
                 f"echo $(rmdir {sub}); cd {sub} && SP=/tmp/x; rm -rf $SP/ev",
                 f"cat <<EOF\n$(rmdir {sub})\nEOF\ncd {sub} && SP=/tmp/x; rm -rf $SP/ev",
-                f"mkdir -p /tmp/x && rm -rf {sub}; cd {sub} && SP=/tmp/x; rm -rf $SP/ev"]:
+                f"mkdir -p /tmp/x && rm -rf {sub}; cd {sub} && SP=/tmp/x; rm -rf $SP/ev",
+                f"rmdir {sub}; bash -c 'cd {sub} && SP=/tmp/x; rm -rf $SP/ev'",
+                f"rmdir {sub}; eval 'cd {sub} && SP=/tmp/x; rm -rf $SP/ev'",
+                f"trap 'cd {sub} && SP=/tmp/x; rm -rf $SP/ev' EXIT; rmdir {sub}",
+                f"echo 'cd {sub} && SP=/tmp/x; rm -rf $SP/ev' > f.sh; rmdir {sub}; bash f.sh"]:
         assert guard_reason(cmd) != "", f"a command before the cd may have removed its folder: {cmd!r}"
     for cmd in ["cd /no/such/dir && SP=/tmp/x; rm -rf $SP/ev", "true && SP=/tmp/x; rm -rf $SP",
                 "make x && SP=/tmp/x; rm -rf $SP", f"false || cd {base} && SP=/tmp/x; rm -rf $SP",
@@ -496,8 +501,17 @@ def guard_keeps_chain_assignments_after_sure_steps(base):
                 f"cd {base} && local SP=/tmp/x; rm -rf $SP/ev", f"declare -r A; A=/tmp/a && SP=/tmp/x; rm -rf $SP/ev",
                 f"cd {base} && SP=/tmp/x>/no/such/dir/out; rm -rf \"$SP/ev\"", "SP=/tmp/x>/no/such/dir/out; rm -rf \"$SP/ev\"",
                 f"IFS=:\ncd {base} && SP=\"/tmp/x:$HOME/Documents\"\nrm -rf $SP",
-                f"rmdir {sub}\ncd {sub} && SP=/tmp/x\nrm -rf $SP/ev"]:
+                f"rmdir {sub}\ncd {sub} && SP=/tmp/x\nrm -rf $SP/ev", "7ZIP=/usr/bin/7z && SP=/tmp/x; rm -rf \"$SP/ev\"",
+                "A=/tmp/a 7Z=/tmp/b && SP=/tmp/x; rm -rf $SP/ev",
+                f"cd {base} && SP=/tmp/x\nprintf -vSP '%s' \"$HOME\"\nrm -rf \"$SP/Documents\"",
+                f"cd {base} && SP=/tmp/x\nread -raSP < f\nrm -rf \"$SP/Documents\""]:
         assert guard_reason(cmd) != "", f"an assignment that may not happen, or not in this shell: {cmd!r}"
+    # A double-quoted string has its $SP expanded by the shell that passes it on, before its own assignment runs.
+    for cmd in [f"bash -c \"cd {base} && SP=/tmp/x; rm -rf $SP/*\"", "bash -c \"A=/tmp/a && SP=/tmp/x; rm -rf $SP/*\"",
+                "echo \"A=/tmp/a && SP=/tmp/x; rm -rf $SP/*\" | bash",
+                "bash -c \"cat > /tmp/n <<E\nSP=1\nE\nSP=/tmp/x; rm -rf $SP/*\"",
+                f"bash -c 'bash -c \"cd {base} && SP=/tmp/x; rm -rf $SP/*\"'"]:
+        assert guard_reason(cmd) != "", f"a string its caller's shell expands first: {cmd!r}"
     assert guard_reason("cd .. && SP=/tmp/x; rm -rf $SP/ev", cwd=sub) != "", "a relative cd isn't trusted"
     if os.geteuid() == 0:
         return  # root enters a folder whatever its mode
@@ -512,7 +526,8 @@ def guard_judges_loop_words_one_by_one(base):
     eight = " ".join("12345678")
     for cmd in ["S=/tmp/x; for m in m1 m2; do rm -rf $S/$m; mkdir -p $S/$m; done",
                 "for p in a b; do rm -rf \"/tmp/x/plugins/$p\"; done", "for m in a b; do rm -rf build/$m; done",
-                "bash -c 'for p in a b; do rm -rf /tmp/x/$p; done'",
+                "bash -c 'for p in a b; do rm -rf /tmp/x/$p; done'", "for f in a b; do mkdir -p /tmp/x/$f; rm -rf /tmp/x/$f; done",
+                "ls; bash -c 'for p in a b; do rm -rf /tmp/x/$p; done'", "ls; bash -c 'A=/tmp/a && B=/tmp/b; rm -rf $B'",
                 "for f in a b; do rm -f \"/tmp/x/${f}.log\"; rm -rf \"/tmp/x/${f}\"; git commit -m x; done; cd /",
                 f"for a in {eight}; do for b in {eight}; do rm -rf /tmp/x/$a/$b; done; done",
                 "S=/tmp/x; for m in a b; do rm -rf $S/$m; mkdir -p $S/$m; (cd $S/$m && git init -q .); done",
@@ -529,6 +544,8 @@ def guard_judges_loop_words_one_by_one(base):
                 "for m in a/b; do rm -rf /tmp/x/${m%/*}; done", "select m in a b; do rm -rf /tmp/x/$m; done",
                 "for m in a b; do m[0]=/usr; rm -rf $m; done", "for m in a b; do ((m++)); rm -rf /tmp/x/$m; done",
                 "IFS=.; for m in a./usr; do rm -rf /tmp/x/$m; done",
+                "for p in a b; do printf -vp '%s' /usr; rm -rf \"/tmp/x/$p\"; done",
+                "for p in a b; do read -rap < f; rm -rf \"/tmp/x/$p\"; done",
                 f"for a in {eight} 9; do for b in {eight}; do rm -rf /tmp/x/$a/$b; done; done",
                 f"for a in {eight}; do for b in {eight}; do rm -rf /tmp/x/$a/$b /tmp/x/$b/$a; done; done"]:
         assert guard_reason(cmd) != "", f"a word that may leave the allowed places, or one not judged: {cmd!r}"
@@ -539,7 +556,12 @@ def guard_judges_loop_words_one_by_one(base):
                 "for m in a b; do (cd /usr && rm -rf $m); done", "for m in a b; do x=$(cd /usr; (ls); rm -rf $m); done",
                 "for m in a b; do (true; (cd /usr; ls; (rm -rf $m))); done",
                 "for m in a b; do\nbash <<'EOF'\nrm -rf \"$PWD/$m\"\nEOF\ndone",
-                "for m in a; do cat > s.sh <<'EOF'\nrm -rf ./$m/lib\nEOF\nbash s.sh; done"]:
+                "for m in a; do cat > s.sh <<'EOF'\nrm -rf ./$m/lib\nEOF\nbash s.sh; done",
+                "bash -c \"for d in /tmp/build /tmp/cache; do rm -rf $d/*; done\"",
+                "echo \"for d in /tmp/build /tmp/cache; do rm -rf $d/*; done\" | bash",
+                "find . -name x -exec sh -c \"for d in /tmp/build /tmp/cache; do rm -rf $d/*; done\" \\;",
+                "python3 -c \"import os; os.system('for d in /tmp/build /tmp/cache; do rm -rf $d/*; done')\"",
+                "echo \"for d in /tmp/build /tmp/cache; do rm -rf $d/*; done\" > f.sh && bash f.sh"]:
         assert guard_reason(cmd) != "", f"a loop that moves the shell, or whose delete another shell runs: {cmd!r}"
 
 
