@@ -814,13 +814,17 @@ def pr_target(words):
 
 STAMP_GATE = "The stamp check (`review_stamp.py gate`)"
 UNEXPECTED_ANSWER = "printed an answer the guard doesn't expect"
+STAMP_STEP_EXITS = (0, 1, 2)  # yes, no, couldn't tell: any other exit read as "no" would skip the validation
 
 
 def stamp_gate_steps(answered):
     """({step's args: (exit, stdout, stderr)}, "") from `review_stamp.py gate`'s completed process, or ({}, why it can't
     be read): every way the process can fail denies, since an answer read as empty would open the gate."""
     if answered.returncode < 0:
-        what = f"was killed by {signal.Signals(-answered.returncode).name}"
+        try:
+            what = f"was killed by {signal.Signals(-answered.returncode).name}"
+        except ValueError:  # a signal Python has no name for, as Linux's real-time ones
+            what = f"was killed by signal {-answered.returncode}"
     elif answered.returncode:
         said = " ".join(answered.stderr.split())
         what = f"failed (exit {answered.returncode})" + (f": {said}" if said else "")
@@ -836,7 +840,8 @@ def stamp_gate_steps(answered):
         steps = answer.get("steps") if type(answer) is dict and answer.keys() == {"steps"} else None
         if type(steps) is list and all(
                 type(step) is list and len(step) == 4 and type(step[0]) is list and all(type(a) is str for a in step[0])
-                and type(step[1]) is int and type(step[2]) is str and type(step[3]) is str for step in steps):
+                and type(step[1]) is int and step[1] in STAMP_STEP_EXITS and type(step[2]) is str and type(step[3]) is str
+                for step in steps):
             return {tuple(step[0]): tuple(step[1:]) for step in steps}, ""
         what = UNEXPECTED_ANSWER
     return {}, f"{STAMP_GATE} {what}, so the guard can't tell whether the change was reviewed and validated."

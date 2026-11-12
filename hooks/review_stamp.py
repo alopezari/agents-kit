@@ -82,9 +82,16 @@ def remember(key, compute):
     return _remembered[key]
 
 
+def forget():
+    """Drop what gate() remembers: for code that changed what git or the fingerprint read, as a move of files does."""
+    if _remembered is not None:
+        _remembered.clear()
+
+
 def run_git(args, cwd=None, env=None, text=True):
     """git's completed process; raises RuntimeError naming the command when it runs past GIT_TIMEOUT. While gate()
-    answers, a call with no environment of its own runs once."""
+    answers, a call with no environment of its own runs once: it must only read, and what changes its answer calls
+    forget()."""
     if env is None and _remembered is not None:
         return remember(("git", tuple(args), cwd, os.getcwd(), text), lambda: launch_git(args, cwd, None, text))
     return launch_git(args, cwd, env, text)
@@ -323,6 +330,7 @@ def follow_branch_renames():
             if os.path.exists(src) and not os.path.exists(dst) and not (old in dashed and branch_exists(old)):
                 try:
                     os.rename(src, dst)
+                    forget()
                     moved = True
                     if dst.endswith(".md"):  # reports link their evidence by its directory's name
                         relink_evidence(dst, f"evidence-{repo}-{old}", f"evidence-{repo}-{new}")
@@ -389,6 +397,7 @@ def move_out_of_tmpdir(common, repo, key):
             try:
                 os.makedirs(shared, exist_ok=True)
                 shutil.move(src, dst)
+                forget()
                 print(f"moved {name} out of $TMPDIR", file=sys.stderr)
             except OSError as error:
                 print(f"could not move {src} to {dst}: {error}", file=sys.stderr)
