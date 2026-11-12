@@ -239,6 +239,7 @@ if [ "$model_status" != 0 ] || [ ! -s "$RUN/proposal.md" ]; then
   [ -s "$RUN/proposal.md" ] && missing="" || missing=" with no proposal in $RUN/proposal.md"
   fail "claude exited $model_status$missing; see $RUN/claude.log"
 fi
+rm -rf "$RUN/rule-checks.md"  # the model writes anywhere in its run directory, and a directory there would stop the redirect
 check_rules > "$RUN/rule-checks.md"
 # Copied beside this month's proposal and renamed over it, so a failed copy leaves the earlier one whole.
 mkdir -p "$(dirname "$PROPOSAL")" && cat "$RUN/proposal.md" "$RUN/rule-checks.md" > "$PROPOSAL.new" \

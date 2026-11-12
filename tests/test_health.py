@@ -60,12 +60,12 @@ def the_failing_tests_are_named_not_the_summary_line(base):
 def warnings_dont_take_the_failing_tests_places(base):
     warnings = "".join(f"  warn stale link {n}\n" for n in range(1, 7))
     failures = "".join(f"FAIL failure_{n}\n" for n in range(1, 7))
-    suite = (f"\n== install doctor\n{warnings}FAIL doctor exited 1 without naming a failing test\n"
+    suite = (f"\n== install doctor\nFAIL install.sh --doctor exited 1:   warn  a stale link\n{warnings}"
              f"\n== hooks\n{failures}\nFAILURES ABOVE\n")
     status, report, stderr = health(base, suite, 1)
     assert status == 1, report
     assert section(report, "Needs attention") == [
-        "- Regression suite failed: FAIL doctor exited 1 without naming a failing test;"
+        "- Regression suite failed: FAIL install.sh --doctor exited 1:   warn  a stale link;"
         + "".join(f"FAIL failure_{n};" for n in range(1, 5)) + "".join(f"  warn stale link {n};" for n in range(1, 6))], report
     assert stderr == "", stderr
 

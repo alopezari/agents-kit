@@ -432,6 +432,13 @@ chmod u+w "$kit/research/proposals"; echo "left by an interrupted run" > "$propo
 mining_fails leftover "an interrupted run's copy can't be renamed or removed" 'echo fresh > proposal.md' \
   "review mining failed: couldn't publish $resolved_run/proposal.md to $proposal_file"
 chmod u+w "$kit/research/proposals"; rm -f "$proposal_file.new"
+fakes obstructed; rm -f "$run_dir/rule-checks.md"  # as in a month's first run
+printf '#!/bin/sh\nmkdir -p rule-checks.md/x\necho "obstructed proposal" > proposal.md\n' > "$home/fakes/obstructed/claude"
+chmod +x "$home/fakes/obstructed/claude"
+HOME="$home" PATH="$home/fakes/obstructed:$PATH" "$kit/review-mining/run.sh" >/dev/null 2>&1; obstructed_status=$?
+check "review mining publishes its rule checks whatever the model left where it writes them" \
+  '[ $obstructed_status = 0 ] && [ "$(head -1 "$proposal_file")" = "obstructed proposal" ] \
+   && grep -q "^## Semgrep rules checked by run.sh" "$proposal_file"'
 # The rules the model drafts are checked by run.sh with real semgrep: one of each result.
 if [ -x "$semgrep_dir/semgrep" ]; then
   fixture="$home/rules-fixture"; mkdir -p "$fixture"

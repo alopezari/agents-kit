@@ -17,7 +17,7 @@ suite=$("$K/tests/run.sh" 2>&1); suite_rc=$?
 failing_tests=$(grep '^FAIL ' <<<"$suite")
 if [ $suite_rc != 0 ]; then
   failed=${failing_tests:-exited $suite_rc without naming a failing test; its last line: $(tail -1 <<<"$suite")}
-  failed=$({ head -5 <<<"$failed"; grep '  warn ' <<<"$suite" | head -5; } | tr '\n' ';')
+  failed=$({ head -5 <<<"$failed"; grep '^  warn ' <<<"$suite" | head -5; } | tr '\n' ';')
   problems+=("Regression suite failed: $failed")
 fi
 # The report keeps a failing block's lines but its ok ones, so a traceback before a FAIL and the detail after it
