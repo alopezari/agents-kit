@@ -185,7 +185,9 @@ def a_section_that_dies_without_naming_a_failure_is_named():
         # The doctor runs on its own, before the others, and a warning fails it without a FAIL line.
         open(os.path.join(kit, "install.sh"), "w").write('#!/bin/sh\necho "  warn a stale link"\n')
         os.chmod(os.path.join(kit, "install.sh"), 0o755)
-        for name, body in (("test_phase.py", 'import sys\nsys.stdout.write("ok   started\\nstopped mid-line")\nraise SystemExit(3)'),
+        # The indented line is the detail of a run inside the section: it quotes a FAIL and names no test of this one.
+        for name, body in (("test_phase.py", 'import sys\nsys.stdout.write("ok   started\\n     FAIL quoted_from_an_inner_run\\n'
+                                             'stopped mid-line")\nraise SystemExit(3)'),
                            ("test_quality_log.py", 'print("FAIL named_test")\nraise SystemExit(1)'),
                            ("test_test_types.py", 'print("ok   fine")')):
             open(os.path.join(tests, name), "w").write(body + "\n")
