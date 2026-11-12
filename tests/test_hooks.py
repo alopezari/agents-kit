@@ -3068,21 +3068,75 @@ def a_stamp_step_that_could_not_tell_denies(base):
     assert "`review_stamp.py check --kind review` failed: review_stamp: git diff failed: fatal: broken on purpose" in said, said
 
 
-def the_pr_gate_measures_the_change_again_after_moving_its_files(base):
-    # A $TMPDIR inside the checkout: following the rename moves the spec kept there, which changes the change.
+def a_target_check_that_could_not_tell_denies(base):
+    # Read by itself: the guard doesn't count on the stamp process stopping at the target it couldn't check.
+    steps = [[["base", "--matches", "trunk"], 2, "", ""], [["check", "--kind", "review"], 0, "", ""], [["needs-validate"], 1, "", ""]]
+    said = stamp_fault_denial(base, "answer", GATE_STAMP_ANSWER=json.dumps({"steps": steps}))
+    assert "review_stamp.py base failed (exit 2)" in said, said
+
+
+def stamped_with_its_spec_in_the_checkout(base, branch):
+    """(repository, its specs directory, the shared agents directory, the repository's name in file names) of a change
+    reviewed and validated with its spec in a $TMPDIR inside the checkout, where moving the spec changes the change."""
     repo = new_repo(base)
     specs = os.path.join(repo, "tmp", "agents-specs")
     os.makedirs(specs)
-    name = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip().split("/")[-2]
-    stamped_change(repo, "old")
-    open(os.path.join(specs, f"spec-{name}-old.md"), "w").write("# spec\n")
+    common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    name = common.split("/")[-2]
+    stamped_change(repo, branch)
+    open(os.path.join(specs, f"spec-{name}-{branch}.md"), "w").write("# spec\n")
     for kind in ("review", "validate"):
         assert write_stamp(repo, kind).returncode == 0, kind
+    return repo, specs, os.path.join(common, "agents"), name
+
+
+def gate_with_tmpdir_in_the_checkout(base, repo):
+    return gate_answer("gh pr create --base trunk --title t --body b", repo, gate_probe(base), TMPDIR=os.path.join(repo, "tmp"))[0]
+
+
+def the_pr_gate_measures_the_change_again_after_moving_its_files(base):
+    repo, specs, shared, name = stamped_with_its_spec_in_the_checkout(base, "old")
     git(repo, "branch", "-m", "old", "new")
-    said = gate_answer("gh pr create --base trunk --title t --body b", repo, gate_probe(base),
-                       TMPDIR=os.path.join(repo, "tmp"))[0]
-    assert not os.path.exists(os.path.join(specs, f"spec-{name}-old.md")), "the gate moved the spec out of the checkout"
+    said = gate_with_tmpdir_in_the_checkout(base, repo)
+    assert os.path.exists(os.path.join(shared, f"spec-{name}-new.md")) and not os.listdir(specs), "the gate moved the spec out of the checkout"
     assert "has no validation recorded" in said, f"the validation is checked against the change as it is now: {said!r}"
+
+
+def the_pr_gate_measures_the_change_again_after_a_rename_alone(base):
+    repo, specs, shared, name = stamped_with_its_spec_in_the_checkout(base, "old")
+    git(repo, "branch", "-m", "old", "new")
+    open(os.path.join(shared, f"spec-{name}-new.md"), "w").write("# another spec\n")  # its place is taken, so no move follows
+    said = gate_with_tmpdir_in_the_checkout(base, repo)
+    assert os.listdir(specs) == [f"spec-{name}-new.md"], "the gate renamed the spec and left it in the checkout"
+    assert "has no validation recorded" in said, f"the validation is checked against the change as it is now: {said!r}"
+
+
+def the_pr_gate_measures_the_change_again_after_a_move_alone(base):
+    repo, specs, shared, name = stamped_with_its_spec_in_the_checkout(base, "feature")
+    git_dir = git(repo, "rev-parse", "--absolute-git-dir").stdout.strip()
+    for stamp in ("self-review.stamp", "validate.stamp"):  # a branch never renamed: only one with no stamps directory looks for files to move
+        os.rename(stamp_file(repo, stamp), os.path.join(git_dir, stamp))
+    os.rmdir(os.path.join(shared, "stamps", "feature"))
+    said = gate_with_tmpdir_in_the_checkout(base, repo)
+    assert os.path.exists(os.path.join(shared, f"spec-{name}-feature.md")) and not os.listdir(specs), "the gate moved the spec out of the checkout"
+    assert "has no validation recorded" in said, f"the validation is checked against the change as it is now: {said!r}"
+
+
+def what_the_gate_remembers_tells_writes_and_directories_apart(base):
+    repo = new_repo(base)
+    os.makedirs(os.path.join(repo, "sub"))
+    code = (f"import os, sys; sys.path.insert(0, {H!r}); import review_stamp as r\n"
+            "r._remembered = {}\n"
+            "tree = r.working_tree()\n"
+            "open('new.py', 'w').write('n = 1\\n')\n"
+            "assert r.working_tree() != tree, 'a git call that stages into its own index runs every time'\n"
+            "top = r.git('rev-parse', '--show-prefix')\n"
+            "os.chdir('sub')\n"
+            "assert (top, r.git('rev-parse', '--show-prefix')) == ('', 'sub/'), 'asked from another directory, it is another question'\n"
+            f"assert r.git('rev-parse', '--show-prefix', cwd={repo!r}) == '', 'and so is one asked about another directory'\n"
+            "assert r._remembered, 'the reads were remembered'\n")
+    done = subprocess.run(["python3", "-c", code], cwd=repo, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
 
 
 def importers_of_the_stamp_tool_see_no_memo(base):
@@ -6153,7 +6207,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_needs_a_video_per_check, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
          validate_stamp_refuses_a_suite_run_that_doesnt_count, validate_stamp_suite_overlay_edge_cases,
-          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, evidence_env_keeps_its_bounds, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, the_pr_gate_launches_few_processes, the_pr_gate_answers_with_slow_git, the_pr_gate_reads_renamed_and_legacy_stamps, a_stamp_check_past_the_budget_denies, a_stamp_check_exiting_above_one_denies, a_stamp_check_killed_by_a_signal_denies, a_stamp_check_printing_nothing_denies, a_stamp_check_answer_cut_short_denies, a_stamp_check_answer_the_guard_does_not_expect_denies, a_stamp_step_that_could_not_tell_denies, the_pr_gate_measures_the_change_again_after_moving_its_files, importers_of_the_stamp_tool_see_no_memo, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, report_paths_asks_one_reports_process_for_all_kinds, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
+          stamps_survive_merging_the_default_branch, validate_stamp_needs_evidence, validate_stamp_refuses_stale_evidence, validate_stamp_requires_an_expected_result, a_checks_guide_results_table_needs_no_expected_column, evidence_env_records_the_environment, evidence_env_survives_probes_that_fail_hang_or_flood, evidence_env_keeps_its_bounds, validate_stamp_needs_a_current_environment_record, unrun_checks_never_hold_the_pr, pr_gate_follows_worktrees, guard_fails_closed, the_pr_gate_launches_few_processes, the_pr_gate_answers_with_slow_git, the_pr_gate_reads_renamed_and_legacy_stamps, a_stamp_check_past_the_budget_denies, a_stamp_check_exiting_above_one_denies, a_stamp_check_killed_by_a_signal_denies, a_stamp_check_printing_nothing_denies, a_stamp_check_answer_cut_short_denies, a_stamp_check_answer_the_guard_does_not_expect_denies, a_stamp_step_that_could_not_tell_denies, a_target_check_that_could_not_tell_denies, the_pr_gate_measures_the_change_again_after_moving_its_files, the_pr_gate_measures_the_change_again_after_a_rename_alone, the_pr_gate_measures_the_change_again_after_a_move_alone, what_the_gate_remembers_tells_writes_and_directories_apart, importers_of_the_stamp_tool_see_no_memo, codex_pr_commands_name_their_checkout, reports_survive_worktree_removal, reports_brief_gives_one_line_per_report, reports_reads_another_branch, report_paths_asks_one_reports_process_for_all_kinds, evidence_needs_a_branch, overlay_found_from_worktree_with_another_name, overlay_edited_while_it_runs_still_runs_as_it_started, stop_catches_leftovers_in_worktree, stop_checks_edits_after_its_directory_is_removed, stop_skips_a_checkout_removed_while_checked, stop_starts_each_profile_after_turn, stop_never_waits_for_profile_after_turn, stop_logs_an_after_turn_that_cannot_start, hook_log_names_the_suite_run_only_inside_one, stop_catches_committed_leftover,
           stop_falls_back_to_auto_verify, stop_continues_only_once, the_stop_message_forbids_working_around_a_check_and_names_no_heading,
           stop_flags_secrets_redacted, stop_flags_marked_override_only,
           stop_finds_override_in_primary_checkout_and_health_finds_it_later, verify_stamp_and_effort_nudge,
