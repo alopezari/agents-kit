@@ -4,6 +4,7 @@ import kit_home
 import ast
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,7 @@ PICKED = {
     "outcomes": ["signal_cells"],
     "review-eval": ["refuses_a_limit_below_one"],
     "sessions": ["short_gaps_add_up"],
+    "health": ["a_healthy_week_writes_nothing_to_stderr"],
 }
 
 
@@ -174,13 +176,33 @@ def a_child_runs_its_named_test_whatever_the_selection():
         assert done.returncode == 0 and f"ok   {name}" in done.stdout.splitlines(), (harness, done.stdout, done.stderr)
 
 
+def a_section_that_dies_without_naming_a_failure_is_named():
+    with tempfile.TemporaryDirectory() as kit:
+        tests = os.path.join(kit, "tests")
+        os.makedirs(tests)
+        shutil.copy(RUN_SH, tests)
+        for name, body in (("test_phase.py", 'print("ok   started")\nraise SystemExit(3)'),
+                           ("test_quality_log.py", 'print("FAIL named_test")\nraise SystemExit(1)'),
+                           ("test_test_types.py", 'print("ok   fine")')):
+            open(os.path.join(tests, name), "w").write(body + "\n")
+        done = subprocess.run(["bash", os.path.join(tests, "run.sh"), "phase", "quality-log", "test-types"],
+                              capture_output=True, text=True, errors="replace", env=suite_env(HOME=kit), timeout=300)
+    out = done.stdout + done.stderr
+    assert done.returncode == 1, out
+    failed = {section: [line for line in blocks(out)[TITLES[section]] if line.startswith("FAIL ")]
+              for section in ("phase", "quality-log", "test-types")}
+    assert failed == {"phase": ["FAIL phase exited 3 without naming a failing test"], "quality-log": ["FAIL named_test"],
+                      "test-types": []}, (failed, out)
+
+
 for test in kit_home.selected((the_helper_keeps_only_the_named_tests, usage_errors_stop_before_any_section,
                                each_harness_runs_only_the_named_test, two_names_run_both, an_unknown_name_fails_the_run,
                                a_name_one_file_of_a_section_holds_is_enough,
                                without_only_every_test_runs_whatever_the_environment_holds,
                                a_child_runs_its_named_test_whatever_the_selection,
                                only_survives_the_home_re_execution,
-                               every_harness_with_named_tests_applies_the_selection)):
+                               every_harness_with_named_tests_applies_the_selection,
+                               a_section_that_dies_without_naming_a_failure_is_named)):
     try:
         test()
         RESULTS.append((test.__name__, None))

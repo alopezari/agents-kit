@@ -14,7 +14,28 @@ days_since() { echo $(( ( $(date +%s) - $(stat -f %m "$1") ) / 86400 )); }
 
 # 1. Regression suite (hooks, semgrep rules, triage, install doctor).
 suite=$("$K/tests/run.sh" 2>&1); suite_rc=$?
-[ $suite_rc = 0 ] || problems+=("Regression suite failed: $(grep -E '^FAIL|  warn ' <<<"$suite" | head -5 | tr '\n' ';')")
+if [ $suite_rc != 0 ]; then
+  failed=$(grep -E '^FAIL |  warn ' <<<"$suite" | head -5 | tr '\n' ';')
+  grep -q '^FAIL ' <<<"$suite" \
+    || failed="exited $suite_rc without naming a failing test; its last line: $(tail -1 <<<"$suite")${failed:+;$failed}"
+  problems+=("Regression suite failed: $failed")
+fi
+# The report keeps a failing block's lines but its ok ones, so a traceback before a FAIL and the detail after it survive.
+suite_report() {
+  if [ $suite_rc != 0 ] && ! grep -q '^FAIL ' <<<"$suite"; then tail -20 <<<"$suite"; return; fi
+  awk '
+    function flush(  i) {
+      if (failed) { if (header != "") print header; for (i = 1; i <= n && i <= 40; i++) print detail[i] }
+      else for (i = 1; i <= m; i++) print summary[i]
+      header = ""; n = m = failed = 0
+    }
+    /^== / { flush(); header = $0; summary[++m] = $0; next }
+    /^FAIL / { failed = 1 }
+    /^(ok|FAIL|ALL|FAILURES|[0-9]+\/)/ { summary[++m] = $0 }
+    !/^ok / && $0 != "" { detail[++n] = $0 }
+    END { flush() }
+  ' <<<"$suite"
+}
 
 # 2. Harness and tool versions: a new version can change the hook contract or add a native feature.
 programs=$(cat "$K/deps.txt" "$K"/profiles/*/deps.txt 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)' | awk '{ p = $2; sub(/>=.*/, "", p) } p != "chrome" { print p }')
@@ -29,6 +50,7 @@ echo "$current" > "$STATE/versions.txt"
 
 # 3. PHPUnit baselines: a stale baseline hides new failures or blocks on fixed ones.
 for b in "$K"/repos/*/phpunit-baseline.txt; do
+  [ -e "$b" ] || continue
   age=$(days_since "$b")
   [ "$age" -gt 45 ] && notes+=("$(basename "$(dirname "$b")") PHPUnit baseline is $age days old; refresh with its verify --refresh-baseline.")
 done
@@ -68,6 +90,7 @@ grep -qE '^model_reasoning_effort *= *"ultra"' "$HOME/.codex/config.toml" && not
 
 # 6. Log growth.
 for f in "$K"/logs/*.jsonl; do
+  [ -e "$f" ] || continue
   kb=$(( $(stat -f %z "$f") / 1024 ))
   [ "$kb" -gt 20480 ] && notes+=("$(basename "$f") is ${kb} KB; consider rotating it.")
 done
@@ -89,7 +112,7 @@ activity=$(jq -r --arg s "$since" 'select(.ts >= $s) | "\(.hook) \(.decision)"' 
   echo '```'; echo "${activity:-none}"; echo '```'
   echo
   echo "## Regression suite"
-  echo '```'; echo "$suite" | grep -E '^(ok|FAIL|==|ALL|FAILURES|[0-9]+/)'; echo '```'
+  echo '```'; suite_report; echo '```'
 } > "$REPORT"
 
 if [ ${#problems[@]} -gt 0 ]; then

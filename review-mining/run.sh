@@ -3,7 +3,9 @@
 # them and propose AGENTS.md changes as a diff. Never edits AGENTS.md itself.
 set -euo pipefail
 
-BASE="$HOME/.agents/review-mining"
+# Resolved: Claude Code matches its permission rules against a file's resolved path, and ~/.agents may be a link.
+KIT=$(cd "$HOME/.agents" && pwd -P)
+BASE="$KIT/review-mining"
 MONTH=$(date +%Y-%m)
 RUN="$BASE/runs/$MONTH"
 PROPOSAL="$HOME/.agents/research/proposals/$MONTH.md"
@@ -166,22 +168,22 @@ Steps:
    high <=45), user corrections right after a kit step (spec, review, validate, a hook), and repeated health-report
    problems. For each, propose the smallest fix: narrow a rule, fix a tool, change a budget, or drop a step.
    End with "What works": the kit steps with evidence of catching real problems, so they are not removed by mistake.
-5. Write $PROPOSAL in English: a short summary, the numbers, the evidence for each proposed change with 2-3 example comment ids, and the proposed change as a unified diff against $HOME/.agents/AGENTS.md. If nothing is worth changing, say so.
+5. Write $RUN/proposal.md in English: a short summary, the numbers, the evidence for each proposed change with 2-3 example comment ids, and the proposed change as a unified diff against $HOME/.agents/AGENTS.md. If nothing is worth changing, say so.
 
-Do not edit AGENTS.md or any file outside $RUN and $PROPOSAL. Do not call GitHub or any other remote service. Never name reviewers.
+Do not edit AGENTS.md or any file outside $RUN. Do not call GitHub or any other remote service. Never name reviewers.
 EOF
 
 cd "$RUN"
-mkdir -p "$(dirname "$PROPOSAL")"
 # The comments are other people's text, so the model gets no network and no shell: even an allowed command like
 # semgrep can fetch rules or rewrite files. --restricted keeps file tools inside the working directories, and
-# dontAsk refuses anything the rules don't allow. It reads the kit; it writes only this run and the proposal.
-previous=$(cksum "$PROPOSAL" 2>/dev/null || true)
-rm -rf "$RUN/rules"  # rules from an earlier run this month would be checked as this run's
+# dontAsk refuses anything the rules don't allow. It reads the kit; it writes only this run, and run.sh publishes
+# the proposal it leaves there.
+rm -rf "$RUN/rules" "$RUN/proposal.md"  # an earlier run's rules or proposal this month would be taken as this run's
+model_status=0
 claude -p "$(cat "$RUN/prompt.md")" --safe-mode --restricted --strict-mcp-config --no-session-persistence --model opus \
-  --add-dir "$HOME/.agents" --tools "Read,Grep,Glob,Write,Edit,Agent" --permission-mode dontAsk \
-  --allowedTools "Edit(/$RUN/**)" "Edit(/$PROPOSAL)" \
-  > "$RUN/claude.log" 2>&1
+  --add-dir "$KIT" --tools "Read,Grep,Glob,Write,Edit,Agent" --permission-mode dontAsk \
+  --allowedTools "Edit(/$RUN/**)" \
+  > "$RUN/claude.log" 2>&1 || model_status=$?
 
 # The model can't run code, so its semgrep rules are checked here: each must flag its .bad example and nothing
 # in its .good one. The rules come from a model that read other people's text, so semgrep runs with the network
@@ -225,12 +227,19 @@ rule_result() {  # <rule> <bad example> <good example>
   else echo "FAIL (flags its good example $good_hits times)"; fi
 }
 
-# A proposal left by an earlier run this month is not this run's success.
-if [ -s "$PROPOSAL" ] && [ "$(cksum "$PROPOSAL")" != "$previous" ]; then
-  check_rules >> "$PROPOSAL"
-  date -u +%Y-%m-%dT%H:%M:%SZ > "$SINCE_FILE"
-  osascript -e "display notification \"Proposal ready: ~/.agents/research/proposals/$MONTH.md\" with title \"Agent review mining\"" || true
-else
+# The line goes last and quotes nothing the model wrote: the health report copies the error log's last line, and the
+# model's reply can quote other people's review comments.
+fail() {
   osascript -e 'display notification "Run failed; see ~/.agents/review-mining/runs" with title "Agent review mining"' || true
+  echo "review mining failed: $1" >&2
   exit 1
+}
+if [ "$model_status" != 0 ] || [ ! -s "$RUN/proposal.md" ]; then
+  [ -s "$RUN/proposal.md" ] && missing="" || missing=" with no proposal in $RUN/proposal.md"
+  fail "claude exited $model_status$missing; see $RUN/claude.log"
 fi
+# Written beside this month's proposal and renamed over it, so a failed copy leaves the earlier one whole.
+mkdir -p "$(dirname "$PROPOSAL")" && cat "$RUN/proposal.md" > "$PROPOSAL.new" && check_rules >> "$PROPOSAL.new" \
+  && mv "$PROPOSAL.new" "$PROPOSAL" || { rm -f "$PROPOSAL.new"; fail "couldn't publish $RUN/proposal.md to $PROPOSAL"; }
+date -u +%Y-%m-%dT%H:%M:%SZ > "$SINCE_FILE"
+osascript -e "display notification \"Proposal ready: ~/.agents/research/proposals/$MONTH.md\" with title \"Agent review mining\"" || true
