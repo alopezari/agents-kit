@@ -57,11 +57,24 @@ def the_failing_tests_are_named_not_the_summary_line(base):
     assert stderr == "", stderr
 
 
+def warnings_dont_take_the_failing_tests_places(base):
+    warnings = "".join(f"  warn stale link {n}\n" for n in range(1, 7))
+    failures = "".join(f"FAIL failure_{n}\n" for n in range(1, 7))
+    suite = (f"\n== install doctor\n{warnings}FAIL doctor exited 1 without naming a failing test\n"
+             f"\n== hooks\n{failures}\nFAILURES ABOVE\n")
+    status, report, stderr = health(base, suite, 1)
+    assert status == 1, report
+    assert section(report, "Needs attention") == [
+        "- Regression suite failed: FAIL doctor exited 1 without naming a failing test;"
+        + "".join(f"FAIL failure_{n};" for n in range(1, 5)) + "".join(f"  warn stale link {n};" for n in range(1, 6))], report
+    assert stderr == "", stderr
+
+
 def a_failing_block_keeps_its_traceback_and_detail(base):
     detail = "".join(f"detail {n}\n" for n in range(1, 61))
     suite = ("\n== hooks\nok   passes_one\nTraceback (most recent call last):\n  File \"test_hooks.py\", line 10, in <module>\n"
              "ValueError: broken fixture\nFAIL a_failing_test\nexpected 2 lines, got 3\nok   passes_two\n"
-             f"\n== install on a new machine\nFAIL a_long_failure\n{detail}"
+             f"\n== install on a new machine\nFAIL a_long_failure\n{detail}FAIL a_late_failure\nits detail\n"
              "\n== flow phase\nok   phase_one\n2/2 passed\n\nFAILURES ABOVE\n")
     status, report, stderr = health(base, suite, 1)
     assert status == 1, report
@@ -69,6 +82,7 @@ def a_failing_block_keeps_its_traceback_and_detail(base):
     assert kept == ["== hooks", "Traceback (most recent call last):", '  File "test_hooks.py", line 10, in <module>',
                     "ValueError: broken fixture", "FAIL a_failing_test", "expected 2 lines, got 3",
                     "== install on a new machine", "FAIL a_long_failure", *[f"detail {n}" for n in range(1, 40)],
+                    "FAIL a_late_failure",
                     "== flow phase", "ok   phase_one", "2/2 passed", "FAILURES ABOVE"], kept
     assert stderr == "", stderr
 
@@ -78,7 +92,7 @@ def a_runner_that_names_no_failure_gives_its_status_and_last_lines(base):
     status, report, stderr = health(base, suite, 2)
     assert status == 1, report
     assert section(report, "Needs attention") == [
-        "- Regression suite failed: exited 2 without naming a failing test; its last line: run.sh: no temp directory"], report
+        "- Regression suite failed: exited 2 without naming a failing test; its last line: run.sh: no temp directory;"], report
     assert section(report, "Regression suite") == [*(f"setup line {n}" for n in range(6, 25)), "run.sh: no temp directory"], report
     assert stderr == "", stderr
 
@@ -93,7 +107,8 @@ def a_healthy_week_writes_nothing_to_stderr(base):
     assert stderr == "", stderr
 
 
-for test in kit_home.selected((the_failing_tests_are_named_not_the_summary_line, a_failing_block_keeps_its_traceback_and_detail,
+for test in kit_home.selected((the_failing_tests_are_named_not_the_summary_line, warnings_dont_take_the_failing_tests_places,
+                               a_failing_block_keeps_its_traceback_and_detail,
                                a_runner_that_names_no_failure_gives_its_status_and_last_lines,
                                a_healthy_week_writes_nothing_to_stderr)):
     base = tempfile.mkdtemp(prefix="agents-test-health-")

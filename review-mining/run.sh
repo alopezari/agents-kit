@@ -4,6 +4,7 @@
 set -euo pipefail
 
 # Resolved: Claude Code matches its permission rules against a file's resolved path, and ~/.agents may be a link.
+# A path the model writes to comes from $KIT, never from $HOME/.agents.
 KIT=$(cd "$HOME/.agents" && pwd -P)
 BASE="$KIT/review-mining"
 MONTH=$(date +%Y-%m)
@@ -238,8 +239,9 @@ if [ "$model_status" != 0 ] || [ ! -s "$RUN/proposal.md" ]; then
   [ -s "$RUN/proposal.md" ] && missing="" || missing=" with no proposal in $RUN/proposal.md"
   fail "claude exited $model_status$missing; see $RUN/claude.log"
 fi
-# Written beside this month's proposal and renamed over it, so a failed copy leaves the earlier one whole.
-mkdir -p "$(dirname "$PROPOSAL")" && cat "$RUN/proposal.md" > "$PROPOSAL.new" && check_rules >> "$PROPOSAL.new" \
-  && mv "$PROPOSAL.new" "$PROPOSAL" || { rm -f "$PROPOSAL.new"; fail "couldn't publish $RUN/proposal.md to $PROPOSAL"; }
+check_rules > "$RUN/rule-checks.md"
+# Copied beside this month's proposal and renamed over it, so a failed copy leaves the earlier one whole.
+mkdir -p "$(dirname "$PROPOSAL")" && cat "$RUN/proposal.md" "$RUN/rule-checks.md" > "$PROPOSAL.new" \
+  && mv "$PROPOSAL.new" "$PROPOSAL" || { rm -f "$PROPOSAL.new" || true; fail "couldn't publish $RUN/proposal.md to $PROPOSAL"; }
 date -u +%Y-%m-%dT%H:%M:%SZ > "$SINCE_FILE"
 osascript -e "display notification \"Proposal ready: ~/.agents/research/proposals/$MONTH.md\" with title \"Agent review mining\"" || true

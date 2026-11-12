@@ -241,7 +241,10 @@ for n in "${!picked[@]}"; do
   [ "$status" = 0 ] || fail=1
   printf '\n== %s\n' "${sections[$i]#*|}"
   cat "$out/$i"
-  [ "$status" = 0 ] || grep -q '^FAIL ' "$out/$i" || echo "FAIL ${names[$i]} exited $status without naming a failing test"
+  if [ "$status" != 0 ] && ! grep -q '^FAIL ' "$out/$i"; then
+    [ -z "$(tail -c1 "$out/$i")" ] || echo  # the section stopped mid-line, and a FAIL counts only at a line's start
+    echo "FAIL ${names[$i]} exited $status without naming a failing test"
+  fi
 done
 
 if [ -n "$only" ]; then

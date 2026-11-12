@@ -381,12 +381,14 @@ flags=$(cat "$home/claude-args" 2>/dev/null)
 month=$(date +%Y-%m); proposal_file="$kit/research/proposals/$month.md"
 run_dir="$kit/review-mining/runs/$month"
 resolved_run=$(cd "$run_dir" && pwd -P)
-writable=$(grep '^Edit(' <<<"$flags" | sort | tr '\n' ' ')
+allowed=$(sed -n '/^--allowedTools$/,$p' <<<"$flags" | tail -n +2 | tr '\n' ' ')  # the last flag: every rule passed
+added_dir=$(grep -A1 -x -- --add-dir <<<"$flags" | tail -1)
 tools=$(grep -A1 -x -- --tools <<<"$flags" | tail -1)
 check "review mining runs the model without network, a shell or writes outside its run directory, and publishes its proposal" \
   '[ $mining_status = 0 ] && grep -qx -- --restricted <<<"$flags" && grep -qx dontAsk <<<"$flags" \
    && [ "$tools" = "Read,Grep,Glob,Write,Edit,Agent" ] && ! grep -q "^Bash" <<<"$flags" \
-   && [ "$writable" = "Edit(/$resolved_run/**) " ] && grep -q "^5\. Write $resolved_run/proposal.md " <<<"$flags" \
+   && [ "$allowed" = "Edit(/$resolved_run/**) " ] && [ "$(cd "$added_dir" && pwd -P)" = "$(cd "$kit" && pwd -P)" ] \
+   && grep -q "^5\. Write $resolved_run/proposal.md " <<<"$flags" \
    && [ "$(head -1 "$proposal_file")" = proposal ]'
 # Installed from a clone kept elsewhere, ~/.agents is a link, and Claude Code matches its rules against the resolved path.
 old_since=2000-01-01T00:00:00Z
@@ -403,13 +405,16 @@ check "with ~/.agents a link to the kit, review mining saves the proposal of a m
 # without the model's reply, which can quote other people's comments.
 mining_fails() {  # <fake> <what fails> <the fake claude's body> <the last line expected on stderr>
   local expected=$4 saved status
-  fakes "$1"; printf '#!/bin/sh\necho "the model reply"\n%s\n' "$3" > "$home/fakes/$1/claude"; chmod +x "$home/fakes/$1/claude"
+  fakes "$1"; printf '#!/bin/sh\necho "the model reply"\necho "the model reply on stderr" >&2\n%s\n' "$3" > "$home/fakes/$1/claude"
+  chmod +x "$home/fakes/$1/claude"
   echo "$old_since" > "$kit/review-mining/last-success"
   saved=$(cksum < "$proposal_file")
   HOME="$home" PATH="$home/fakes/$1:$PATH" "$kit/review-mining/run.sh" >/dev/null 2>"$home/mining.err"; status=$?
   check "review mining fails when $2, moving nothing and saying why last on stderr" \
-    '[ $status = 1 ] && [ "$(cat "$kit/review-mining/last-success")" = "$old_since" ] && [ "$(cksum < "$proposal_file")" = "$saved" ] \
-     && [ "$(tail -1 "$home/mining.err")" = "$expected" ] && ! grep -q "model reply" "$home/mining.err"'
+    '[ $status = 1 ] && [ "$(cat "$kit/review-mining/last-success")" = "$old_since" ] \
+     && [ -s "$proposal_file" ] && [ "$(cksum < "$proposal_file")" = "$saved" ] \
+     && [ "$(tail -1 "$home/mining.err")" = "$expected" ] && ! grep -q "model reply" "$home/mining.err" \
+     && grep -q "model reply on stderr" "$run_dir/claude.log"'
 }
 log_hint="see $resolved_run/claude.log"
 no_proposal="with no proposal in $resolved_run/proposal.md"
@@ -423,7 +428,10 @@ mining_fails stale "only an earlier run left a proposal" 'exit 0' "review mining
 chmod a-w "$kit/research/proposals"
 mining_fails read-only "the proposals directory can't be written" 'echo fresh > proposal.md' \
   "review mining failed: couldn't publish $resolved_run/proposal.md to $proposal_file"
-chmod u+w "$kit/research/proposals"
+chmod u+w "$kit/research/proposals"; echo "left by an interrupted run" > "$proposal_file.new"; chmod a-w "$kit/research/proposals"
+mining_fails leftover "an interrupted run's copy can't be renamed or removed" 'echo fresh > proposal.md' \
+  "review mining failed: couldn't publish $resolved_run/proposal.md to $proposal_file"
+chmod u+w "$kit/research/proposals"; rm -f "$proposal_file.new"
 # The rules the model drafts are checked by run.sh with real semgrep: one of each result.
 if [ -x "$semgrep_dir/semgrep" ]; then
   fixture="$home/rules-fixture"; mkdir -p "$fixture"

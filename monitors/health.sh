@@ -14,18 +14,19 @@ days_since() { echo $(( ( $(date +%s) - $(stat -f %m "$1") ) / 86400 )); }
 
 # 1. Regression suite (hooks, semgrep rules, triage, install doctor).
 suite=$("$K/tests/run.sh" 2>&1); suite_rc=$?
+failing_tests=$(grep '^FAIL ' <<<"$suite")
 if [ $suite_rc != 0 ]; then
-  failed=$(grep -E '^FAIL |  warn ' <<<"$suite" | head -5 | tr '\n' ';')
-  grep -q '^FAIL ' <<<"$suite" \
-    || failed="exited $suite_rc without naming a failing test; its last line: $(tail -1 <<<"$suite")${failed:+;$failed}"
+  failed=${failing_tests:-exited $suite_rc without naming a failing test; its last line: $(tail -1 <<<"$suite")}
+  failed=$({ head -5 <<<"$failed"; grep '  warn ' <<<"$suite" | head -5; } | tr '\n' ';')
   problems+=("Regression suite failed: $failed")
 fi
-# The report keeps a failing block's lines but its ok ones, so a traceback before a FAIL and the detail after it survive.
+# The report keeps a failing block's lines but its ok ones, so a traceback before a FAIL and the detail after it
+# survive: the block's first 40, then only its FAIL lines.
 suite_report() {
-  if [ $suite_rc != 0 ] && ! grep -q '^FAIL ' <<<"$suite"; then tail -20 <<<"$suite"; return; fi
+  if [ $suite_rc != 0 ] && [ -z "$failing_tests" ]; then tail -20 <<<"$suite"; return; fi
   awk '
     function flush(  i) {
-      if (failed) { if (header != "") print header; for (i = 1; i <= n && i <= 40; i++) print detail[i] }
+      if (failed) { if (header != "") print header; for (i = 1; i <= n; i++) if (i <= 40 || detail[i] ~ /^FAIL /) print detail[i] }
       else for (i = 1; i <= m; i++) print summary[i]
       header = ""; n = m = failed = 0
     }

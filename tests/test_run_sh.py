@@ -177,21 +177,26 @@ def a_child_runs_its_named_test_whatever_the_selection():
 
 
 def a_section_that_dies_without_naming_a_failure_is_named():
-    with tempfile.TemporaryDirectory() as kit:
+    with tempfile.TemporaryDirectory() as home:
+        kit = os.path.join(home, ".agents")
         tests = os.path.join(kit, "tests")
         os.makedirs(tests)
         shutil.copy(RUN_SH, tests)
-        for name, body in (("test_phase.py", 'print("ok   started")\nraise SystemExit(3)'),
+        # The doctor runs on its own, before the others, and a warning fails it without a FAIL line.
+        open(os.path.join(kit, "install.sh"), "w").write('#!/bin/sh\necho "  warn a stale link"\n')
+        os.chmod(os.path.join(kit, "install.sh"), 0o755)
+        for name, body in (("test_phase.py", 'import sys\nsys.stdout.write("ok   started\\nstopped mid-line")\nraise SystemExit(3)'),
                            ("test_quality_log.py", 'print("FAIL named_test")\nraise SystemExit(1)'),
                            ("test_test_types.py", 'print("ok   fine")')):
             open(os.path.join(tests, name), "w").write(body + "\n")
-        done = subprocess.run(["bash", os.path.join(tests, "run.sh"), "phase", "quality-log", "test-types"],
-                              capture_output=True, text=True, errors="replace", env=suite_env(HOME=kit), timeout=300)
+        done = subprocess.run(["bash", os.path.join(tests, "run.sh"), "doctor", "phase", "quality-log", "test-types"],
+                              capture_output=True, text=True, errors="replace", env=suite_env(HOME=home), timeout=300)
     out = done.stdout + done.stderr
     assert done.returncode == 1, out
     failed = {section: [line for line in blocks(out)[TITLES[section]] if line.startswith("FAIL ")]
-              for section in ("phase", "quality-log", "test-types")}
-    assert failed == {"phase": ["FAIL phase exited 3 without naming a failing test"], "quality-log": ["FAIL named_test"],
+              for section in ("doctor", "phase", "quality-log", "test-types")}
+    assert failed == {"doctor": ["FAIL doctor exited 1 without naming a failing test"],
+                      "phase": ["FAIL phase exited 3 without naming a failing test"], "quality-log": ["FAIL named_test"],
                       "test-types": []}, (failed, out)
 
 
