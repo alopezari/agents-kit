@@ -18,6 +18,7 @@ import math
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -811,6 +812,36 @@ def pr_target(words):
     return target
 
 
+STAMP_GATE = "The stamp check (`review_stamp.py gate`)"
+UNEXPECTED_ANSWER = "printed an answer the guard doesn't expect"
+
+
+def stamp_gate_steps(answered):
+    """({step's args: (exit, stdout, stderr)}, "") from `review_stamp.py gate`'s completed process, or ({}, why it can't
+    be read): every way the process can fail denies, since an answer read as empty would open the gate."""
+    if answered.returncode < 0:
+        what = f"was killed by {signal.Signals(-answered.returncode).name}"
+    elif answered.returncode:
+        said = " ".join(answered.stderr.split())
+        what = f"failed (exit {answered.returncode})" + (f": {said}" if said else "")
+    elif not answered.stdout:
+        what = "printed nothing"
+    elif not answered.stdout.endswith("\n"):
+        what = "printed an answer cut short"
+    else:
+        try:
+            answer = json.loads(answered.stdout)
+        except ValueError:
+            answer = None
+        steps = answer.get("steps") if type(answer) is dict and answer.keys() == {"steps"} else None
+        if type(steps) is list and all(
+                type(step) is list and len(step) == 4 and type(step[0]) is list and all(type(a) is str for a in step[0])
+                and type(step[1]) is int and type(step[2]) is str and type(step[3]) is str for step in steps):
+            return {tuple(step[0]): tuple(step[1:]) for step in steps}, ""
+        what = UNEXPECTED_ANSWER
+    return {}, f"{STAMP_GATE} {what}, so the guard can't tell whether the change was reviewed and validated."
+
+
 def unreviewed_pr(command, cwd):
     """Opening a PR requires a review stamp for the exact current change, measured against the branch the PR
     targets, and a validate stamp for a behavior change; each unless the user switched its phase off."""
@@ -825,12 +856,13 @@ def unreviewed_pr(command, cwd):
     failures = []
 
     def ok(*args):
-        result = subprocess.run([sys.executable, stamp, *args], cwd=cwd, capture_output=True, text=True,
-                                timeout=time_left())
-        if result.returncode > 1:  # it couldn't tell (git failed, no common commit): not the same as "no stamp"
-            failures.append(f"`review_stamp.py {' '.join(args)}` failed: "
-                            f"{' '.join(result.stderr.split()) or f'exit {result.returncode}'}")
-        return result.returncode == 0
+        if args not in steps:
+            failures.append(f"{STAMP_GATE} {UNEXPECTED_ANSWER}: no answer for `review_stamp.py {' '.join(args)}`.")
+            return False
+        code, _, err = steps[args]
+        if code > 1:  # it couldn't tell (git failed, no common commit): not the same as "no stamp"
+            failures.append(f"`review_stamp.py {' '.join(args)}` failed: {' '.join(err.split()) or f'exit {code}'}")
+        return code == 0
 
     def refused(reason):
         return " ".join(failures) + store if failures else reason + order + store
@@ -841,13 +873,22 @@ def unreviewed_pr(command, cwd):
              if re.search(r"review_stamp\.py\b[^;&|\n]*\bwrite\b", re.sub(r"\\\n", " ", shell_code(command))) else "")
     off, unreadable = phase_switches.phases_off_or_error(cwd, time_left())
     store = f" {unreadable}." if unreadable else ""
-    if not {"review", "validate"} <= off.keys():
-        for target in {pr_target(pr_args(command, match, 1)) for match in creates}:
-            matched = subprocess.run([sys.executable, stamp, "base", "--matches", target], cwd=cwd,
-                                     capture_output=True, text=True, timeout=time_left())
-            if matched.returncode != 0:
-                return (matched.stdout.strip() or matched.stderr.strip()
-                        or f"review_stamp.py base failed (exit {matched.returncode}), so the PR's target can't be checked.")
+    checks = [check for check in ("review", "validate") if check not in off]
+    if not checks:
+        return None
+    targets = list({pr_target(pr_args(command, match, 1)) for match in creates})
+    answered = subprocess.run([sys.executable, stamp, "gate", ",".join(checks), *targets], cwd=cwd,
+                              capture_output=True, text=True, timeout=time_left())
+    steps, unreadable_answer = stamp_gate_steps(answered)
+    if unreadable_answer:
+        return unreadable_answer + store
+    for target in targets:
+        if ("base", "--matches", target) not in steps:
+            return f"{STAMP_GATE} {UNEXPECTED_ANSWER}: no answer for `review_stamp.py base --matches {target}`.{store}"
+        code, out, err = steps[("base", "--matches", target)]
+        if code != 0:
+            return (out.strip() or err.strip()
+                    or f"review_stamp.py base failed (exit {code}), so the PR's target can't be checked.")
     if "review" not in off and not ok("check", "--kind", "review"):
         return refused("No review recorded for the current change. Run the kit-review skill first "
                        "(it ends with review_stamp.py write); any edit after the review needs a new one.")
