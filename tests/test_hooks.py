@@ -924,6 +924,7 @@ def guard_reads_a_run_string_as_its_shell_gets_it(base):
     for cmd in ["D=/tmp/build; bash -c 'rm -rf \"$D\"/*'; export D",
                 "D=/tmp/build; set -a; bash -c 'rm -rf \"$D\"/*'",
                 "D=/tmp/build; echo export D; bash -c 'rm -rf \"$D\"/*'",
+                "D=/tmp/build; cat > /tmp/kit-export.sh <<'EOF'\nexport D\nEOF\nbash -c 'rm -rf \"$D\"/*'",
                 "D=/tmp/build; bash -c 'export D'; bash -c 'rm -rf \"$D\"/*'",
                 "D=/tmp/build; (export D); bash -c 'rm -rf \"$D\"/*'"]:
         reason = guard_reason(cmd)

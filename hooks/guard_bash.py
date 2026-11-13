@@ -366,6 +366,7 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
             at += len(segment)
     run_files = files_run(text)
     heredocs = read_heredocs(lines) or ()
+    body_lines = {i for first, end, _, _ in heredocs for i in range(first, end)}
     spawning = {i for first, end, kind, _ in heredocs if kind == "spawns" for i in range(first, end)}
     # A body only written to files the command doesn't run is text: its trap or eval runs nowhere yet.
     written_only = {i for first, end, kind, _ in heredocs
@@ -445,7 +446,7 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
             tail = tokens[1:]
             tokens, chdir = run_words(["./" + w if w.startswith("~") else w for w in held[reference.group(1)].split()] + tail)
             literal_count = len(tokens) - len(tail)
-        if (m := HELD_COMMAND.fullmatch(code)) and assigned[m.group(1)] == 1:
+        if line not in body_lines and (m := HELD_COMMAND.fullmatch(code)) and assigned[m.group(1)] == 1:
             value = m.group(2)[1:-1] if m.group(2)[0] == "'" else expand(m.group(2)[1:-1], values)
             if m.group(2)[0] == "'" or not re.search(r"[$`\\]", value):
                 held[m.group(1)] = value
@@ -453,16 +454,16 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
         if chdir is not None and (here is not None or os.path.isabs(chdir)):  # relative to an unresolved cd: unresolved
             runs_in = cd_into(here or cwd, chdir)
         name = os.path.basename(tokens[0]) if tokens else ""
-        if "*" in exported and not tokens:
+        if line not in body_lines and "*" in exported and not tokens:
             exported.update(m.group(1) for word in raw if (m := re.match(r"([A-Za-z_]\w*)=", word)))
-        if name == "export" or name in ("declare", "typeset") and any(
-                word.startswith("-") and "x" in word for word in tokens[1:]):
+        if line not in body_lines and (name == "export" or name in ("declare", "typeset") and any(
+                word.startswith("-") and "x" in word for word in tokens[1:])):
             names = {word.split("=", 1)[0] for word in tokens[1:] if re.match(r"^[A-Za-z_]\w*(?:=|$)", word)}
             if name == "export" and "-n" in tokens:
                 exported.difference_update(names)
             else:
                 exported.update(names)
-        elif name == "set":
+        elif line not in body_lines and name == "set":
             if any(re.fullmatch(r"-[a-z]*a[a-z]*", word) for word in tokens[1:]) or tokens[1:] == ["-o", "allexport"]:
                 exported.add("*")
             elif any(re.fullmatch(r"\+[a-z]*a[a-z]*", word) for word in tokens[1:]) or tokens[1:] == ["+o", "allexport"]:
