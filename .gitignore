@@ -29,7 +29,7 @@ profiles/
 !/skills/kit-validate/
 !/skills/kit-write-pr-description/
 
-# Other tools share ~/.agents: Superset installs its commands here
+# Other tools share ~/.agents and install their commands here
 /commands/
 
 # Written by Claude Code each time it loads the mod from a directory, for the version running
