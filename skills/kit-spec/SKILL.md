@@ -77,18 +77,18 @@ The defects reviewers catch most are a rule enforced on one path and not another
 
 Build so that every item is handled, and add a criterion when an item needs its own check. The review starts its tables from this map. Name every file the change touches by its path: the stop hook asks about a changed code file the map doesn't name, so the spec is updated, or the change split, while building. Run the lint again: it fails on a map left empty or unfilled.
 
-When the change goes through a one-way door (a schema or migration, a public contract, a new dependency), add the decisions a reviewer would otherwise ask about, one line each:
+When the change goes through a one-way door (a schema or migration, a public contract, a new dependency), or you chose between approaches a reviewer would otherwise ask about, add the decisions, one line each:
 
 ```markdown
 ## Decisions
 - <chosen option> over <rejected alternative>, because <reason>
 ```
 
-The PR description reuses them, and the review asks for them: its Maintainability lens for a new dependency, its Compatibility lens for a contract, schema or migration. The lint fails the section when it is empty or unfilled.
+The PR description reuses them, and the review asks for a one-way door's: its Maintainability lens for a new dependency, its Compatibility lens for a contract, schema or migration. The section sets no tier: the Risk line does. The lint fails the section when it is empty or unfilled.
 
 The Risk line predicts the change's risk before any code exists; settle it now, from the Change map and any Decisions:
 
-- **High:** a one-way door (a schema or migration, a public contract, a new dependency) or a high-risk signal triage looks for (auth or permissions, payments, schema or migration, public API or hooks, caching, scheduled jobs), named in the Risk reason; or more than 400 expected changed lines outside tests. The door makes it high, not the Decisions section that records it.
+- **High:** a one-way door (a schema or migration, a public contract, a new dependency) or a high-risk signal triage looks for (auth or permissions, payments, schema or migration, public API or hooks, caching, scheduled jobs), named in the Risk reason; or more than 400 expected changed lines outside tests.
 - **Low:** a behavior change under 50 lines, with none of those, in files that already have tests.
 - **Standard:** everything else.
 
