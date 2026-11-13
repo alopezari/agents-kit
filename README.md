@@ -12,6 +12,20 @@ macOS only for now (the scheduled jobs use launchd).
 git clone https://github.com/alopezari/agents-kit.git ~/.agents && ~/.agents/install.sh
 ```
 
+If `~/.agents` already exists, `git clone` stops with "destination path already exists". Other tools write there too (Superset installs its skills and commands in it), so turn the folder into the kit's checkout in place:
+
+```bash
+git -C ~/.agents init &&
+  git -C ~/.agents remote add origin https://github.com/alopezari/agents-kit.git &&
+  git -C ~/.agents fetch origin main &&
+  git -C ~/.agents checkout -t origin/main &&
+  ~/.agents/install.sh
+```
+
+Each step runs only if the one before it worked. If `~/.agents` is already a git repository with its own `origin`, `remote add` stops there: the kit can't share that folder.
+
+The other tools' files stay where they are. If one has the same path as a file of the kit, the checkout lists it and stops without overwriting anything: move it aside and run the checkout again. `install.sh` doesn't tell the kit's skills from another tool's: it links every folder in `~/.agents/skills` that holds a `SKILL.md` into each harness (`~/.claude/skills`, `~/.codex/skills`), and `uninstall.sh` removes those links. What was at a link's path is moved to `~/.agents/backups` first, and so is a folder in `~/.agents/skills` with the name of a pinned third-party skill the kit installs (`skills.external`).
+
 `install.sh` wires every installed harness and is safe to re-run. To check the setup afterwards:
 
 ```bash
