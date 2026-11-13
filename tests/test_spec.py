@@ -123,18 +123,20 @@ def docs_give_the_high_tier_without_the_decisions_heading(base):
     """The instructions say what triage and the lint do: the size rule leaves tests out, a Decisions heading moves no tier."""
     def read(rel):
         return open(os.path.join(KIT, rel), encoding="utf-8").read()
+    research = "docs/research/review-testing-perspectives.md"
     texts = {rel: read(rel) for rel in ("AGENTS.md", "skills/kit-spec/SKILL.md", "skills/kit-spec/review-prompt.sh",
-                                       "skills/kit-review/SKILL.md", "docs/framework.md")}
+                                       "skills/kit-review/SKILL.md", "docs/framework.md", research)}
     texts["bin/triage docstring"] = ast.get_docstring(ast.parse(read("bin/triage")))
     texts["lint.py docstring and messages"] = read("skills/kit-spec/lint.py")
+    texts = {name: " ".join(text.split()) for name, text in texts.items()}  # a sentence may wrap
     stale = re.compile(r"Decisions`? section\)? makes it high|\*\*High:\*\* a `## Decisions`|high for a Decisions section"
                        r"|Decisions`? section on a (tier below high|spec whose tier)|'## Decisions' means a one-way door")
     for name, text in texts.items():
         found = stale.search(text)
         assert not found, f"{name} still says a Decisions section makes the tier high: {found.group(0)!r}"
-    for name in ("skills/kit-spec/SKILL.md", "skills/kit-spec/review-prompt.sh", "bin/triage docstring"):
-        size = re.search(r"more than 400[^.]*", " ".join(texts[name].split()))
-        assert size and "outside test" in size.group(0), f"{name} gives the size rule without leaving tests out: {size and size.group(0)!r}"
+    for name in ("skills/kit-spec/SKILL.md", "skills/kit-spec/review-prompt.sh", "bin/triage docstring", research):
+        sizes = re.findall(r"(?:more than |>)400[^.)]*", texts[name])
+        assert sizes and all("outside test" in size for size in sizes), f"{name} gives the size rule without leaving tests out: {sizes}"
 
 
 def lint_rejects_a_placeholder_verify(base):

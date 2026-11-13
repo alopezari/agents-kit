@@ -692,7 +692,10 @@ def triage_sized(before, after, committed):
 
 
 ONE_WAY = "".join(f"line {n} of a long helper\n" for n in range(1000))
-EDITED = "".join(f"line {n} of a long helper{', edited' if n < 300 else ''}\n" for n in range(1000))
+# 300 lines leave and 100 arrive: a count that reads either side by the other file's path gives another number.
+EDITED = "".join(f"line {n} of a long helper{', edited' if n < 300 else ''}\n" for n in range(200, 1000))
+TEST_NAMINGS = ("test/a.py", "tests/b.py", "src/__tests__/c.js", "spec/d.rb", "src/e.test.js", "lib/f_spec.rb", "src/g-test.ts",
+                "src/CartTest.php")
 # (case, before, after, total changed lines, the size reason or None, the diff's tier)
 SIZE_CASES = [
     ("400 code lines added", {}, {"app.py": code(400)}, 400, None, "standard"),
@@ -706,10 +709,16 @@ SIZE_CASES = [
     ("only tests, 600 lines", {}, {"tests/test_app.py": code(600, name="t")}, 600, None, "standard"),
     ("450 lines of instructions and a few code lines", {}, {"app.py": code(5), "AGENTS.md": "- Rule.\n" * 300,
                                                            "skills/x/SKILL.md": "- Step.\n" * 150}, 455, "455 changed lines outside tests", "high"),
+    ("450 lines of prose under test directories and a few code lines", {}, {"app.py": code(5), "tests/README.md": "- Note.\n" * 300,
+                                                                           "spec/notes.txt": "- Note.\n" * 150}, 455, "455 changed lines outside tests", "high"),
+    ("a few code lines and 450 test lines under each test naming", {},
+     {"app.py": code(5), **{path: code(450, name="t") for path in TEST_NAMINGS}}, 5 + 450 * len(TEST_NAMINGS), None, "standard"),
+    ("450 lines in PHP files whose names end in test", {}, {"includes/class-contest.php": code(250), "src/latest.php": code(200)},
+     450, "450 changed lines outside tests", "high"),
     ("an edited move from code into tests", {"src/helper.py": ONE_WAY},
-     {"src/helper.py": None, "tests/helper.py": EDITED, "app.py": code(101)}, 701, "401 changed lines outside tests", "high"),
+     {"src/helper.py": None, "tests/helper.py": EDITED, "app.py": code(101)}, 501, "401 changed lines outside tests", "high"),
     ("an edited move from tests into code", {"tests/helper.py": ONE_WAY},
-     {"tests/helper.py": None, "src/helper.py": EDITED, "app.py": code(101)}, 701, "401 changed lines outside tests", "high"),
+     {"tests/helper.py": None, "src/helper.py": EDITED, "app.py": code(301)}, 701, "401 changed lines outside tests", "high"),
 ]
 for case, before, after, total, size_reason, tier in SIZE_CASES:
     for committed in (True, False):
