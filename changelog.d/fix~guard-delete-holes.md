@@ -1,4 +1,4 @@
 - The shell guard now judges a recursive `rm` wherever it runs, not only as the first word: in a case arm, a `$(…)` or backticks, a subshell, a function (at each call, with its arguments), a string or heredoc run by `bash -c`, `eval` or `trap`, and a command held in a variable, with the variables and directory in effect there.
-- A string run by a child shell is read as that shell gets it: a `$NAME` the calling shell expands in a double-quoted string, or one a single-quoted string can't see because it wasn't exported, is denied with the rewrite that passes.
+- A string run by a child shell is read as that shell gets it: a `$NAME` expanded before the string assigns its intended value, or one a single-quoted string can't see because it wasn't exported, is denied with the rewrite that passes. Safe caller expansions still pass.
 - Deleting a temp root itself, or everything in it (`/tmp`, `/tmp/*`, `"$TMPDIR"/*`), is denied; a directory under it still passes.
 - Links the same command makes with `ln -s` are followed, so a delete through one is judged at its target.

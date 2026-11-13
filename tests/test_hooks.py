@@ -11,6 +11,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -428,7 +429,7 @@ def guard_reason(command, cwd="/usr/lib", crash=False):
     env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
     env.update({"AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, "TMPDIR": "/private/var/folders/ab/T/"})
     out = subprocess.run(["python3", H + "guard_bash.py"], capture_output=True, text=True, env=env,
-                         input=json.dumps({"tool_input": {"command": command}, "cwd": cwd, "session_id": "t"}))
+                         input=json.dumps({"tool_input": {"command": command}, "cwd": cwd, "session_id": "t"}), timeout=10)
     assert out.returncode == 0 and crash == ("guard failed" in out.stdout), out.stdout + out.stderr
     return json.loads(out.stdout)["hookSpecificOutput"]["permissionDecisionReason"] if out.stdout.strip() else ""
 
@@ -888,6 +889,11 @@ def guard_judges_a_delete_wherever_it_runs(base):
 
 
 def guard_judges_a_function_where_it_is_called(base):
+    for cmd in ["bash -c 'f() {\nrm -rf /tmp/x\n}; f'; bash -c 'f() {\nrm -rf /usr/local/old\n}; f'",
+                "f() { ln -s /usr/local /tmp/l; }; f; rm -f /tmp/l; f; rm -rf /tmp/l/old",
+                "f() { rm -rf \"$1\"; }; trap 'f /usr/local/old' EXIT"]:
+        reason = guard_reason(cmd)
+        assert deletes(reason, "/usr/local/old"), f"each function call keeps its body, effects and arguments: {cmd!r} -> {reason!r}"
     for cmd, path in [("f() { rm -rf build; }; cd /; f", "/build"), ("f() {\n  rm -rf build\n}\ncd /\nf", "/build"),
                       ("function f { rm -rf build; }; cd /; f", "/build"),
                       ("function f() {\n  rm -rf \"$2\"\n}\nf a /usr/local/old", "/usr/local/old"),
@@ -915,6 +921,18 @@ def guard_judges_a_function_where_it_is_called(base):
 
 
 def guard_reads_a_run_string_as_its_shell_gets_it(base):
+    for cmd in ["D=/tmp/build; bash -c 'rm -rf \"$D\"/*'; export D",
+                "D=/tmp/build; set -a; bash -c 'rm -rf \"$D\"/*'",
+                "D=/tmp/build; echo export D; bash -c 'rm -rf \"$D\"/*'",
+                "D=/tmp/build; bash -c 'export D'; bash -c 'rm -rf \"$D\"/*'",
+                "D=/tmp/build; (export D); bash -c 'rm -rf \"$D\"/*'"]:
+        reason = guard_reason(cmd)
+        assert "export the variable" in reason, f"only exports in this shell before the call apply: {cmd!r} -> {reason!r}"
+    for cmd in ["cmd='rm -rf \"$D\"/out'; D=/tmp/build bash -c \"$cmd\"",
+                "set -a; D=/tmp/build; set +a; bash -c 'rm -rf \"$D\"/out'",
+                "D=/tmp/build bash <<'EOF'\nrm -rf \"$D\"/out\nEOF"]:
+        reason = guard_reason(cmd)
+        assert not reason, f"the child receives its prefix assignments: {cmd!r} -> {reason!r}"
     quote = "single-quote the string or the heredoc's delimiter"
     export = "export the variable or assign it in the string"
     for cmd, hint in [("bash -c \"S=/tmp/x; rm -rf $S/*\"", quote), ("sh -c \"D=/tmp/build && rm -rf $D/\"", quote),
@@ -939,6 +957,13 @@ def guard_reads_a_run_string_as_its_shell_gets_it(base):
 
 
 def guard_judges_a_command_held_in_a_variable(base):
+    for cmd in ["CMD='rm -rf /usr/local/old'; f() { $CMD; }; f",
+                "CMD='rm -rf /usr/local/old'; x=$($CMD)"]:
+        reason = guard_reason(cmd)
+        assert deletes(reason, "/usr/local/old"), f"nested execution inherits known shell variables: {cmd!r} -> {reason!r}"
+    for cmd in ["CMD='rm -rf $HOME/old'; $CMD", "CMD='rm -rf `$HOME`/old'; $CMD"]:
+        reason = guard_reason(cmd)
+        assert not reason, f"held words do not expand a second time: {cmd!r} -> {reason!r}"
     for cmd, path in [("CMD=\"rm -rf $HOME/old\"; $CMD", in_home("old")), ("CMD='rm -rf ~/old'; eval \"$CMD\"", in_home("old")),
                       ("cmd='rm -rf /usr/local/x'; bash -c \"$cmd\"", "/usr/local/x"),
                       ("CMD=\"rm -rf /usr/local/x\"; $CMD -v", "/usr/local/x")]:
@@ -965,6 +990,10 @@ def guard_keeps_the_temp_roots(base):
 
 
 def guard_follows_a_link_the_command_makes(base):
+    for cmd in ["ln -s /usr/local /tmp/stage/l; rm -rf /tmp/stage; mkdir -p /tmp/stage/l; rm -rf /tmp/stage/l/old",
+                "cleanup() { rm -f /tmp/l; }; ln -s /usr/local /tmp/l; cleanup; ln -s /usr/local /tmp/l; cleanup; mkdir /tmp/l; rm -rf /tmp/l/old"]:
+        reason = guard_reason(cmd)
+        assert not reason, f"removed links no longer redirect a later delete: {cmd!r} -> {reason!r}"
     for cmd, path in [("ln -s ~/Documents /tmp/docs && rm -rf /tmp/docs/", in_home("Documents")),
                       ("ln -s \"$HOME/Projects/app\" /tmp/l; rm -rf /tmp/l/src", in_home("Projects/app/src")),
                       ("ln -s /usr/local /tmp/l; rm -rf /tmp/l/src", "/usr/local/src"),
@@ -1006,16 +1035,22 @@ def guard_adds_no_denial_for_routine_deletes(base):
 
 def guard_judges_deep_commands_in_time(base):
     chained = "; ".join(f"f{i}() {{ f{i - 1}; f{i - 1}; }}" for i in range(1, 200))
+    branching = "; ".join(f'f{i}() {{ f{i - 1} "a$1"; f{i - 1} "b$1"; }}' for i in range(1, 15))
     links = "; ".join(f"ln -s /tmp/a{i} /tmp/l{i}" for i in range(200))
+    nested = "rm -rf /usr/local/old"
+    for _ in range(5):
+        nested = "bash -c " + shlex.quote(nested)
     for cmd in ["f0() { rm -rf /usr/local/old; }; " + chained + "; f199",
+                nested,
+                "f0() { :; }; " + branching + "; f14; rm -rf /usr/local/old",
                 "f() { g; }; g() { f; rm -rf /usr/local/old; }; f",
                 "$(" * 200 + "rm -rf /usr/local/old" + ")" * 200, "(" * 200 + "cd / && rm -rf usr/local/old" + ")" * 200,
                 "; ".join(f"bash -c 'rm -rf /tmp/x{i}'" for i in range(200)) + "; bash -c 'rm -rf /usr/local/old'",
                 links + "; ln -s /usr/local /tmp/l; rm -rf /tmp/l/lib",
                 "for i in " + " ".join(map(str, range(200))) + "; do ln -s /usr/local /tmp/l$i; done; rm -rf /tmp/l7/lib"]:
-        started = child_cpu()
+        started = time.monotonic()
         reason = guard_reason(cmd)
-        assert child_cpu() - started < 2, f"the guard must answer before the harness lets the command through: {cmd[:80]!r}"
+        assert time.monotonic() - started < 2, f"the guard must answer before the harness lets the command through: {cmd[:80]!r}"
         assert reason and "The guard failed" not in reason, f"a deep delete outside the allowed places: {cmd[:80]!r}"
 
 

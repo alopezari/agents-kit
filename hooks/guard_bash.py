@@ -10,6 +10,7 @@ Records the checkout of each allowed `git push`, so the stop hook can follow
 that commit's CI.
 """
 import bisect
+from collections import Counter
 import fnmatch
 import functools
 import io
@@ -267,6 +268,7 @@ UNKNOWN = object()
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
 # Functions, $(…) and strings a shell runs, read inside one another: past this the hook would run out of time.
 MAX_NESTING = 16
+MAX_COMMAND_EXPANSIONS = 1024
 NESTED_TOO_DEEP = ("Recursive delete nested deeper than the guard reads: functions, $(…) or strings a shell runs, "
                    f"more than {MAX_NESTING} levels inside one another. To pass, run the delete with less nesting.")
 TOO_MANY_LINKS = ("Recursive delete after more links made by the same command than the guard follows. To pass, make "
@@ -280,7 +282,6 @@ MKTEMP_ONLY = re.compile(r"\s*mktemp\b[^()|;&\n`]*")
 HELD_REFERENCE = re.compile(r"\$\{?(\w+)\}?")
 HELD_COMMAND = re.compile(r"([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*')")
 SHELL = re.compile(r"(?:ba|z|da|k)?sh")
-EXPORTS = re.compile(r"(?<![\w-])(?:export|(?:declare|typeset)\s+-\w*x\w*)((?:\s+[A-Za-z_]\w*(?:=\S*)?)+)")
 
 
 def dangerous_rm(command, cwd):
@@ -296,18 +297,24 @@ def dangerous_rm(command, cwd):
     put in first, a child shell seeing only the variables exported to it."""
     if "rm" not in command:
         return None
-    scope = {"memo": {}, "links": {}, "too_many_links": False, "exported": set()}
+    scope = {"walks": 0, "links": {}, "too_many_links": False}
     return rm_walk(command, cwd, scope, cwd)[0]
 
 
 def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=True, from_text=False,
-            functions=None, chain=(), depth=0, outer_loops=()):
+            functions=None, chain=(), depth=0, outer_loops=(), exported=None, held=None):
     """dangerous_rm() of one text a shell runs, and the directory it leaves the shell in. here is where it starts
     (None after an unresolvable cd), known the variables it inherits, runs_first whether it runs before anything else
     could have removed a directory, as_written whether its shell reads it as written (segments_with_values()),
     from_text whether it is a string run as a command, whose $1 and $@ are what its caller passes in, functions
     those defined where it runs, chain the functions being called around it, outer_loops the loops around it."""
     functions = dict(functions or {})
+    exported = set() if exported is None else exported
+    held = {} if held is None else held
+    scope["walks"] += 1
+    if scope["walks"] > MAX_COMMAND_EXPANSIONS:
+        return (f"Recursive delete analysis exceeds {MAX_COMMAND_EXPANSIONS} command expansions. "
+                "To pass, split the command into smaller steps."), here
     if depth > MAX_NESTING:
         reaches_rm = any(re.search(r"\brm\b", body) for body in [command, *(f["body"] for f in functions.values())])
         return (NESTED_TOO_DEEP if reaches_rm else None), here
@@ -334,15 +341,16 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
             for i in range(first, end):
                 view[offsets[i]:offsets[i] + len(lines[i])] = " " * len(lines[i])
     view = "".join(view)
-    scope["exported"] |= {n for m in EXPORTS.finditer(masked) for n in re.findall(r"([A-Za-z_]\w*)(?:=\S*)?", m.group(1))}
-    if re.search(r"\bset\s+(?:-\w*a|-o\s+allexport)\b", masked):
-        scope["exported"].add("*")
     # Found in the whole text: a string spanning lines spans segments too, and runs from the one it starts in.
     runs = [(a, b) for a, b in quoted_spans(masked) if view[a] == masked[a] and text[a + 1:b - 1] in scripts]
     # What a child shell's string assigns stays in that shell: the caller's values are those around the string.
     values_text = list(masked)
+    runner_code = list(masked)
+    for a, b in quoted_spans(masked):
+        runner_code[a:b] = " " * (b - a)
+    runner_code = "".join(runner_code)
     for a, b in runs:
-        if SHELL.fullmatch(string_runner(masked, a)):
+        if SHELL.fullmatch(string_runner(masked, a, runner_code)):
             values_text[a + 1:b - 1] = [c if c == "\n" else " " for c in masked[a + 1:b - 1]]
     values_text = "".join(values_text)
     # What a masked $(…) holds may still set this shell's variables (eval "$(cat <<EOF … EOF)"): a variable is known
@@ -366,10 +374,10 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
     # Code an interpreter runs (python3 -c '… os.system("rm …")') runs its strings wherever they stand in it.
     code_spawns = from_text and bool(SPAWNS.search(text))
     loops = (loop_words(text) if as_written else ()) + tuple(outer_loops)
-    assigned = ASSIGNED_NAME.findall(masked)
-    defined, held = [], {}
+    assigned = Counter(ASSIGNED_NAME.findall(masked))
+    defined = []
     outer, at, line, next_run, next_sub, next_def, next_fed, in_pattern = [], 0, 0, 0, 0, 0, 0, False
-    walk = functools.partial(rm_walk, cwd=cwd, scope=scope, chain=chain, depth=depth + 1)
+    walk = functools.partial(rm_walk, cwd=cwd, scope=scope, chain=chain, depth=depth + 1, exported=exported, held=held)
     for segment, values in segments_with_values(values_text, known, runs_first, as_written):
         start = values_text.find(segment, at)
         if unmasked_starts:
@@ -401,7 +409,7 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
         opens = len(quoted) - len(quoted.lstrip("("))
         # Only the closing parentheses of a subshell this segment didn't open: x=$(ls) closes its own.
         closes = min(len(quoted) - len(quoted.rstrip(")")), max(0, quoted.count(")") - quoted.count("(") + opens))
-        outer += [here] * opens
+        outer += [(here, set(exported), dict(held)) for _ in range(opens)]
         while next_def < len(defs) and defs[next_def][0] < at:
             header, body_start, body_end, _, name = defs[next_def]
             next_def += 1
@@ -416,7 +424,7 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
             around = tuple((0, math.inf, name, words) for do, done, name, words in loops if do <= a < done)
             denied = walk(text[a + 2:b - 1] if text[a] == "$" else text[a + 1:b - 1], here=here, known=values,
                           runs_first=False, as_written=as_written, from_text=from_text, functions=functions,
-                          outer_loops=around)[0]
+                          outer_loops=around, exported=set(exported), held=dict(held))[0]
             if denied:
                 return denied, here
         try:  # the subshell's parentheses only: a quoted "(old)" in a name stays
@@ -429,11 +437,15 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
                 tokens += values["@"]
             else:
                 tokens.append(expand(word, values))
+        prefix = shell_prefix(tokens)
         tokens, chdir = run_words(tokens)
+        literal_count = 0
         reference = HELD_REFERENCE.fullmatch(tokens[0]) if tokens else None
         if reference and reference.group(1) in held:  # its value split on spaces, with no second reading of quotes, ~ or $
-            tokens, chdir = run_words(["./" + w if w.startswith("~") else w for w in held[reference.group(1)].split()] + tokens[1:])
-        if (m := HELD_COMMAND.fullmatch(code)) and assigned.count(m.group(1)) == 1:
+            tail = tokens[1:]
+            tokens, chdir = run_words(["./" + w if w.startswith("~") else w for w in held[reference.group(1)].split()] + tail)
+            literal_count = len(tokens) - len(tail)
+        if (m := HELD_COMMAND.fullmatch(code)) and assigned[m.group(1)] == 1:
             value = m.group(2)[1:-1] if m.group(2)[0] == "'" else expand(m.group(2)[1:-1], values)
             if m.group(2)[0] == "'" or not re.search(r"[$`\\]", value):
                 held[m.group(1)] = value
@@ -441,6 +453,20 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
         if chdir is not None and (here is not None or os.path.isabs(chdir)):  # relative to an unresolved cd: unresolved
             runs_in = cd_into(here or cwd, chdir)
         name = os.path.basename(tokens[0]) if tokens else ""
+        if "*" in exported and not tokens:
+            exported.update(m.group(1) for word in raw if (m := re.match(r"([A-Za-z_]\w*)=", word)))
+        if name == "export" or name in ("declare", "typeset") and any(
+                word.startswith("-") and "x" in word for word in tokens[1:]):
+            names = {word.split("=", 1)[0] for word in tokens[1:] if re.match(r"^[A-Za-z_]\w*(?:=|$)", word)}
+            if name == "export" and "-n" in tokens:
+                exported.difference_update(names)
+            else:
+                exported.update(names)
+        elif name == "set":
+            if "-a" in tokens or tokens[1:] == ["-o", "allexport"]:
+                exported.add("*")
+            elif "+a" in tokens or tokens[1:] == ["+o", "allexport"]:
+                exported.discard("*")
         if name in ("cd", "pushd"):
             args = [t for t in tokens[1:] if t == "-" or not t.startswith("-")]
             target = (args[0] if args else "~").replace("${HOME}", "~").replace("$HOME", "~")
@@ -449,45 +475,53 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
             elif here is not None or os.path.isabs(os.path.expanduser(target)):
                 here = cd_into(here or cwd, through_links(target.rstrip("/") + "/", here, cwd, scope["links"]))
         elif tokens[0:1] and tokens[0] in functions:
-            denied, here = rm_in_call(functions[tokens[0]], tokens[1:], runs_in, values, walk, functions, chain, scope)
+            denied, here = rm_in_call(functions[tokens[0]], tokens[1:], runs_in, values, walk, functions, chain)
             if denied:
                 return denied, here
         elif name == "trap" and len(tokens) > 1:
-            for word in re.split(r"[;&|\s]+", tokens[1]):
-                if word in functions:
-                    denied = rm_in_call(functions[word], [], runs_in, values, walk, functions, chain, scope)[0]
-                    if denied:
-                        return denied, here
+            if any(word in functions for word in re.split(r"[;&|\s]+", tokens[1])):
+                denied = walk(tokens[1], here=runs_in, known=values, runs_first=False,
+                              functions=functions)[0]
+                if denied:
+                    return denied, here
         elif (reference := HELD_REFERENCE.fullmatch(tokens[-1]) if tokens else None) and reference.group(1) in held and (
                 name == "eval" and len(tokens) == 2 or SHELL.fullmatch(name) and re.fullmatch(r"-\w*c", tokens[-2])):
             script, inherited, inner = held[reference.group(1)], values, functions
             if name != "eval":
-                (script, inherited), inner = child_shell_view(script, values, {}, scope["exported"]), {}
+                (script, inherited), inner = child_shell_view(script, values, prefix, exported), {}
             denied = walk(script, here=runs_in, known=inherited, runs_first=False, as_written=as_written, from_text=True,
-                          functions=inner)[0]
+                          functions=inner, exported=exported if name == "eval" else set(exported),
+                          held=held if name == "eval" else {k: v for k, v in held.items() if k in exported})[0]
             if denied:
                 return denied, here
         elif name in ("rm", "unlink"):
-            given = [t for t in tokens[1:] if t and not t.startswith("-")]
+            given = [(t, i < literal_count) for i, t in enumerate(tokens) if i and t and not t.startswith("-")]
             flags = "".join(t.lstrip("-") for t in tokens[1:] if t.startswith("-") and not t.startswith("--"))
             if name == "rm" and ("r" in flags.lower() or "--recursive" in tokens):
                 targets = given
                 if from_text:
                     # Run as text, the caller's arguments are what it passes in (find -exec sh -c '… "$1"').
-                    targets = [t for t in targets if not re.search(r"\$\{?[\d@*#]", t) and (runs_in is not None or os.path.isabs(t))]
-                per_word = [word for t in targets for word in with_loop_words(t, start, loops)]
+                    targets = [(t, literal) for t, literal in targets if (literal or not re.search(r"\$\{?[\d@*#]", t))
+                               and (runs_in is not None or os.path.isabs(t))]
+                per_word = [(word, literal) for t, literal in targets
+                            for word in ([t] if literal else with_loop_words(t, start, loops))]
                 if len(per_word) - len(targets) <= LOOP_COMBINATIONS:
                     targets = per_word
                 if scope["too_many_links"] and targets:
                     return TOO_MANY_LINKS, here
-                targets = [through_links(t, runs_in, cwd, scope["links"]) for t in targets]
                 # An unquoted $VAR splits on spaces, so the path before a cache name may be several targets.
-                denied = dangerous_rm_targets(targets, runs_in, cwd, "$" in shell_code(code))
-                if denied:
-                    return denied, here
-            for t in given:  # a link removed is followed no longer
+                for t, literal in targets:
+                    denied = dangerous_rm_targets([through_links(t, runs_in, cwd, scope["links"], literal=literal)], runs_in, cwd,
+                                                  "$" in shell_code(code), literal=literal)
+                    if denied:
+                        return denied, here
+            for t, _ in given:  # a link removed is followed no longer
                 for link in link_names(t, start, loops):
-                    scope["links"].pop(link_path(link, runs_in, cwd), None)
+                    path = link_path(link, runs_in, cwd)
+                    recursive = name == "rm" and ("r" in flags.lower() or "--recursive" in tokens)
+                    for tracked in list(scope["links"]):
+                        if path and (tracked == path or recursive and tracked.startswith(path.rstrip("/") + "/")):
+                            del scope["links"][tracked]
         elif name == "ln":
             options = [t for t in tokens[1:] if t.startswith("-")]
             places = [t for t in tokens[1:] if not t.startswith("-")]
@@ -506,9 +540,10 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
             next_fed += 1
             if not quoted_delimiter:
                 body = as_caller_expands(body, values)
-            body, inherited = child_shell_view(body, values, {}, scope["exported"])
+            body, inherited = child_shell_view(body, values, prefix, exported)
             denied = walk(body, here=runs_in, known=inherited, runs_first=False, as_written=as_written and quoted_delimiter,
-                          from_text=True)[0]
+                          from_text=True, exported=set(exported),
+                          held={k: v for k, v in held.items() if k in exported})[0]
             if denied:
                 return denied, here
         runs_strings = None
@@ -531,10 +566,7 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
                     script = as_caller_expands(script, values)
                     around = tuple((0, math.inf, name, words) for do, done, name, words in loops if do <= a < done)
                 if SHELL.fullmatch(runner):
-                    shell_at = next(i for i, w in enumerate(raw) if SHELL.fullmatch(os.path.basename(w)))
-                    prefix = {m.group(1): m.group(2) for w in raw[:shell_at]
-                              if (m := re.fullmatch(r"([A-Za-z_]\w*)=([^$`]*)", w, re.S))}
-                    script, inherited = child_shell_view(script, values, prefix, scope["exported"])
+                    script, inherited = child_shell_view(script, values, shell_prefix(raw), exported)
                     inner = {}
                 elif not runner:
                     inner = {}
@@ -544,11 +576,19 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
                 first = runs_first and words[:1] not in ([], ["trap"]) and not written_files(segment) and all(
                     not before.strip() or before.lstrip().startswith("#") for before in text[:start].split("\n"))
                 denied = walk(script, here=runs_in, known=inherited, runs_first=first, as_written=as_written and single,
-                              from_text=True, functions=inner, outer_loops=around)[0]
+                              from_text=True, functions=inner, outer_loops=around,
+                              exported=exported if runner in ("eval", "trap") else set(exported),
+                              held=held if runner in ("eval", "trap") else
+                              {k: v for k, v in held.items() if k in exported})[0]
                 if denied:
                     return denied, here
         for _ in range(closes):
-            here = outer.pop() if outer else here
+            if outer:
+                here, saved_exports, saved_held = outer.pop()
+                exported.clear()
+                exported.update(saved_exports)
+                held.clear()
+                held.update(saved_held)
         line += segment.count("\n")
     for definition in defined:  # one nothing calls is judged where it is defined
         if not definition["called"]:
@@ -560,36 +600,27 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
     return None, here
 
 
-def string_runner(text, at):
+def string_runner(text, at, code):
     """The shell, eval or trap that runs the quoted string starting at this position, from the words before it in
     its segment; empty when none does."""
-    before = list(text[text.rfind("\n", 0, at) + 1:at])
-    for a, b in quoted_spans("".join(before)):
-        before[a:b] = " " * (b - a)
-    before = "".join(before)
+    start = max(code.rfind(separator, 0, at) for separator in "\n;&|") + 1
     try:
-        words = shlex.split(text[at - len(before) + max(map(before.rfind, ";&|")) + 1:at])
+        words = shlex.split(text[start:at])
         words = run_words([w.lstrip("(") or w for w in words])[0]
     except ValueError:
         return ""
     return next((w for w in map(os.path.basename, words) if SHELL.fullmatch(w) or w in ("eval", "trap")), "")
 
 
-def rm_in_call(definition, args, here, values, walk, functions, chain, scope):
-    """rm_walk() of a function's body where it is called, with args as $1… and $@: once per chain of calls, and once
-    per directory, words, variables and links it is called with."""
+def rm_in_call(definition, args, here, values, walk, functions, chain):
+    """Judge each call with its arguments; walking a body also changes the tracked links."""
     definition["called"] = True
     name = definition["name"]
     if name in chain:
         return None, here
     inherited = {**values, **{str(i): args[i - 1] if i <= len(args) else "" for i in range(1, 10)}, "@": tuple(args)}
-    key = (name, definition["at"], here, frozenset(inherited.items()), frozenset(scope["links"].items()))
-    if key in scope["memo"]:
-        return None, scope["memo"][key]
     denied, after = walk(definition["body"], here=here, known=inherited, runs_first=False, functions=functions,
                          chain=chain + (name,))
-    if not denied:
-        scope["memo"][key] = after
     return denied, after
 
 
@@ -653,7 +684,12 @@ def command_substitutions(text):
             if kind == "$(":
                 found.append((start, i + 1))
         i += 1
-    return [(a, b) for a, b in found if b - a > 2 and not any(a2 < a and b <= b2 for a2, b2 in found)]
+    outer, last_end = [], -1
+    for a, b in sorted(found):
+        if a >= last_end and b - a > 2:
+            outer.append((a, b))
+            last_end = b
+    return outer
 
 
 def function_definitions(text):
@@ -730,7 +766,7 @@ def child_shell_view(script, values, prefix, exported):
     for name, value in values.items():
         if name.isdigit() or name == "@" or name in prefix:
             continue
-        if value is None or name in os.environ or name in exported or "*" in exported:
+        if value is None or name in os.environ or name in exported:
             inherited[name] = value
         elif re.search(rf"(?<!\w)\$\{{?{name}(?!\w)", script) and not re.search(rf"(?<![\w$.:/-]){name}\+?=", script):
             hidden.append(name)
@@ -738,6 +774,12 @@ def child_shell_view(script, values, prefix, exported):
     if hidden:
         script = re.sub(r"\$(\{?)(" + "|".join(hidden) + r")(?!\w)", r"$\1" + NOT_EXPORTED + r"\2", script)
     return script, inherited
+
+
+def shell_prefix(words):
+    shell_at = next((i for i, word in enumerate(words) if SHELL.fullmatch(os.path.basename(word))), 0)
+    return {m.group(1): m.group(2) for word in words[:shell_at]
+            if (m := re.fullmatch(r"([A-Za-z_]\w*)=([^$`]*)", word, re.S))}
 
 
 def link_names(word, at, loops):
@@ -755,10 +797,10 @@ def link_path(name, here, cwd):
     return os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
 
 
-def through_links(target, here, cwd, links):
+def through_links(target, here, cwd, links, literal=False):
     """The target with each link the command made on its way followed to the link's target: as written when it
     passes through none. A target naming the link itself deletes the link, unless a trailing / follows it."""
-    if not links or "$" in target or "`" in target or (here is None and not os.path.isabs(os.path.expanduser(target))):
+    if not links or (not literal and ("$" in target or "`" in target)) or (here is None and not os.path.isabs(os.path.expanduser(target))):
         return target
     path = os.path.realpath(os.path.join(here or cwd, os.path.expanduser(target)))
     followed = False
@@ -840,7 +882,7 @@ def run_words(tokens):
 WILDCARDS_ONLY = re.compile(r"(?=.*[*?[])(?:[*?.]|\[[^\]]*\])+")
 
 
-def dangerous_rm_targets(targets, here, cwd, unquoted_variable=False):
+def dangerous_rm_targets(targets, here, cwd, unquoted_variable=False, literal=False):
     """Each target judged from the tracked directory and from cwd as well: a cd the tracking gets wrong (in a
     pipeline, after `false &&`, undone by popd) can then only deny more than judging from cwd alone did. A linked
     worktree and a regenerable cache may go from anywhere, but never the folder the shell is in or one holding it."""
@@ -854,11 +896,12 @@ def dangerous_rm_targets(targets, here, cwd, unquoted_variable=False):
             tmpdir = os.path.dirname(tmpdir)
     for target in targets:
         # $PWD as ., not as here: judged from cwd too, a cd tracked wrong can't make it look safer.
-        target = os.path.expanduser(re.sub(r"^\$(?:\{PWD\}|PWD)(?=/|$)", ".", target))
+        if not literal:
+            target = os.path.expanduser(re.sub(r"^\$(?:\{PWD\}|PWD)(?=/|$)", ".", target))
         # A cache folder that holds the shell's folder could be the one a variable or wildcard names.
         cache = regenerable_cache(target) and not any(set(d.split(os.sep)) & CACHE_FOLDERS for d in shell_dirs)
-        unresolved = "$" in target or "`" in target or (here is None and not os.path.isabs(target))
-        if marker := re.search(rf"\$\{{?({EXPANDED_BY_CALLER}|{NOT_EXPORTED})(\w+)", target):
+        unresolved = (not literal and ("$" in target or "`" in target)) or (here is None and not os.path.isabs(target))
+        if not literal and (marker := re.search(rf"\$\{{?({EXPANDED_BY_CALLER}|{NOT_EXPORTED})(\w+)", target)):
             shown = target.replace(marker.group(1), "")
             if marker.group(1) == EXPANDED_BY_CALLER:
                 return (f"Recursive delete of {shown}: the calling shell expands ${marker.group(2)} in the double-quoted "
@@ -1050,6 +1093,7 @@ def cd_into(cwd, target):
     return path if os.path.isdir(path) and os.access(path, os.X_OK) else cwd
 
 
+@functools.lru_cache(maxsize=8)
 def quoted_spans(command):
     """(start, end) of each quoted string in the command, quotes included; an unclosed one runs to the end.
     Heredoc bodies aren't skipped: an apostrophe in one can pair with a later quote."""
@@ -1069,7 +1113,7 @@ def quoted_spans(command):
             i = n if end < 0 else end
         else:
             i += 1
-    return spans
+    return tuple(spans)
 
 
 # Claude Code and Codex give the hook 10 s and let the command through when it runs out. All
