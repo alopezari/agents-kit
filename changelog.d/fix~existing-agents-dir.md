@@ -1,0 +1,1 @@
+- The README shows how to install into a `~/.agents` that already exists, which `git clone` refuses, and git ignores the `commands/` folder Superset installs there.

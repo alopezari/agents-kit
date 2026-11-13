@@ -12,6 +12,17 @@ macOS only for now (the scheduled jobs use launchd).
 git clone https://github.com/alopezari/agents-kit.git ~/.agents && ~/.agents/install.sh
 ```
 
+If `~/.agents` already exists, `git clone` stops with "destination path already exists". Other tools write there too (Superset installs its skills and commands in it), so turn the folder into the kit's checkout in place:
+
+```bash
+git -C ~/.agents init
+git -C ~/.agents remote add origin https://github.com/alopezari/agents-kit.git
+git -C ~/.agents fetch origin main
+git -C ~/.agents checkout -t origin/main && ~/.agents/install.sh
+```
+
+Superset's files stay where they are, and git ignores them. If a file already there has the same path as a file of the kit, the checkout lists it and stops without overwriting anything: move it aside and run the checkout again.
+
 `install.sh` wires every installed harness and is safe to re-run. To check the setup afterwards:
 
 ```bash
