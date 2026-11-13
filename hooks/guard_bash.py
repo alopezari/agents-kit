@@ -10,6 +10,8 @@ Records the checkout of each allowed `git push`, so the stop hook can follow
 that commit's CI.
 """
 import bisect
+from collections import Counter
+import fnmatch
 import functools
 import io
 import itertools
@@ -264,96 +266,557 @@ def touches_approvals(command, cwd, runs=False):
 
 UNKNOWN = object()
 SAFE_RM_ROOTS = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
+# Functions, $(…) and strings a shell runs, read inside one another: past this the hook would run out of time.
+MAX_NESTING = 16
+MAX_COMMAND_EXPANSIONS = 1024
+NESTED_TOO_DEEP = ("Recursive delete nested deeper than the guard reads: functions, $(…) or strings a shell runs, "
+                   f"more than {MAX_NESTING} levels inside one another. To pass, run the delete with less nesting.")
+TOO_MANY_LINKS = ("Recursive delete after more links made by the same command than the guard follows. To pass, make "
+                  "the links in a command of their own.")
+# Marks a $NAME the walk knows the running shell can't take from the calling one, for dangerous_rm_targets().
+EXPANDED_BY_CALLER, NOT_EXPORTED = "__expanded_by_caller_", "__not_exported_"
+FUNCTION_DEF = re.compile(r"(?:^|(?<=[\s;&|(]))(?:function\s+([\w.:-]+)(?:\s*\(\s*\))?|([\w.:-]+)\s*\(\s*\))\s*\{(?=\s)")
+LEADING_KEYWORD = re.compile(r"(?:then|do|else|elif|if|while|until|!|\{|time(?=\s+\())(?=[\s(])\s*")
+CASE_HEADER = re.compile(r"case\s+\S+\s+in(?:\s+|$)")
+MKTEMP_ONLY = re.compile(r"\s*mktemp\b[^()|;&\n`]*")
+HELD_REFERENCE = re.compile(r"\$\{?(\w+)\}?")
+HELD_COMMAND = re.compile(r"([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*')")
+SHELL = re.compile(r"(?:ba|z|da|k)?sh")
 
 
-def dangerous_rm(command, cwd, run_by=None):
-    """Recursive deletes outside the working directory, temp dirs, linked worktrees and regenerable caches, each judged from where the `cd`s before it
-    leave the shell (a subshell's cd ends with it), with the variables segments_with_values() knows substituted.
-    Inside a loop over literal words (loop_words()), a target using its variable is judged once per word, while that
-    adds at most LOOP_COMBINATIONS targets to one delete.
-    After a cd the guard can't resolve, a relative target is unresolved too. A quoted string the command runs as a
-    command (bash -c, eval, trap) is judged the same way, run_by giving the directory and variables of its segment,
-    whether it runs before anything else could have removed a directory, and whether its shell reads it as written
-    (segments_with_values()): in a double-quoted one the calling shell expands each $NAME first, so no loop's words
-    stand for it there."""
-    here, known, runs_first, as_written = run_by or (cwd, None, True, True)  # here is None after an unresolvable cd
-    # An unquoted heredoc writes \$T as $T: T=\$(mktemp -d) there makes a temp dir. Elsewhere a target with $ is
-    # unresolved anyway.
-    command = command.replace("\\$", "$")
+def dangerous_rm(command, cwd):
+    """Recursive deletes outside the working directory, temp dirs, linked worktrees and regenerable caches, or of a
+    temp root itself, each judged where the shell runs it: from where the `cd`s before it leave the shell (a cd in a
+    subshell or $(…) ends with it), with the variables segments_with_values() knows substituted, through the links
+    the command made with `ln -s`. A function is judged at each call with its words as $1…, at the trap that names
+    it, or where it is defined when nothing calls it; a $(…) where it stands; a $CMD whose whole value is known as
+    its words. Inside a loop over literal words (loop_words()), a target using its variable is judged once per word,
+    while that adds at most LOOP_COMBINATIONS targets to one delete. After a cd the guard can't resolve, a relative
+    target is unresolved too. A quoted string or heredoc the command runs as a command (bash -c, eval, trap, bash
+    <<EOF) is judged as its shell gets it: a double-quoted one or an unquoted heredoc with the calling shell's values
+    put in first, a child shell seeing only the variables exported to it."""
+    if "rm" not in command:
+        return None
+    scope = {"walks": 0, "links": {}, "too_many_links": False,
+             "reaches_rm": bool(re.search(r"\brm\b", command))}
+    return rm_walk(command, cwd, scope, cwd)[0]
+
+
+def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=True, from_text=False,
+            functions=None, chain=(), depth=0, outer_loops=(), exported=None, held=None):
+    """dangerous_rm() of one text a shell runs, and the directory it leaves the shell in. here is where it starts
+    (None after an unresolvable cd), known the variables it inherits, runs_first whether it runs before anything else
+    could have removed a directory, as_written whether its shell reads it as written (segments_with_values()),
+    from_text whether it is a string run as a command, whose $1 and $@ are what its caller passes in, functions
+    those defined where it runs, chain the functions being called around it, outer_loops the loops around it."""
+    functions = dict(functions or {})
+    exported = set() if exported is None else exported
+    held = {} if held is None else held
+    scope["walks"] += 1
+    if scope["walks"] > MAX_COMMAND_EXPANSIONS:
+        return (f"Recursive delete analysis exceeds {MAX_COMMAND_EXPANSIONS} command expansions. "
+                "To pass, split the command into smaller steps." if scope["reaches_rm"] else None), here
+    if depth > MAX_NESTING:
+        reaches_rm = any(re.search(r"\brm\b", body) for body in [command, *(f["body"] for f in functions.values())])
+        return (NESTED_TOO_DEEP if reaches_rm else None), here
+    command = heredoc_dollars_unescaped(command)
     text, scripts = without_scripts(command)[0], set(strings_running_rm(command))
-    # Found in the whole text: a string spanning lines spans segments too, and runs from the one it starts in.
-    runs = [(a, b) for a, b in quoted_spans(text) if text[a + 1:b - 1] in scripts]
-    run_files = files_run(text)
     lines = text.split("\n")
+    masked = list(text)
+    substitutions = []
+    for a, b in command_substitutions(text):
+        if not MKTEMP_ONLY.fullmatch(text[a + 2:b - 1] if text[a] == "$" else text[a + 1:b - 1]):
+            masked[a:b] = "$(" + "-" * (b - a - 3) + ")"
+            substitutions.append((a, b))
+    masked = "".join(masked)
+    defs = function_definitions(masked)
+    view = list(masked)
+    for header, body_start, body_end, end, _ in defs:
+        view[header:end] = [" " if c != "\n" else c for c in masked[header:end]]
+    offsets = line_offsets(lines)
+    fed = []  # (header position, body, quoted delimiter) of each heredoc a shell runs
+    for header, m, first, end in heredoc_spans(lines) or ():
+        at = offsets[header] + m.start()
+        if view[at] == text[at] and heredoc_shell(lines[header], m):
+            fed.append((at, "\n".join(lines[first:end]), not m.group(4)))
+            for i in range(first, end):
+                view[offsets[i]:offsets[i] + len(lines[i])] = " " * len(lines[i])
+    view = "".join(view)
+    # Found in the whole text: a string spanning lines spans segments too, and runs from the one it starts in.
+    runs = [(a, b) for a, b in quoted_spans(masked) if view[a] == masked[a] and text[a + 1:b - 1] in scripts]
+    # What a child shell's string assigns stays in that shell: the caller's values are those around the string.
+    values_text = list(masked)
+    runner_code = list(masked)
+    for a, b in quoted_spans(masked):
+        runner_code[a:b] = " " * (b - a)
+    runner_code = "".join(runner_code)
+    for a, b in runs:
+        if SHELL.fullmatch(string_runner(masked, a, runner_code)):
+            values_text[a + 1:b - 1] = [c if c == "\n" else " " for c in masked[a + 1:b - 1]]
+    values_text = "".join(values_text)
+    # What a masked $(…) holds may still set this shell's variables (eval "$(cat <<EOF … EOF)"): a variable is known
+    # only where the reading of the text with them in knows it too.
+    unmasked_starts, unmasked_values = [], []
+    if substitutions:
+        unmasked = "".join(c if values_text[i] == masked[i] else values_text[i] for i, c in enumerate(text))
+        at = 0
+        for segment, values in segments_with_values(unmasked, known, runs_first, as_written):
+            at = unmasked.find(segment, at)
+            unmasked_starts.append(at)
+            unmasked_values.append(values)
+            at += len(segment)
+    run_files = files_run(text)
     heredocs = read_heredocs(lines) or ()
+    body_lines = {i for first, end, _, _ in heredocs for i in range(first, end)}
     spawning = {i for first, end, kind, _ in heredocs if kind == "spawns" for i in range(first, end)}
     # A body only written to files the command doesn't run is text: its trap or eval runs nowhere yet.
     written_only = {i for first, end, kind, _ in heredocs
                     if kind == "other" and (written := written_files(lines[first - 1])) and not written & run_files
                     for i in range(first, end)}
     # Code an interpreter runs (python3 -c '… os.system("rm …")') runs its strings wherever they stand in it.
-    code_spawns = run_by is not None and bool(SPAWNS.search(text))
-    loops = loop_words(text) if as_written else ()
-    outer, at, line, next_run = [], 0, 0, 0
-    for segment, values in segments_with_values(text, known, runs_first, as_written):
-        start = text.find(segment, at)
+    code_spawns = from_text and bool(SPAWNS.search(text))
+    loops = (loop_words(text) if as_written else ()) + tuple(outer_loops)
+    assigned = Counter(ASSIGNED_NAME.findall(masked))
+    defined = []
+    outer, at, line, next_run, next_sub, next_def, next_fed, in_pattern = [], 0, 0, 0, 0, 0, 0, False
+    walk = functools.partial(rm_walk, cwd=cwd, scope=scope, chain=chain, depth=depth + 1, exported=exported, held=held)
+    for segment, values in segments_with_values(values_text, known, runs_first, as_written):
+        start = values_text.find(segment, at)
+        if unmasked_starts:
+            also = unmasked_values[max(0, bisect.bisect_right(unmasked_starts, start) - 1)]
+            values = {name: value for name, value in values.items() if name in also and also[name] == value}
+        segment = masked[start:start + len(segment)]
+        in_pattern |= bool(re.search(r";;|;&", masked[at:start]))  # after ;; or ;& a case pattern comes first
         line += text.count("\n", at, start)
         at = start + len(segment)
-        stripped = segment.strip()
-        outer += [here] * (len(stripped) - len(stripped.lstrip("(")))
+        code, lead = view[start:at], 0
+        quoted = list(code)
+        for a, b in quoted_spans(code):
+            quoted[a:b] = "q" * (b - a)
+        quoted = "".join(quoted)
+        lead = len(quoted) - len(quoted.lstrip())
+        while m := LEADING_KEYWORD.match(quoted, lead):
+            lead = m.end()
+        if m := CASE_HEADER.match(quoted, lead):
+            lead, in_pattern = m.end(), True
+        if in_pattern:
+            if re.match(r"esac(?:\s|;|\)|$)", quoted[lead:]):
+                in_pattern = False
+            else:  # a pattern a | splits goes on in the next segment
+                close = quoted.find(")", lead)
+                lead, in_pattern = (len(quoted), True) if close < 0 else (close + 1, False)
+                lead += len(quoted[lead:]) - len(quoted[lead:].lstrip())
+        end = len(quoted.rstrip())
+        code, quoted = code[lead:end], quoted[lead:end]
+        opens = len(quoted) - len(quoted.lstrip("("))
+        # Only the closing parentheses of a subshell this segment didn't open: x=$(ls) closes its own.
+        closes = min(len(quoted) - len(quoted.rstrip(")")), max(0, quoted.count(")") - quoted.count("(") + opens))
+        outer += [(here, set(exported), dict(held)) for _ in range(opens)]
+        while next_def < len(defs) and defs[next_def][0] < at:
+            header, body_start, body_end, _, name = defs[next_def]
+            next_def += 1
+            functions[name] = {"name": name, "at": header, "body": text[body_start:body_end], "called": False,
+                               "here": here, "values": values}
+            defined.append(functions[name])
+        while next_sub < len(substitutions) and substitutions[next_sub][0] < at:
+            a, b = substitutions[next_sub]
+            next_sub += 1
+            if view[a] != masked[a]:
+                continue  # in a function's body, judged where it is called
+            around = tuple((0, math.inf, name, words) for do, done, name, words in loops if do <= a < done)
+            denied = walk(text[a + 2:b - 1] if text[a] == "$" else text[a + 1:b - 1], here=here, known=values,
+                          runs_first=False, as_written=as_written, from_text=from_text, functions=functions,
+                          outer_loops=around, exported=set(exported), held=dict(held))[0]
+            if denied:
+                return denied, here
         try:  # the subshell's parentheses only: a quoted "(old)" in a name stays
-            tokens = [expand(t, values) for t in shlex.split(stripped.lstrip("(").rstrip(")"))]
+            raw = shlex.split(code[opens:len(code) - closes])
         except ValueError:
-            tokens = []
+            raw = []
+        tokens = []
+        for word in raw:
+            if word in ("$@", "${@}", "$*", "${*}") and "@" in values:
+                tokens += values["@"]
+            else:
+                tokens.append(expand(word, values))
+        prefix = shell_prefix(tokens)
         tokens, chdir = run_words(tokens)
+        literal_count = 0
+        reference = HELD_REFERENCE.fullmatch(tokens[0]) if tokens else None
+        if reference and reference.group(1) in held:  # its value split on spaces, with no second reading of quotes, ~ or $
+            tail = tokens[1:]
+            tokens, chdir = run_words(["./" + w if w.startswith("~") else w for w in held[reference.group(1)].split()] + tail)
+            literal_count = len(tokens) - len(tail)
+        if line not in body_lines and (m := HELD_COMMAND.fullmatch(code)) and assigned[m.group(1)] == 1:
+            value = m.group(2)[1:-1] if m.group(2)[0] == "'" else expand(m.group(2)[1:-1], values)
+            if m.group(2)[0] == "'" or not re.search(r"[$`\\]", value):
+                held[m.group(1)] = value
         runs_in = here
         if chdir is not None and (here is not None or os.path.isabs(chdir)):  # relative to an unresolved cd: unresolved
             runs_in = cd_into(here or cwd, chdir)
-        if tokens and tokens[0] in ("cd", "pushd"):
+        name = os.path.basename(tokens[0]) if tokens else ""
+        if line not in body_lines and "*" in exported and not tokens:
+            exported.update(m.group(1) for word in raw if (m := re.match(r"([A-Za-z_]\w*)=", word)))
+        if line not in body_lines and (name == "export" or name in ("declare", "typeset") and any(
+                word.startswith("-") and "x" in word for word in tokens[1:])):
+            names = {word.split("=", 1)[0] for word in tokens[1:] if re.match(r"^[A-Za-z_]\w*(?:=|$)", word)}
+            if name == "export" and "-n" in tokens:
+                exported.difference_update(names)
+            else:
+                exported.update(names)
+        elif line not in body_lines and name == "set":
+            if any(re.fullmatch(r"-[a-z]*a[a-z]*", word) for word in tokens[1:]) or tokens[1:] == ["-o", "allexport"]:
+                exported.add("*")
+            elif any(re.fullmatch(r"\+[a-z]*a[a-z]*", word) for word in tokens[1:]) or tokens[1:] == ["+o", "allexport"]:
+                exported.discard("*")
+        if name in ("cd", "pushd"):
             args = [t for t in tokens[1:] if t == "-" or not t.startswith("-")]
             target = (args[0] if args else "~").replace("${HOME}", "~").replace("$HOME", "~")
             if target == "-" or "$" in target or "`" in target:
                 here = None
             elif here is not None or os.path.isabs(os.path.expanduser(target)):
-                here = cd_into(here or cwd, target)
-        elif tokens and os.path.basename(tokens[0]) == "rm":
+                here = cd_into(here or cwd, through_links(target.rstrip("/") + "/", here, cwd, scope["links"]))
+        elif tokens[0:1] and tokens[0] in functions:
+            denied, here = rm_in_call(functions[tokens[0]], tokens[1:], runs_in, values, walk, functions, chain)
+            if denied:
+                return denied, here
+        elif name == "trap" and len(tokens) > 1:
+            if any(word in functions for word in re.split(r"[;&|\s]+", tokens[1])):
+                denied = walk(tokens[1], here=runs_in, known=values, runs_first=False,
+                              functions=functions, exported=set(exported), held=dict(held))[0]
+                if denied:
+                    return denied, here
+        elif (reference := HELD_REFERENCE.fullmatch(tokens[-1]) if tokens else None) and reference.group(1) in held and (
+                name == "eval" and len(tokens) == 2 or SHELL.fullmatch(name) and re.fullmatch(r"-\w*c", tokens[-2])):
+            script, inherited, inner = held[reference.group(1)], values, functions
+            if name != "eval":
+                (script, inherited), inner = child_shell_view(script, values, prefix, exported), {}
+            denied = walk(script, here=runs_in, known=inherited, runs_first=False, as_written=as_written, from_text=True,
+                          functions=inner, exported=exported if name == "eval" else set(exported),
+                          held=held if name == "eval" else {k: v for k, v in held.items() if k in exported})[0]
+            if denied:
+                return denied, here
+        elif name in ("rm", "unlink"):
+            given = [(t, i < literal_count) for i, t in enumerate(tokens) if i and t and not t.startswith("-")]
             flags = "".join(t.lstrip("-") for t in tokens[1:] if t.startswith("-") and not t.startswith("--"))
-            if "r" in flags.lower() or "--recursive" in tokens:
-                targets = [t for t in tokens[1:] if t and not t.startswith("-")]
-                if run_by:
+            if name == "rm" and ("r" in flags.lower() or "--recursive" in tokens):
+                targets = given
+                if from_text:
                     # Run as text, the caller's arguments are what it passes in (find -exec sh -c '… "$1"').
-                    targets = [t for t in targets if not re.search(r"\$\{?[\d@*#]", t) and (runs_in is not None or os.path.isabs(t))]
-                per_word = [word for t in targets for word in with_loop_words(t, start, loops)]
+                    targets = [(t, literal) for t, literal in targets if (literal or not re.search(r"\$\{?[\d@*#]", t))
+                               and (runs_in is not None or os.path.isabs(t))]
+                per_word = [(word, literal) for t, literal in targets
+                            for word in ([t] if literal else with_loop_words(t, start, loops))]
                 if len(per_word) - len(targets) <= LOOP_COMBINATIONS:
                     targets = per_word
+                if scope["too_many_links"] and targets:
+                    return TOO_MANY_LINKS, here
                 # An unquoted $VAR splits on spaces, so the path before a cache name may be several targets.
-                denied = dangerous_rm_targets(targets, runs_in, cwd, "$" in shell_code(stripped))
-                if denied:
-                    return denied
+                for t, literal in targets:
+                    denied = dangerous_rm_targets([through_links(t, runs_in, cwd, scope["links"], literal=literal)], runs_in, cwd,
+                                                  "$" in shell_code(code), literal=literal)
+                    if denied:
+                        return denied, here
+            for t, _ in given:  # a link removed is followed no longer
+                for link in link_names(t, start, loops):
+                    path = link_path(link, runs_in, cwd)
+                    recursive = name == "rm" and ("r" in flags.lower() or "--recursive" in tokens)
+                    for tracked in list(scope["links"]):
+                        if path and (tracked == path or recursive and tracked.startswith(path.rstrip("/") + "/")):
+                            del scope["links"][tracked]
+        elif name == "ln":
+            options = [t for t in tokens[1:] if t.startswith("-")]
+            places = [t for t in tokens[1:] if not t.startswith("-")]
+            letters = "".join(t[1:] for t in options if not t.startswith("--"))
+            symbolic = ("s" in letters or "--symbolic" in options) and not ("t" in letters or "T" in letters)
+            if symbolic and len(places) == 2 and not re.search(r"[$`]", places[0]):
+                for link in link_names(places[1], start, loops):
+                    if len(scope["links"]) >= LOOP_COMBINATIONS:
+                        scope["too_many_links"] = True
+                        break
+                    path = link_path(link, runs_in, cwd)
+                    if path:
+                        scope["links"][path] = os.path.normpath(os.path.join(os.path.dirname(path), os.path.expanduser(places[0])))
+        while next_fed < len(fed) and fed[next_fed][0] < at:
+            _, body, quoted_delimiter = fed[next_fed]
+            next_fed += 1
+            if not quoted_delimiter:
+                body = as_caller_expands(body, values)
+            body, inherited = child_shell_view(body, values, prefix, exported)
+            denied = walk(body, here=runs_in, known=inherited, runs_first=False, as_written=as_written and quoted_delimiter,
+                          from_text=True, exported=set(exported),
+                          held={k: v for k, v in held.items() if k in exported})[0]
+            if denied:
+                return denied, here
         runs_strings = None
         while next_run < len(runs) and runs[next_run][0] < at:
             a, b = runs[next_run]
             next_run += 1
             if runs_strings is None:  # from the words before the segment's first string: a segment can hold thousands
-                try:
-                    words = run_words(shlex.split(text[start:a]))[0]
+                try:  # (bash -c '…'): the subshell's parenthesis is no part of the shell's name
+                    raw = [w.lstrip("(") or w for w in shlex.split(masked[start:a])]
                 except ValueError:
-                    words = []
+                    raw = []
+                words = run_words(raw)[0]
+                runner = next((w for w in map(os.path.basename, words) if SHELL.fullmatch(w) or w in ("eval", "trap")), "")
                 runs_strings = code_spawns or line in spawning or (
                     line not in written_only and runs_its_strings(words, segment, text[at:], run_files))
             if runs_strings:
+                script, inherited, inner, single = text[a + 1:b - 1], values, functions, text[a] == "'"
+                around = ()
+                if runner and not single:
+                    script = as_caller_expands(script, values)
+                    around = tuple((0, math.inf, name, words) for do, done, name, words in loops if do <= a < done)
+                if SHELL.fullmatch(runner):
+                    script, inherited = child_shell_view(script, values, shell_prefix(raw), exported)
+                    inner = {}
+                elif not runner:
+                    inner = {}
                 script = PROCESS_QUOTE.sub(lambda m: "\n" + "".join(g or "" for g in m.group(1, 2, 3, 5, 6)) + "\n",
-                                           text[a + 1:b - 1].replace("\\n", "\n"))
+                                           script.replace("\\n", "\n"))
                 # A trap's string or one written to a file runs later, and one after another command runs after it.
                 first = runs_first and words[:1] not in ([], ["trap"]) and not written_files(segment) and all(
                     not before.strip() or before.lstrip().startswith("#") for before in text[:start].split("\n"))
-                denied = dangerous_rm(script, cwd, (runs_in, values, first, as_written and text[a] == "'"))
+                denied = walk(script, here=runs_in, known=inherited, runs_first=first, as_written=as_written and single,
+                              from_text=True, functions=inner, outer_loops=around,
+                              exported=exported if runner == "eval" else set(exported),
+                              held=held if runner == "eval" else dict(held) if runner == "trap" else
+                              {k: v for k, v in held.items() if k in exported})[0]
                 if denied:
-                    return denied
-        for _ in range(len(stripped) - len(stripped.rstrip(")"))):
-            here = outer.pop() if outer else here
+                    return denied, here
+        for _ in range(closes):
+            if outer:
+                here, saved_exports, saved_held = outer.pop()
+                exported.clear()
+                exported.update(saved_exports)
+                held.clear()
+                held.update(saved_held)
         line += segment.count("\n")
-    return None
+    for definition in defined:  # one nothing calls is judged where it is defined
+        if not definition["called"]:
+            definition["called"] = True
+            denied = walk(definition["body"], here=definition["here"], known=definition["values"], runs_first=False,
+                          from_text=from_text, functions=functions, chain=chain + (definition["name"],))[0]
+            if denied:
+                return denied, here
+    return None, here
+
+
+def string_runner(text, at, code):
+    """The shell, eval or trap that runs the quoted string starting at this position, from the words before it in
+    its segment; empty when none does."""
+    start = max(code.rfind(separator, 0, at) for separator in "\n;&|") + 1
+    try:
+        words = shlex.split(text[start:at])
+        words = run_words([w.lstrip("(") or w for w in words])[0]
+    except ValueError:
+        return ""
+    return next((w for w in map(os.path.basename, words) if SHELL.fullmatch(w) or w in ("eval", "trap")), "")
+
+
+def rm_in_call(definition, args, here, values, walk, functions, chain):
+    """Judge each call with its arguments; walking a body also changes the tracked links."""
+    definition["called"] = True
+    name = definition["name"]
+    if name in chain:
+        return None, here
+    inherited = {**values, **{str(i): args[i - 1] if i <= len(args) else "" for i in range(1, 10)}, "@": tuple(args)}
+    denied, after = walk(definition["body"], here=here, known=inherited, runs_first=False, functions=functions,
+                         chain=chain + (name,))
+    return denied, after
+
+
+def command_substitutions(text):
+    """(start, end) of each outermost $(…) and backtick substitution the shell runs in the text: outside single
+    quotes, comments and heredoc bodies, inside double quotes too. One that doesn't close is left out."""
+    found, stack, pending, i, n = [], [], [], 0, len(text)  # stack: (kind, start) of each open ( $( ` and "
+    while i < n:
+        c, top = text[i], stack[-1][0] if stack else ""
+        if c == "\\":
+            i += 2
+            continue
+        if top == '"':
+            if c == '"':
+                stack.pop()
+            elif c == "`" or text.startswith("$(", i):
+                stack.append(("`" if c == "`" else "$(", i))
+                i += 1
+            i += 1
+            continue
+        if c == "'":
+            close = text.find("'", i + 1)
+            i = n if close < 0 else close + 1
+            continue
+        if c == "#" and (i == 0 or text[i - 1] in " \t\n;&|("):
+            close = text.find("\n", i)
+            i = n if close < 0 else close
+            continue
+        if c == "\n" and pending:  # skip each heredoc body this line opened
+            i += 1
+            for delimiter in pending:
+                while i <= n:
+                    close = text.find("\n", i)
+                    close = n if close < 0 else close
+                    body_line, i = text[i:close], close + 1
+                    if body_line.lstrip("\t") == delimiter:
+                        break
+            pending = []
+            continue
+        if c == "<" and (m := HEREDOC.match(text, i)) and not text.startswith("<<<", i):
+            pending.append(m.group(2) or m.group(3) or m.group(4))
+            i = m.end()
+            continue
+        if c == '"':
+            stack.append(('"', i))
+        elif c == "`":
+            if top == "`":
+                found.append((stack.pop()[1], i + 1))
+            else:
+                stack.append(("`", i))
+        elif text.startswith("$((", i):
+            stack.append(("(", i))
+            i += 1
+        elif text.startswith("$(", i):
+            stack.append(("$(", i))
+            i += 1
+        elif c == "(" and stack:
+            stack.append(("(", i))
+        elif c == ")" and top in ("(", "$("):
+            kind, start = stack.pop()
+            if kind == "$(":
+                found.append((start, i + 1))
+        i += 1
+    outer, last_end = [], -1
+    for a, b in sorted(found):
+        if a >= last_end and b - a > 2:
+            outer.append((a, b))
+            last_end = b
+    return outer
+
+
+def function_definitions(text):
+    """(header start, body start, body end, end, name) of each outermost `name() { …; }` or `function name { …; }`
+    in the text, outside quoted strings, comments and heredoc bodies; one whose closing } isn't found is left out."""
+    lines = text.split("\n")
+    code = blank_lines(text, {i for _, _, first, end in heredoc_spans(lines) or () for i in range(first, end)})
+    code = list(code)
+    for a, b in quoted_spans("".join(code)):
+        code[a:b] = " " * (b - a)
+    code = re.sub(r"(?:^|(?<=[\s;&|()]))#[^\n]*", lambda m: " " * len(m.group()), "".join(code))
+    found, after = [], 0
+    for m in FUNCTION_DEF.finditer(code):
+        if m.start() < after:
+            continue
+        depth = 1
+        for brace in re.finditer(r"(?:^|(?<=[\s;&|()]))\{(?=\s)|(?:^|(?<=[\s;&]))\}(?=[\s;&|)]|$)", code[m.end():]):
+            depth += 1 if brace.group() == "{" else -1
+            if depth == 0:
+                close = m.end() + brace.start()
+                found.append((m.start(), m.end(), close, close + 1, m.group(1) or m.group(2)))
+                after = close + 1
+                break
+    return found
+
+
+def heredoc_dollars_unescaped(command):
+    """The command with \\$ written as $ in the bodies of unquoted heredocs no shell runs, as bash writes them:
+    T=\\$(mktemp -d) there makes a temp dir. A body a shell runs, and a double-quoted string, is read by
+    as_caller_expands(); elsewhere shlex reads \\$ as $."""
+    lines = command.split("\n")
+    spans = heredoc_spans(lines)
+    if spans is None:
+        return command.replace("\\$", "$")
+    for header, m, first, end in spans:
+        if m.group(4) and not heredoc_shell(lines[header], m):
+            lines[first:end] = [body_line.replace("\\$", "$") for body_line in lines[first:end]]
+    return "\n".join(lines)
+
+
+def heredoc_shell(line, m):
+    """Whether a shell runs this heredoc's body: bash, sh, zsh, dash or ksh owns its << and is given no -c."""
+    masked, _, starts, _, _ = line_layout(line)
+    try:
+        words = run_words(shlex.split(masked[starts[bisect.bisect_right(starts, m.start()) - 1]:m.start()]))[0]
+    except ValueError:
+        return False
+    return bool(words) and bool(SHELL.fullmatch(os.path.basename(words[0]))) and all(
+        w.startswith("-") and not re.fullmatch(r"-[a-z]*c[a-z]*", w) for w in words[1:])
+
+
+def as_caller_expands(script, values):
+    """A double-quoted string or unquoted heredoc as the shell running it gets it: each unescaped $NAME the calling
+    shell knows put in, one only the string assigns marked EXPANDED_BY_CALLER (the caller has none), then \\$, \\`,
+    \\" and \\\\ unescaped."""
+    inside = set(ASSIGNED_NAME.findall(script))
+
+    def one(m):
+        if m.group(1):
+            return m.group(1)
+        name = m.group(2) or m.group(4)
+        if name in values:
+            return expand(m.group(0), values)
+        return m.group(0).replace(name, EXPANDED_BY_CALLER + name, 1) if name in inside else m.group(0)
+    expanded = re.sub(r"(\\.)|\$\{(\w+)(:?-[^}]*)?\}|\$(\w+)", one, script, flags=re.S)
+    return re.sub(r"\\([$`\"\\])", r"\1", expanded)
+
+
+def child_shell_view(script, values, prefix, exported):
+    """The script a child shell runs and the variables it starts with: those the environment holds, the command
+    exports or the NAME=value words before the shell give it. A $NAME the caller knows but doesn't export, and the
+    script doesn't assign, is marked NOT_EXPORTED."""
+    inherited, hidden = dict(prefix), []
+    for name, value in values.items():
+        if name.isdigit() or name == "@" or name in prefix:
+            continue
+        if value is None or name in os.environ or name in exported:
+            inherited[name] = value
+        elif re.search(rf"(?<!\w)\$\{{?{name}(?!\w)", script) and not re.search(rf"(?<![\w$.:/-]){name}\+?=", script):
+            hidden.append(name)
+            inherited[NOT_EXPORTED + name] = None
+    if hidden:
+        script = re.sub(r"\$(\{?)(" + "|".join(hidden) + r")(?!\w)", r"$\1" + NOT_EXPORTED + r"\2", script)
+    return script, inherited
+
+
+def shell_prefix(words):
+    shell_at = next((i for i, word in enumerate(words) if SHELL.fullmatch(os.path.basename(word))), 0)
+    return {m.group(1): m.group(2) for word in words[:shell_at]
+            if (m := re.fullmatch(r"([A-Za-z_]\w*)=([^$`]*)", word, re.S))}
+
+
+def link_names(word, at, loops):
+    """The paths a link's name stands for: once per word of the loops around it, a variable left as a wildcard."""
+    names = with_loop_words(word, at, loops)
+    names = [re.sub(r"\$(?:\{\w+\}|\w+)", "*", name) for name in names]
+    return [name for name in names if "$" not in name and "`" not in name]
+
+
+def link_path(name, here, cwd):
+    """Where a link of this name is made, its folder resolved; None when the shell's folder isn't known."""
+    if here is None and not os.path.isabs(os.path.expanduser(name)):
+        return None
+    path = os.path.normpath(os.path.join(here or cwd, os.path.expanduser(name)))
+    return os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
+
+
+def through_links(target, here, cwd, links, literal=False):
+    """The target with each link the command made on its way followed to the link's target: as written when it
+    passes through none. A target naming the link itself deletes the link, unless a trailing / follows it."""
+    if not links or (not literal and ("$" in target or "`" in target)) or (here is None and not os.path.isabs(os.path.expanduser(target))):
+        return target
+    path = os.path.realpath(os.path.join(here or cwd, os.path.expanduser(target)))
+    followed = False
+    for _ in range(LOOP_COMBINATIONS):
+        parts = path.split(os.sep)
+        for link, destination in links.items():
+            link_parts = link.split(os.sep)
+            if (len(parts) > len(link_parts) or (len(parts) == len(link_parts) and target.endswith("/"))) and all(
+                    fnmatch.fnmatchcase(part, pattern) for part, pattern in zip(parts, link_parts)):
+                path, followed = os.path.join(destination, *parts[len(link_parts):]), True
+                break
+        else:
+            break
+    return path if followed else target
 
 
 def runs_its_strings(words, segment, rest, run_files):
@@ -418,18 +881,36 @@ def run_words(tokens):
     return [], chdir
 
 
-def dangerous_rm_targets(targets, here, cwd, unquoted_variable=False):
+WILDCARDS_ONLY = re.compile(r"(?=.*[*?[])(?:[*?.]|\[[^\]]*\])+")
+
+
+def dangerous_rm_targets(targets, here, cwd, unquoted_variable=False, literal=False):
     """Each target judged from the tracked directory and from cwd as well: a cd the tracking gets wrong (in a
     pipeline, after `false &&`, undone by popd) can then only deny more than judging from cwd alone did. A linked
     worktree and a regenerable cache may go from anywhere, but never the folder the shell is in or one holding it."""
     home = os.path.realpath(os.path.expanduser("~"))
     shell_dirs = {d for d in (cwd, here and os.path.realpath(here)) if d}
+    temp_roots = {os.path.realpath(r) for r in SAFE_RM_ROOTS}
+    if tmpdir := os.environ.get("TMPDIR"):
+        tmpdir = os.path.realpath(tmpdir)
+        while tmpdir not in temp_roots:
+            temp_roots.add(tmpdir)
+            tmpdir = os.path.dirname(tmpdir)
     for target in targets:
         # $PWD as ., not as here: judged from cwd too, a cd tracked wrong can't make it look safer.
-        target = os.path.expanduser(re.sub(r"^\$(?:\{PWD\}|PWD)(?=/|$)", ".", target))
+        if not literal:
+            target = os.path.expanduser(re.sub(r"^\$(?:\{PWD\}|PWD)(?=/|$)", ".", target))
         # A cache folder that holds the shell's folder could be the one a variable or wildcard names.
         cache = regenerable_cache(target) and not any(set(d.split(os.sep)) & CACHE_FOLDERS for d in shell_dirs)
-        unresolved = "$" in target or "`" in target or (here is None and not os.path.isabs(target))
+        unresolved = (not literal and ("$" in target or "`" in target)) or (here is None and not os.path.isabs(target))
+        if not literal and (marker := re.search(rf"\$\{{?({EXPANDED_BY_CALLER}|{NOT_EXPORTED})(\w+)", target)):
+            shown = target.replace(marker.group(1), "")
+            if marker.group(1) == EXPANDED_BY_CALLER:
+                return (f"Recursive delete of {shown}: the calling shell expands ${marker.group(2)} in the double-quoted "
+                        "string or unquoted heredoc before it runs, so the value the string assigns isn't the one used. "
+                        "To pass, single-quote the string or the heredoc's delimiter.")
+            return (f"Recursive delete of {shown}: the shell this string runs in doesn't see ${marker.group(2)}, which "
+                    "the command sets without exporting. To pass, export the variable or assign it in the string.")
         if unresolved and cache and not unquoted_variable:
             continue
         if unresolved or "*" == target.strip("/"):
@@ -446,6 +927,11 @@ def dangerous_rm_targets(targets, here, cwd, unquoted_variable=False):
             path = os.path.realpath(os.path.join(place, target))
             if path in ("/", home) or cwd.startswith(path + os.sep) or path == cwd:
                 return f"Recursive delete of {path}, which contains the working directory or home."
+            # A name of wildcards only (*, .[!.]*) deletes everything in its folder, as the folder itself would.
+            root = os.path.dirname(path) if WILDCARDS_ONLY.fullmatch(os.path.basename(path)) else path
+            if root in temp_roots:
+                return (f"Recursive delete of {path}, a temp root that holds other programs' files. To pass, name the "
+                        "directory under it.")
             if path.startswith(cwd + os.sep) or any(path == r or path.startswith(r + os.sep) for r in SAFE_RM_ROOTS):
                 continue
             # A symlink named __pycache__ resolves to what it points at, which is what rm -rf path/ deletes.
@@ -609,6 +1095,7 @@ def cd_into(cwd, target):
     return path if os.path.isdir(path) and os.access(path, os.X_OK) else cwd
 
 
+@functools.lru_cache(maxsize=8)
 def quoted_spans(command):
     """(start, end) of each quoted string in the command, quotes included; an unclosed one runs to the end.
     Heredoc bodies aren't skipped: an apostrophe in one can pair with a later quote."""
@@ -628,7 +1115,7 @@ def quoted_spans(command):
             i = n if end < 0 else end
         else:
             i += 1
-    return spans
+    return tuple(spans)
 
 
 # Claude Code and Codex give the hook 10 s and let the command through when it runs out. All
