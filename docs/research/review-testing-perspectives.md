@@ -30,7 +30,7 @@ validate    (before PR)          →  the triggered test types; e2e positive/neg
 |---|---|---|---|
 | Low (docs, tests, config, <50 lines) | Correctness pass | `verify` only | < 5 min |
 | Standard | 3–4 triggered lenses, one cross-model pass | `verify`, full unit suite, e2e for the criteria | ≤ 20 min |
-| High (auth, payments, data, public API, caching, cron, >400 lines) | All triggered lenses, cross-model per lens | Standard, plus the triggered advanced tests below | ≤ 45 min |
+| High (auth, payments, data, public API, caching, cron, >400 lines outside tests) | All triggered lenses, cross-model per lens | Standard, plus the triggered advanced tests below | ≤ 45 min |
 
 ## Review lenses
 

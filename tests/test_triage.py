@@ -482,14 +482,16 @@ for case, args, expected in (
         ("spec low, high-risk diff", ("Risk: low — one line", "auth"), ("high", "low", "high")),
         ("spec standard, docs-only diff", ("Risk: standard — totals", "docs"), ("standard", "standard", "low")),
         ("spec high, docs-only diff", ("Risk: high — schema", "docs"), ("high", "high", "low")),
-        ("a low Risk line with Decisions", ("Risk: low — one line", "docs", DECISIONS), ("high", "high", "low")),
+        ("a low Risk line with Decisions", ("Risk: low — one line", "docs", DECISIONS), ("low", "low", "low")),
         ("spec equal to the diff", ("Risk: standard — totals", "code"), ("standard", "standard", "standard")),
         ("no spec", (None, "auth"), ("high", None, "high")),
         ("no Risk line", ("", "docs"), ("low", None, "low")),
         ("an invalid Risk line", ("Risk: medium — totals", "docs"), ("low", None, "low")),
         ("two Risk lines", ("Risk: high — schema\nRisk: low — docs", "docs"), ("low", None, "low")),
-        ("no Risk line, with Decisions", ("", "docs", DECISIONS), ("high", "high", "low")),
-        ("an invalid Risk line, with Decisions", ("Risk: medium — x", "docs", DECISIONS), ("high", "high", "low"))):
+        ("no Risk line, with Decisions", ("", "docs", DECISIONS), ("low", None, "low")),
+        ("an invalid Risk line, with Decisions", ("Risk: medium — x", "docs", DECISIONS), ("low", None, "low")),
+        ("a high Risk line with Decisions, docs-only diff", ("Risk: high — schema", "docs", DECISIONS), ("high", "high", "low")),
+        ("a low Risk line with Decisions, high-risk diff", ("Risk: low — one line", "auth", DECISIONS), ("high", "low", "high"))):
     result = triage_spec(*args)
     ok = tiers(result) == expected
     fail |= not ok
@@ -522,8 +524,7 @@ for case, args, expected in (
         ("the spec decides", ("Risk: high — adds a schema", "docs"), ("Risk: high (", "the spec", "adds a schema")),
         ("the diff decides", ("Risk: low — one line", "auth"), ("Risk: high (", "the diff", "one line")),
         ("they agree", ("Risk: standard — totals", "code"), ("Risk: standard (", "they agree", "totals")),
-        ("a low Risk line with Decisions", ("Risk: low — one line", "docs", DECISIONS),
-         ("Risk: high (", "the spec", "a '## Decisions' section; its Risk line says low: one line")),
+        ("a low Risk line with Decisions", ("Risk: low — one line", "docs", DECISIONS), ("Risk: low (", "they agree", "one line")),
         ("an invalid Risk line", ("Risk: medium — totals", "docs"), ("Risk: low (", "no prediction", "'medium' is not a tier")),
         ("no Risk line", ("", "docs"), ("Risk: low (", "no prediction", "no 'Risk:' line")),
         ("two Risk lines", ("Risk: high — a\nRisk: low — b", "docs"), ("Risk: low (", "no prediction", "more than one")),
@@ -536,6 +537,18 @@ for case, args, expected in (
         ok = out.startswith(expected[0]) and all(part in head for part in expected[1:])
     fail |= not ok
     print(f"{'ok  ' if ok else 'FAIL'} spec risk, plain output, {case}: {head!r}")
+
+# A Decisions section moves no tier: the same spec without it gives the same answer, in both outputs.
+for risk in ("Risk: low — one line", "Risk: standard — totals", "Risk: high — schema", "", "Risk: medium — totals",
+             "Risk: high — a\nRisk: low — b"):
+    for diff in ("docs", "code"):
+        without, with_decisions = (triage_spec(risk, diff, extra) for extra in ("", DECISIONS))
+        plain_without, plain_with = (triage_spec(risk, diff, extra, plain=True) for extra in ("", DECISIONS))
+        ok = isinstance(without, dict) and without == with_decisions and plain_without == plain_with
+        fail |= not ok
+        got = {k: with_decisions.get(k) for k in ("tier", "spec_tier", "spec_note")} if isinstance(with_decisions, dict) else with_decisions
+        print(f"{'ok  ' if ok else 'FAIL'} spec risk, a Decisions section changes nothing ({risk.splitlines()[0] if risk else 'no Risk line'}, "
+              f"{diff} diff): {got}")
 
 
 def spec_off(home, repo, spec, env):
@@ -648,6 +661,77 @@ reason = MUTATION_CASES[0][1]["tests"].get(LIGHT_MUTATION, [""])[0]
 ok = "5 mutants" in reason and "5 minutes" in reason
 fail |= not ok
 print(f"{'ok  ' if ok else 'FAIL'} mutation: the light check's reason names the cap: {reason!r}")
+
+
+def code(count, value=0, name="a"):
+    return "".join(f"{name}{n} = {value}\n" for n in range(count))
+
+
+def triage_sized(before, after, committed):
+    """triage --json and its text output on a change from `before` to `after` ({path: text or None}): committed and read
+    with --range, or left in the working tree, its new files untracked."""
+    with tempfile.TemporaryDirectory(prefix="agents-test-triage-") as repo:
+        def git(*args):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True)
+        git("init", "-q", "-b", "main")
+        for files in (before, after):
+            for path, text in files.items():
+                full = os.path.join(repo, path)
+                if text is None:
+                    os.remove(full)
+                else:
+                    os.makedirs(os.path.dirname(full), exist_ok=True)
+                    open(full, "w").write(text)
+            if files is before or committed:
+                git("add", "-A")
+                git("commit", "-q", "--allow-empty", "-m", "change" if files is after else "base")
+        args = ["--range", "HEAD~1..HEAD"] if committed else []
+        run = [subprocess.run([TRIAGE, *args, *json_flag], cwd=repo, capture_output=True, text=True, timeout=60).stdout
+               for json_flag in (["--json"], [])]
+        return json.loads(run[0]), run[1]
+
+
+ONE_WAY = "".join(f"line {n} of a long helper\n" for n in range(1000))
+# 300 lines leave and 100 arrive: a count that reads either side by the other file's path gives another number.
+EDITED = "".join(f"line {n} of a long helper{', edited' if n < 300 else ''}\n" for n in range(200, 1000))
+TEST_NAMINGS = ("test/a.py", "tests/b.py", "src/__tests__/c.js", "spec/d.rb", "src/e.test.js", "lib/f_spec.rb", "src/g-test.ts",
+                "src/CartTest.php")
+# (case, before, after, total changed lines, the size reason or None, the diff's tier)
+SIZE_CASES = [
+    ("400 code lines added", {}, {"app.py": code(400)}, 400, None, "standard"),
+    ("401 code lines added", {}, {"app.py": code(401)}, 401, "401 changed lines outside tests", "high"),
+    ("400 code lines, 200 of them removed, and 300 test lines", {"app.py": code(200)},
+     {"app.py": code(200, 1), "tests/test_app.py": code(300, name="t")}, 700, None, "standard"),
+    ("401 code lines, 200 of them removed, and 300 test lines", {"app.py": code(200)},
+     {"app.py": code(200, 1) + "z = 1\n", "tests/test_app.py": code(300, name="t")}, 701, "401 changed lines outside tests", "high"),
+    ("a few code lines and 600 test lines", {}, {"app.py": code(5), "tests/test_app.py": code(300, name="t"),
+                                                  "src/cart.test.js": code(200, name="t"), "spec/cart_spec.rb": code(100, name="t")}, 605, None, "standard"),
+    ("only tests, 600 lines", {}, {"tests/test_app.py": code(600, name="t")}, 600, None, "standard"),
+    ("450 lines of instructions and a few code lines", {}, {"app.py": code(5), "AGENTS.md": "- Rule.\n" * 300,
+                                                           "skills/x/SKILL.md": "- Step.\n" * 150}, 455, "455 changed lines outside tests", "high"),
+    ("450 lines of prose under test directories and a few code lines", {}, {"app.py": code(5), "tests/README.md": "- Note.\n" * 300,
+                                                                           "spec/notes.txt": "- Note.\n" * 150}, 455, "455 changed lines outside tests", "high"),
+    ("a few code lines and 450 test lines under each test naming", {},
+     {"app.py": code(5), **{path: code(450, name="t") for path in TEST_NAMINGS}}, 5 + 450 * len(TEST_NAMINGS), None, "standard"),
+    ("450 lines in PHP files whose names end in test", {}, {"includes/class-contest.php": code(250), "src/latest.php": code(200)},
+     450, "450 changed lines outside tests", "high"),
+    ("an edited move from code into tests", {"src/helper.py": ONE_WAY},
+     {"src/helper.py": None, "tests/helper.py": EDITED, "app.py": code(101)}, 501, "401 changed lines outside tests", "high"),
+    ("an edited move from tests into code", {"tests/helper.py": ONE_WAY},
+     {"tests/helper.py": None, "src/helper.py": EDITED, "app.py": code(301)}, 701, "401 changed lines outside tests", "high"),
+]
+for case, before, after, total, size_reason, tier in SIZE_CASES:
+    for committed in (True, False):
+        if not committed and case.startswith("an edited move"):
+            continue  # an uncommitted move is a deletion and an untracked file: no rename to read
+        result, text = triage_sized(before, after, committed)
+        sized_reasons = [r for r in result["reasons"] if "changed lines" in r]
+        ok = (result["diff_tier"] == tier and sized_reasons == ([size_reason] if size_reason else []) and result["changed_lines"] == total
+              and text.startswith(f"Risk: {tier} ({total} changed lines in ")
+              and (size_reason is None or f"  high-risk signal: {size_reason}" in text.splitlines()))
+        fail |= not ok
+        print(f"{'ok  ' if ok else 'FAIL'} size, {case} ({'--range' if committed else 'working tree'}): {result['diff_tier']}, "
+              f"{result['changed_lines']} changed lines, {result['reasons']}")
 
 for line, expected in [(l, False) for l in GIT_SENSE] + [(l, True) for l in SHOP_SENSE]:
     ok = payments_signal(line) == expected

@@ -422,14 +422,14 @@ def guard_allows_worktree_and_cache_deletes(base):
         os.chmod(os.path.join(unreadable, ".git"), 0o644)
 
 
-def guard_reason(command, cwd="/usr/lib", crash=False):
+def guard_reason(command, cwd="/usr/lib", crash=False, timeout=10):
     """The guard's deny reason, "" when it allows. From /usr/lib no temp path is inside the working directory, and
     TMPDIR is fixed: an allow comes from a variable the guard resolved, not from where the command runs. A guard
     that fails is a failed test, unless the crash is what the test asks for."""
     env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
     env.update({"AGENTS_TEST": "1", "AGENTS_STATE_DIR": STATE, "TMPDIR": "/private/var/folders/ab/T/"})
-    out = subprocess.run(["python3", H + "guard_bash.py"], capture_output=True, text=True, env=env,
-                         input=json.dumps({"tool_input": {"command": command}, "cwd": cwd, "session_id": "t"}), timeout=10)
+    out = subprocess.run(["python3", H + "guard_bash.py"], capture_output=True, text=True, env=env, timeout=timeout,
+                         input=json.dumps({"tool_input": {"command": command}, "cwd": cwd, "session_id": "t"}))
     assert out.returncode == 0 and crash == ("guard failed" in out.stdout), out.stdout + out.stderr
     return json.loads(out.stdout)["hookSpecificOutput"]["permissionDecisionReason"] if out.stdout.strip() else ""
 
@@ -465,7 +465,9 @@ def guard_keeps_variables_through_heredocs_and_quoted_text(base):
     for cmd in ["$a" * 40 + "/x!", "cat <<EOF\n" + "${" * 35000 + "\nEOF", "x;" + ">  " * 26,
                 "bash -c \"" + " " * 30000 + "x " + "IFS " * 30000 + "\"; rm -rf /tmp/x/y"]:
         started = child_cpu()
-        assert guard_reason(cmd) == "" and child_cpu() - started < 3, f"the heredoc reading must not stall: {cmd[:20]!r}"
+        # The CPU bound is the stall check: beside the suite's other sections the largest input waits past 10 seconds.
+        assert guard_reason(cmd, timeout=120) == "" and child_cpu() - started < 3, \
+            f"the heredoc reading must not stall: {cmd[:20]!r}"
 
 
 def guard_keeps_chain_assignments_after_sure_steps(base):
