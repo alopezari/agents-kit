@@ -442,7 +442,9 @@ def guard_keeps_variables_through_heredocs_and_quoted_text(base):
                 "S=/tmp/x; sed -i 's/a:unset}/b/' $S/f; rm -rf $S/m",
                 "S=/tmp/x\n\"$T/tool\" - <<'EOF'\nS=/usr\nEOF\nrm -rf $S/lib"]:
         assert guard_reason(cmd) == "", f"the outer shell never runs that text: {cmd!r}"
-    for cmd in ["S=/tmp/x\nbash <<'EOF'\nS=$HOME\nrm -rf $S/y\nEOF", "cat > f <<'EOF'\nT=/tmp/x\nEOF\nrm -rf $T/y",
+    # The suite's HOME is a temp dir, where this body's delete may go: it is a home delete only under another HOME.
+    assert guard_reason_from_home("S=/tmp/x\nbash <<'EOF'\nS=$HOME\nrm -rf $S/y\nEOF") != "", "a body's own delete"
+    for cmd in ["cat > f <<'EOF'\nT=/tmp/x\nEOF\nrm -rf $T/y",
                 "S=/tmp/x; read S; rm -rf $S", "S=/tmp/x; eval 'unset S'; rm -rf $S/y",
                 "S=/tmp/x; trap 'unset S' DEBUG; rm -rf $S/y", "S=/tmp/x; eval 'true; unset S'; rm -rf $S/y",
                 "S=/tmp/x; 'unset' S; rm -rf $S/y", "S=/tmp/x\n2>/dev/null eval 'echo hi; unset S'\nrm -rf $S/y"]:
@@ -869,6 +871,9 @@ def guard_judges_a_delete_wherever_it_runs(base):
                       ("for i in 1; do (cd / && rm -rf usr/local/old); done", "/usr/local/old"),
                       ("while true; do (cd / && rm -rf usr/local/old); break; done", "/usr/local/old"),
                       ("{ (cd / && rm -rf usr/local/old); }", "/usr/local/old"),
+                      ("time (cd / && rm -rf usr/local/old)", "/usr/local/old"),
+                      ("(bash -c 'cd / && rm -rf usr/local/old')", "/usr/local/old"),
+                      ("true && (eval 'rm -rf /usr/local/old')", "/usr/local/old"),
                       ("(cd /usr; x=$(ls); rm -rf local/old)", "/usr/local/old")]:
         reason = guard_reason(cmd)
         assert deletes(reason, path), f"the delete runs from where its cd leaves it: {cmd!r} -> {reason!r}"
@@ -876,6 +881,8 @@ def guard_judges_a_delete_wherever_it_runs(base):
                 "x=`cd / && pwd`; rm -rf build", "x=$(ls; cd /usr); rm -rf lib",
                 "if true; then (cd / && ls); fi; rm -rf build", "for i in 1; do (cd / && ls); done; rm -rf build",
                 "{ (cd / && ls); }; rm -rf build", "case x in x) (cd / && ls) ;; esac; rm -rf build",
+                "time (cd / && ls); rm -rf build", "time (make clean && rm -rf build)", "time -p rm -rf build",
+                "(bash -c 'S=/tmp/x; rm -rf $S/out')",
                 "case x in x) x=$(cd /; pwd) ;; esac; rm -rf build", "x=$(cd / && rm -rf tmp/x); rm -rf build"]:
         assert guard_reason(cmd) == "", f"a cd in a subshell or $(…) ends with it: {cmd!r}"
 
@@ -914,6 +921,7 @@ def guard_reads_a_run_string_as_its_shell_gets_it(base):
                       ("eval \"S=/tmp/x; rm -rf $S/out\"", quote), ("bash <<EOF\nS=/tmp/x; rm -rf $S/*\nEOF", quote),
                       ("D=/tmp/build; bash -c 'rm -rf \"$D\"/*'", export), ("D=/tmp/build; sh -c 'rm -rf $D/out'", export),
                       ("D=/tmp/build\nbash <<'EOF'\nrm -rf \"$D\"/out\nEOF", export),
+                      ("D=/tmp/build; (bash -c 'rm -rf \"$D\"/*')", export),
                       ("D=/tmp/build; ls | xargs sh -c 'rm -rf $D/out'", export)]:
         reason = guard_reason(cmd)
         assert hint in reason and "Nothing in this command ran" in reason, f"{cmd!r} -> {reason!r}"

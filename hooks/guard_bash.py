@@ -274,7 +274,7 @@ TOO_MANY_LINKS = ("Recursive delete after more links made by the same command th
 # Marks a $NAME the walk knows the running shell can't take from the calling one, for dangerous_rm_targets().
 EXPANDED_BY_CALLER, NOT_EXPORTED = "__expanded_by_caller_", "__not_exported_"
 FUNCTION_DEF = re.compile(r"(?:^|(?<=[\s;&|(]))(?:function\s+([\w.:-]+)(?:\s*\(\s*\))?|([\w.:-]+)\s*\(\s*\))\s*\{(?=\s)")
-LEADING_KEYWORD = re.compile(r"(?:then|do|else|elif|if|while|until|!|\{)(?=[\s(])\s*")
+LEADING_KEYWORD = re.compile(r"(?:then|do|else|elif|if|while|until|!|\{|time(?=\s+\())(?=[\s(])\s*")
 CASE_HEADER = re.compile(r"case\s+\S+\s+in(?:\s+|$)")
 MKTEMP_ONLY = re.compile(r"\s*mktemp\b[^()|;&\n`]*")
 HELD_REFERENCE = re.compile(r"\$\{?(\w+)\}?")
@@ -345,6 +345,17 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
         if SHELL.fullmatch(string_runner(masked, a)):
             values_text[a + 1:b - 1] = [c if c == "\n" else " " for c in masked[a + 1:b - 1]]
     values_text = "".join(values_text)
+    # What a masked $(…) holds may still set this shell's variables (eval "$(cat <<EOF … EOF)"): a variable is known
+    # only where the reading of the text with them in knows it too.
+    unmasked_starts, unmasked_values = [], []
+    if substitutions:
+        unmasked = "".join(c if values_text[i] == masked[i] else values_text[i] for i, c in enumerate(text))
+        at = 0
+        for segment, values in segments_with_values(unmasked, known, runs_first, as_written):
+            at = unmasked.find(segment, at)
+            unmasked_starts.append(at)
+            unmasked_values.append(values)
+            at += len(segment)
     run_files = files_run(text)
     heredocs = read_heredocs(lines) or ()
     spawning = {i for first, end, kind, _ in heredocs if kind == "spawns" for i in range(first, end)}
@@ -361,6 +372,9 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
     walk = functools.partial(rm_walk, cwd=cwd, scope=scope, chain=chain, depth=depth + 1)
     for segment, values in segments_with_values(values_text, known, runs_first, as_written):
         start = values_text.find(segment, at)
+        if unmasked_starts:
+            also = unmasked_values[max(0, bisect.bisect_right(unmasked_starts, start) - 1)]
+            values = {name: value for name, value in values.items() if name in also and also[name] == value}
         segment = masked[start:start + len(segment)]
         in_pattern |= bool(re.search(r";;|;&", masked[at:start]))  # after ;; or ;& a case pattern comes first
         line += text.count("\n", at, start)
@@ -502,8 +516,8 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
             a, b = runs[next_run]
             next_run += 1
             if runs_strings is None:  # from the words before the segment's first string: a segment can hold thousands
-                try:
-                    raw = shlex.split(masked[start:a])
+                try:  # (bash -c '…'): the subshell's parenthesis is no part of the shell's name
+                    raw = [w.lstrip("(") or w for w in shlex.split(masked[start:a])]
                 except ValueError:
                     raw = []
                 words = run_words(raw)[0]
@@ -554,7 +568,8 @@ def string_runner(text, at):
         before[a:b] = " " * (b - a)
     before = "".join(before)
     try:
-        words = run_words(shlex.split(text[at - len(before) + max(map(before.rfind, ";&|")) + 1:at]))[0]
+        words = shlex.split(text[at - len(before) + max(map(before.rfind, ";&|")) + 1:at])
+        words = run_words([w.lstrip("(") or w for w in words])[0]
     except ValueError:
         return ""
     return next((w for w in map(os.path.basename, words) if SHELL.fullmatch(w) or w in ("eval", "trap")), "")
