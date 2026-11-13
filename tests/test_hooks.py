@@ -824,6 +824,193 @@ def guard_reads_through_wrappers_and_scripts(base):
         assert guard(cmd) == "allow", f"text a program only prints: {cmd!r}"
 
 
+def deletes(reason, path):
+    """Whether the guard's reason is the delete rule's own, naming this path."""
+    return re.search(r"Recursive delete (?:of |outside the working directory: )" + re.escape(path) + r"(?![\w/-])", reason)
+
+
+# The suite's own HOME is a temp dir, where a delete may go: a home path is denied only from a HOME outside them.
+HOME_OUTSIDE_TEMP = "/var/empty"
+
+
+def guard_reason_from_home(command):
+    """guard_reason() with HOME_OUTSIDE_TEMP as the guard's HOME, its log still in the suite's."""
+    saved = {name: os.environ.get(name) for name in ("HOME", "AGENTS_LOG_DIR")}
+    os.environ["AGENTS_LOG_DIR"] = os.path.expanduser("~/.agents/logs")
+    os.environ["HOME"] = HOME_OUTSIDE_TEMP
+    try:
+        return guard_reason(command)
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name)
+            else:
+                os.environ[name] = value
+
+
+def in_home(path):
+    return os.path.realpath(os.path.join(HOME_OUTSIDE_TEMP, path))
+
+
+def guard_judges_a_delete_wherever_it_runs(base):
+    # From /usr/lib a relative target left untracked stays inside the working directory: only a tracked cd denies.
+    for cmd, path in [("x=$(cd / && rm -rf usr)", "/usr"), ("if true; then (cd / && rm -rf usr); fi", "/usr"),
+                      ("case x in x) rm -rf /usr/local/old ;; esac", "/usr/local/old"),
+                      ("case x in x) cd / && rm -rf usr/local/old ;; esac", "/usr/local/old"),
+                      ("case $1 in a|b) cd /; rm -rf usr/local/old;; esac", "/usr/local/old"),
+                      ("case x in\n  y) ls ;;\n  x) cd / && rm -rf usr/local/old ;;\nesac", "/usr/local/old"),
+                      ("x=$(cd / && rm -rf usr/local/old)", "/usr/local/old"),
+                      ("$(cd / && rm -rf usr/local/old)", "/usr/local/old"),
+                      ("echo \"$(cd / && rm -rf usr/local/old)\"", "/usr/local/old"),
+                      ("x=`cd / && rm -rf usr/local/old`", "/usr/local/old"),
+                      ("`cd / && rm -rf usr/local/old`", "/usr/local/old"),
+                      ("echo \"`cd / && rm -rf usr/local/old`\"", "/usr/local/old"),
+                      ("cd / && x=$(rm -rf usr/local/old)", "/usr/local/old"),
+                      ("for i in 1; do (cd / && rm -rf usr/local/old); done", "/usr/local/old"),
+                      ("while true; do (cd / && rm -rf usr/local/old); break; done", "/usr/local/old"),
+                      ("{ (cd / && rm -rf usr/local/old); }", "/usr/local/old"),
+                      ("(cd /usr; x=$(ls); rm -rf local/old)", "/usr/local/old")]:
+        reason = guard_reason(cmd)
+        assert deletes(reason, path), f"the delete runs from where its cd leaves it: {cmd!r} -> {reason!r}"
+    for cmd in ["(cd / && ls); rm -rf build", "x=$(cd / && ls); rm -rf build", "echo \"$(cd /; pwd)\"; rm -rf build",
+                "x=`cd / && pwd`; rm -rf build", "x=$(ls; cd /usr); rm -rf lib",
+                "if true; then (cd / && ls); fi; rm -rf build", "for i in 1; do (cd / && ls); done; rm -rf build",
+                "{ (cd / && ls); }; rm -rf build", "case x in x) (cd / && ls) ;; esac; rm -rf build",
+                "case x in x) x=$(cd /; pwd) ;; esac; rm -rf build", "x=$(cd / && rm -rf tmp/x); rm -rf build"]:
+        assert guard_reason(cmd) == "", f"a cd in a subshell or $(…) ends with it: {cmd!r}"
+
+
+def guard_judges_a_function_where_it_is_called(base):
+    for cmd, path in [("f() { rm -rf build; }; cd /; f", "/build"), ("f() {\n  rm -rf build\n}\ncd /\nf", "/build"),
+                      ("function f { rm -rf build; }; cd /; f", "/build"),
+                      ("function f() {\n  rm -rf \"$2\"\n}\nf a /usr/local/old", "/usr/local/old"),
+                      ("t() { rm -rf \"$1\"; }; t ~/Projects", in_home("Projects")), ("t() { rm -rf \"$1\"; }; t /usr/local/old", "/usr/local/old"),
+                      ("t() { rm -rf \"$@\"; }; t /tmp/x /usr/local/old", "/usr/local/old"),
+                      ("cleanup() { rm -rf \"$T\"; }; T=/usr/local/old; trap cleanup EXIT", "/usr/local/old"),
+                      ("f() { rm -rf usr/local/old; }; g() { cd / && f; }; g", "/usr/local/old"),
+                      ("f() { cd /; }; f; rm -rf usr/local/old", "/usr/local/old"),
+                      ("t() { rm -rf \"$1\"; }; cd /; t usr/local/old", "/usr/local/old"),
+                      ("cleanup() { rm -rf usr/local/old; }; cd /; trap cleanup EXIT", "/usr/local/old"),
+                      ("f() { rm -rf /usr/local/old; }", "/usr/local/old"),
+                      ("cd /; f() { rm -rf usr/local/old; }", "/usr/local/old"),
+                      ("f() { rm -rf /usr/local/old; f; }; f", "/usr/local/old"),
+                      ("f() { rm -rf usr/local/old; f; }; cd /; f", "/usr/local/old"),
+                      ("x=$(f() { rm -rf usr/local/old; }; cd / && f)", "/usr/local/old")]:
+        reason = guard_reason_from_home(cmd)
+        assert deletes(reason, path), f"the body runs where the function is called: {cmd!r} -> {reason!r}"
+    for cmd in ["t() { rm -rf \"$1\"; }; t /tmp/x", "t() {\n  rm -rf \"$1\"\n}\nt /tmp/x",
+                "cleanup() { rm -rf \"$T\"; }; T=$(mktemp -d); trap cleanup EXIT",
+                "T=$(mktemp -d); cleanup() { rm -rf \"$T\"; }; trap cleanup EXIT",
+                "cleanup() {\n  rm -rf \"$T\"\n}\nT=$(mktemp -d)\ntrap cleanup EXIT",
+                "f() { rm -rf build; }; (cd / && ls); f", "f() { (cd / && ls); rm -rf build; }; f",
+                "f() { rm -rf \"${1:-build}\"; }; f", "f() { rm -rf /tmp/x; f; }; f"]:
+        assert guard_reason(cmd) == "", f"each call's words and directory keep the delete in place: {cmd!r}"
+
+
+def guard_reads_a_run_string_as_its_shell_gets_it(base):
+    quote = "single-quote the string or the heredoc's delimiter"
+    export = "export the variable or assign it in the string"
+    for cmd, hint in [("bash -c \"S=/tmp/x; rm -rf $S/*\"", quote), ("sh -c \"D=/tmp/build && rm -rf $D/\"", quote),
+                      ("eval \"S=/tmp/x; rm -rf $S/out\"", quote), ("bash <<EOF\nS=/tmp/x; rm -rf $S/*\nEOF", quote),
+                      ("D=/tmp/build; bash -c 'rm -rf \"$D\"/*'", export), ("D=/tmp/build; sh -c 'rm -rf $D/out'", export),
+                      ("D=/tmp/build\nbash <<'EOF'\nrm -rf \"$D\"/out\nEOF", export),
+                      ("D=/tmp/build; ls | xargs sh -c 'rm -rf $D/out'", export)]:
+        reason = guard_reason(cmd)
+        assert hint in reason and "Nothing in this command ran" in reason, f"{cmd!r} -> {reason!r}"
+    for cmd, path in [("S=/usr; bash -c \"S=/tmp/x; rm -rf $S/out\"", "/usr/out"),
+                      ("bash -c 'rm -rf \"$HOME\"'", in_home(""))]:
+        assert deletes(guard_reason_from_home(cmd), path), f"the value the running shell sees: {cmd!r}"
+    for cmd in ["T=/tmp/x; bash -c \"rm -rf $T/out\"", "export T=/tmp/x; bash -c \"rm -rf $T/out\"",
+                "bash -c 'S=/tmp/x; rm -rf $S/out'",
+                "export S=/tmp/x; bash -c 'rm -rf \"$S/out\"'", "S=/tmp/x bash -c 'rm -rf \"$S/out\"'",
+                "S=/tmp/x; eval 'rm -rf \"$S/out\"'", "T=$(mktemp -d); trap 'rm -rf \"$T\"' EXIT",
+                "bash -c \"export S=/tmp/x; rm -rf \\$S/out\"", "S=/tmp/x; bash -c \"S=/usr; rm -rf $S/out\"",
+                "export S=/tmp/x\nbash <<'EOF'\nrm -rf \"$S/out\"\nEOF", "bash <<'EOF'\nS=/tmp/x; rm -rf $S/out\nEOF",
+                "T=/tmp/x\nbash <<EOF\nrm -rf $T/out\nEOF", "bash <<'EOF'\ntmp=$(mktemp -d)\nrm -rf \"$tmp\"\nEOF"]:
+        assert guard_reason(cmd) == "", f"the running shell sees a temp path: {cmd!r}"
+
+
+def guard_judges_a_command_held_in_a_variable(base):
+    for cmd, path in [("CMD=\"rm -rf $HOME/old\"; $CMD", in_home("old")), ("CMD='rm -rf ~/old'; eval \"$CMD\"", in_home("old")),
+                      ("cmd='rm -rf /usr/local/x'; bash -c \"$cmd\"", "/usr/local/x"),
+                      ("CMD=\"rm -rf /usr/local/x\"; $CMD -v", "/usr/local/x")]:
+        reason = guard_reason_from_home(cmd)
+        assert deletes(reason, path), f"the held command is the delete: {cmd!r} -> {reason!r}"
+    for cmd in ["CMD=\"rm -rf $TMPDIR/old\"; $CMD", "CMD=\"rm -rf /tmp/old\"; $CMD", "CMD='rm -rf /tmp/old'; eval \"$CMD\"",
+                "cmd='rm -rf /tmp/x'; bash -c \"$cmd\"", "X=\"env A=1 python3 -m tool\"; $X run",
+                "CMD='rm -rf ~/old'; $CMD", "$CMD", "CMD=$(cat f); $CMD"]:
+        assert guard_reason(cmd) == "", f"a held delete of a temp path, a word ~, or a value the guard can't know: {cmd!r}"
+
+
+def guard_keeps_the_temp_roots(base):
+    # guard_reason() runs from /usr/lib, outside every temp root, with TMPDIR /private/var/folders/ab/T/.
+    for cmd in ["rm -rf /tmp", "rm -rf /tmp/", "rm -rf /private/tmp", "rm -rf /var/folders", "rm -rf /var/folders/",
+                "rm -rf /private/var/folders", "rm -rf /tmp/*", "rm -rf /tmp/.[!.]*", "cd /tmp && rm -rf ./*",
+                "rm -rf \"$TMPDIR\"", "rm -rf \"$TMPDIR\"/*", "rm -rf /private/var/folders/ab",
+                "rm -rf /private/var/folders/ab/T/"]:
+        reason = guard_reason(cmd)
+        assert "name the directory under it" in reason and "Nothing in this command ran" in reason, f"{cmd!r} -> {reason!r}"
+    for cmd in ["rm -rf /tmp/x", "rm -rf /tmp/kit-suite-*", "rm -rf /tmp/*.log", "rm -rf \"${TMPDIR:-/tmp}/kit-x\"",
+                "T=$(mktemp -d); rm -rf \"$T\"", "T=$(mktemp -d); rm -rf \"$T\"/*", "TMPDIR=/tmp/x; rm -rf \"$TMPDIR\"",
+                "rm -rf /tmp/x/*"]:
+        assert guard_reason(cmd) == "", f"a directory under a temp root: {cmd!r}"
+
+
+def guard_follows_a_link_the_command_makes(base):
+    for cmd, path in [("ln -s ~/Documents /tmp/docs && rm -rf /tmp/docs/", in_home("Documents")),
+                      ("ln -s \"$HOME/Projects/app\" /tmp/l; rm -rf /tmp/l/src", in_home("Projects/app/src")),
+                      ("ln -s /usr/local /tmp/l; rm -rf /tmp/l/src", "/usr/local/src"),
+                      ("for d in docs; do ln -s /usr/local /tmp/$d && rm -rf /tmp/$d/lib; done", "/usr/local/lib"),
+                      ("cd /tmp && ln -s /usr/local l && rm -rf l/lib", "/usr/local/lib"),
+                      ("ln -s /usr/local /tmp/l && cd /tmp/l && rm -rf lib", "/usr/local/lib"),
+                      ("ln -sfn /usr/local /tmp/l; rm -rf /tmp/l/lib", "/usr/local/lib")]:
+        reason = guard_reason_from_home(cmd)
+        assert deletes(reason, path), f"the delete reaches the link's target: {cmd!r} -> {reason!r}"
+    # Counted from the link's own folder, ../usr/local leaves the temp root whatever /tmp resolves to.
+    reason = guard_reason("cd /tmp && ln -s ../usr/local l && rm -rf l/lib")
+    assert re.search(r"Recursive delete outside the working directory: \S*/usr/local/lib", reason), reason
+    for cmd in ["ln -s /usr/local /tmp/l; rm -f /tmp/l; mkdir /tmp/l; rm -rf /tmp/l/lib",
+                "ln -s /usr/local /tmp/l; unlink /tmp/l; mkdir /tmp/l; rm -rf /tmp/l/lib",
+                "ln -s ~/Documents /tmp/docs && rm -rf /tmp/docs",
+                "home=$(mktemp -d); ln -s /usr/local \"$home/.agents\"; rm -rf \"$home\"",
+                "ln -s /tmp/y /tmp/l; rm -rf /tmp/l/sub", "cd /tmp && ln -s x l && rm -rf l/lib"]:
+        assert guard_reason(cmd) == "", f"the link itself, a folder holding it, or a link to a temp path: {cmd!r}"
+
+
+def guard_adds_no_denial_for_routine_deletes(base):
+    for cmd in ["T=$(mktemp -d)\ncleanup() { tool close; rm -rf \"$T\"; }\ntrap cleanup EXIT\ntool open \"$T\"",
+                "S=/tmp/s; reset(){ rm -rf $S/m/src; cp -R x $S/m/; }; reset; reset",
+                "cd /tmp\nrun() { rm -rf m; cp -R orig m; tool \"$1\"; }\nrun a\nrun b",
+                "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; ls \"$tmp\"",
+                "bash <<'EOF'\nset -e\ntmp=$(mktemp -d)\ncd \"$tmp\"\ngit init -q\nrm -rf \"$tmp\"\nEOF",
+                "home=$(mktemp -d); ln -s \"$PWD\" \"$home/.agents\"; HOME=\"$home\" ls; rm -f \"$home/.agents\"; rm -rf \"$home\"",
+                "X=\"env A=1 python3 -m tool\"; $X run", "rm -rf /tmp/kit-suite-*",
+                "x=$(mktemp -d) && (cd \"$x\" && git init -q) && rm -rf \"$x\"",
+                "for m in a b; do out=$(ls /tmp/x/$m); rm -rf /tmp/x/$m; done",
+                "find . -name node_modules -prune -exec sh -c 'rm -rf \"$1\"' _ {} \\;",
+                "echo 'f() { rm -rf ~/x; }' > notes.txt", "git commit -m 'drop the f() { rm -rf /usr/x; } helper'",
+                "grep -rn 'rm -rf /usr' .", "cat > notes.md <<'EOF'\nf() { rm -rf /usr/x; }\nf\nEOF",
+                "git commit -m \"$(cat <<'EOF'\nDrop the f() { rm -rf /usr/x; } helper\nEOF\n)\"",
+                "ssh host 'rm -rf /usr/local/old'", "docker exec c sh -c 'rm -rf /usr/local/old'",
+                "ssh host \"f() { rm -rf /usr/x; }; f\""]:
+        assert guard_reason(cmd) == "", f"a routine delete, text, or a delete on another machine: {cmd!r}"
+
+
+def guard_judges_deep_commands_in_time(base):
+    chained = "; ".join(f"f{i}() {{ f{i - 1}; f{i - 1}; }}" for i in range(1, 200))
+    links = "; ".join(f"ln -s /tmp/a{i} /tmp/l{i}" for i in range(200))
+    for cmd in ["f0() { rm -rf /usr/local/old; }; " + chained + "; f199",
+                "f() { g; }; g() { f; rm -rf /usr/local/old; }; f",
+                "$(" * 200 + "rm -rf /usr/local/old" + ")" * 200, "(" * 200 + "cd / && rm -rf usr/local/old" + ")" * 200,
+                "; ".join(f"bash -c 'rm -rf /tmp/x{i}'" for i in range(200)) + "; bash -c 'rm -rf /usr/local/old'",
+                links + "; ln -s /usr/local /tmp/l; rm -rf /tmp/l/lib",
+                "for i in " + " ".join(map(str, range(200))) + "; do ln -s /usr/local /tmp/l$i; done; rm -rf /tmp/l7/lib"]:
+        started = child_cpu()
+        reason = guard_reason(cmd)
+        assert child_cpu() - started < 2, f"the guard must answer before the harness lets the command through: {cmd[:80]!r}"
+        assert reason and "The guard failed" not in reason, f"a deep delete outside the allowed places: {cmd[:80]!r}"
+
+
 def guard_mcp_linear(base):
     os.makedirs(os.path.join(base, "profiles", "work"))
     json.dump({"gateways": [{"tool": "gateway__execute$", "service_field": "provider", "operation_fields": ["subtool"],
@@ -6202,7 +6389,7 @@ TESTS = [a_stacked_branch_is_measured_against_its_parent, a_phase_line_switches_
          the_agent_stays_out_of_the_approvals,
          guard_allows_routine, guard_resolves_rm_variables, guard_allows_worktree_and_cache_deletes,
          guard_keeps_variables_through_heredocs_and_quoted_text, guard_keeps_chain_assignments_after_sure_steps,
-         guard_judges_loop_words_one_by_one, guard_denials_name_the_rewrite, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
+         guard_judges_loop_words_one_by_one, guard_denials_name_the_rewrite, guard_reads_code_not_text, guard_command_starts_stay_on_their_line, guard_reads_through_wrappers_and_scripts, guard_judges_a_delete_wherever_it_runs, guard_judges_a_function_where_it_is_called, guard_reads_a_run_string_as_its_shell_gets_it, guard_judges_a_command_held_in_a_variable, guard_keeps_the_temp_roots, guard_follows_a_link_the_command_makes, guard_adds_no_denial_for_routine_deletes, guard_judges_deep_commands_in_time, guard_mcp_linear, asking_for_a_service_approves_its_writes_for_that_turn, a_broken_profile_blocks_mcp_calls_instead_of_letting_them_through, the_hook_log_keeps_secrets_out, a_turn_approval_that_cant_be_removed_is_moved_aside, an_answer_to_the_agents_offer_approves_the_service_it_named, a_block_says_when_no_approval_dialog_can_show,
          a_write_to_an_object_the_user_approved_is_approved_for_the_session, an_allow_line_approves_a_database_statement_for_that_turn,
          a_plain_request_approves_a_database_statement_for_that_turn, a_message_asking_to_merge_approves_gh_pr_merge_for_that_turn,
          a_message_asking_to_push_approves_that_protected_branch, a_first_push_to_an_empty_remote_needs_no_approval, guard_mcp_logs_browser_mcp, pr_gate_review_and_validation, validate_stamp_refuses_empty_recordings, validate_stamp_needs_a_video_per_check, validate_stamp_checks_criteria_coverage, validate_stamp_needs_a_readable_spec, validate_stamp_checks_test_types, validate_stamp_refuses_failed_lookups, evidence_records_the_code_fingerprint, validate_stamp_needs_a_full_suite_run,
