@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """skills/kit-spec: the lint that checks a spec's shape, and the prompt for its second reading."""
 import kit_home  # noqa: F401  (first: refuses to test another checkout)
+import ast
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -103,13 +105,36 @@ def lint_demands_a_risk_line_with_a_reason(base):
     assert status == 0, f"a hyphen for the dash passes: {out}"
 
 
-def lint_takes_decisions_only_on_a_high_risk_spec(base):
+def lint_takes_decisions_at_any_tier(base):
     decisions = "\n## Decisions\n- Accept v2 by version string over probing flags, because v1 and v2 share flags.\n"
-    for tier in ("low", "standard"):
+    for tier in ("low", "standard", "high"):
         status, out = lint(base, GOOD.replace("Risk: standard", f"Risk: {tier}") + decisions)
-        assert status == 1 and "'## Decisions' means a one-way door: the tier is high" in out, (tier, out)
-    status, out = lint(base, HIGH + decisions)
-    assert status == 0, out
+        assert status == 0 and "FAIL" not in out, (tier, out)
+    low = GOOD.replace("Risk: standard", "Risk: low")
+    for broken, problem in ((low.replace("Risk: low", "Risk: medium") + decisions, "'medium' is not a tier"),
+                            (low + "\n## Decisions\n\n", "'## Decisions' is empty"),
+                            (low + "\n## Decisions\n- <chosen> over postgres, because simpler.\n", "'## Decisions' has an unfilled item"),
+                            (low.replace(" — verify: tests/test_compose.py::plugin", "") + decisions, "criterion 3 has no 'verify:'")):
+        status, out = lint(base, broken)
+        assert status == 1 and problem in out, (problem, out)
+
+
+def docs_give_the_high_tier_without_the_decisions_heading(base):
+    """The instructions say what triage and the lint do: the size rule leaves tests out, a Decisions heading moves no tier."""
+    def read(rel):
+        return open(os.path.join(KIT, rel), encoding="utf-8").read()
+    texts = {rel: read(rel) for rel in ("AGENTS.md", "skills/kit-spec/SKILL.md", "skills/kit-spec/review-prompt.sh",
+                                       "skills/kit-review/SKILL.md", "docs/framework.md")}
+    texts["bin/triage docstring"] = ast.get_docstring(ast.parse(read("bin/triage")))
+    texts["lint.py docstring and messages"] = read("skills/kit-spec/lint.py")
+    stale = re.compile(r"Decisions`? section\)? makes it high|\*\*High:\*\* a `## Decisions`|high for a Decisions section"
+                       r"|Decisions`? section on a (tier below high|spec whose tier)|'## Decisions' means a one-way door")
+    for name, text in texts.items():
+        found = stale.search(text)
+        assert not found, f"{name} still says a Decisions section makes the tier high: {found.group(0)!r}"
+    for name in ("skills/kit-spec/SKILL.md", "skills/kit-spec/review-prompt.sh", "bin/triage docstring"):
+        size = re.search(r"more than 400[^.]*", " ".join(texts[name].split()))
+        assert size and "outside test" in size.group(0), f"{name} gives the size rule without leaving tests out: {size and size.group(0)!r}"
 
 
 def lint_rejects_a_placeholder_verify(base):
@@ -166,7 +191,8 @@ RESULTS = []
 for test in kit_home.selected((lint_passes_the_documented_shape, lint_names_every_missing_part, lint_rejects_a_placeholder_verify,
                                lint_warns_outside_three_to_six_criteria, lint_exits_2_on_an_unreadable_spec,
                                lint_takes_a_change_map_only_when_filled, lint_takes_decisions_only_when_filled,
-                               lint_demands_a_risk_line_with_a_reason, lint_takes_decisions_only_on_a_high_risk_spec,
+                               lint_demands_a_risk_line_with_a_reason, lint_takes_decisions_at_any_tier,
+                               docs_give_the_high_tier_without_the_decisions_heading,
                                review_prompt_bundles_the_request_and_the_spec)):
     base = tempfile.mkdtemp(prefix="agents-test-spec-")
     try:

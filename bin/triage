@@ -7,7 +7,8 @@
   triage --lens-briefs    every review lens as JSON [{key, title, brief}], from skills/kit-review/lenses.md
 
 The kit-review and kit-validate skills run the lenses and tests this selects. Every rule is a regex
-over changed paths or added code lines (a whole-line comment isn't one; the high-risk labels read removed ones too), so a selection can always be traced back to its signal. Without --range, the
+over changed paths or added code lines (a whole-line comment isn't one; the high-risk labels read removed ones too), so a selection can always be traced back to its signal. One rule counts instead: more than 400 changed lines
+outside test files make the diff high. Without --range, the
 branch's spec, by its Risk line, can raise the diff's tier, never lower it: the tier is the higher of the two.
 
 A framework's own names are signals only in its repos: packs/<name>.json adds them, in a repo whose top level, at
@@ -24,8 +25,8 @@ import re
 import subprocess
 import sys
 
-TEST_OR_DOC = re.compile(r"(^|/)(tests?|__tests__|spec|docs?)/|[._-](test|spec)\.[a-z]+$|Test\.php$|\.(md|txt|rst)$"
-                         r"|(^|/)(CHANGELOG|README|LICENSE)", re.I)
+TEST_PATH = r"(^|/)(tests?|__tests__|spec)/|[._-](test|spec)\.[a-z]+$|Test\.php$"
+TEST_OR_DOC = re.compile(rf"{TEST_PATH}|(^|/)docs?/|\.(md|txt|rst)$|(^|/)(CHANGELOG|README|LICENSE)", re.I)
 STYLE_FILE = re.compile(r"\.(css|scss|sass|less)$", re.I)
 PROSE_FILE = re.compile(r"\.(md|txt|rst)$|(^|/)(CHANGELOG|README|LICENSE)(\.[a-z]+)?$", re.I)
 # A log or a session's output left in the tree is no part of the change, though the review stamp still covers it.
@@ -48,6 +49,11 @@ BLOCK_COMMENT_HOLDS_CODE = re.compile(r"\*/\s*(?!//|/\*)\S")
 HTML_COMMENT_HOLDS_CODE = re.compile(r"-->\s*(?!<!--)\S|<\?|\{\{|\{%|<%")
 # A spaced `*` opens a docblock line, unless the line ends like a statement: C's `* p = f(x);`, a generator method.
 STATEMENT_END = re.compile(r"[;{}]\s*$")
+
+
+def is_test_file(path):
+    """A test the size signal leaves out: under a test directory or named as one, prose there excluded."""
+    return bool(re.search(TEST_PATH, path, re.I)) and not PROSE_FILE.search(path)
 
 
 def is_comment(path, line, html_holds_code=HTML_COMMENT_HOLDS_CODE):
@@ -551,6 +557,9 @@ def triage(rng=None):
         html_holds_code = re.compile(f"{html_holds_code.pattern}|{pack['html_comment_holds_code']}")
     files, added, removed, renamed_from, data_files = collect(rng, merge_base)
     changed_lines = sum(files.values()) + len(removed)
+    # Only the size signal leaves tests out: the low rule and the count triage reports keep the total.
+    changed_outside_tests = (sum(n for p, n in files.items() if not is_test_file(p))
+                             + sum(1 for p, _ in removed if not is_test_file(p or "")))
     behavior = [p for p in files if not TEST_OR_DOC.search(p)]
     style_only = bool(behavior) and all(STYLE_FILE.search(p) for p in behavior)
     behavior_added = [(p, l) for p, l in added if not TEST_OR_DOC.search(p)]
@@ -580,8 +589,8 @@ def triage(rng=None):
         h = hits(rx, limit=1) or hits(rx, code_removed, limit=1, where=", removed")
         if h:
             high.append(f"{label} ({h[0]})")
-    if changed_lines > 400:
-        high.append(f"{changed_lines} changed lines")
+    if changed_outside_tests > 400:
+        high.append(f"{changed_outside_tests} changed lines outside tests")
 
     if (not behavior or style_only) and changed_lines < 50 and not high:
         diff_tier = "low"
@@ -673,9 +682,6 @@ def spec_risk():
     lint = importlib.util.module_from_spec(importlib.util.spec_from_loader("spec_lint", loader))
     loader.exec_module(lint)
     tier, reason, problem = lint.risk(text)
-    if lint.DECISIONS.search(text) and tier != "high":
-        written = f"; its Risk line says {tier}: {reason}" if tier else ""
-        return "high", f"a '## Decisions' section{written}", None
     return (None, None, problem) if problem else (tier, reason, None)
 
 

@@ -4,9 +4,9 @@
   lint.py [spec.md]     the current branch's spec (path.sh) when no file is given
 
 Fails, naming each problem, on a missing title, Goal line or section, a `Risk:` line missing, repeated, with an unknown
-tier or without a reason (or with the template's placeholder for one), a `## Decisions` section on a spec whose tier
-isn't high, no numbered criteria, a criterion whose `verify:` is missing, empty or only a placeholder, and an empty or
-unfilled Change map or Decisions; exits 2 when the spec can't be read.
+tier or without a reason (or with the template's placeholder for one), no numbered criteria, a criterion whose `verify:`
+is missing, empty or only a placeholder, and an empty or unfilled Change map or Decisions; exits 2 when the spec can't
+be read.
 Warns, without failing, when there are fewer than 3 or more than 6 criteria.
 """
 import os
@@ -16,7 +16,6 @@ import sys
 
 TIERS = ("low", "standard", "high")
 RISK_LINE = re.compile(r"^Risk:[ \t]*([^\s—–-]*)(.*)$", re.M)
-DECISIONS = re.compile(r"^## Decisions\s*$", re.M | re.I)
 SECTIONS = ("Acceptance criteria", "Out of scope", "Assumptions", "Open questions")
 # A verify that names no test, command or step: nobody could run it.
 PLACEHOLDER_VERIFY = re.compile(r"((run )?(the )?(unit |manual |automated )?(tests?|testing)( pass(es)?)?|manual(ly)?|check"
@@ -57,11 +56,9 @@ def problems(text):
         errors.append("no title: the first line should be '# <title>', with the issue id first when there is one")
     if not re.search(r"^Goal:[ \t]*\S", text, re.M):
         errors.append("no 'Goal:' line")
-    tier, _, problem = risk(text)
+    problem = risk(text)[2]
     if problem:
         errors.append(problem)
-    elif tier != "high" and DECISIONS.search(text):
-        errors.append(f"'## Decisions' means a one-way door: the tier is high, not {tier}")
     for name in SECTIONS:
         if not re.search(rf"^## {name}\s*$", text, re.M | re.I):
             errors.append(f"no '## {name}' section")

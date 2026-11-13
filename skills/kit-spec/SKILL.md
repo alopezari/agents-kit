@@ -88,11 +88,11 @@ The PR description reuses them, and the review asks for them: its Maintainabilit
 
 The Risk line predicts the change's risk before any code exists; settle it now, from the Change map and any Decisions:
 
-- **High:** a `## Decisions` section (a one-way door), a high-risk signal triage looks for (auth or permissions, payments, schema or migration, public API or hooks, caching, scheduled jobs), or more than 400 expected changed lines.
+- **High:** a one-way door (a schema or migration, a public contract, a new dependency) or a high-risk signal triage looks for (auth or permissions, payments, schema or migration, public API or hooks, caching, scheduled jobs), named in the Risk reason; or more than 400 expected changed lines outside tests. The door makes it high, not the Decisions section that records it.
 - **Low:** a behavior change under 50 lines, with none of those, in files that already have tests.
 - **Standard:** everything else.
 
-You may raise the tier with a reason; never lower it below what these rules give. After the build, triage compares it with the diff's tier and the review runs the higher of the two, so a "low" spec still gets a standard review when the diff says standard; a diff that turns out riskier than the spec predicted is what the monthly job counts. Run the lint again: it fails a `## Decisions` section on a tier below high.
+You may raise the tier with a reason; never lower it below what these rules give. After the build, triage compares it with the diff's tier and the review runs the higher of the two, so a "low" spec still gets a standard review when the diff says standard; a diff that turns out riskier than the spec predicted is what the monthly job counts. Run the lint again: it fails a Risk line without a tier or a reason.
 
 ## 4. Get a second reading
 
