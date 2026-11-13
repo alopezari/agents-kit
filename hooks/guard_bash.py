@@ -297,7 +297,8 @@ def dangerous_rm(command, cwd):
     put in first, a child shell seeing only the variables exported to it."""
     if "rm" not in command:
         return None
-    scope = {"walks": 0, "links": {}, "too_many_links": False}
+    scope = {"walks": 0, "links": {}, "too_many_links": False,
+             "reaches_rm": bool(re.search(r"\brm\b", command))}
     return rm_walk(command, cwd, scope, cwd)[0]
 
 
@@ -314,7 +315,7 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
     scope["walks"] += 1
     if scope["walks"] > MAX_COMMAND_EXPANSIONS:
         return (f"Recursive delete analysis exceeds {MAX_COMMAND_EXPANSIONS} command expansions. "
-                "To pass, split the command into smaller steps."), here
+                "To pass, split the command into smaller steps." if scope["reaches_rm"] else None), here
     if depth > MAX_NESTING:
         reaches_rm = any(re.search(r"\brm\b", body) for body in [command, *(f["body"] for f in functions.values())])
         return (NESTED_TOO_DEEP if reaches_rm else None), here
@@ -482,7 +483,7 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
         elif name == "trap" and len(tokens) > 1:
             if any(word in functions for word in re.split(r"[;&|\s]+", tokens[1])):
                 denied = walk(tokens[1], here=runs_in, known=values, runs_first=False,
-                              functions=functions)[0]
+                              functions=functions, exported=set(exported), held=dict(held))[0]
                 if denied:
                     return denied, here
         elif (reference := HELD_REFERENCE.fullmatch(tokens[-1]) if tokens else None) and reference.group(1) in held and (
@@ -578,8 +579,8 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
                     not before.strip() or before.lstrip().startswith("#") for before in text[:start].split("\n"))
                 denied = walk(script, here=runs_in, known=inherited, runs_first=first, as_written=as_written and single,
                               from_text=True, functions=inner, outer_loops=around,
-                              exported=exported if runner in ("eval", "trap") else set(exported),
-                              held=held if runner in ("eval", "trap") else
+                              exported=exported if runner == "eval" else set(exported),
+                              held=held if runner == "eval" else dict(held) if runner == "trap" else
                               {k: v for k, v in held.items() if k in exported})[0]
                 if denied:
                     return denied, here

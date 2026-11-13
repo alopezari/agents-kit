@@ -922,6 +922,9 @@ def guard_judges_a_function_where_it_is_called(base):
 
 def guard_reads_a_run_string_as_its_shell_gets_it(base):
     for cmd in ["D=/tmp/build; bash -c 'rm -rf \"$D\"/*'; export D",
+                "D=/tmp/build; setx() { export D; }; trap setx EXIT; bash -c 'rm -rf \"$D\"/usr'",
+                "D=/tmp/build; setx() { export D; }; trap 'setx' EXIT; bash -c 'rm -rf \"$D\"/usr'",
+                "D=/tmp/build; trap 'export D; rm -rf /tmp/build' EXIT; bash -c 'rm -rf \"$D\"/usr'",
                 "D=/tmp/build; set -a; bash -c 'rm -rf \"$D\"/*'",
                 "D=/tmp/build; echo export D; bash -c 'rm -rf \"$D\"/*'",
                 "D=/tmp/build; cat > /tmp/kit-export.sh <<'EOF'\nexport D\nEOF\nbash -c 'rm -rf \"$D\"/*'",
@@ -1036,6 +1039,9 @@ def guard_adds_no_denial_for_routine_deletes(base):
 
 
 def guard_judges_deep_commands_in_time(base):
+    logging = 'log() { echo "$(date) $*"; }\n' + '\n'.join(f'log step{i}' for i in range(1100))
+    assert not guard_reason(logging + '\nterraform plan'), "exhausting the budget without a delete must not block work"
+    assert guard_reason(logging + '\nrm -rf /usr/local/old'), "the budget must not hide a later delete"
     chained = "; ".join(f"f{i}() {{ f{i - 1}; f{i - 1}; }}" for i in range(1, 200))
     branching = "; ".join(f'f{i}() {{ f{i - 1} "a$1"; f{i - 1} "b$1"; }}' for i in range(1, 15))
     links = "; ".join(f"ln -s /tmp/a{i} /tmp/l{i}" for i in range(200))
