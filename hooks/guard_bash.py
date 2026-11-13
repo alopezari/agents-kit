@@ -463,9 +463,9 @@ def rm_walk(command, cwd, scope, here, known=None, runs_first=True, as_written=T
             else:
                 exported.update(names)
         elif name == "set":
-            if "-a" in tokens or tokens[1:] == ["-o", "allexport"]:
+            if any(re.fullmatch(r"-[a-z]*a[a-z]*", word) for word in tokens[1:]) or tokens[1:] == ["-o", "allexport"]:
                 exported.add("*")
-            elif "+a" in tokens or tokens[1:] == ["+o", "allexport"]:
+            elif any(re.fullmatch(r"\+[a-z]*a[a-z]*", word) for word in tokens[1:]) or tokens[1:] == ["+o", "allexport"]:
                 exported.discard("*")
         if name in ("cd", "pushd"):
             args = [t for t in tokens[1:] if t == "-" or not t.startswith("-")]

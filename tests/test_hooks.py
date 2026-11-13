@@ -930,6 +930,7 @@ def guard_reads_a_run_string_as_its_shell_gets_it(base):
         assert "export the variable" in reason, f"only exports in this shell before the call apply: {cmd!r} -> {reason!r}"
     for cmd in ["cmd='rm -rf \"$D\"/out'; D=/tmp/build bash -c \"$cmd\"",
                 "set -a; D=/tmp/build; set +a; bash -c 'rm -rf \"$D\"/out'",
+                "set -ea; D=/tmp/build; set +a; bash -c 'rm -rf \"$D\"/out'",
                 "D=/tmp/build bash <<'EOF'\nrm -rf \"$D\"/out\nEOF"]:
         reason = guard_reason(cmd)
         assert not reason, f"the child receives its prefix assignments: {cmd!r} -> {reason!r}"
